@@ -213,6 +213,170 @@ pub async fn pull_ff_only(repo_path: &Path) -> Result<String, String> {
     }
 }
 
+/// Get the current branch name.
+pub async fn current_branch(repo_path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["-C", &repo_path.to_string_lossy(), "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .await
+        .ok()?;
+
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    }
+}
+
+/// Get list of branches that have been merged into the default branch.
+pub async fn merged_branches(repo_path: &Path, default_branch: &str) -> Vec<String> {
+    let output = Command::new("git")
+        .args([
+            "-C", &repo_path.to_string_lossy(),
+            "branch", "--merged", default_branch, "--format=%(refname:short)",
+        ])
+        .output()
+        .await;
+
+    match output {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| l.trim().to_string())
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Get all local branch names.
+pub async fn all_branches(repo_path: &Path) -> Vec<String> {
+    let output = Command::new("git")
+        .args([
+            "-C", &repo_path.to_string_lossy(),
+            "branch", "--format=%(refname:short)",
+        ])
+        .output()
+        .await;
+
+    match output {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| l.trim().to_string())
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Delete a local branch.
+pub async fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["-C", &repo_path.to_string_lossy(), "branch", "-d", branch])
+        .output()
+        .await
+        .map_err(|e| format!("failed to delete branch: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// List stash entries.
+pub async fn stash_list(repo_path: &Path) -> Vec<String> {
+    let output = Command::new("git")
+        .args(["-C", &repo_path.to_string_lossy(), "stash", "list", "--format=%s"])
+        .output()
+        .await;
+
+    match output {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| l.to_string())
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// List active worktrees (excluding the main one).
+pub async fn worktree_list(repo_path: &Path) -> Vec<crate::model::Worktree> {
+    let output = Command::new("git")
+        .args(["-C", &repo_path.to_string_lossy(), "worktree", "list", "--porcelain"])
+        .output()
+        .await;
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_worktree_output(&stdout, repo_path)
+}
+
+fn parse_worktree_output(output: &str, main_path: &Path) -> Vec<crate::model::Worktree> {
+    let mut worktrees = Vec::new();
+    let mut current_path = String::new();
+    let mut current_branch = String::new();
+
+    for line in output.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            current_path = p.to_string();
+            current_branch.clear();
+        } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
+            current_branch = b.to_string();
+        } else if line.is_empty() && !current_path.is_empty() {
+            // Skip the main worktree
+            let wt_path = std::path::Path::new(&current_path);
+            if wt_path != main_path && !current_branch.is_empty() {
+                let home = dirs::home_dir().unwrap_or_default();
+                let display = format!(
+                    "~{}",
+                    wt_path.strip_prefix(&home).unwrap_or(wt_path).display()
+                );
+                worktrees.push(crate::model::Worktree {
+                    path: display,
+                    branch: current_branch.clone(),
+                });
+            }
+            current_path.clear();
+            current_branch.clear();
+        }
+    }
+
+    // Handle last entry without trailing newline
+    if !current_path.is_empty() {
+        let wt_path = std::path::Path::new(&current_path);
+        if wt_path != main_path && !current_branch.is_empty() {
+            let home = dirs::home_dir().unwrap_or_default();
+            let display = format!(
+                "~{}",
+                wt_path.strip_prefix(&home).unwrap_or(wt_path).display()
+            );
+            worktrees.push(crate::model::Worktree {
+                path: display,
+                branch: current_branch,
+            });
+        }
+    }
+
+    worktrees
+}
+
+const PROTECTED_BRANCHES: &[&str] = &["main", "master", "develop", "dev"];
+
+pub fn is_protected_branch(name: &str) -> bool {
+    PROTECTED_BRANCHES.contains(&name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

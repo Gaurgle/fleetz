@@ -1,4 +1,5 @@
-use crate::model::{RepoLocation, RepoStatus, Summary};
+use chrono::{DateTime, Local};
+use crate::model::{self, RepoLocation, RepoStatus, Summary};
 
 /// Which TUI view is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8,10 +9,72 @@ pub enum View {
 }
 
 /// Overlay shown on top of the main view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Overlay {
     None,
     Help,
+    Branches(BranchOverlay),
+}
+
+/// State for the branch cleanup overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchOverlay {
+    pub repo_name: String,
+    pub repo_path: String,
+    pub branches: Vec<BranchEntry>,
+    pub selected: usize,
+    pub confirm_delete: bool,
+}
+
+/// A branch entry in the cleanup overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchEntry {
+    pub name: String,
+    pub is_merged: bool,
+    pub is_current: bool,
+    pub is_protected: bool,
+    pub selected_for_delete: bool,
+}
+
+impl BranchEntry {
+    pub fn can_delete(&self) -> bool {
+        !self.is_current && !self.is_protected
+    }
+}
+
+impl BranchOverlay {
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        let max = self.branches.len().saturating_sub(1);
+        if self.selected < max {
+            self.selected += 1;
+        }
+    }
+
+    pub fn toggle_selected(&mut self) {
+        if let Some(b) = self.branches.get_mut(self.selected) {
+            if b.can_delete() {
+                b.selected_for_delete = !b.selected_for_delete;
+            }
+        }
+    }
+
+    pub fn selected_count(&self) -> usize {
+        self.branches.iter().filter(|b| b.selected_for_delete).count()
+    }
+
+    pub fn selected_branch_names(&self) -> Vec<String> {
+        self.branches
+            .iter()
+            .filter(|b| b.selected_for_delete)
+            .map(|b| b.name.clone())
+            .collect()
+    }
 }
 
 /// Status message shown temporarily in the footer.
@@ -34,6 +97,11 @@ pub struct App {
     pub should_quit: bool,
     pub show_prs: bool,
     pub show_stat: bool,
+    pub watch_mode: bool,
+    pub refresh_interval: u64,
+    pub last_refreshed: Option<DateTime<Local>>,
+    pub group_names: Vec<String>,
+    pub active_group: Option<usize>,
 }
 
 impl App {
@@ -50,21 +118,64 @@ impl App {
             should_quit: false,
             show_prs,
             show_stat,
+            watch_mode: false,
+            refresh_interval: 300,
+            last_refreshed: Some(Local::now()),
+            group_names: Vec::new(),
+            active_group: None,
         }
     }
 
-    /// Repos filtered by the current search query.
+    /// Repos filtered by the current search query and active group.
     pub fn visible_repos(&self) -> Vec<(usize, &RepoStatus)> {
-        if self.search_query.is_empty() {
-            self.repos.iter().enumerate().collect()
-        } else {
-            let q = self.search_query.to_lowercase();
-            self.repos
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| r.name.to_lowercase().contains(&q))
-                .collect()
+        let active_group = self.active_group.and_then(|i| self.group_names.get(i));
+
+        self.repos
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                // Group filter
+                if let Some(group) = active_group {
+                    if !r.groups.contains(group) {
+                        return false;
+                    }
+                }
+                // Search filter
+                if !self.search_query.is_empty() {
+                    let q = self.search_query.to_lowercase();
+                    if !r.name.to_lowercase().contains(&q) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect()
+    }
+
+    /// Cycle to the next group. None -> first -> second -> ... -> None.
+    pub fn cycle_group(&mut self) {
+        if self.group_names.is_empty() {
+            return;
         }
+        self.active_group = match self.active_group {
+            None => Some(0),
+            Some(i) if i + 1 < self.group_names.len() => Some(i + 1),
+            Some(_) => None,
+        };
+        self.selected = 0;
+    }
+
+    /// Clear group filter (show all).
+    pub fn clear_group(&mut self) {
+        self.active_group = None;
+        self.selected = 0;
+    }
+
+    /// Label for the active group, if any.
+    pub fn active_group_label(&self) -> Option<&str> {
+        self.active_group
+            .and_then(|i| self.group_names.get(i))
+            .map(|s| s.as_str())
     }
 
     /// The currently selected repo, if any.
@@ -101,8 +212,8 @@ impl App {
 
     pub fn toggle_help(&mut self) {
         self.overlay = match self.overlay {
-            Overlay::None => Overlay::Help,
             Overlay::Help => Overlay::None,
+            _ => Overlay::Help,
         };
     }
 
@@ -185,7 +296,15 @@ mod tests {
                 ahead: 0,
                 dirty: 0,
                 pr_count: 0,
+                prs: vec![],
+                ci_status: model::CiStatus::Unknown,
+                ci_workflow: None,
+                ci_duration: None,
                 pushed_at: None,
+                groups: vec![],
+                stash_count: 0,
+                stash_entries: vec![],
+                worktrees: vec![],
             })
             .collect();
         App::new(repos, "test".to_string(), false, false)

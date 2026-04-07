@@ -161,7 +161,15 @@ mod tests {
             ahead,
             dirty,
             pr_count: 0,
+            prs: vec![],
+            ci_status: crate::model::CiStatus::Unknown,
+            ci_workflow: None,
+            ci_duration: None,
             pushed_at: None,
+            groups: vec![],
+            stash_count: 0,
+            stash_entries: vec![],
+            worktrees: vec![],
         }
     }
 

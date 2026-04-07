@@ -5,7 +5,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::model::RepoStatus;
+use crate::model::{CiStatus, RepoStatus};
 use crate::ui::colors;
 
 /// Render the compact view: two-column dense grid of all repos.
@@ -70,12 +70,25 @@ fn compact_repo_spans(repo: &RepoStatus, is_selected: bool, max_width: usize) ->
         colors::GREEN
     };
 
-    // Build dots between name and status
-    let content_len = marker.len() + repo.name.len() + 1 + status.len();
-    let dot_count = max_width
-        .saturating_sub(content_len)
-        .saturating_sub(repo.pr_count.to_string().len() + if repo.pr_count > 0 { 3 } else { 0 })
-        .max(1);
+    // Build dots between name and right-aligned badges
+    let ci_sym = repo.ci_status.symbol();
+    let mut badge_len = status.len();
+    if !ci_sym.is_empty() {
+        badge_len += 2;
+    }
+    if repo.pr_count > 0 {
+        badge_len += format!(" {}PR", repo.pr_count).len();
+    }
+    if repo.stash_count > 0 {
+        badge_len += format!(" {}s", repo.stash_count).len();
+    }
+    if !repo.worktrees.is_empty() {
+        badge_len += format!(" {}w", repo.worktrees.len()).len();
+    }
+
+    let left_len = marker.len() + repo.name.len() + 1;
+    let right_len = badge_len + 1;
+    let dot_count = max_width.saturating_sub(left_len + right_len).max(1);
     let dots = "·".repeat(dot_count);
 
     let mut spans = vec![
@@ -85,10 +98,38 @@ fn compact_repo_spans(repo: &RepoStatus, is_selected: bool, max_width: usize) ->
         Span::styled(status, Style::default().fg(status_color)),
     ];
 
+    // CI badge
+    if !ci_sym.is_empty() {
+        let ci_color = match repo.ci_status {
+            CiStatus::Passed => colors::GREEN,
+            CiStatus::Failed => colors::RED,
+            CiStatus::Pending => colors::YELLOW,
+            CiStatus::Unknown => colors::OVERLAY,
+        };
+        spans.push(Span::styled(
+            format!(" {ci_sym}"),
+            Style::default().fg(ci_color),
+        ));
+    }
+
     if repo.pr_count > 0 {
         spans.push(Span::styled(
             format!(" {}PR", repo.pr_count),
             Style::default().fg(colors::MAUVE),
+        ));
+    }
+
+    if repo.stash_count > 0 {
+        spans.push(Span::styled(
+            format!(" {}s", repo.stash_count),
+            Style::default().fg(colors::OVERLAY),
+        ));
+    }
+
+    if !repo.worktrees.is_empty() {
+        spans.push(Span::styled(
+            format!(" {}w", repo.worktrees.len()),
+            Style::default().fg(colors::OVERLAY),
         ));
     }
 

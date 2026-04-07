@@ -1,3 +1,4 @@
+pub mod branches;
 pub mod colors;
 pub mod compact;
 pub mod detail;
@@ -45,8 +46,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     footer::render(frame, chunks[3], app);
 
     // Overlay (rendered last, on top)
-    if app.overlay == Overlay::Help {
-        help::render(frame, area);
+    match &app.overlay {
+        Overlay::Help => help::render(frame, area),
+        Overlay::Branches(bo) => branches::render(frame, area, bo),
+        Overlay::None => {}
     }
 }
 
@@ -56,7 +59,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         View::Compact => "[v] detail",
     };
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             " epoz",
             Style::default()
@@ -67,11 +70,30 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             format!(" — {}", app.header),
             Style::default().fg(colors::OVERLAY),
         ),
+    ];
+
+    if let Some(group) = app.active_group_label() {
+        spans.push(Span::styled(
+            format!("  [{group}]"),
+            Style::default().fg(colors::MAUVE),
+        ));
+    }
+
+    if let Some(ref ts) = app.last_refreshed {
+        spans.push(Span::styled(
+            format!("  (refreshed {})", ts.format("%H:%M")),
+            Style::default().fg(colors::SURFACE),
+        ));
+    }
+
+    spans.extend([
         Span::raw("  "),
-        Span::styled(view_hint, Style::default().fg(colors::SURFACE)),
+        Span::styled(view_hint.to_string(), Style::default().fg(colors::SURFACE)),
         Span::raw("  "),
-        Span::styled("[?] help", Style::default().fg(colors::SURFACE)),
+        Span::styled("[?] help".to_string(), Style::default().fg(colors::SURFACE)),
     ]);
+
+    let line = Line::from(spans);
 
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);

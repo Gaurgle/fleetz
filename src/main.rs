@@ -1,4 +1,5 @@
 mod app;
+mod cache;
 mod cli;
 mod config;
 mod discovery;
@@ -9,7 +10,7 @@ mod pull;
 mod time;
 mod ui;
 
-use app::{App, Overlay};
+use app::{App, BranchEntry, BranchOverlay, Overlay};
 use clap::Parser;
 use cli::{Args, Mode};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -36,6 +37,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (repos, header) = load_repos(&args, &config, &repo_dir, &mode).await?;
 
     let mut app = App::new(repos, header, args.prs, args.stat);
+    app.watch_mode = args.watch;
+    app.refresh_interval = config.refresh_interval;
+
+    // Set up groups from config
+    if !config.groups.is_empty() {
+        app.group_names = config.groups.keys().cloned().collect();
+        app.group_names.sort();
+        for repo in &mut app.repos {
+            for (group_name, members) in &config.groups {
+                if members.iter().any(|m| m.eq_ignore_ascii_case(&repo.name)) {
+                    repo.groups.push(group_name.clone());
+                }
+            }
+        }
+    }
 
     // Enter TUI
     enable_raw_mode()?;
@@ -58,6 +74,12 @@ async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let poll_timeout = if app.watch_mode {
+        std::time::Duration::from_secs(1)
+    } else {
+        std::time::Duration::from_secs(3600) // effectively blocking
+    };
+
     loop {
         terminal.draw(|frame| ui::render(frame, app))?;
 
@@ -65,22 +87,107 @@ async fn run_event_loop(
             return Ok(());
         }
 
-        if let Event::Key(key) = event::read()? {
-            if app.overlay == Overlay::Help {
-                match key.code {
-                    KeyCode::Char('?') | KeyCode::Esc => app.toggle_help(),
-                    _ => {}
+        // Check if watch mode refresh is due
+        if app.watch_mode {
+            if let Some(last) = app.last_refreshed {
+                let elapsed = (chrono::Local::now() - last).num_seconds();
+                if elapsed >= app.refresh_interval as i64 {
+                    for repo in &mut app.repos {
+                        refresh_single_repo(repo).await;
+                    }
+                    app.last_refreshed = Some(chrono::Local::now());
                 }
-                continue;
             }
-
-            if app.search_active {
-                handle_search_input(app, key);
-                continue;
-            }
-
-            handle_normal_input(app, terminal, key).await?;
         }
+
+        if event::poll(poll_timeout)? {
+            if let Event::Key(key) = event::read()? {
+                match &app.overlay {
+                    Overlay::Help => {
+                        match key.code {
+                            KeyCode::Char('?') | KeyCode::Esc => app.toggle_help(),
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    Overlay::Branches(_) => {
+                        handle_branch_input(app, key).await;
+                        continue;
+                    }
+                    Overlay::None => {}
+                }
+
+                if app.search_active {
+                    handle_search_input(app, key);
+                    continue;
+                }
+
+                handle_normal_input(app, terminal, key).await?;
+            }
+        }
+    }
+}
+
+async fn handle_branch_input(app: &mut App, key: KeyEvent) {
+    // Extract overlay data — need to work around borrow checker
+    let is_confirming = matches!(&app.overlay, Overlay::Branches(bo) if bo.confirm_delete);
+
+    if is_confirming {
+        match key.code {
+            KeyCode::Char('y') => {
+                // Delete selected branches
+                if let Overlay::Branches(ref bo) = app.overlay {
+                    let repo_path = bo.repo_path.clone();
+                    let to_delete = bo.selected_branch_names();
+                    let expanded = shellexpand::tilde(&repo_path).to_string();
+                    let path = Path::new(&expanded);
+                    let mut deleted = 0u32;
+                    for name in &to_delete {
+                        if git::delete_branch(path, name).await.is_ok() {
+                            deleted += 1;
+                        }
+                    }
+                    app.set_status(format!("Deleted {deleted} branch(es)"), false);
+                }
+                app.overlay = Overlay::None;
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                if let Overlay::Branches(ref mut bo) = app.overlay {
+                    bo.confirm_delete = false;
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('b') => {
+            app.overlay = Overlay::None;
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Overlay::Branches(ref mut bo) = app.overlay {
+                bo.move_down();
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Overlay::Branches(ref mut bo) = app.overlay {
+                bo.move_up();
+            }
+        }
+        KeyCode::Char(' ') => {
+            if let Overlay::Branches(ref mut bo) = app.overlay {
+                bo.toggle_selected();
+            }
+        }
+        KeyCode::Char('d') => {
+            if let Overlay::Branches(ref mut bo) = app.overlay {
+                if bo.selected_count() > 0 {
+                    bo.confirm_delete = true;
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -173,13 +280,64 @@ async fn handle_normal_input(
                 }
             }
         }
+        KeyCode::Char('g') => {
+            app.cycle_group();
+        }
+        KeyCode::Char('G') => {
+            app.clear_group();
+        }
+        KeyCode::Char('b') => {
+            // Open branch cleanup overlay
+            if let Some(repo) = app.selected_repo() {
+                if let Some(ref path) = repo.path {
+                    let expanded = shellexpand::tilde(path).to_string();
+                    let repo_path = Path::new(&expanded);
+                    let current = git::current_branch(repo_path).await.unwrap_or_default();
+                    let all = git::all_branches(repo_path).await;
+                    let merged = git::merged_branches(repo_path, &current).await;
+
+                    let branches: Vec<BranchEntry> = all
+                        .into_iter()
+                        .map(|name| {
+                            let is_current = name == current;
+                            let is_protected = git::is_protected_branch(&name);
+                            let is_merged = merged.contains(&name) && !is_current;
+                            BranchEntry {
+                                name,
+                                is_merged,
+                                is_current,
+                                is_protected,
+                                selected_for_delete: false,
+                            }
+                        })
+                        .collect();
+
+                    app.overlay = Overlay::Branches(BranchOverlay {
+                        repo_name: repo.name.clone(),
+                        repo_path: path.clone(),
+                        branches,
+                        selected: 0,
+                        confirm_delete: false,
+                    });
+                }
+            }
+        }
+        KeyCode::Char('O') => {
+            // Open first PR in browser (Shift+O)
+            if let Some(repo) = app.selected_repo() {
+                if let Some(pr) = repo.prs.first() {
+                    let _ = StdCommand::new("open").arg(&pr.url).status();
+                } else if repo.pr_count > 0 {
+                    app.set_status("Use -p flag to fetch PR details for browser open".to_string(), false);
+                }
+            }
+        }
         KeyCode::Char('r') => {
             app.set_status("Refreshing...".to_string(), false);
-            // Full refresh would re-fetch from GitHub + git
-            // For now, just refresh git status for all local repos
             for repo in &mut app.repos {
                 refresh_single_repo(repo).await;
             }
+            app.last_refreshed = Some(chrono::Local::now());
             app.set_status("Refreshed".to_string(), false);
         }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -301,14 +459,23 @@ async fn load_repos(
                 ahead: total_ahead,
                 dirty,
                 pr_count: 0,
+                prs: Vec::new(),
+                ci_status: model::CiStatus::Unknown,
+                ci_workflow: None,
+                ci_duration: None,
                 pushed_at: None,
+                groups: vec![],
+                stash_count: 0,
+                stash_entries: vec![],
+                worktrees: vec![],
             });
         }
         return Ok((repos, header));
     }
 
-    // Fetch from GitHub
-    let gh_repos = github::fetch_repos(config.repo_limit, args.prs).await?;
+    // Fetch from GitHub (with caching)
+    let api_cache = cache::ApiCache::new(config.cache_ttl);
+    let gh_repos = github::fetch_repos(config.repo_limit, args.prs, &api_cache, false).await?;
 
     // Determine cutoff and header
     let (cutoff, header) = match mode {
@@ -416,7 +583,15 @@ async fn load_repos(
             ahead: 0,
             dirty: 0,
             pr_count: gh_repo.pr_count,
+            prs: gh_repo.prs.clone(),
+            ci_status: gh_repo.ci_status.clone(),
+            ci_workflow: gh_repo.ci_workflow.clone(),
+            ci_duration: gh_repo.ci_duration.clone(),
             pushed_at: Some(gh_repo.pushed_at),
+            groups: vec![],
+            stash_count: 0,
+            stash_entries: vec![],
+            worktrees: vec![],
         });
     }
 
@@ -458,7 +633,15 @@ async fn load_repos(
             ahead: total_ahead,
             dirty,
             pr_count: 0,
+            prs: Vec::new(),
+            ci_status: model::CiStatus::Unknown,
+            ci_workflow: None,
+            ci_duration: None,
             pushed_at: None,
+            groups: vec![],
+            stash_count: 0,
+            stash_entries: vec![],
+            worktrees: vec![],
         });
     }
 
@@ -520,20 +703,27 @@ async fn build_repo_status(
         commits.extend(c);
     }
 
-    let pr_count = gh_repos
+    let gh_match = gh_repos
         .iter()
-        .find(|r| r.name.eq_ignore_ascii_case(&found.name))
-        .map_or(0, |r| r.pr_count);
-    let pushed_at = gh_repos
-        .iter()
-        .find(|r| r.name.eq_ignore_ascii_case(&found.name))
-        .map(|r| r.pushed_at);
+        .find(|r| r.name.eq_ignore_ascii_case(&found.name));
+
+    let pr_count = gh_match.map_or(0, |r| r.pr_count);
+    let prs = gh_match.map_or_else(Vec::new, |r| r.prs.clone());
+    let ci_status = gh_match.map_or(model::CiStatus::Unknown, |r| r.ci_status.clone());
+    let ci_workflow = gh_match.and_then(|r| r.ci_workflow.clone());
+    let ci_duration = gh_match.and_then(|r| r.ci_duration.clone());
+    let pushed_at = gh_match.map(|r| r.pushed_at);
 
     let home = dirs::home_dir().unwrap_or_default();
     let display = format!(
         "~{}",
         path.strip_prefix(&home).unwrap_or(path).display()
     );
+
+    // Stash + worktree info
+    let stash_entries = git::stash_list(path).await;
+    let stash_count = stash_entries.len() as u32;
+    let worktrees = git::worktree_list(path).await;
 
     RepoStatus {
         name: found.name.clone(),
@@ -545,6 +735,14 @@ async fn build_repo_status(
         ahead: total_ahead,
         dirty,
         pr_count,
+        prs,
+        ci_status,
+        ci_workflow,
+        ci_duration,
         pushed_at,
+        groups: vec![],
+        stash_count,
+        stash_entries,
+        worktrees,
     }
 }

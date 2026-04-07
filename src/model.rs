@@ -19,6 +19,57 @@ pub struct Commit {
     pub deletions: u32,
 }
 
+/// CI/check status for the default branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CiStatus {
+    Passed,
+    Failed,
+    Pending,
+    Unknown,
+}
+
+impl CiStatus {
+    pub fn symbol(&self) -> &str {
+        match self {
+            Self::Passed => "✓",
+            Self::Failed => "✗",
+            Self::Pending => "○",
+            Self::Unknown => "",
+        }
+    }
+}
+
+/// An open pull request.
+#[derive(Debug, Clone)]
+pub struct PullRequest {
+    pub number: u32,
+    pub title: String,
+    pub author: String,
+    pub created_at: DateTime<Utc>,
+    pub review_status: ReviewStatus,
+    pub url: String,
+}
+
+/// Review status of a PR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewStatus {
+    Approved,
+    ChangesRequested,
+    ReviewRequired,
+    Unknown,
+}
+
+impl ReviewStatus {
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Approved => "approved",
+            Self::ChangesRequested => "changes requested",
+            Self::ReviewRequired => "review needed",
+            Self::Unknown => "",
+        }
+    }
+}
+
 /// Where a repo was discovered relative to the configured repo_dir.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepoLocation {
@@ -44,7 +95,22 @@ pub struct RepoStatus {
     pub ahead: u32,
     pub dirty: u32,
     pub pr_count: u32,
+    pub prs: Vec<PullRequest>,
+    pub ci_status: CiStatus,
+    pub ci_workflow: Option<String>,
+    pub ci_duration: Option<String>,
     pub pushed_at: Option<DateTime<Utc>>,
+    pub groups: Vec<String>,
+    pub stash_count: u32,
+    pub stash_entries: Vec<String>,
+    pub worktrees: Vec<Worktree>,
+}
+
+/// An active git worktree.
+#[derive(Debug, Clone)]
+pub struct Worktree {
+    pub path: String,
+    pub branch: String,
 }
 
 impl RepoStatus {
@@ -145,7 +211,15 @@ mod tests {
             ahead,
             dirty,
             pr_count: 0,
+            prs: vec![],
+            ci_status: CiStatus::Unknown,
+            ci_workflow: None,
+            ci_duration: None,
             pushed_at: None,
+            groups: vec![],
+            stash_count: 0,
+            stash_entries: vec![],
+            worktrees: vec![],
         }
     }
 

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -5,7 +6,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::model::RepoStatus;
+use crate::model::{CiStatus, RepoStatus};
 use crate::ui::colors;
 
 /// Render the detail view: repo list (left 35%) + detail pane (right 65%).
@@ -22,14 +23,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     let mut items: Vec<ListItem> = Vec::new();
+    // Available width inside the block (minus border)
+    let col_width = area.width.saturating_sub(2) as usize;
 
     let primary = app.primary_repos();
     let elsewhere = app.elsewhere_repos();
     let local_only = app.local_only_repos();
+    let selected_idx = app.selected_repo_index().unwrap_or(usize::MAX);
 
     // Primary repos
     for (idx, repo) in &primary {
-        items.push(repo_list_item(repo, *idx == app.selected_repo_index().unwrap_or(usize::MAX)));
+        items.push(repo_list_item(repo, *idx == selected_idx, col_width));
     }
 
     // "also active" section
@@ -40,7 +44,7 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(" ──", Style::default().fg(colors::SURFACE)),
         ])));
         for (idx, repo) in &elsewhere {
-            items.push(repo_list_item(repo, *idx == app.selected_repo_index().unwrap_or(usize::MAX)));
+            items.push(repo_list_item(repo, *idx == selected_idx, col_width));
         }
     }
 
@@ -52,7 +56,7 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(" ──", Style::default().fg(colors::SURFACE)),
         ])));
         for (idx, repo) in &local_only {
-            items.push(repo_list_item(repo, *idx == app.selected_repo_index().unwrap_or(usize::MAX)));
+            items.push(repo_list_item(repo, *idx == selected_idx, col_width));
         }
     }
 
@@ -65,7 +69,7 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(list, area);
 }
 
-fn repo_list_item(repo: &RepoStatus, is_selected: bool) -> ListItem<'static> {
+fn repo_list_item(repo: &RepoStatus, is_selected: bool, col_width: usize) -> ListItem<'static> {
     let marker = if is_selected { "▸ " } else { "  " };
     let name_style = if is_selected {
         Style::default()
@@ -86,18 +90,70 @@ fn repo_list_item(repo: &RepoStatus, is_selected: bool) -> ListItem<'static> {
         colors::GREEN
     };
 
+    // Build right-side badge string to calculate dot fill
+    let ci_sym = repo.ci_status.symbol();
+    let mut badge_len = status.len();
+    if !ci_sym.is_empty() {
+        badge_len += 2; // " ✓"
+    }
+    if repo.pr_count > 0 {
+        badge_len += format!(" {}PR", repo.pr_count).len();
+    }
+    if repo.stash_count > 0 {
+        badge_len += format!(" {}s", repo.stash_count).len();
+    }
+    if !repo.worktrees.is_empty() {
+        badge_len += format!(" {}w", repo.worktrees.len()).len();
+    }
+
+    // Dot-fill between name and right-aligned badges
+    let left_len = marker.len() + repo.name.len() + 1; // +1 for space before dots
+    let right_len = badge_len + 1; // +1 for space after dots
+    let dot_count = col_width.saturating_sub(left_len + right_len).max(1);
+    let dots = "·".repeat(dot_count);
+
     let mut spans = vec![
         Span::raw(marker.to_string()),
         Span::styled(repo.name.clone(), name_style),
-        Span::styled(" ", Style::default()),
+        Span::styled(format!(" {dots} "), Style::default().fg(colors::SURFACE)),
         Span::styled(status, Style::default().fg(status_color)),
     ];
+
+    // CI badge
+    if !ci_sym.is_empty() {
+        let ci_color = match repo.ci_status {
+            CiStatus::Passed => colors::GREEN,
+            CiStatus::Failed => colors::RED,
+            CiStatus::Pending => colors::YELLOW,
+            CiStatus::Unknown => colors::OVERLAY,
+        };
+        spans.push(Span::styled(
+            format!(" {ci_sym}"),
+            Style::default().fg(ci_color),
+        ));
+    }
 
     // PR badge
     if repo.pr_count > 0 {
         spans.push(Span::styled(
             format!(" {}PR", repo.pr_count),
             Style::default().fg(colors::MAUVE),
+        ));
+    }
+
+    // Stash badge
+    if repo.stash_count > 0 {
+        spans.push(Span::styled(
+            format!(" {}s", repo.stash_count),
+            Style::default().fg(colors::OVERLAY),
+        ));
+    }
+
+    // Worktree badge
+    if !repo.worktrees.is_empty() {
+        spans.push(Span::styled(
+            format!(" {}w", repo.worktrees.len()),
+            Style::default().fg(colors::OVERLAY),
         ));
     }
 
@@ -223,8 +279,64 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
     }
 
-    // PR count
-    if repo.pr_count > 0 {
+    // CI status
+    if repo.ci_status != CiStatus::Unknown {
+        let (ci_sym, ci_color, ci_label) = match repo.ci_status {
+            CiStatus::Passed => ("✓", colors::GREEN, "passed"),
+            CiStatus::Failed => ("✗", colors::RED, "failed"),
+            CiStatus::Pending => ("○", colors::YELLOW, "pending"),
+            CiStatus::Unknown => ("", colors::OVERLAY, ""),
+        };
+        let mut ci_spans = vec![
+            Span::styled(format!("CI {ci_sym} "), Style::default().fg(ci_color)),
+            Span::styled(ci_label, Style::default().fg(ci_color)),
+        ];
+        if let Some(ref wf) = repo.ci_workflow {
+            ci_spans.push(Span::styled(
+                format!(" · {wf}"),
+                Style::default().fg(colors::OVERLAY),
+            ));
+        }
+        if let Some(ref dur) = repo.ci_duration {
+            ci_spans.push(Span::styled(
+                format!(" · {dur}"),
+                Style::default().fg(colors::OVERLAY),
+            ));
+        }
+        lines.push(Line::from(ci_spans));
+    }
+
+    // PRs
+    if !repo.prs.is_empty() {
+        let pr_label = if repo.prs.len() == 1 { "PR" } else { "PRs" };
+        lines.push(Line::from(Span::styled(
+            format!("{} open {pr_label}", repo.prs.len()),
+            Style::default().fg(colors::MAUVE),
+        )));
+        for pr in &repo.prs {
+            let age = format_age(pr.created_at);
+            let review = pr.review_status.label();
+            let mut pr_spans = vec![
+                Span::styled(
+                    format!("  #{}", pr.number),
+                    Style::default().fg(colors::MAUVE),
+                ),
+                Span::raw(" "),
+                Span::styled(pr.title.clone(), Style::default().fg(colors::TEXT)),
+            ];
+            pr_spans.push(Span::styled(
+                format!("  {} · {age}", pr.author),
+                Style::default().fg(colors::OVERLAY),
+            ));
+            if !review.is_empty() {
+                pr_spans.push(Span::styled(
+                    format!(" · {review}"),
+                    Style::default().fg(colors::OVERLAY),
+                ));
+            }
+            lines.push(Line::from(pr_spans));
+        }
+    } else if repo.pr_count > 0 {
         let pr_label = if repo.pr_count == 1 { "PR" } else { "PRs" };
         lines.push(Line::from(Span::styled(
             format!("{} open {pr_label}", repo.pr_count),
@@ -232,6 +344,55 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         )));
     }
 
+    // Worktrees
+    if !repo.worktrees.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("{} worktree{}", repo.worktrees.len(), if repo.worktrees.len() == 1 { "" } else { "s" }),
+            Style::default().fg(colors::OVERLAY),
+        )));
+        for wt in &repo.worktrees {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {}", wt.branch), Style::default().fg(colors::TEXT)),
+                Span::styled(format!("  {}", wt.path), Style::default().fg(colors::OVERLAY)),
+            ]));
+        }
+    }
+
+    // Stashes
+    if repo.stash_count > 0 {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("{} stash{}", repo.stash_count, if repo.stash_count == 1 { "" } else { "es" }),
+            Style::default().fg(colors::OVERLAY),
+        )));
+        for entry in &repo.stash_entries {
+            lines.push(Line::from(Span::styled(
+                format!("  {entry}"),
+                Style::default().fg(colors::OVERLAY),
+            )));
+        }
+    }
+
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+}
+
+fn format_age(created: DateTime<Utc>) -> String {
+    let diff = Utc::now() - created;
+    let days = diff.num_days();
+    if days == 0 {
+        let hours = diff.num_hours();
+        if hours == 0 {
+            format!("{}m ago", diff.num_minutes().max(1))
+        } else {
+            format!("{hours}h ago")
+        }
+    } else if days == 1 {
+        "1d ago".to_string()
+    } else if days < 30 {
+        format!("{days}d ago")
+    } else {
+        format!("{}mo ago", days / 30)
+    }
 }
