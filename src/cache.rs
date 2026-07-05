@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 /// Disk-based cache for GitHub API responses.
-/// Stores raw JSON at `~/.cache/epoz/github.json`.
+/// Stores raw JSON at `~/.cache/fleetz/github.json`.
 pub struct ApiCache {
     path: PathBuf,
     ttl: Duration,
@@ -12,7 +12,7 @@ impl ApiCache {
     pub fn new(ttl_secs: u64) -> Self {
         let cache_dir = dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("~/.cache"))
-            .join("epoz");
+            .join("fleetz");
         Self {
             path: cache_dir.join("github.json"),
             ttl: Duration::from_secs(ttl_secs),
@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn cache_write_and_read() {
-        let dir = std::env::temp_dir().join("epoz_cache_test");
+        let dir = std::env::temp_dir().join("fleetz_cache_test");
         let _ = std::fs::remove_dir_all(&dir);
         let cache = ApiCache {
             path: dir.join("test.json"),
@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn cache_expired_returns_none() {
-        let dir = std::env::temp_dir().join("epoz_cache_expired");
+        let dir = std::env::temp_dir().join("fleetz_cache_expired");
         let _ = std::fs::remove_dir_all(&dir);
         let cache = ApiCache {
             path: dir.join("test.json"),

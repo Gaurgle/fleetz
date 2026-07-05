@@ -1,4 +1,4 @@
-# epoz
+# fleetz
 
 ![Rust](https://img.shields.io/badge/rust-stable-dea584?logo=rust)
 ![Platform](https://img.shields.io/badge/platform-macOS%20·%20Linux-lightgrey)
@@ -10,7 +10,7 @@
 
 Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/Gaurgle/repoz).
 
-`repoz` answers "what's the state right now?" in one shot. `epoz` is the dashboard you leave open: live status across all your repos, with pulls, branch cleanup, PR details, and CI badges one keystroke away.
+`repoz` answers "what's the state right now?" in one shot. `fleetz` is the dashboard you leave open: live status across all your repos, with pulls, branch cleanup, PR details, and CI badges one keystroke away.
 
 ## What it shows
 
@@ -26,8 +26,8 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 Requires the Rust toolchain (`cargo`).
 
 ```bash
-git clone https://github.com/Gaurgle/epoz.git
-cd epoz
+git clone https://github.com/Gaurgle/fleetz.git
+cd fleetz
 cargo install --path .
 ```
 
@@ -40,7 +40,7 @@ You also need:
 ## Usage
 
 ```bash
-epoz [options]
+fleetz [options]
 ```
 
 ### Modes (pick one)
@@ -66,12 +66,12 @@ epoz [options]
 ### Examples
 
 ```bash
-epoz                                # what changed since I last sat down
-epoz --since 1w                     # last week
-epoz --since 1w --author andreas    # only my commits
-epoz -a -p                          # everything plus PR counts
-epoz -d                             # local dirty repos only
-epoz --watch                        # live dashboard, auto-refreshes
+fleetz                                # what changed since I last sat down
+fleetz --since 1w                     # last week
+fleetz --since 1w --author andreas    # only my commits
+fleetz -a -p                          # everything plus PR counts
+fleetz -d                             # local dirty repos only
+fleetz --watch                        # live dashboard, auto-refreshes
 ```
 
 ## Keybindings
@@ -97,7 +97,7 @@ epoz --watch                        # live dashboard, auto-refreshes
 
 ## Config
 
-Optional config at `~/.config/epoz/config.toml`:
+Optional config at `~/.config/fleetz/config.toml` (a legacy `~/.config/epoz/config.toml` is still read as a fallback):
 
 ```toml
 # Time slot boundaries (24h)
@@ -128,13 +128,13 @@ The three time slots are derived from `work_start` and `work_end`:
 
 | Slot | Default |
 |------|---------|
-| Work | 09:00–18:00 |
-| Evening | 18:00–00:00 |
-| Night | 00:00–09:00 |
+| Work | 09:00-18:00 |
+| Evening | 18:00-00:00 |
+| Night | 00:00-09:00 |
 
 ## How it relates to repoz
 
-| | repoz | epoz |
+| | repoz | fleetz |
 |---|---|---|
 | Form | Bash one-shot | Rust TUI |
 | Output | Static text dump | Interactive dashboard |
@@ -145,7 +145,7 @@ The three time slots are derived from `work_start` and `work_end`:
 | Caching | None | GitHub API disk cache |
 | Watch mode | No | `--watch` for tmux |
 
-Same flag set, same time-slot logic. `repoz` is the script you pipe; `epoz` is the dashboard you live in.
+Same flag set, same time-slot logic. `repoz` is the script you pipe; `fleetz` is the dashboard you live in.
 
 ## Stack
 
@@ -154,6 +154,39 @@ Rust, [ratatui](https://github.com/ratatui/ratatui), [crossterm](https://github.
 ## Status
 
 Personal project, used daily. Public API and config keys may shift before a 1.0 tag.
+
+## Roadmap
+
+Toward a true realtime dashboard (today `--watch` only re-reads local git state
+on an interval, inline on the UI task, and GitHub data is fetched once at startup):
+
+- Background refresh: per-repo `tokio::spawn` tasks feeding the UI over an mpsc
+  channel, `tokio::select!` with the crossterm `EventStream` so refresh never
+  freezes the UI; tick-based redraw so updates paint without a keypress.
+- `git fetch` in the refresh cycle so ahead/behind stops going stale mid-session.
+- Filesystem events (`notify` on `.git/HEAD`, `.git/refs/`, index) with a
+  debounce: dirty/branch changes appear in milliseconds, not on the interval.
+- GitHub conditional polling with stored ETags (`If-None-Match`) so PR and CI
+  badges refresh live without burning rate limit.
+
+First-class worktrees (today: a read-only `Nw` badge and a path list, only for
+GitHub-matched repos):
+
+- A `w` overlay like the branch overlay: per-worktree dirty/ahead-behind,
+  Enter opens lazygit or a shell there.
+- Create and prune from the overlay (`git worktree add` under a configured
+  root; prune merged ones with the existing y/n confirm flow).
+- Per-worktree dirty state surfaced in the main views (badge + `-d` mode), so
+  uncommitted work in a worktree stops being invisible.
+
+Shared core with repoz: extract discovery, git porcelain parsing, and the
+GitHub client + cache into a library crate both tools consume; a repoz TUI (or
+rewrite) becomes a thin one-shot frontend over the same `RepoStatus` snapshot,
+with `--json` output for free.
+
+## History
+
+This tool was previously named `epoz`. The `epoz` name now belongs to the desktop app in the notez2 project; the TUI lives on as `fleetz`, the interactive sibling of `repoz`.
 
 ## See also
 

@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn find_in_primary_finds_matching_repos() {
-        let dir = std::env::temp_dir().join("epoz_test_primary");
+        let dir = std::env::temp_dir().join("fleetz_test_primary");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let names = setup_test_repos(&dir);
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn find_in_primary_is_case_insensitive() {
-        let dir = std::env::temp_dir().join("epoz_test_case");
+        let dir = std::env::temp_dir().join("fleetz_test_case");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("MyRepo").join(".git")).unwrap();
 
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn find_in_primary_ignores_non_matching() {
-        let dir = std::env::temp_dir().join("epoz_test_nomatch");
+        let dir = std::env::temp_dir().join("fleetz_test_nomatch");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("other").join(".git")).unwrap();
 
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn find_all_local_returns_all_git_dirs() {
-        let dir = std::env::temp_dir().join("epoz_test_all");
+        let dir = std::env::temp_dir().join("fleetz_test_all");
         let _ = fs::remove_dir_all(&dir);
         setup_test_repos(&dir);
 
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn scan_respects_max_depth() {
-        let dir = std::env::temp_dir().join("epoz_test_depth");
+        let dir = std::env::temp_dir().join("fleetz_test_depth");
         let _ = fs::remove_dir_all(&dir);
         // Create a repo at depth 5 — should not be found at maxdepth 3
         let deep = dir.join("a").join("b").join("c").join("d").join("deep");

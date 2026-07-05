@@ -179,7 +179,7 @@ pub async fn fetch_repos(
     let resp = client
         .post("https://api.github.com/graphql")
         .header("Authorization", format!("bearer {token}"))
-        .header("User-Agent", "epoz")
+        .header("User-Agent", "fleetz")
         .json(&serde_json::json!({ "query": query }))
         .send()
         .await

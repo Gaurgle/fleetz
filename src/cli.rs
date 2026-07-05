@@ -2,8 +2,8 @@ use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "epoz",
-    about = "Multi-repo dashboard TUI — see what changed across your repos"
+    name = "fleetz",
+    about = "Multi-repo dashboard TUI: see what changed across your repos"
 )]
 pub struct Args {
     /// Show all activity since DATE (e.g. 2026-03-15, yesterday, 3d, 1w)
@@ -75,37 +75,37 @@ mod tests {
 
     #[test]
     fn default_mode_is_auto() {
-        let args = Args::parse_from(["epoz"]);
+        let args = Args::parse_from(["fleetz"]);
         assert_eq!(args.mode(), Mode::Auto);
     }
 
     #[test]
     fn dirty_flag() {
-        let args = Args::parse_from(["epoz", "-d"]);
+        let args = Args::parse_from(["fleetz", "-d"]);
         assert_eq!(args.mode(), Mode::Dirty);
     }
 
     #[test]
     fn since_flag() {
-        let args = Args::parse_from(["epoz", "--since", "3d"]);
+        let args = Args::parse_from(["fleetz", "--since", "3d"]);
         assert_eq!(args.mode(), Mode::Since("3d".to_string()));
     }
 
     #[test]
     fn today_flag() {
-        let args = Args::parse_from(["epoz", "-t"]);
+        let args = Args::parse_from(["fleetz", "-t"]);
         assert_eq!(args.mode(), Mode::Today);
     }
 
     #[test]
     fn all_flag() {
-        let args = Args::parse_from(["epoz", "-a"]);
+        let args = Args::parse_from(["fleetz", "-a"]);
         assert_eq!(args.mode(), Mode::All);
     }
 
     #[test]
     fn combined_flags() {
-        let args = Args::parse_from(["epoz", "--since", "1w", "--author", "andreas", "-s", "-p"]);
+        let args = Args::parse_from(["fleetz", "--since", "1w", "--author", "andreas", "-s", "-p"]);
         assert_eq!(args.mode(), Mode::Since("1w".to_string()));
         assert_eq!(args.author.as_deref(), Some("andreas"));
         assert!(args.stat);

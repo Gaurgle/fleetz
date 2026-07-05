@@ -1,8 +1,8 @@
 [package]
-name = "epoz"
+name = "fleetz"
 version = "0.1.0"
 edition = "2024"
-description = "Multi-repo dashboard TUI — see what changed across your repos"
+description = "Multi-repo dashboard TUI: see what changed across your repos"
 license = "MIT"
 
 [dependencies]

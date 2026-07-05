@@ -61,7 +61,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 
     let mut spans = vec![
         Span::styled(
-            " epoz",
+            " fleetz",
             Style::default()
                 .fg(colors::LAVENDER)
                 .add_modifier(Modifier::BOLD),

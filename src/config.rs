@@ -30,11 +30,15 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Load config from `~/.config/epoz/config.toml`, falling back to defaults.
+    /// Load config from `~/.config/fleetz/config.toml`, falling back to the
+    /// legacy `~/.config/epoz/config.toml` (pre-rename), then to defaults.
     pub fn load() -> Self {
-        let path = config_path();
+        let path = config_path("fleetz");
+        let legacy = config_path("epoz");
         if path.exists() {
             Self::load_from(&path).unwrap_or_default()
+        } else if legacy.exists() {
+            Self::load_from(&legacy).unwrap_or_default()
         } else {
             Self::default()
         }
@@ -55,10 +59,10 @@ impl Config {
     }
 }
 
-fn config_path() -> PathBuf {
+fn config_path(app_dir: &str) -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("epoz")
+        .join(app_dir)
         .join("config.toml")
 }
 
@@ -111,7 +115,7 @@ mod tests {
 
     #[test]
     fn invalid_toml_returns_error() {
-        let dir = std::env::temp_dir().join("epoz_test_bad_config");
+        let dir = std::env::temp_dir().join("fleetz_test_bad_config");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
         std::fs::write(&path, "not = [valid toml {{").unwrap();
