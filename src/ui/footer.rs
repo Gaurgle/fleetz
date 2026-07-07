@@ -9,21 +9,28 @@ use crate::model::Summary;
 use crate::ui::colors;
 
 /// Render the footer: summary stats on the left, keybind hints on the right.
+///
+/// Never lets the two sides collide: hints drop their descriptions first
+/// (keys only) when tight, and the summary drops entirely if even that
+/// doesn't fit, rather than risk a negative spacer width.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let summary = app.summary();
+    let width = area.width as usize;
 
-    // Build summary spans
-    let mut spans = summary_spans(&summary, app.show_prs);
+    let full_summary = summary_spans(&summary, app.show_prs);
+    let full_hints = keybind_hints(app.view, true);
+    let compact_hints = keybind_hints(app.view, false);
 
-    // Add keybind hints on the right
-    let hints = keybind_hints(app.view);
-    let spacer_width = area.width as usize - line_width(&spans) - line_width(&hints);
-    let spacer = if spacer_width > 2 {
-        " ".repeat(spacer_width)
+    let (mut spans, hints) = if fits(width, &full_summary, &full_hints) {
+        (full_summary, full_hints)
+    } else if fits(width, &full_summary, &compact_hints) {
+        (full_summary, compact_hints)
     } else {
-        "  ".to_string()
+        (Vec::new(), compact_hints)
     };
-    spans.push(Span::raw(spacer));
+
+    let spacer_width = width.saturating_sub(line_width(&spans) + line_width(&hints));
+    spans.push(Span::raw(" ".repeat(spacer_width.max(1))));
     spans.extend(hints);
 
     let line = Line::from(spans);
@@ -90,33 +97,48 @@ fn summary_spans(summary: &Summary, show_prs: bool) -> Vec<Span<'static>> {
     spans
 }
 
-fn keybind_hints(view: View) -> Vec<Span<'static>> {
+/// Keybind hints. `with_desc` shows the trailing word ("lazygit", "pull", ...);
+/// set false to fall back to keys only when space is tight.
+fn keybind_hints(view: View, with_desc: bool) -> Vec<Span<'static>> {
     let key_style = Style::default()
         .fg(colors::TEXT)
         .add_modifier(Modifier::BOLD);
     let desc_style = Style::default().fg(colors::OVERLAY);
-    let gap = Span::raw("  ");
+    let gap = Span::raw(if with_desc { "  " } else { " " });
 
     let view_hint = match view {
         View::Detail => "compact",
         View::Compact => "detail",
     };
 
-    vec![
-        Span::styled("[enter]", key_style),
-        Span::styled(" lazygit", desc_style),
-        gap.clone(),
-        Span::styled("[p]", key_style),
-        Span::styled(" pull", desc_style),
-        gap.clone(),
-        Span::styled("[v]", key_style),
-        Span::styled(format!(" {view_hint}"), desc_style),
-        gap.clone(),
-        Span::styled("[q]", key_style),
-        Span::styled(" quit", desc_style),
-    ]
+    let mut hints = vec![Span::styled("[enter]", key_style)];
+    if with_desc {
+        hints.push(Span::styled(" lazygit", desc_style));
+    }
+    hints.push(gap.clone());
+    hints.push(Span::styled("[p]", key_style));
+    if with_desc {
+        hints.push(Span::styled(" pull", desc_style));
+    }
+    hints.push(gap.clone());
+    hints.push(Span::styled("[v]", key_style));
+    if with_desc {
+        hints.push(Span::styled(format!(" {view_hint}"), desc_style));
+    }
+    hints.push(gap.clone());
+    hints.push(Span::styled("[q]", key_style));
+    if with_desc {
+        hints.push(Span::styled(" quit", desc_style));
+    }
+    hints
 }
 
 fn line_width(spans: &[Span]) -> usize {
     spans.iter().map(|s| s.content.len()).sum()
+}
+
+/// Whether summary + hints fit side by side in `width` with at least one
+/// column of breathing room between them.
+fn fits(width: usize, spans: &[Span], hints: &[Span]) -> bool {
+    line_width(spans) + line_width(hints) < width
 }

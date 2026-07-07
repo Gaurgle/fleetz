@@ -56,30 +56,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let col_width = (content.width as usize / 2).saturating_sub(1);
+    // Below this width a second column would squeeze each repo's name/status
+    // below a usable minimum, so fall back to one dense column instead.
+    const MIN_TWO_COL_WIDTH: usize = 48;
+    let columns = if content.width as usize >= MIN_TWO_COL_WIDTH { 2 } else { 1 };
+    let col_width = (content.width as usize / columns).saturating_sub(1);
+
+    let selected = app.selected_repo_index().unwrap_or(usize::MAX);
     let mut lines: Vec<Line> = Vec::new();
 
-    // Pair repos into rows of two
-    let pairs: Vec<_> = visible.chunks(2).collect();
-    for pair in pairs {
-        let left = &pair[0];
-        let right = pair.get(1);
-
-        let is_left_selected = left.0 == app.selected_repo_index().unwrap_or(usize::MAX);
-        let left_spans = compact_repo_spans(left.1, is_left_selected, col_width);
-
-        let mut row_spans = left_spans;
-
-        if let Some(right_entry) = right {
-            let is_right_selected =
-                right_entry.0 == app.selected_repo_index().unwrap_or(usize::MAX);
-            // Pad left column to col_width
-            let left_text_len: usize = row_spans.iter().map(|s| s.content.len()).sum();
-            let pad = col_width.saturating_sub(left_text_len) + 2;
-            row_spans.push(Span::raw(" ".repeat(pad)));
-            row_spans.extend(compact_repo_spans(right_entry.1, is_right_selected, col_width));
+    for row in visible.chunks(columns) {
+        let mut row_spans: Vec<Span<'static>> = Vec::new();
+        for (i, entry) in row.iter().enumerate() {
+            if i > 0 {
+                let prev_len: usize = row_spans.iter().map(|s| s.content.chars().count()).sum();
+                let pad = col_width.saturating_sub(prev_len) + 2;
+                row_spans.push(Span::raw(" ".repeat(pad)));
+            }
+            row_spans.extend(compact_repo_spans(entry.1, entry.0 == selected, col_width));
         }
-
         lines.push(Line::from(row_spans));
     }
 
@@ -124,14 +119,21 @@ fn compact_repo_spans(repo: &RepoStatus, is_selected: bool, max_width: usize) ->
         badge_len += format!(" {}w", repo.worktrees.len()).len();
     }
 
-    let left_len = marker.len() + repo.name.len() + 1;
     let right_len = badge_len + 1;
+    // Reserve room for the marker, at least one dot, and the badges; whatever
+    // remains is the name's budget -- truncate it rather than let it (and
+    // everything after it) overflow into the next column.
+    let reserved = marker.len() + 1 + right_len;
+    let name_budget = max_width.saturating_sub(reserved).max(3);
+    let name = crate::ui::truncate(&repo.name, name_budget);
+
+    let left_len = marker.len() + name.chars().count() + 1;
     let dot_count = max_width.saturating_sub(left_len + right_len).max(1);
     let dots = "·".repeat(dot_count);
 
     let mut spans = vec![
         Span::raw(marker.to_string()),
-        Span::styled(repo.name.clone(), name_style),
+        Span::styled(name, name_style),
         Span::styled(format!(" {dots} "), Style::default().fg(colors::SURFACE)),
         Span::styled(status, Style::default().fg(status_color)),
     ];

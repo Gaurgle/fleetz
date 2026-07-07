@@ -162,11 +162,33 @@ pub struct App {
     pub filters: QuickFilters,
 }
 
+/// Below this width or height, `Detail`'s list+detail split doesn't have
+/// enough room to be useful, so `Compact`'s dense single-line-per-repo grid
+/// is the better default. `v` still lets the user override it either way.
+const SMALL_WIDTH: u16 = 70;
+const SMALL_HEIGHT: u16 = 20;
+
+/// Pick the view a fresh terminal size should start in.
+pub fn initial_view(term_width: u16, term_height: u16) -> View {
+    if term_width < SMALL_WIDTH || term_height < SMALL_HEIGHT {
+        View::Compact
+    } else {
+        View::Detail
+    }
+}
+
 impl App {
-    pub fn new(repos: Vec<RepoStatus>, header: String, show_prs: bool, show_stat: bool) -> Self {
+    pub fn new(
+        repos: Vec<RepoStatus>,
+        header: String,
+        show_prs: bool,
+        show_stat: bool,
+        term_width: u16,
+        term_height: u16,
+    ) -> Self {
         Self {
             repos,
-            view: View::Detail,
+            view: initial_view(term_width, term_height),
             overlay: Overlay::None,
             selected: 0,
             search_query: String::new(),
@@ -380,9 +402,11 @@ mod tests {
                 stash_count: 0,
                 stash_entries: vec![],
                 worktrees: vec![],
+                reflog: vec![],
+                graph: vec![],
             })
             .collect();
-        App::new(repos, "test".to_string(), false, false)
+        App::new(repos, "test".to_string(), false, false, 120, 40)
     }
 
     #[test]
@@ -408,6 +432,17 @@ mod tests {
             app.move_down();
         }
         assert_eq!(app.selected, 2);
+    }
+
+    #[test]
+    fn initial_view_small_terminal_is_compact() {
+        assert_eq!(initial_view(SMALL_WIDTH - 1, 40), View::Compact);
+        assert_eq!(initial_view(120, SMALL_HEIGHT - 1), View::Compact);
+    }
+
+    #[test]
+    fn initial_view_roomy_terminal_is_detail() {
+        assert_eq!(initial_view(SMALL_WIDTH, SMALL_HEIGHT), View::Detail);
     }
 
     #[test]

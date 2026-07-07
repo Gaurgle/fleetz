@@ -140,15 +140,21 @@ fn repo_list_item(repo: &RepoStatus, is_selected: bool, col_width: usize) -> Lis
         badge_len += format!(" {}w", repo.worktrees.len()).len();
     }
 
-    // Dot-fill between name and right-aligned badges
-    let left_len = marker.len() + repo.name.len() + 1; // +1 for space before dots
+    // Dot-fill between name and right-aligned badges. Truncate the name with
+    // an ellipsis rather than let it (and the badges after it) overflow the
+    // column when the pane is narrow.
     let right_len = badge_len + 1; // +1 for space after dots
+    let reserved = marker.len() + 1 + right_len;
+    let name_budget = col_width.saturating_sub(reserved).max(3);
+    let name = crate::ui::truncate(&repo.name, name_budget);
+
+    let left_len = marker.len() + name.chars().count() + 1; // +1 for space before dots
     let dot_count = col_width.saturating_sub(left_len + right_len).max(1);
     let dots = "·".repeat(dot_count);
 
     let mut spans = vec![
         Span::raw(marker.to_string()),
-        Span::styled(repo.name.clone(), name_style),
+        Span::styled(name, name_style),
         Span::styled(format!(" {dots} "), Style::default().fg(colors::SURFACE)),
         Span::styled(status, Style::default().fg(status_color)),
     ];
@@ -242,6 +248,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     let inner = panel.inner(area);
     frame.render_widget(panel, area);
     let area = inner;
+    let width = area.width as usize;
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -266,12 +273,10 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     ]));
     lines.push(Line::from(""));
 
-    // Branches
+    // Branches (worktrees shown inline under the branch they're checked out on)
+    let mut shown_worktrees = std::collections::HashSet::new();
     if !repo.branches.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "branches",
-            Style::default().fg(colors::OVERLAY),
-        )));
+        lines.push(Line::from(section_label("branches")));
         for b in &repo.branches {
             let mut branch_spans = vec![Span::styled(
                 format!("  {}", b.name),
@@ -294,24 +299,45 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
                     .push(Span::styled(" ✓", Style::default().fg(colors::GREEN)));
             }
             lines.push(Line::from(branch_spans));
+
+            for wt in repo.worktrees.iter().filter(|wt| wt.branch == b.name) {
+                shown_worktrees.insert(&wt.path);
+                lines.push(Line::from(Span::styled(
+                    format!("    ⎇ {}", wt.path),
+                    Style::default().fg(colors::OVERLAY),
+                )));
+            }
         }
         lines.push(Line::from(""));
     }
 
-    // Recent commits
+    // Recent commits. The message is truncated to what's left after the
+    // hash/diffstat/author -- letting it wrap instead orphans the author
+    // onto its own line, which reads as broken rather than as a long commit.
     if !repo.commits.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "recent commits",
-            Style::default().fg(colors::OVERLAY),
-        )));
+        lines.push(Line::from(section_label("recent commits")));
         for c in &repo.commits {
+            let prefix_len = 2 + c.hash.chars().count() + 1;
+            let mut stat_len = 0;
+            if c.insertions > 0 {
+                stat_len += format!("  +{}", c.insertions).chars().count();
+            }
+            if c.deletions > 0 {
+                stat_len += format!(" -{}", c.deletions).chars().count();
+            }
+            let author_len = 2 + c.author.chars().count();
+            let msg_budget = width
+                .saturating_sub(prefix_len + stat_len + author_len)
+                .max(10);
+            let message = crate::ui::truncate(&c.message, msg_budget);
+
             let mut commit_spans = vec![
                 Span::styled(
                     format!("  {}", c.hash),
                     Style::default().fg(colors::HASH_CLR),
                 ),
                 Span::raw(" "),
-                Span::styled(c.message.clone(), Style::default().fg(colors::TEXT)),
+                Span::styled(message, Style::default().fg(colors::TEXT)),
             ];
 
             if c.insertions > 0 || c.deletions > 0 {
@@ -338,6 +364,76 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             ));
 
             lines.push(Line::from(commit_spans));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // History graph -- git's own --graph topology, just colorized: the
+    // ASCII structure dimmed, hash/refs/message carrying the color.
+    if !repo.graph.is_empty() {
+        lines.push(Line::from(section_label("history")));
+        for g in &repo.graph {
+            if g.hash.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", g.prefix),
+                    Style::default().fg(colors::SURFACE),
+                )));
+                continue;
+            }
+            let prefix_len = 2 + g.prefix.chars().count();
+            let refs_len = if g.refs.is_empty() {
+                0
+            } else {
+                1 + g.refs.chars().count()
+            };
+            let msg_budget = width
+                .saturating_sub(prefix_len + g.hash.chars().count() + refs_len + 1)
+                .max(10);
+            let message = crate::ui::truncate(&g.message, msg_budget);
+
+            let mut graph_spans = vec![
+                Span::styled(format!("  {}", g.prefix), Style::default().fg(colors::SURFACE)),
+                Span::styled(g.hash.clone(), Style::default().fg(colors::HASH_CLR)),
+            ];
+            if !g.refs.is_empty() {
+                graph_spans.push(Span::styled(
+                    format!(" {}", g.refs),
+                    Style::default().fg(colors::MAUVE),
+                ));
+            }
+            graph_spans.push(Span::raw(" "));
+            graph_spans.push(Span::styled(message, Style::default().fg(colors::TEXT)));
+            lines.push(Line::from(graph_spans));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Reflog -- recent HEAD movements, for a "what did I just do" glance.
+    if !repo.reflog.is_empty() {
+        lines.push(Line::from(section_label("reflog")));
+        for entry in &repo.reflog {
+            let prefix_len = 2 + entry.hash.chars().count();
+            let action_len = if entry.action.is_empty() {
+                0
+            } else {
+                1 + entry.action.chars().count()
+            };
+            let msg_budget = width.saturating_sub(prefix_len + action_len + 1).max(10);
+            let description = crate::ui::truncate(&entry.description, msg_budget);
+
+            let mut reflog_spans = vec![Span::styled(
+                format!("  {}", entry.hash),
+                Style::default().fg(colors::HASH_CLR),
+            )];
+            if !entry.action.is_empty() {
+                reflog_spans.push(Span::styled(
+                    format!(" {}", entry.action),
+                    Style::default().fg(colors::MAUVE),
+                ));
+            }
+            reflog_spans.push(Span::raw(" "));
+            reflog_spans.push(Span::styled(description, Style::default().fg(colors::TEXT)));
+            lines.push(Line::from(reflog_spans));
         }
         lines.push(Line::from(""));
     }
@@ -372,25 +468,35 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // PRs
     if !repo.prs.is_empty() {
         let pr_label = if repo.prs.len() == 1 { "PR" } else { "PRs" };
-        lines.push(Line::from(Span::styled(
-            format!("{} open {pr_label}", repo.prs.len()),
-            Style::default().fg(colors::MAUVE),
-        )));
+        lines.push(Line::from(section_label(&format!(
+            "{} open {pr_label}",
+            repo.prs.len()
+        ))));
         for pr in &repo.prs {
             let age = format_age(pr.created_at);
             let review = pr.review_status.label();
+
+            let number_len = 3 + pr.number.to_string().chars().count();
+            let trailer = format!("  {} · {age}", pr.author);
+            let review_len = if review.is_empty() {
+                0
+            } else {
+                3 + review.chars().count()
+            };
+            let title_budget = width
+                .saturating_sub(number_len + trailer.chars().count() + review_len)
+                .max(10);
+            let title = crate::ui::truncate(&pr.title, title_budget);
+
             let mut pr_spans = vec![
                 Span::styled(
                     format!("  #{}", pr.number),
                     Style::default().fg(colors::MAUVE),
                 ),
                 Span::raw(" "),
-                Span::styled(pr.title.clone(), Style::default().fg(colors::TEXT)),
+                Span::styled(title, Style::default().fg(colors::TEXT)),
             ];
-            pr_spans.push(Span::styled(
-                format!("  {} · {age}", pr.author),
-                Style::default().fg(colors::OVERLAY),
-            ));
+            pr_spans.push(Span::styled(trailer, Style::default().fg(colors::OVERLAY)));
             if !review.is_empty() {
                 pr_spans.push(Span::styled(
                     format!(" · {review}"),
@@ -401,20 +507,23 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         }
     } else if repo.pr_count > 0 {
         let pr_label = if repo.pr_count == 1 { "PR" } else { "PRs" };
-        lines.push(Line::from(Span::styled(
-            format!("{} open {pr_label}", repo.pr_count),
-            Style::default().fg(colors::MAUVE),
-        )));
+        lines.push(Line::from(section_label(&format!(
+            "{} open {pr_label}",
+            repo.pr_count
+        ))));
     }
 
-    // Worktrees
-    if !repo.worktrees.is_empty() {
+    // Worktrees not matched to a local branch above (e.g. detached HEAD) --
+    // the common case is already shown inline under its branch.
+    let orphan_worktrees: Vec<_> = repo
+        .worktrees
+        .iter()
+        .filter(|wt| !shown_worktrees.contains(&wt.path))
+        .collect();
+    if !orphan_worktrees.is_empty() {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("{} worktree{}", repo.worktrees.len(), if repo.worktrees.len() == 1 { "" } else { "s" }),
-            Style::default().fg(colors::OVERLAY),
-        )));
-        for wt in &repo.worktrees {
+        lines.push(Line::from(section_label("other worktrees")));
+        for wt in orphan_worktrees {
             lines.push(Line::from(vec![
                 Span::styled(format!("  {}", wt.branch), Style::default().fg(colors::TEXT)),
                 Span::styled(format!("  {}", wt.path), Style::default().fg(colors::OVERLAY)),
@@ -425,10 +534,11 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // Stashes
     if repo.stash_count > 0 {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("{} stash{}", repo.stash_count, if repo.stash_count == 1 { "" } else { "es" }),
-            Style::default().fg(colors::OVERLAY),
-        )));
+        lines.push(Line::from(section_label(&format!(
+            "{} stash{}",
+            repo.stash_count,
+            if repo.stash_count == 1 { "" } else { "es" }
+        ))));
         for entry in &repo.stash_entries {
             lines.push(Line::from(Span::styled(
                 format!("  {entry}"),
@@ -439,6 +549,16 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+}
+
+/// A bold section header inside the detail pane (e.g. "branches", "history").
+fn section_label(text: &str) -> Span<'static> {
+    Span::styled(
+        text.to_string(),
+        Style::default()
+            .fg(colors::MAUVE)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 fn format_age(created: DateTime<Utc>) -> String {

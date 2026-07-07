@@ -171,6 +171,8 @@ mod tests {
             stash_count: 0,
             stash_entries: vec![],
             worktrees: vec![],
+            reflog: vec![],
+            graph: vec![],
         }
     }
 

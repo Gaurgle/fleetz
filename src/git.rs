@@ -1,4 +1,4 @@
-use crate::model::{BranchStatus, Commit};
+use crate::model::{BranchStatus, Commit, GraphLine, ReflogEntry};
 use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
@@ -34,7 +34,44 @@ pub async fn branch_statuses(repo_path: &Path) -> Vec<BranchStatus> {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_branch_output(&stdout)
+    let mut statuses = parse_branch_output(&stdout);
+
+    // `upstream:track` only measures divergence from a branch's own upstream. A
+    // branch whose upstream is stale (e.g. a leftover worktree branch already
+    // merged into main via a different ref) still reports "ahead" there even
+    // though the commits are safely on the remote. Recheck against ALL remotes
+    // before reporting a branch as genuinely unpushed.
+    for status in &mut statuses {
+        if status.ahead > 0 {
+            status.ahead = count_unreachable_from_remotes(repo_path, &status.name).await;
+        }
+    }
+
+    statuses
+}
+
+/// Count commits on `branch` not reachable from any remote-tracking ref.
+async fn count_unreachable_from_remotes(repo_path: &Path, branch: &str) -> u32 {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "rev-list",
+            "--count",
+            branch,
+            "--not",
+            "--remotes",
+        ])
+        .output()
+        .await;
+
+    match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0),
+        _ => 0,
+    }
 }
 
 /// Parse the output of `git for-each-ref` into BranchStatus structs.
@@ -178,6 +215,110 @@ fn extract_stat_number(line: &str, keyword: &str) -> u32 {
         }
     }
     0
+}
+
+/// Get the last `limit` reflog entries -- HEAD movements, for a "what did I
+/// just do" recovery glance.
+pub async fn reflog(repo_path: &Path, limit: u32) -> Vec<ReflogEntry> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "reflog",
+            "--format=REFLOG|%h|%gs",
+            "-n",
+            &limit.to_string(),
+        ])
+        .output()
+        .await;
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_reflog_output(&stdout)
+}
+
+fn parse_reflog_output(output: &str) -> Vec<ReflogEntry> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("REFLOG|")?;
+            let parts: Vec<&str> = rest.splitn(2, '|').collect();
+            if parts.len() != 2 {
+                return None;
+            }
+            let (action, description) = match parts[1].split_once(": ") {
+                Some((a, d)) => (a.to_string(), d.to_string()),
+                None => (String::new(), parts[1].to_string()),
+            };
+            Some(ReflogEntry {
+                hash: parts[0].to_string(),
+                action,
+                description,
+            })
+        })
+        .collect()
+}
+
+/// Render `git log --graph` over the given local branches (their union of
+/// reachable commits), limited to `limit` commits. The graph's ASCII
+/// topology is git's own -- we just capture and colorize it, rather than
+/// recomputing branch layout ourselves.
+pub async fn graph(repo_path: &Path, branches: &[String], limit: u32) -> Vec<GraphLine> {
+    if branches.is_empty() {
+        return Vec::new();
+    }
+
+    let mut args = vec![
+        "-C".to_string(),
+        repo_path.to_string_lossy().to_string(),
+        "log".to_string(),
+        "--graph".to_string(),
+        "--color=never".to_string(),
+        "--format=GRAPH|%h|%d|%s".to_string(),
+        "-n".to_string(),
+        limit.to_string(),
+    ];
+    args.extend(branches.iter().cloned());
+
+    let output = Command::new("git").args(&args).output().await;
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_graph_output(&stdout)
+}
+
+fn parse_graph_output(output: &str) -> Vec<GraphLine> {
+    const MARKER: &str = "GRAPH|";
+    output
+        .lines()
+        .map(|line| match line.find(MARKER) {
+            Some(idx) => {
+                let prefix = line[..idx].to_string();
+                let rest = &line[idx + MARKER.len()..];
+                let parts: Vec<&str> = rest.splitn(3, '|').collect();
+                GraphLine {
+                    prefix,
+                    hash: parts.first().unwrap_or(&"").to_string(),
+                    refs: parts.get(1).unwrap_or(&"").trim().to_string(),
+                    message: parts.get(2).unwrap_or(&"").to_string(),
+                }
+            }
+            None => GraphLine {
+                prefix: line.to_string(),
+                hash: String::new(),
+                refs: String::new(),
+                message: String::new(),
+            },
+        })
+        .collect()
 }
 
 /// Check if a branch is fast-forward-able (not diverged).
@@ -455,5 +596,48 @@ mod tests {
             extract_stat_number(" 1 file changed, 2 insertions(+)", "deletion"),
             0
         );
+    }
+
+    #[test]
+    fn parse_reflog_output_splits_action_from_description() {
+        let output = "REFLOG|a1b2c3d|commit: add feature\nREFLOG|e4f5g6h|checkout: moving from main to feat\n";
+        let entries = parse_reflog_output(output);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].hash, "a1b2c3d");
+        assert_eq!(entries[0].action, "commit");
+        assert_eq!(entries[0].description, "add feature");
+        assert_eq!(entries[1].action, "checkout");
+        assert_eq!(entries[1].description, "moving from main to feat");
+    }
+
+    #[test]
+    fn parse_reflog_output_no_colon_keeps_whole_subject_as_description() {
+        let output = "REFLOG|a1b2c3d|pull origin main\n";
+        let entries = parse_reflog_output(output);
+        assert_eq!(entries[0].action, "");
+        assert_eq!(entries[0].description, "pull origin main");
+    }
+
+    #[test]
+    fn parse_graph_output_commit_line() {
+        let output = "* GRAPH|a1b2c3d| (HEAD -> main, origin/main)|feat: add feature";
+        let lines = parse_graph_output(output);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].prefix, "* ");
+        assert_eq!(lines[0].hash, "a1b2c3d");
+        assert_eq!(lines[0].refs, "(HEAD -> main, origin/main)");
+        assert_eq!(lines[0].message, "feat: add feature");
+    }
+
+    #[test]
+    fn parse_graph_output_connector_line_has_no_commit_data() {
+        let output = "* GRAPH|a1b2c3d||feat: add feature\n|\\  \n| * GRAPH|d4e5f6g||other branch commit";
+        let lines = parse_graph_output(output);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1].prefix, "|\\  ");
+        assert!(lines[1].hash.is_empty());
+        assert!(lines[1].message.is_empty());
+        assert_eq!(lines[2].prefix, "| * ");
+        assert_eq!(lines[2].hash, "d4e5f6g");
     }
 }

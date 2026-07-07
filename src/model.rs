@@ -104,6 +104,8 @@ pub struct RepoStatus {
     pub stash_count: u32,
     pub stash_entries: Vec<String>,
     pub worktrees: Vec<Worktree>,
+    pub reflog: Vec<ReflogEntry>,
+    pub graph: Vec<GraphLine>,
 }
 
 /// An active git worktree.
@@ -111,6 +113,26 @@ pub struct RepoStatus {
 pub struct Worktree {
     pub path: String,
     pub branch: String,
+}
+
+/// One entry from `git reflog` -- a HEAD movement, for "what did I just do"
+/// recovery glances.
+#[derive(Debug, Clone)]
+pub struct ReflogEntry {
+    pub hash: String,
+    pub action: String,
+    pub description: String,
+}
+
+/// One rendered line of `git log --graph`: the ASCII graph prefix plus the
+/// commit it points at. Pure connector lines (no commit on that row) carry
+/// an empty hash/refs/message and only the prefix.
+#[derive(Debug, Clone)]
+pub struct GraphLine {
+    pub prefix: String,
+    pub hash: String,
+    pub refs: String,
+    pub message: String,
 }
 
 impl RepoStatus {
@@ -220,6 +242,8 @@ mod tests {
             stash_count: 0,
             stash_entries: vec![],
             worktrees: vec![],
+            reflog: vec![],
+            graph: vec![],
         }
     }
 

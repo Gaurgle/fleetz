@@ -25,6 +25,13 @@ use std::io;
 use std::path::Path;
 use std::process::Command as StdCommand;
 
+/// How many commits/reflog entries to show in the detail pane's history
+/// sections. Kept modest -- the pane has no scrolling, and these share it
+/// with branches, CI, PRs, and stashes.
+const RECENT_COMMIT_COUNT: u32 = 6;
+const REFLOG_COUNT: u32 = 6;
+const GRAPH_COMMIT_COUNT: u32 = 10;
+
 /// Format a path for display, using `~/` shorthand when it's under the home dir.
 /// Unlike a bare `~{suffix}` concatenation, this always produces a string
 /// `shellexpand::tilde` can correctly re-expand back to the original path.
@@ -47,7 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mode = args.mode();
     let (repos, header) = load_repos(&args, &config, &repo_dir, &mode).await?;
 
-    let mut app = App::new(repos, header, args.prs, args.stat);
+    let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
+    let mut app = App::new(repos, header, args.prs, args.stat, term_width, term_height);
     app.watch_mode = args.watch;
     app.refresh_interval = config.refresh_interval;
 
@@ -470,12 +478,22 @@ async fn load_repos(
                 .to_string();
             let display = tilde_display(&path);
 
+            let show_stat = args.stat;
+            let author = args.author.as_deref();
+            let commits = git::commits(&path, &format!("-{RECENT_COMMIT_COUNT}"), show_stat, author).await;
+            let reflog = git::reflog(&path, REFLOG_COUNT).await;
+            let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
+            let graph = git::graph(&path, &branch_names, GRAPH_COMMIT_COUNT).await;
+            let stash_entries = git::stash_list(&path).await;
+            let stash_count = stash_entries.len() as u32;
+            let worktrees = git::worktree_list(&path).await;
+
             repos.push(RepoStatus {
                 name,
                 path: Some(display),
                 location: RepoLocation::LocalOnly,
                 branches,
-                commits: Vec::new(),
+                commits,
                 behind: 0,
                 ahead: total_ahead,
                 dirty,
@@ -486,9 +504,11 @@ async fn load_repos(
                 ci_duration: None,
                 pushed_at: None,
                 groups: vec![],
-                stash_count: 0,
-                stash_entries: vec![],
-                worktrees: vec![],
+                stash_count,
+                stash_entries,
+                worktrees,
+                reflog,
+                graph,
             });
         }
         return Ok((repos, header));
@@ -613,6 +633,8 @@ async fn load_repos(
             stash_count: 0,
             stash_entries: vec![],
             worktrees: vec![],
+            reflog: vec![],
+            graph: vec![],
         });
     }
 
@@ -660,6 +682,8 @@ async fn load_repos(
             stash_count: 0,
             stash_entries: vec![],
             worktrees: vec![],
+            reflog: vec![],
+            graph: vec![],
         });
     }
 
@@ -693,33 +717,17 @@ async fn build_repo_status(
         total_ahead += b.ahead;
     }
 
-    // Determine the range for commits
     let has_changes = total_behind > 0 || total_ahead > 0 || dirty > 0;
     let show_stat = has_changes || args.stat;
     let author = args.author.as_deref();
 
-    let mut commits = Vec::new();
-    for b in &branches {
-        if b.behind > 0 {
-            if let Some(ref up) = b.upstream {
-                let range = format!("{}..{}", b.name, up);
-                let c = git::commits(path, &range, show_stat, author).await;
-                commits.extend(c);
-            }
-        }
-        if b.ahead > 0 {
-            if let Some(ref up) = b.upstream {
-                let range = format!("{}..{}", up, b.name);
-                let c = git::commits(path, &range, show_stat, author).await;
-                commits.extend(c);
-            }
-        }
-    }
-    // If no divergence, show last commit
-    if commits.is_empty() {
-        let c = git::commits(path, "-1", show_stat, author).await;
-        commits.extend(c);
-    }
+    // Recent history on HEAD, not just the divergent commits -- a glance at
+    // "what's been happening here" shouldn't depend on being ahead/behind.
+    let commits = git::commits(path, &format!("-{RECENT_COMMIT_COUNT}"), show_stat, author).await;
+    let reflog = git::reflog(path, REFLOG_COUNT).await;
+
+    let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
+    let graph = git::graph(path, &branch_names, GRAPH_COMMIT_COUNT).await;
 
     let gh_match = gh_repos
         .iter()
@@ -758,5 +766,7 @@ async fn build_repo_status(
         stash_count,
         stash_entries,
         worktrees,
+        reflog,
+        graph,
     }
 }

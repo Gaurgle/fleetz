@@ -28,7 +28,9 @@ const FILTER_DEFS: [(FilterKind, &str, Color); 6] = [
 
 /// The always-visible quick-filter strip: one dot per filter, lit in its own
 /// color when active and dimmed (same hue) otherwise -- so the row of dots
-/// alone shows what's applied, no separate legend needed.
+/// alone shows what's applied. The label only appears once a filter is
+/// active, since an idle dot+number is a keybind reminder (see help), not
+/// something that needs spelling out -- keeps the strip compact by default.
 pub fn filter_strip_line(app: &App) -> Line<'static> {
     let mut spans = vec![Span::raw("  ")];
     for (i, (kind, label, color)) in FILTER_DEFS.iter().enumerate() {
@@ -39,10 +41,30 @@ pub fn filter_strip_line(app: &App) -> Line<'static> {
             Style::default().fg(colors::dim(*color))
         };
         let dot = if active { "●" } else { "·" };
-        spans.push(Span::styled(format!("{dot}{} {label}", i + 1), style));
+        let text = if active {
+            format!("{dot}{} {label}", i + 1)
+        } else {
+            format!("{dot}{}", i + 1)
+        };
+        spans.push(Span::styled(text, style));
         spans.push(Span::raw("  "));
     }
     Line::from(spans)
+}
+
+/// Truncate `s` to at most `budget` chars, replacing the tail with `…` when
+/// it doesn't fit, rather than letting it silently overflow into whatever
+/// renders next to it.
+pub fn truncate(s: &str, budget: usize) -> String {
+    if s.chars().count() <= budget {
+        return s.to_string();
+    }
+    if budget == 0 {
+        return String::new();
+    }
+    let mut out: String = s.chars().take(budget.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 /// A thin divider rule, the width of `width`, separating the filter strip
@@ -93,48 +115,99 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
 }
 
+/// Render the header. The left (name/header/group) and right (refresh time/
+/// view hint/help) titles are positioned independently by ratatui with no
+/// mutual awareness, so on a narrow pane they can literally overlap
+/// character-for-character. To avoid that, progressively drop the least
+/// important piece from each side -- refresh timestamp first, then the view
+/// hint, then the group tag, then the header description -- until both sides
+/// fit side by side.
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let view_hint = match app.view {
-        View::Detail => "[v] compact",
-        View::Compact => "[v] detail",
-    };
+    let width = area.width as usize;
 
-    let mut left = vec![Span::styled(
+    let name = Span::styled(
         " fleetz",
         Style::default()
             .fg(colors::LAVENDER)
             .add_modifier(Modifier::BOLD),
-    )];
-    if !app.header.is_empty() {
-        left.push(Span::styled(
+    );
+    let header_span = (!app.header.is_empty()).then(|| {
+        Span::styled(
             format!(" — {}", app.header),
             Style::default().fg(colors::OVERLAY),
-        ));
-    }
-    if let Some(group) = app.active_group_label() {
-        left.push(Span::styled(
-            format!("  [{group}]"),
-            Style::default().fg(colors::MAUVE),
-        ));
-    }
-    let mut right: Vec<Span> = Vec::new();
-    if let Some(ref ts) = app.last_refreshed {
-        right.push(Span::styled(
+        )
+    });
+    let group_span = app.active_group_label().map(|group| {
+        Span::styled(format!("  [{group}]"), Style::default().fg(colors::MAUVE))
+    });
+
+    let view_hint = match app.view {
+        View::Detail => "[v] compact",
+        View::Compact => "[v] detail",
+    };
+    let ts_span = app.last_refreshed.map(|ts| {
+        Span::styled(
             format!(" refreshed {}  ", ts.format("%H:%M")),
             Style::default().fg(colors::SURFACE),
-        ));
-    } else {
-        right.push(Span::raw(" "));
+        )
+    });
+    let view_span = Span::styled(view_hint, Style::default().fg(colors::SURFACE));
+    let help_span = Span::styled("[?] help ", Style::default().fg(colors::SURFACE));
+
+    let mut include_ts = true;
+    let mut include_view = true;
+    let mut include_group = true;
+    let mut include_header = true;
+
+    loop {
+        let mut left: Vec<Span> = vec![name.clone()];
+        if include_header {
+            if let Some(ref h) = header_span {
+                left.push(h.clone());
+            }
+        }
+        if include_group {
+            if let Some(ref g) = group_span {
+                left.push(g.clone());
+            }
+        }
+
+        let mut right: Vec<Span> = Vec::new();
+        if include_ts {
+            if let Some(ref t) = ts_span {
+                right.push(t.clone());
+            } else {
+                right.push(Span::raw(" "));
+            }
+        }
+        if include_view {
+            right.push(view_span.clone());
+            right.push(Span::raw("  "));
+        }
+        right.push(help_span.clone());
+
+        let left_w: usize = left.iter().map(|s| s.content.len()).sum();
+        let right_w: usize = right.iter().map(|s| s.content.len()).sum();
+        let exhausted = !include_ts && !include_view && !include_group && !include_header;
+
+        if left_w + right_w < width || exhausted {
+            let block = Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(colors::SURFACE))
+                .title_bottom(Line::from(left).left_aligned())
+                .title_bottom(Line::from(right).right_aligned());
+            frame.render_widget(block, area);
+            return;
+        }
+
+        if include_ts {
+            include_ts = false;
+        } else if include_view {
+            include_view = false;
+        } else if include_group {
+            include_group = false;
+        } else {
+            include_header = false;
+        }
     }
-    right.push(Span::styled(view_hint, Style::default().fg(colors::SURFACE)));
-    right.push(Span::raw("  "));
-    right.push(Span::styled("[?] help ", Style::default().fg(colors::SURFACE)));
-
-    let block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(colors::SURFACE))
-        .title_bottom(Line::from(left).left_aligned())
-        .title_bottom(Line::from(right).right_aligned());
-
-    frame.render_widget(block, area);
 }
