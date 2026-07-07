@@ -43,6 +43,17 @@ impl QuickFilters {
         *flag = !*flag;
     }
 
+    pub fn is_active(&self, kind: FilterKind) -> bool {
+        match kind {
+            FilterKind::Dirty => self.dirty,
+            FilterKind::Behind => self.behind,
+            FilterKind::Ahead => self.ahead,
+            FilterKind::CiFailed => self.ci_failed,
+            FilterKind::HasPrs => self.has_prs,
+            FilterKind::HasStashes => self.has_stashes,
+        }
+    }
+
     pub fn matches(&self, repo: &RepoStatus) -> bool {
         (!self.dirty || repo.dirty > 0)
             && (!self.behind || repo.behind > 0)
@@ -52,29 +63,6 @@ impl QuickFilters {
             && (!self.has_stashes || repo.stash_count > 0)
     }
 
-    /// Short labels for currently active filters, for the header tag.
-    pub fn active_labels(&self) -> Vec<&'static str> {
-        let mut labels = Vec::new();
-        if self.dirty {
-            labels.push("dirty");
-        }
-        if self.behind {
-            labels.push("behind");
-        }
-        if self.ahead {
-            labels.push("ahead");
-        }
-        if self.ci_failed {
-            labels.push("CI✗");
-        }
-        if self.has_prs {
-            labels.push("PRs");
-        }
-        if self.has_stashes {
-            labels.push("stash");
-        }
-        labels
-    }
 }
 
 /// Overlay shown on top of the main view.

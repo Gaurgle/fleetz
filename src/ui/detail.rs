@@ -63,7 +63,7 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    let mut block = Block::default()
+    let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(colors::SURFACE))
@@ -83,12 +83,24 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
             ))
             .right_aligned(),
         );
-    if let Some(pill) = crate::ui::filter_pill_title(app) {
-        block = block.title_top(pill);
-    }
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    let list = List::new(items).block(block);
-    frame.render_widget(list, area);
+    // Filter strip + divider, then the repo list below.
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+    frame.render_widget(Paragraph::new(crate::ui::filter_strip_line(app)), rows[0]);
+    frame.render_widget(
+        Paragraph::new(crate::ui::divider_line(rows[1].width as usize)),
+        rows[1],
+    );
+
+    let list = List::new(items);
+    frame.render_widget(list, rows[2]);
 }
 
 fn repo_list_item(repo: &RepoStatus, is_selected: bool, col_width: usize) -> ListItem<'static> {

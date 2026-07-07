@@ -15,3 +15,12 @@ pub const SURFACE: Color = Color::Rgb(69, 71, 90);      // dots, dividers
 pub const BASE: Color = Color::Rgb(30, 30, 46);         // background
 pub const TEXT: Color = Color::Rgb(205, 214, 244);       // default text
 pub const RED: Color = Color::Rgb(243, 139, 168);        // CI failed
+
+/// Dim a color toward the background while keeping its hue, for an inactive
+/// state that still hints at what it would look like active.
+pub fn dim(c: Color) -> Color {
+    match c {
+        Color::Rgb(r, g, b) => Color::Rgb(r / 3, g / 3, b / 3),
+        other => other,
+    }
+}

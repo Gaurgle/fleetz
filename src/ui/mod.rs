@@ -7,31 +7,51 @@ pub mod help;
 pub mod search;
 
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 
-use crate::app::{App, Overlay, View};
+use crate::app::{App, FilterKind, Overlay, View};
 
-/// A centered "filter: x+y" pill for a panel's top border, shown only when
-/// at least one quick filter is active. Deliberately a solid-background chip
-/// (not just colored text) so it can't get lost in a busy border line.
-pub fn filter_pill_title(app: &App) -> Option<Line<'static>> {
-    let labels = app.filters.active_labels();
-    if labels.is_empty() {
-        return None;
+/// Quick filters in strip order, with the digit key each is bound to (index + 1)
+/// and the color it lights up in -- matching the color that filter's data
+/// already uses elsewhere (e.g. dirty badges are YELLOW, so is this dot).
+const FILTER_DEFS: [(FilterKind, &str, Color); 6] = [
+    (FilterKind::Dirty, "dirty", colors::YELLOW),
+    (FilterKind::Behind, "behind", colors::PEACH),
+    (FilterKind::Ahead, "ahead", colors::SAPPHIRE),
+    (FilterKind::CiFailed, "CI\u{2717}", colors::RED),
+    (FilterKind::HasPrs, "PRs", colors::MAUVE),
+    (FilterKind::HasStashes, "stash", colors::HASH_CLR),
+];
+
+/// The always-visible quick-filter strip: one dot per filter, lit in its own
+/// color when active and dimmed (same hue) otherwise -- so the row of dots
+/// alone shows what's applied, no separate legend needed.
+pub fn filter_strip_line(app: &App) -> Line<'static> {
+    let mut spans = vec![Span::raw("  ")];
+    for (i, (kind, label, color)) in FILTER_DEFS.iter().enumerate() {
+        let active = app.filters.is_active(*kind);
+        let style = if active {
+            Style::default().fg(*color).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(colors::dim(*color))
+        };
+        let dot = if active { "●" } else { "·" };
+        spans.push(Span::styled(format!("{dot}{} {label}", i + 1), style));
+        spans.push(Span::raw("  "));
     }
-    Some(
-        Line::from(Span::styled(
-            format!(" filter: {} ", labels.join("+")),
-            Style::default()
-                .bg(colors::PEACH)
-                .fg(colors::BASE)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .centered(),
-    )
+    Line::from(spans)
+}
+
+/// A thin divider rule, the width of `width`, separating the filter strip
+/// from the panel content below it.
+pub fn divider_line(width: usize) -> Line<'static> {
+    Line::from(Span::styled(
+        "─".repeat(width),
+        Style::default().fg(colors::SURFACE),
+    ))
 }
 
 /// Top-level render: header + main view + optional search + footer + optional overlay.

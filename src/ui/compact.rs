@@ -1,4 +1,4 @@
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
@@ -12,7 +12,7 @@ use crate::ui::colors;
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let visible = app.visible_repos();
 
-    let mut block = Block::default()
+    let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(colors::SURFACE))
@@ -32,20 +32,31 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             ))
             .right_aligned(),
         );
-    if let Some(pill) = crate::ui::filter_pill_title(app) {
-        block = block.title_top(pill);
-    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    // Filter strip + divider, then content below.
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+    frame.render_widget(Paragraph::new(crate::ui::filter_strip_line(app)), rows[0]);
+    frame.render_widget(
+        Paragraph::new(crate::ui::divider_line(rows[1].width as usize)),
+        rows[1],
+    );
+    let content = rows[2];
 
     if visible.is_empty() {
         let empty = Paragraph::new("No repos to display")
             .style(Style::default().fg(colors::OVERLAY));
-        frame.render_widget(empty, inner);
+        frame.render_widget(empty, content);
         return;
     }
 
-    let col_width = (inner.width as usize / 2).saturating_sub(1);
+    let col_width = (content.width as usize / 2).saturating_sub(1);
     let mut lines: Vec<Line> = Vec::new();
 
     // Pair repos into rows of two
@@ -73,7 +84,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, content);
 }
 
 fn compact_repo_spans(repo: &RepoStatus, is_selected: bool, max_width: usize) -> Vec<Span<'static>> {
