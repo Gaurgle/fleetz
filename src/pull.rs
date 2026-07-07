@@ -63,7 +63,8 @@ pub async fn pull_single(repo: &RepoStatus) -> PullResult {
         PullCandidate::Yes => {}
     }
 
-    let path = Path::new(repo.path.as_ref().unwrap());
+    let expanded = shellexpand::tilde(repo.path.as_ref().unwrap()).to_string();
+    let path = Path::new(&expanded);
     let behind_before = repo.behind;
 
     match git::pull_ff_only(path).await {

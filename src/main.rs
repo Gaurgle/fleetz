@@ -10,7 +10,7 @@ mod pull;
 mod time;
 mod ui;
 
-use app::{App, BranchEntry, BranchOverlay, Overlay};
+use app::{App, BranchEntry, BranchOverlay, FilterKind, Overlay};
 use clap::Parser;
 use cli::{Args, Mode};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -24,6 +24,17 @@ use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::process::Command as StdCommand;
+
+/// Format a path for display, using `~/` shorthand when it's under the home dir.
+/// Unlike a bare `~{suffix}` concatenation, this always produces a string
+/// `shellexpand::tilde` can correctly re-expand back to the original path.
+fn tilde_display(path: &Path) -> String {
+    let home = dirs::home_dir().unwrap_or_default();
+    match path.strip_prefix(&home) {
+        Ok(rel) if !rel.as_os_str().is_empty() => format!("~/{}", rel.display()),
+        _ => path.display().to_string(),
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -258,7 +269,8 @@ async fn handle_normal_input(
             // Open lazygit in selected repo
             if let Some(repo) = app.selected_repo() {
                 if let Some(ref path) = repo.path {
-                    suspend_and_run(terminal, "lazygit", &["-p", path])?;
+                    let expanded = shellexpand::tilde(path).to_string();
+                    suspend_and_run(terminal, "lazygit", &["-p", &expanded])?;
                 }
             }
         }
@@ -266,8 +278,9 @@ async fn handle_normal_input(
             // Open $EDITOR in selected repo
             if let Some(repo) = app.selected_repo() {
                 if let Some(ref path) = repo.path {
+                    let expanded = shellexpand::tilde(path).to_string();
                     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
-                    suspend_and_run(terminal, &editor, &[path])?;
+                    suspend_and_run(terminal, &editor, &[&expanded])?;
                 }
             }
         }
@@ -275,8 +288,9 @@ async fn handle_normal_input(
             // Open shell in repo dir
             if let Some(repo) = app.selected_repo() {
                 if let Some(ref path) = repo.path {
+                    let expanded = shellexpand::tilde(path).to_string();
                     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-                    suspend_and_run_in_dir(terminal, &shell, &[], path)?;
+                    suspend_and_run_in_dir(terminal, &shell, &[], &expanded)?;
                 }
             }
         }
@@ -286,6 +300,13 @@ async fn handle_normal_input(
         KeyCode::Char('G') => {
             app.clear_group();
         }
+        KeyCode::Char('1') => app.toggle_filter(FilterKind::Dirty),
+        KeyCode::Char('2') => app.toggle_filter(FilterKind::Behind),
+        KeyCode::Char('3') => app.toggle_filter(FilterKind::Ahead),
+        KeyCode::Char('4') => app.toggle_filter(FilterKind::CiFailed),
+        KeyCode::Char('5') => app.toggle_filter(FilterKind::HasPrs),
+        KeyCode::Char('6') => app.toggle_filter(FilterKind::HasStashes),
+        KeyCode::Char('0') => app.clear_filters(),
         KeyCode::Char('b') => {
             // Open branch cleanup overlay
             if let Some(repo) = app.selected_repo() {
@@ -447,7 +468,7 @@ async fn load_repos(
                 .and_then(|n| n.to_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let display = format!("~{}", path.strip_prefix(dirs::home_dir().unwrap_or_default()).unwrap_or(&path).display());
+            let display = tilde_display(&path);
 
             repos.push(RepoStatus {
                 name,
@@ -618,10 +639,7 @@ async fn load_repos(
             continue;
         }
 
-        let display = format!(
-            "~{}",
-            path.strip_prefix(&home).unwrap_or(&path).display()
-        );
+        let display = tilde_display(&path);
 
         repos.push(RepoStatus {
             name,
@@ -714,11 +732,7 @@ async fn build_repo_status(
     let ci_duration = gh_match.and_then(|r| r.ci_duration.clone());
     let pushed_at = gh_match.map(|r| r.pushed_at);
 
-    let home = dirs::home_dir().unwrap_or_default();
-    let display = format!(
-        "~{}",
-        path.strip_prefix(&home).unwrap_or(path).display()
-    );
+    let display = tilde_display(path);
 
     // Stash + worktree info
     let stash_entries = git::stash_list(path).await;

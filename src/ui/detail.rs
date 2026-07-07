@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::App;
@@ -15,6 +15,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Percentage(35),
         Constraint::Percentage(65),
     ])
+    .spacing(1)
     .split(area);
 
     render_repo_list(frame, chunks[0], app);
@@ -30,6 +31,8 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     let elsewhere = app.elsewhere_repos();
     let local_only = app.local_only_repos();
     let selected_idx = app.selected_repo_index().unwrap_or(usize::MAX);
+
+    let total = primary.len() + elsewhere.len() + local_only.len();
 
     // Primary repos
     for (idx, repo) in &primary {
@@ -60,10 +63,29 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    let block = Block::default()
-        .borders(Borders::RIGHT)
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(colors::SURFACE))
-        .title(Span::styled("REPOS", Style::default().fg(colors::OVERLAY)));
+        .title_top(
+            Line::from(Span::styled(
+                " repos ",
+                Style::default()
+                    .fg(colors::LAVENDER)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .left_aligned(),
+        )
+        .title_top(
+            Line::from(Span::styled(
+                format!(" {total} "),
+                Style::default().fg(colors::OVERLAY),
+            ))
+            .right_aligned(),
+        );
+    if let Some(pill) = crate::ui::filter_pill_title(app) {
+        block = block.title_top(pill);
+    }
 
     let list = List::new(items).block(block);
     frame.render_widget(list, area);
@@ -161,26 +183,55 @@ fn repo_list_item(repo: &RepoStatus, is_selected: bool, col_width: usize) -> Lis
 }
 
 fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
+    let panel = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(colors::SURFACE));
+
     let repo = match app.selected_repo() {
         Some(r) => r,
         None => {
             let empty = Paragraph::new("No repos to display")
-                .style(Style::default().fg(colors::OVERLAY));
+                .style(Style::default().fg(colors::OVERLAY))
+                .block(panel.title_top(Line::from(" detail ").left_aligned()));
             frame.render_widget(empty, area);
             return;
         }
     };
 
-    let mut lines: Vec<Line> = Vec::new();
+    let mut right_title: Vec<Span> = Vec::new();
+    if repo.ci_status != CiStatus::Unknown {
+        let (ci_sym, ci_color, ci_label) = match repo.ci_status {
+            CiStatus::Passed => ("✓", colors::GREEN, "passed"),
+            CiStatus::Failed => ("✗", colors::RED, "failed"),
+            CiStatus::Pending => ("○", colors::YELLOW, "pending"),
+            CiStatus::Unknown => ("", colors::OVERLAY, ""),
+        };
+        right_title.push(Span::styled(
+            format!(" {ci_sym} {ci_label} "),
+            Style::default().fg(ci_color),
+        ));
+    }
 
-    // Header: repo name + status + path
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!("DETAIL — {}", repo.name),
-            Style::default().fg(colors::OVERLAY),
-        ),
-    ]));
-    lines.push(Line::from(""));
+    let panel = panel
+        .title_top(
+            Line::from(vec![
+                Span::styled(
+                    format!(" {} ", repo.name),
+                    Style::default()
+                        .fg(colors::SAPPHIRE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(repo.short_status(), Style::default().fg(colors::OVERLAY)),
+            ])
+            .left_aligned(),
+        )
+        .title_top(Line::from(right_title).right_aligned());
+    let inner = panel.inner(area);
+    frame.render_widget(panel, area);
+    let area = inner;
+
+    let mut lines: Vec<Line> = Vec::new();
 
     // Status + path
     let status_color = if repo.is_synced() {

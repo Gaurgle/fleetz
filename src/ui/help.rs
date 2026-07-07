@@ -25,6 +25,8 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ("b", "Branch cleanup"),
         ("g", "Cycle group filter"),
         ("G", "Show all (clear group)"),
+        ("1-6", "Toggle quick filter: dirty/behind/ahead/CI✗/PRs/stash"),
+        ("0", "Clear all quick filters"),
         ("r", "Refresh data"),
         ("/", "Search/filter repos"),
         ("Esc", "Close search / help"),
