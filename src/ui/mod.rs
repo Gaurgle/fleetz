@@ -14,6 +14,26 @@ use ratatui::Frame;
 
 use crate::app::{App, Overlay, View};
 
+/// A centered "filter: x+y" pill for a panel's top border, shown only when
+/// at least one quick filter is active. Deliberately a solid-background chip
+/// (not just colored text) so it can't get lost in a busy border line.
+pub fn filter_pill_title(app: &App) -> Option<Line<'static>> {
+    let labels = app.filters.active_labels();
+    if labels.is_empty() {
+        return None;
+    }
+    Some(
+        Line::from(Span::styled(
+            format!(" filter: {} ", labels.join("+")),
+            Style::default()
+                .bg(colors::PEACH)
+                .fg(colors::BASE)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .centered(),
+    )
+}
+
 /// Top-level render: header + main view + optional search + footer + optional overlay.
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
@@ -77,14 +97,6 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(colors::MAUVE),
         ));
     }
-    let filter_labels = app.filters.active_labels();
-    if !filter_labels.is_empty() {
-        left.push(Span::styled(
-            format!("  filter: {}", filter_labels.join("+")),
-            Style::default().fg(colors::PEACH),
-        ));
-    }
-
     let mut right: Vec<Span> = Vec::new();
     if let Some(ref ts) = app.last_refreshed {
         right.push(Span::styled(

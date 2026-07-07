@@ -12,7 +12,7 @@ use crate::ui::colors;
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let visible = app.visible_repos();
 
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(colors::SURFACE))
@@ -32,6 +32,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             ))
             .right_aligned(),
         );
+    if let Some(pill) = crate::ui::filter_pill_title(app) {
+        block = block.title_top(pill);
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

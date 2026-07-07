@@ -63,7 +63,7 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(colors::SURFACE))
@@ -83,6 +83,9 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
             ))
             .right_aligned(),
         );
+    if let Some(pill) = crate::ui::filter_pill_title(app) {
+        block = block.title_top(pill);
+    }
 
     let list = List::new(items).block(block);
     frame.render_widget(list, area);
