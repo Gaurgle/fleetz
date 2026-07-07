@@ -10,7 +10,7 @@ mod pull;
 mod time;
 mod ui;
 
-use app::{App, BranchEntry, BranchOverlay, Overlay};
+use app::{App, BranchEntry, BranchOverlay, FilterKind, Overlay};
 use clap::Parser;
 use cli::{Args, Mode};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -300,6 +300,13 @@ async fn handle_normal_input(
         KeyCode::Char('G') => {
             app.clear_group();
         }
+        KeyCode::Char('1') => app.toggle_filter(FilterKind::Dirty),
+        KeyCode::Char('2') => app.toggle_filter(FilterKind::Behind),
+        KeyCode::Char('3') => app.toggle_filter(FilterKind::Ahead),
+        KeyCode::Char('4') => app.toggle_filter(FilterKind::CiFailed),
+        KeyCode::Char('5') => app.toggle_filter(FilterKind::HasPrs),
+        KeyCode::Char('6') => app.toggle_filter(FilterKind::HasStashes),
+        KeyCode::Char('0') => app.clear_filters(),
         KeyCode::Char('b') => {
             // Open branch cleanup overlay
             if let Some(repo) = app.selected_repo() {

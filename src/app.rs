@@ -1,11 +1,80 @@
 use chrono::{DateTime, Local};
-use crate::model::{self, RepoLocation, RepoStatus, Summary};
+use crate::model::{self, CiStatus, RepoLocation, RepoStatus, Summary};
 
 /// Which TUI view is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Detail,
     Compact,
+}
+
+/// One quick-filter a repo can be toggled against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterKind {
+    Dirty,
+    Behind,
+    Ahead,
+    CiFailed,
+    HasPrs,
+    HasStashes,
+}
+
+/// Combinable quick filters for the repo list (AND'd together when several are active).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct QuickFilters {
+    pub dirty: bool,
+    pub behind: bool,
+    pub ahead: bool,
+    pub ci_failed: bool,
+    pub has_prs: bool,
+    pub has_stashes: bool,
+}
+
+impl QuickFilters {
+    pub fn toggle(&mut self, kind: FilterKind) {
+        let flag = match kind {
+            FilterKind::Dirty => &mut self.dirty,
+            FilterKind::Behind => &mut self.behind,
+            FilterKind::Ahead => &mut self.ahead,
+            FilterKind::CiFailed => &mut self.ci_failed,
+            FilterKind::HasPrs => &mut self.has_prs,
+            FilterKind::HasStashes => &mut self.has_stashes,
+        };
+        *flag = !*flag;
+    }
+
+    pub fn matches(&self, repo: &RepoStatus) -> bool {
+        (!self.dirty || repo.dirty > 0)
+            && (!self.behind || repo.behind > 0)
+            && (!self.ahead || repo.ahead > 0)
+            && (!self.ci_failed || repo.ci_status == CiStatus::Failed)
+            && (!self.has_prs || repo.pr_count > 0)
+            && (!self.has_stashes || repo.stash_count > 0)
+    }
+
+    /// Short labels for currently active filters, for the header tag.
+    pub fn active_labels(&self) -> Vec<&'static str> {
+        let mut labels = Vec::new();
+        if self.dirty {
+            labels.push("dirty");
+        }
+        if self.behind {
+            labels.push("behind");
+        }
+        if self.ahead {
+            labels.push("ahead");
+        }
+        if self.ci_failed {
+            labels.push("CI✗");
+        }
+        if self.has_prs {
+            labels.push("PRs");
+        }
+        if self.has_stashes {
+            labels.push("stash");
+        }
+        labels
+    }
 }
 
 /// Overlay shown on top of the main view.
@@ -102,6 +171,7 @@ pub struct App {
     pub last_refreshed: Option<DateTime<Local>>,
     pub group_names: Vec<String>,
     pub active_group: Option<usize>,
+    pub filters: QuickFilters,
 }
 
 impl App {
@@ -123,10 +193,11 @@ impl App {
             last_refreshed: Some(Local::now()),
             group_names: Vec::new(),
             active_group: None,
+            filters: QuickFilters::default(),
         }
     }
 
-    /// Repos filtered by the current search query and active group.
+    /// Repos filtered by the current search query, active group, and quick filters.
     pub fn visible_repos(&self) -> Vec<(usize, &RepoStatus)> {
         let active_group = self.active_group.and_then(|i| self.group_names.get(i));
 
@@ -147,9 +218,25 @@ impl App {
                         return false;
                     }
                 }
+                // Quick filters (dirty/behind/ahead/CI/PRs/stashes)
+                if !self.filters.matches(r) {
+                    return false;
+                }
                 true
             })
             .collect()
+    }
+
+    /// Toggle one quick filter on/off; filters combine with AND.
+    pub fn toggle_filter(&mut self, kind: FilterKind) {
+        self.filters.toggle(kind);
+        self.selected = 0;
+    }
+
+    /// Clear all active quick filters.
+    pub fn clear_filters(&mut self) {
+        self.filters = QuickFilters::default();
+        self.selected = 0;
     }
 
     /// Cycle to the next group. None -> first -> second -> ... -> None.
@@ -379,5 +466,61 @@ mod tests {
         app.move_down();
         let r = app.selected_repo().unwrap();
         assert_eq!(r.name, "repo-1");
+    }
+
+    #[test]
+    fn dirty_filter_shows_only_dirty_repos() {
+        let mut app = make_app(3);
+        app.repos[1].dirty = 2;
+        app.toggle_filter(FilterKind::Dirty);
+        let visible = app.visible_repos();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].1.name, "repo-1");
+    }
+
+    #[test]
+    fn quick_filters_combine_with_and() {
+        let mut app = make_app(3);
+        app.repos[0].dirty = 1; // dirty only
+        app.repos[1].dirty = 1;
+        app.repos[1].behind = 1; // dirty AND behind
+        app.repos[2].behind = 1; // behind only
+
+        app.toggle_filter(FilterKind::Dirty);
+        app.toggle_filter(FilterKind::Behind);
+
+        let visible = app.visible_repos();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].1.name, "repo-1");
+    }
+
+    #[test]
+    fn toggling_same_filter_twice_clears_it() {
+        let mut app = make_app(3);
+        app.repos[1].dirty = 1;
+        app.toggle_filter(FilterKind::Dirty);
+        app.toggle_filter(FilterKind::Dirty);
+        assert_eq!(app.visible_repos().len(), 3);
+    }
+
+    #[test]
+    fn clear_filters_shows_all() {
+        let mut app = make_app(3);
+        app.repos[1].dirty = 1;
+        app.toggle_filter(FilterKind::Dirty);
+        assert_eq!(app.visible_repos().len(), 1);
+        app.clear_filters();
+        assert_eq!(app.visible_repos().len(), 3);
+    }
+
+    #[test]
+    fn ci_failed_filter_matches_only_failed_ci() {
+        let mut app = make_app(2);
+        app.repos[0].ci_status = model::CiStatus::Passed;
+        app.repos[1].ci_status = model::CiStatus::Failed;
+        app.toggle_filter(FilterKind::CiFailed);
+        let visible = app.visible_repos();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].1.name, "repo-1");
     }
 }

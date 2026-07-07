@@ -89,6 +89,8 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `b` | Branch cleanup overlay (multi-select delete) |
 | `g` | Cycle group filter |
 | `G` | Show all (clear group) |
+| `1`-`6` | Toggle quick filter: dirty / behind / ahead / CI failed / has PRs / has stashes (combine freely) |
+| `0` | Clear all quick filters |
 | `r` | Refresh data |
 | `/` | Search / filter |
 | `?` | Toggle help overlay |
