@@ -1,7 +1,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
@@ -11,14 +11,38 @@ use crate::ui::colors;
 /// Render the compact view: two-column dense grid of all repos.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let visible = app.visible_repos();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(colors::SURFACE))
+        .title_top(
+            Line::from(Span::styled(
+                " repos ",
+                Style::default()
+                    .fg(colors::LAVENDER)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .left_aligned(),
+        )
+        .title_top(
+            Line::from(Span::styled(
+                format!(" {} ", visible.len()),
+                Style::default().fg(colors::OVERLAY),
+            ))
+            .right_aligned(),
+        );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
     if visible.is_empty() {
         let empty = Paragraph::new("No repos to display")
             .style(Style::default().fg(colors::OVERLAY));
-        frame.render_widget(empty, area);
+        frame.render_widget(empty, inner);
         return;
     }
 
-    let col_width = (area.width as usize / 2).saturating_sub(1);
+    let col_width = (inner.width as usize / 2).saturating_sub(1);
     let mut lines: Vec<Line> = Vec::new();
 
     // Pair repos into rows of two
@@ -46,7 +70,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, inner);
 }
 
 fn compact_repo_spans(repo: &RepoStatus, is_selected: bool, max_width: usize) -> Vec<Span<'static>> {
