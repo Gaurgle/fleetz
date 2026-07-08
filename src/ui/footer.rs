@@ -126,6 +126,11 @@ fn keybind_hints(view: View, with_desc: bool) -> Vec<Span<'static>> {
         hints.push(Span::styled(" lazygit", desc_style));
     }
     hints.push(gap.clone());
+    hints.push(Span::styled("[r]", key_style));
+    if with_desc {
+        hints.push(Span::styled(" refresh", desc_style));
+    }
+    hints.push(gap.clone());
     hints.push(Span::styled("[f]", key_style));
     if with_desc {
         hints.push(Span::styled(" fetch", desc_style));
