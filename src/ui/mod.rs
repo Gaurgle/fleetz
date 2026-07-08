@@ -330,6 +330,11 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(colors::SURFACE),
         )
     });
+    // Persistent indicator so the `w` toggle's state is visible at a glance,
+    // not just in the transient status message when it flips.
+    let watch_span = app.watch_mode.then(|| {
+        Span::styled(" ◉ watch ", Style::default().fg(colors::GREEN))
+    });
     let view_span = Span::styled(view_hint, Style::default().fg(colors::SURFACE));
     let help_span = Span::styled("[?] help ", Style::default().fg(colors::SURFACE));
 
@@ -352,6 +357,9 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         }
 
         let mut right: Vec<Span> = Vec::new();
+        if let Some(ref w) = watch_span {
+            right.push(w.clone());
+        }
         if include_ts {
             if let Some(ref t) = ts_span {
                 right.push(t.clone());

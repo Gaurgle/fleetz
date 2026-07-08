@@ -212,6 +212,9 @@ impl BranchOverlay {
 pub struct StatusMessage {
     pub text: String,
     pub is_error: bool,
+    /// When the message was set, so the event loop can expire it after a
+    /// short TTL instead of it sitting frozen until the next keypress.
+    pub created: std::time::Instant,
 }
 
 /// Main application state.
@@ -240,6 +243,11 @@ pub struct App {
     pub detail_selected: usize,
     /// Scroll offset for the inspector pane (long commit bodies).
     pub inspector_scroll: u16,
+    /// Set by the `r` key; the event loop consumes it to re-run the full
+    /// `load_repos` (GitHub fetch + discovery), rather than only re-statting
+    /// the existing list. Lets a just-pushed or newly-dirty repo appear
+    /// without restarting fleetz.
+    pub reload_requested: bool,
 }
 
 /// Below this width or height, `Detail`'s list+detail split doesn't have
@@ -287,7 +295,21 @@ impl App {
             detail_scroll: 0,
             detail_selected: 0,
             inspector_scroll: 0,
+            reload_requested: false,
         }
+    }
+
+    /// After the repo list is replaced by a reload, keep the selection in
+    /// range and reset the detail/inspector panes so nothing points at a
+    /// commit that no longer exists.
+    pub fn clamp_after_reload(&mut self) {
+        let len = self.visible_repos().len();
+        if self.selected >= len {
+            self.selected = len.saturating_sub(1);
+        }
+        self.detail_scroll = 0;
+        self.detail_selected = 0;
+        self.inspector_scroll = 0;
     }
 
     /// Repos filtered by the current search query, active group, and quick
@@ -533,11 +555,23 @@ impl App {
     }
 
     pub fn set_status(&mut self, text: String, is_error: bool) {
-        self.status_message = Some(StatusMessage { text, is_error });
+        self.status_message = Some(StatusMessage {
+            text,
+            is_error,
+            created: std::time::Instant::now(),
+        });
     }
 
     pub fn clear_status(&mut self) {
         self.status_message = None;
+    }
+
+    /// Whether the current status message (if any) has been showing for at
+    /// least `ttl` and should be auto-dismissed.
+    pub fn status_expired(&self, ttl: std::time::Duration) -> bool {
+        self.status_message
+            .as_ref()
+            .is_some_and(|m| m.created.elapsed() >= ttl)
     }
 
     pub fn summary(&self) -> Summary {

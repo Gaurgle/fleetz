@@ -34,6 +34,10 @@ const RECENT_COMMIT_COUNT: u32 = 6;
 const REFLOG_COUNT: u32 = 6;
 const GRAPH_COMMIT_COUNT: u32 = 10;
 
+/// How long a footer status message ("Refreshed", "Watch off", …) stays before
+/// it auto-dismisses back to the summary.
+const STATUS_TTL: std::time::Duration = std::time::Duration::from_millis(1500);
+
 /// Format a path for display, using `~/` shorthand when it's under the home dir.
 /// Unlike a bare `~{suffix}` concatenation, this always produces a string
 /// `shellexpand::tilde` can correctly re-expand back to the original path.
@@ -54,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| config.resolved_repo_dir());
 
     let mode = args.mode();
-    let (repos, header) = load_repos(&args, &config, &repo_dir, &mode).await?;
+    let (repos, header) = load_repos(&args, &config, &repo_dir, &mode, false).await?;
 
     let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
     let mut app = App::new(repos, header, args.prs, args.stat, term_width, term_height);
@@ -65,14 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !config.groups.is_empty() {
         app.group_names = config.groups.keys().cloned().collect();
         app.group_names.sort();
-        for repo in &mut app.repos {
-            for (group_name, members) in &config.groups {
-                if members.iter().any(|m| m.eq_ignore_ascii_case(&repo.name)) {
-                    repo.groups.push(group_name.clone());
-                }
-            }
-        }
     }
+    apply_groups(&mut app.repos, &config);
 
     // Enter TUI
     enable_raw_mode()?;
@@ -81,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_event_loop(&mut terminal, &mut app).await;
+    let result = run_event_loop(&mut terminal, &mut app, &args, &config, &repo_dir).await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -95,22 +93,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
+/// Assign each repo to the config-defined groups whose member list names it.
+/// Clears first so it's safe to re-run after a reload replaces the list.
+fn apply_groups(repos: &mut [RepoStatus], config: &config::Config) {
+    for repo in repos.iter_mut() {
+        repo.groups.clear();
+        for (group_name, members) in &config.groups {
+            if members.iter().any(|m| m.eq_ignore_ascii_case(&repo.name)) {
+                repo.groups.push(group_name.clone());
+            }
+        }
+    }
+}
+
+/// Re-run the full `load_repos` (GitHub fetch + discovery + git status),
+/// bypassing the API cache so a just-pushed repo shows up, and swap the result
+/// into `app` while preserving UI state (selection is clamped, groups
+/// re-applied). This is what `r` triggers -- unlike `refresh_single_repo`, it
+/// can add or drop repos, not just re-stat the ones already listed.
+async fn reload_all(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    args: &Args,
+    config: &config::Config,
+    repo_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    app.set_status("Refreshing…".to_string(), false);
+    terminal.draw(|frame| ui::render(frame, app))?;
+
+    let mode = args.mode();
+    match load_repos(args, config, repo_dir, &mode, true).await {
+        Ok((repos, header)) => {
+            app.repos = repos;
+            apply_groups(&mut app.repos, config);
+            app.header = header;
+            app.clamp_after_reload();
+            app.last_refreshed = Some(chrono::Local::now());
+            app.set_status("Refreshed".to_string(), false);
+        }
+        Err(e) => app.set_status(format!("Refresh failed: {e}"), true),
+    }
+    Ok(())
+}
+
 async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
+    args: &Args,
+    config: &config::Config,
+    repo_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let poll_timeout = if app.watch_mode {
-        std::time::Duration::from_secs(1)
-    } else {
-        std::time::Duration::from_secs(3600) // effectively blocking
-    };
-
     loop {
+        // Drop a status message once it's outlived its TTL, so it fades on its
+        // own rather than sitting frozen until the next keypress.
+        if app.status_expired(STATUS_TTL) {
+            app.clear_status();
+        }
+
         terminal.draw(|frame| ui::render(frame, app))?;
 
         if app.should_quit {
             return Ok(());
         }
+
+        // Recomputed each iteration so the `w` toggle takes effect immediately.
+        // A visible status message forces a short poll so the loop wakes up to
+        // expire it; otherwise watch mode polls once a second to check if a
+        // refresh is due, and static mode blocks until the next keypress.
+        let poll_timeout = if app.status_message.is_some() {
+            std::time::Duration::from_millis(150)
+        } else if app.watch_mode {
+            std::time::Duration::from_secs(1)
+        } else {
+            std::time::Duration::from_secs(3600)
+        };
 
         // Check if watch mode refresh is due
         if app.watch_mode {
@@ -160,6 +216,14 @@ async fn run_event_loop(
                 Event::Mouse(m) => handle_mouse_input(app, terminal, m),
                 _ => {}
             }
+        }
+
+        // Serviced here rather than inline in the key handler so the reload has
+        // access to args/config/repo_dir; the draw at the loop top already
+        // showed the "Refreshing…" status set by `reload_all`.
+        if app.reload_requested {
+            app.reload_requested = false;
+            reload_all(terminal, app, args, config, repo_dir).await?;
         }
     }
 }
@@ -507,13 +571,39 @@ async fn handle_normal_input(
                 }
             }
         }
+        // Full reload: re-fetch GitHub (cache-bypassed) and re-run discovery,
+        // so a just-pushed or newly-dirty repo appears. Deferred to the event
+        // loop via a flag because the reload needs the args/config/repo_dir
+        // context that only `run_event_loop` holds.
         KeyCode::Char('r') => {
-            app.set_status("Refreshing...".to_string(), false);
+            app.reload_requested = true;
+        }
+        // Lightweight refresh: re-stat only the repos already listed (git
+        // status, ahead/behind, dirty). Fast and offline -- no GitHub, no
+        // discovery -- so it won't surface a new repo, but it reflects local
+        // work on the ones already shown. `r` is the full rediscover.
+        KeyCode::Char('R') => {
+            app.set_status("Refreshing…".to_string(), false);
             for repo in &mut app.repos {
                 refresh_single_repo(repo).await;
             }
             app.last_refreshed = Some(chrono::Local::now());
             app.set_status("Refreshed".to_string(), false);
+        }
+        // Toggle watch mode: auto re-stat the listed repos every
+        // `refresh_interval` seconds (the same lightweight pass as `R`). Reset
+        // the clock on enable so the first auto-refresh is a full interval out.
+        KeyCode::Char('w') => {
+            app.watch_mode = !app.watch_mode;
+            if app.watch_mode {
+                app.last_refreshed = Some(chrono::Local::now());
+                app.set_status(
+                    format!("Watch on — auto-refresh every {}s", app.refresh_interval),
+                    false,
+                );
+            } else {
+                app.set_status("Watch off".to_string(), false);
+            }
         }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.should_quit = true;
@@ -601,6 +691,7 @@ async fn load_repos(
     config: &config::Config,
     repo_dir: &Path,
     mode: &Mode,
+    bypass_cache: bool,
 ) -> Result<(Vec<RepoStatus>, String), Box<dyn std::error::Error>> {
     // Dirty mode: local only, no GitHub
     if *mode == Mode::Dirty {
@@ -671,7 +762,8 @@ async fn load_repos(
 
     // Fetch from GitHub (with caching)
     let api_cache = cache::ApiCache::new(config.cache_ttl);
-    let gh_repos = github::fetch_repos(config.repo_limit, args.prs, &api_cache, false).await?;
+    let gh_repos =
+        github::fetch_repos(config.repo_limit, args.prs, &api_cache, bypass_cache).await?;
 
     // Determine cutoff and header
     let (cutoff, header) = match mode {
