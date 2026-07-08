@@ -5,7 +5,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::model::{CiStatus, RepoStatus};
+use crate::model::RepoStatus;
+use crate::ui::badges;
 use crate::ui::colors;
 
 /// Render the compact view: two-column dense grid of all repos.
@@ -16,15 +17,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(colors::SURFACE))
-        .title_top(
-            Line::from(Span::styled(
-                " repos ",
-                Style::default()
-                    .fg(colors::LAVENDER)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .left_aligned(),
-        )
+        // Compact view is a single pane -- always the focused one -- so its
+        // numbered title reads as active.
+        .title_top(crate::ui::panel_title(1, "repos", true))
         .title_top(
             Line::from(Span::styled(
                 format!(" {} ", visible.len()),
@@ -82,7 +77,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, content);
 }
 
-fn compact_repo_spans(repo: &RepoStatus, is_selected: bool, max_width: usize) -> Vec<Span<'static>> {
+fn compact_repo_spans(
+    repo: &RepoStatus,
+    is_selected: bool,
+    max_width: usize,
+) -> Vec<Span<'static>> {
     let marker = if is_selected { "▸ " } else { "  " };
     let name_style = if is_selected {
         Style::default()
@@ -92,86 +91,27 @@ fn compact_repo_spans(repo: &RepoStatus, is_selected: bool, max_width: usize) ->
         Style::default().fg(colors::SAPPHIRE)
     };
 
-    let status = repo.short_status();
-    let status_color = if repo.behind > 0 {
-        colors::PEACH
-    } else if repo.dirty > 0 {
-        colors::YELLOW
-    } else if repo.ahead > 0 {
-        colors::PEACH
-    } else {
-        colors::GREEN
-    };
-
-    // Build dots between name and right-aligned badges
-    let ci_sym = repo.ci_status.symbol();
-    let mut badge_len = status.len();
-    if !ci_sym.is_empty() {
-        badge_len += 2;
-    }
-    if repo.pr_count > 0 {
-        badge_len += format!(" {}PR", repo.pr_count).len();
-    }
-    if repo.stash_count > 0 {
-        badge_len += format!(" {}s", repo.stash_count).len();
-    }
-    if !repo.worktrees.is_empty() {
-        badge_len += format!(" {}w", repo.worktrees.len()).len();
-    }
-
-    let right_len = badge_len + 1;
-    // Reserve room for the marker, at least one dot, and the badges; whatever
-    // remains is the name's budget -- truncate it rather than let it (and
-    // everything after it) overflow into the next column.
-    let reserved = marker.len() + 1 + right_len;
+    // Tight, right-aligned badges flush to each grid cell's right edge, dots
+    // filling from the name to them (see ui::badges::badge_spans). Reserve
+    // room for marker, glyph, at least one dot, and the badges; whatever
+    // remains is the name's budget -- truncate rather than overflow into the
+    // next column.
+    let (badge_spans, badge_w) = badges::badge_spans(repo);
+    let right_len = badge_w + 1; // +1 for space after dots
+    let reserved = badges::MARKER_W + badges::GLYPH_W + 1 + right_len;
     let name_budget = max_width.saturating_sub(reserved).max(3);
     let name = crate::ui::truncate(&repo.name, name_budget);
 
-    let left_len = marker.len() + name.chars().count() + 1;
+    let left_len = badges::MARKER_W + badges::GLYPH_W + name.chars().count() + 1;
     let dot_count = max_width.saturating_sub(left_len + right_len).max(1);
     let dots = "·".repeat(dot_count);
 
     let mut spans = vec![
         Span::raw(marker.to_string()),
+        badges::glyph_span(repo),
         Span::styled(name, name_style),
         Span::styled(format!(" {dots} "), Style::default().fg(colors::SURFACE)),
-        Span::styled(status, Style::default().fg(status_color)),
     ];
-
-    // CI badge
-    if !ci_sym.is_empty() {
-        let ci_color = match repo.ci_status {
-            CiStatus::Passed => colors::GREEN,
-            CiStatus::Failed => colors::RED,
-            CiStatus::Pending => colors::YELLOW,
-            CiStatus::Unknown => colors::OVERLAY,
-        };
-        spans.push(Span::styled(
-            format!(" {ci_sym}"),
-            Style::default().fg(ci_color),
-        ));
-    }
-
-    if repo.pr_count > 0 {
-        spans.push(Span::styled(
-            format!(" {}PR", repo.pr_count),
-            Style::default().fg(colors::MAUVE),
-        ));
-    }
-
-    if repo.stash_count > 0 {
-        spans.push(Span::styled(
-            format!(" {}s", repo.stash_count),
-            Style::default().fg(colors::OVERLAY),
-        ));
-    }
-
-    if !repo.worktrees.is_empty() {
-        spans.push(Span::styled(
-            format!(" {}w", repo.worktrees.len()),
-            Style::default().fg(colors::OVERLAY),
-        ));
-    }
-
+    spans.extend(badge_spans);
     spans
 }

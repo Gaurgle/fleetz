@@ -78,8 +78,10 @@ pub fn render(frame: &mut Frame, area: Rect, overlay: &BranchOverlay) {
         lines.push(Line::from(""));
         let sel_count = overlay.selected_count();
         let mut hint_spans = vec![
-            Span::styled("  space", Style::default().fg(colors::TEXT).add_modifier(Modifier::BOLD)),
-            Span::styled(" toggle  ", Style::default().fg(colors::OVERLAY)),
+            Span::styled("  enter", Style::default().fg(colors::TEXT).add_modifier(Modifier::BOLD)),
+            Span::styled(" switch  ", Style::default().fg(colors::OVERLAY)),
+            Span::styled("space", Style::default().fg(colors::TEXT).add_modifier(Modifier::BOLD)),
+            Span::styled(" mark  ", Style::default().fg(colors::OVERLAY)),
         ];
         if sel_count > 0 {
             hint_spans.extend([
@@ -92,6 +94,50 @@ pub fn render(frame: &mut Frame, area: Rect, overlay: &BranchOverlay) {
             Span::styled(" close", Style::default().fg(colors::OVERLAY)),
         ]);
         lines.push(Line::from(hint_spans));
+
+        // Read-only preview of the highlighted branch's recent commits, so
+        // you can see what happened there before switching. Filled lazily as
+        // branches are highlighted (see main::ensure_preview).
+        if let Some(branch) = overlay.selected_branch() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("── recent on {branch} ──"),
+                Style::default().fg(colors::MAUVE),
+            )));
+            match overlay.previews.get(branch) {
+                Some(commits) if !commits.is_empty() => {
+                    for c in commits {
+                        let author = crate::ui::author_code(&c.author);
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                format!("  {}", c.hash),
+                                Style::default().fg(colors::HASH_CLR),
+                            ),
+                            Span::styled(
+                                format!(" {author} "),
+                                Style::default().fg(colors::author_color(&c.author)),
+                            ),
+                            Span::styled(
+                                crate::ui::truncate(&c.message, 52),
+                                Style::default().fg(colors::TEXT),
+                            ),
+                            Span::styled(
+                                format!("  {}", c.date),
+                                Style::default().fg(colors::OVERLAY),
+                            ),
+                        ]));
+                    }
+                }
+                Some(_) => lines.push(Line::from(Span::styled(
+                    "  (no commits)",
+                    Style::default().fg(colors::OVERLAY),
+                ))),
+                None => lines.push(Line::from(Span::styled(
+                    "  loading…",
+                    Style::default().fg(colors::OVERLAY),
+                ))),
+            }
+        }
     }
 
     let title = format!(" Branches — {} ", overlay.repo_name);

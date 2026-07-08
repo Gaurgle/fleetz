@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::model::{CiStatus, PullRequest, ReviewStatus};
+use crate::model::{CiStatus, PullRequest, RepoKind, ReviewStatus};
 
 /// A repo as returned by the GitHub GraphQL API.
 #[derive(Debug, Clone)]
@@ -13,6 +13,7 @@ pub struct GithubRepo {
     pub ci_status: CiStatus,
     pub ci_workflow: Option<String>,
     pub ci_duration: Option<String>,
+    pub repo_kind: RepoKind,
 }
 
 // --- Raw deserialization types (match GraphQL response shape) ---
@@ -43,8 +44,16 @@ struct RepositoryConnection {
 struct RepoNode {
     name: String,
     pushed_at: Option<String>,
+    is_private: Option<bool>,
+    owner: Option<OwnerNode>,
     pull_requests: Option<PrConnectionNode>,
     default_branch_ref: Option<DefaultBranchRef>,
+}
+
+#[derive(Deserialize)]
+struct OwnerNode {
+    #[serde(rename = "__typename")]
+    typename: String,
 }
 
 #[derive(Deserialize)]
@@ -131,7 +140,8 @@ fn build_query(repo_limit: u32, include_prs: bool) -> String {
   repositories(first: {repo_limit}, orderBy: {{field: PUSHED_AT, direction: DESC}},
     affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {{
     nodes {{
-      name, pushedAt
+      name, pushedAt, isPrivate
+      owner {{ __typename }}
       {pr_field}
       defaultBranchRef {{
         target {{
@@ -228,6 +238,12 @@ fn parse_repos(nodes: Vec<RepoNode>) -> Vec<GithubRepo> {
             let pr_count = node.pull_requests.as_ref().map_or(0, |pr| pr.total_count);
             let prs = parse_prs(&node.pull_requests);
             let (ci_status, ci_workflow, ci_duration) = parse_ci(&node.default_branch_ref);
+            let repo_kind = match (&node.owner, node.is_private) {
+                (Some(o), _) if o.typename == "Organization" => RepoKind::Org,
+                (_, Some(true)) => RepoKind::Private,
+                (_, Some(false)) => RepoKind::Public,
+                _ => RepoKind::Unknown,
+            };
 
             Some(GithubRepo {
                 name: node.name,
@@ -237,6 +253,7 @@ fn parse_repos(nodes: Vec<RepoNode>) -> Vec<GithubRepo> {
                 ci_status,
                 ci_workflow,
                 ci_duration,
+                repo_kind,
             })
         })
         .collect()
@@ -358,6 +375,8 @@ mod tests {
         RepoNode {
             name: name.to_string(),
             pushed_at: pushed_at.map(|s| s.to_string()),
+            is_private: None,
+            owner: None,
             pull_requests: None,
             default_branch_ref: None,
         }
@@ -374,6 +393,7 @@ mod tests {
             ci_status: CiStatus::Unknown,
             ci_workflow: None,
             ci_duration: None,
+            repo_kind: RepoKind::Unknown,
         }
     }
 
@@ -393,6 +413,8 @@ mod tests {
         let nodes = vec![RepoNode {
             name: "with_prs".to_string(),
             pushed_at: Some("2026-04-01T10:00:00Z".to_string()),
+            is_private: None,
+            owner: None,
             pull_requests: Some(PrConnectionNode {
                 total_count: 3,
                 nodes: None,
@@ -449,6 +471,48 @@ mod tests {
         let filtered = filter_since(&repos, cutoff);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "new");
+    }
+
+    #[test]
+    fn repo_kind_org_takes_priority_over_private() {
+        let nodes = vec![RepoNode {
+            name: "org_repo".to_string(),
+            pushed_at: Some("2026-04-01T10:00:00Z".to_string()),
+            is_private: Some(true),
+            owner: Some(OwnerNode { typename: "Organization".to_string() }),
+            pull_requests: None,
+            default_branch_ref: None,
+        }];
+        let repos = parse_repos(nodes);
+        assert_eq!(repos[0].repo_kind, RepoKind::Org);
+    }
+
+    #[test]
+    fn repo_kind_private_when_not_org() {
+        let nodes = vec![RepoNode {
+            name: "priv_repo".to_string(),
+            pushed_at: Some("2026-04-01T10:00:00Z".to_string()),
+            is_private: Some(true),
+            owner: Some(OwnerNode { typename: "User".to_string() }),
+            pull_requests: None,
+            default_branch_ref: None,
+        }];
+        let repos = parse_repos(nodes);
+        assert_eq!(repos[0].repo_kind, RepoKind::Private);
+    }
+
+    #[test]
+    fn repo_kind_public_when_not_private_or_org() {
+        let nodes = vec![RepoNode {
+            name: "pub_repo".to_string(),
+            pushed_at: Some("2026-04-01T10:00:00Z".to_string()),
+            is_private: Some(false),
+            owner: Some(OwnerNode { typename: "User".to_string() }),
+            pull_requests: None,
+            default_branch_ref: None,
+        }];
+        let repos = parse_repos(nodes);
+        assert_eq!(repos[0].repo_kind, RepoKind::Public);
     }
 
     #[test]

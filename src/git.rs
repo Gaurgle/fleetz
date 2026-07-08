@@ -136,6 +136,30 @@ pub async fn dirty_count(repo_path: &Path) -> u32 {
     }
 }
 
+/// Recent commits on a specific branch (local or "origin/x"), for the
+/// read-only preview of what's happened on a branch without checking it out.
+pub async fn branch_commits(repo_path: &Path, branch: &str, limit: u32) -> Vec<Commit> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "log",
+            &format!("-{limit}"),
+            "--date=relative",
+            "--format=%x1e%h%x1f%aN%x1f%ad%x1f%s%x1f%b",
+            branch,
+        ])
+        .output()
+        .await;
+
+    match output {
+        Ok(o) if o.status.success() => {
+            parse_commit_output(&String::from_utf8_lossy(&o.stdout))
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Get recent commits for a range (e.g. "main..origin/main" or "-5").
 pub async fn commits(
     repo_path: &Path,
@@ -143,11 +167,16 @@ pub async fn commits(
     with_stat: bool,
     author_filter: Option<&str>,
 ) -> Vec<Commit> {
+    // Record-separated so the (possibly multi-line) body can't be confused
+    // with field boundaries: each commit starts with RS (0x1e), fields are
+    // split by US (0x1f). With --shortstat, a " N files changed..." line
+    // trails the body inside the same record.
     let mut args = vec![
         "-C".to_string(),
         repo_path.to_string_lossy().to_string(),
         "log".to_string(),
-        "--format=COMMIT|%h|%aN|%s".to_string(),
+        "--date=relative".to_string(),
+        "--format=%x1e%h%x1f%aN%x1f%ad%x1f%s%x1f%b".to_string(),
     ];
     if with_stat {
         args.push("--shortstat".to_string());
@@ -168,39 +197,54 @@ pub async fn commits(
     parse_commit_output(&stdout)
 }
 
-/// Parse git log output with COMMIT| prefix format.
+/// Parse the record-separated git log output (see `commits`). Each record is
+/// `hash US author US date US subject US body-and-maybe-shortstat`.
 fn parse_commit_output(output: &str) -> Vec<Commit> {
     let mut result = Vec::new();
-    let mut current: Option<Commit> = None;
 
-    for line in output.lines() {
-        if let Some(rest) = line.strip_prefix("COMMIT|") {
-            // Flush previous commit
-            if let Some(c) = current.take() {
-                result.push(c);
-            }
-            let parts: Vec<&str> = rest.splitn(3, '|').collect();
-            if parts.len() == 3 {
-                current = Some(Commit {
-                    hash: parts[0].to_string(),
-                    author: parts[1].to_string(),
-                    message: parts[2].to_string(),
-                    insertions: 0,
-                    deletions: 0,
-                });
-            }
-        } else if line.contains("changed") {
-            // --shortstat line: " 3 files changed, 18 insertions(+), 4 deletions(-)"
-            if let Some(ref mut c) = current {
-                c.insertions = extract_stat_number(line, "insertion");
-                c.deletions = extract_stat_number(line, "deletion");
+    for record in output.split('\u{1e}') {
+        if record.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = record.splitn(5, '\u{1f}').collect();
+        if fields.len() < 4 {
+            continue;
+        }
+        let hash = fields[0].trim().to_string();
+        let author = fields[1].to_string();
+        let date = fields[2].to_string();
+        let message = fields[3].to_string();
+
+        // The 5th field is the body, possibly with a trailing --shortstat
+        // line. Pull the shortstat out and keep the rest as the body.
+        let mut body_lines: Vec<&str> = Vec::new();
+        let mut insertions = 0;
+        let mut deletions = 0;
+        if let Some(tail) = fields.get(4) {
+            for line in tail.lines() {
+                if line.contains("changed")
+                    && (line.contains("insertion") || line.contains("deletion") || line.contains("file"))
+                {
+                    insertions = extract_stat_number(line, "insertion");
+                    deletions = extract_stat_number(line, "deletion");
+                } else {
+                    body_lines.push(line);
+                }
             }
         }
+        let body = body_lines.join("\n").trim().to_string();
+
+        result.push(Commit {
+            hash,
+            message,
+            body,
+            author,
+            date,
+            insertions,
+            deletions,
+        });
     }
 
-    if let Some(c) = current {
-        result.push(c);
-    }
     result
 }
 
@@ -278,7 +322,7 @@ pub async fn graph(repo_path: &Path, branches: &[String], limit: u32) -> Vec<Gra
         "log".to_string(),
         "--graph".to_string(),
         "--color=never".to_string(),
-        "--format=GRAPH|%h|%d|%s".to_string(),
+        "--format=GRAPH|%h|%d|%aN|%s".to_string(),
         "-n".to_string(),
         limit.to_string(),
     ];
@@ -303,18 +347,20 @@ fn parse_graph_output(output: &str) -> Vec<GraphLine> {
             Some(idx) => {
                 let prefix = line[..idx].to_string();
                 let rest = &line[idx + MARKER.len()..];
-                let parts: Vec<&str> = rest.splitn(3, '|').collect();
+                let parts: Vec<&str> = rest.splitn(4, '|').collect();
                 GraphLine {
                     prefix,
                     hash: parts.first().unwrap_or(&"").to_string(),
                     refs: parts.get(1).unwrap_or(&"").trim().to_string(),
-                    message: parts.get(2).unwrap_or(&"").to_string(),
+                    author: parts.get(2).unwrap_or(&"").to_string(),
+                    message: parts.get(3).unwrap_or(&"").to_string(),
                 }
             }
             None => GraphLine {
                 prefix: line.to_string(),
                 hash: String::new(),
                 refs: String::new(),
+                author: String::new(),
                 message: String::new(),
             },
         })
@@ -410,6 +456,84 @@ pub async fn all_branches(repo_path: &Path) -> Vec<String> {
                 .collect()
         }
         _ => Vec::new(),
+    }
+}
+
+/// Get all remote-tracking branch names (e.g. "origin/feature-x"), excluding
+/// symbolic refs like `origin/HEAD`.
+pub async fn remote_branches(repo_path: &Path) -> Vec<String> {
+    let output = Command::new("git")
+        .args([
+            "-C", &repo_path.to_string_lossy(),
+            "for-each-ref", "--format=%(refname:short)",
+            "refs/remotes/",
+        ])
+        .output()
+        .await;
+
+    match output {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty() && !l.ends_with("/HEAD"))
+                .map(|l| l.trim().to_string())
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Remote branches with no local branch of the same name -- never
+/// fetched/checked out locally, or checked out once and deleted locally
+/// after merging. `remote` entries are the "origin/name" short form;
+/// `local` entries are bare branch names.
+pub fn unfetched_branches(remote: &[String], local: &[String]) -> Vec<String> {
+    remote
+        .iter()
+        .filter(|r| {
+            let short = r.split_once('/').map_or(r.as_str(), |(_, name)| name);
+            !local.iter().any(|l| l == short)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Get the URL of the "origin" remote, if configured.
+pub async fn remote_url(repo_path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["-C", &repo_path.to_string_lossy(), "remote", "get-url", "origin"])
+        .output()
+        .await
+        .ok()?;
+
+    if output.status.success() {
+        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!url.is_empty()).then_some(url)
+    } else {
+        None
+    }
+}
+
+/// Switch to a branch (`git switch`). For a `refs/remotes` short name like
+/// "origin/feature-x", switches to the local "feature-x" (git auto-creates a
+/// tracking branch), so the same overlay can check out an unfetched remote
+/// branch and a local one alike.
+pub async fn switch_branch(repo_path: &Path, branch: &str) -> Result<(), String> {
+    let local = branch
+        .split_once('/')
+        .filter(|(remote, _)| !remote.is_empty())
+        .map_or(branch, |(_, name)| name);
+
+    let output = Command::new("git")
+        .args(["-C", &repo_path.to_string_lossy(), "switch", local])
+        .output()
+        .await
+        .map_err(|e| format!("failed to switch branch: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
 }
 
@@ -523,6 +647,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unfetched_branches_skips_ones_with_local_counterpart() {
+        let remote = vec!["origin/main".to_string(), "origin/feature-x".to_string()];
+        let local = vec!["main".to_string()];
+        assert_eq!(unfetched_branches(&remote, &local), vec!["origin/feature-x"]);
+    }
+
+    #[test]
+    fn unfetched_branches_empty_when_all_fetched() {
+        let remote = vec!["origin/main".to_string()];
+        let local = vec!["main".to_string()];
+        assert!(unfetched_branches(&remote, &local).is_empty());
+    }
+
+    #[test]
+    fn unfetched_branches_handles_nested_remote_names() {
+        // A remote name with slashes in the branch itself (e.g. "origin/feat/x")
+        // should still compare against the bare local branch "feat/x".
+        let remote = vec!["origin/feat/x".to_string()];
+        let local = vec!["feat/x".to_string()];
+        assert!(unfetched_branches(&remote, &local).is_empty());
+    }
+
+    #[test]
     fn parse_track_info_ahead_and_behind() {
         assert_eq!(parse_track_info("[ahead 2, behind 3]"), (2, 3));
     }
@@ -566,24 +713,39 @@ mod tests {
 
     #[test]
     fn parse_commit_output_without_stat() {
-        let output = "COMMIT|a1b2c3d|Alice|feat: add feature\nCOMMIT|e4f5g6h|Bob|fix: bug\n";
+        // Records: RS h US author US date US subject US body
+        let output = "\u{1e}a1b2c3d\u{1f}Alice\u{1f}2 days ago\u{1f}feat: add feature\u{1f}\u{1e}e4f5g6h\u{1f}Bob\u{1f}5 hours ago\u{1f}fix: bug\u{1f}";
         let commits = parse_commit_output(output);
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0].hash, "a1b2c3d");
         assert_eq!(commits[0].author, "Alice");
+        assert_eq!(commits[0].date, "2 days ago");
         assert_eq!(commits[0].message, "feat: add feature");
+        assert_eq!(commits[0].body, "");
         assert_eq!(commits[0].insertions, 0);
     }
 
     #[test]
     fn parse_commit_output_with_stat() {
-        let output = "COMMIT|a1b2c3d|Alice|feat: add feature\n 3 files changed, 18 insertions(+), 4 deletions(-)\nCOMMIT|e4f5g6h|Bob|fix: bug\n 1 file changed, 2 insertions(+)\n";
+        let output = "\u{1e}a1b2c3d\u{1f}Alice\u{1f}2 days ago\u{1f}feat: add feature\u{1f} 3 files changed, 18 insertions(+), 4 deletions(-)\n\u{1e}e4f5g6h\u{1f}Bob\u{1f}5 hours ago\u{1f}fix: bug\u{1f} 1 file changed, 2 insertions(+)\n";
         let commits = parse_commit_output(output);
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0].insertions, 18);
         assert_eq!(commits[0].deletions, 4);
         assert_eq!(commits[1].insertions, 2);
         assert_eq!(commits[1].deletions, 0);
+    }
+
+    #[test]
+    fn parse_commit_output_multiline_body_and_stat() {
+        // A body with its own newlines, then a shortstat line -- the body is
+        // preserved and the stat is pulled out, not treated as body text.
+        let output = "\u{1e}a1b2c3d\u{1f}Alice\u{1f}1 day ago\u{1f}feat: thing\u{1f}Longer explanation.\n\nSecond paragraph.\n 2 files changed, 9 insertions(+)\n";
+        let commits = parse_commit_output(output);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].message, "feat: thing");
+        assert_eq!(commits[0].body, "Longer explanation.\n\nSecond paragraph.");
+        assert_eq!(commits[0].insertions, 9);
     }
 
     #[test]
@@ -620,18 +782,19 @@ mod tests {
 
     #[test]
     fn parse_graph_output_commit_line() {
-        let output = "* GRAPH|a1b2c3d| (HEAD -> main, origin/main)|feat: add feature";
+        let output = "* GRAPH|a1b2c3d| (HEAD -> main, origin/main)|Alice|feat: add feature";
         let lines = parse_graph_output(output);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].prefix, "* ");
         assert_eq!(lines[0].hash, "a1b2c3d");
         assert_eq!(lines[0].refs, "(HEAD -> main, origin/main)");
+        assert_eq!(lines[0].author, "Alice");
         assert_eq!(lines[0].message, "feat: add feature");
     }
 
     #[test]
     fn parse_graph_output_connector_line_has_no_commit_data() {
-        let output = "* GRAPH|a1b2c3d||feat: add feature\n|\\  \n| * GRAPH|d4e5f6g||other branch commit";
+        let output = "* GRAPH|a1b2c3d||Alice|feat: add feature\n|\\  \n| * GRAPH|d4e5f6g||Bob|other branch commit";
         let lines = parse_graph_output(output);
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[1].prefix, "|\\  ");
@@ -639,5 +802,6 @@ mod tests {
         assert!(lines[1].message.is_empty());
         assert_eq!(lines[2].prefix, "| * ");
         assert_eq!(lines[2].hash, "d4e5f6g");
+        assert_eq!(lines[2].author, "Bob");
     }
 }

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local};
-use crate::model::{self, CiStatus, RepoLocation, RepoStatus, Summary};
+use crate::model::{CiStatus, RepoLocation, RepoStatus, Summary};
 
 /// Which TUI view is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7,6 +7,25 @@ pub enum View {
     Detail,
     Compact,
 }
+
+/// Which panel has keyboard focus in `Detail` view -- only meaningful there,
+/// since `Compact` has a single flat grid. Reachable directly with 1/2/3 or
+/// cycled with Tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusedPanel {
+    RepoList,
+    /// The detail pane. j/k here moves the commit-selection cursor that
+    /// drives the inspector, rather than scrolling.
+    Detail,
+    /// The inspector pane (full detail of the selected commit). j/k here
+    /// scrolls its content.
+    Inspector,
+}
+
+/// Detail-pane scroll offset is capped well above any realistic content
+/// length (recent commits/reflog/graph are all bounded to small constants in
+/// main.rs) so an over-eager scroll-down can't grow unbounded.
+const DETAIL_SCROLL_CAP: u16 = 300;
 
 /// One quick-filter a repo can be toggled against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,18 +50,6 @@ pub struct QuickFilters {
 }
 
 impl QuickFilters {
-    pub fn toggle(&mut self, kind: FilterKind) {
-        let flag = match kind {
-            FilterKind::Dirty => &mut self.dirty,
-            FilterKind::Behind => &mut self.behind,
-            FilterKind::Ahead => &mut self.ahead,
-            FilterKind::CiFailed => &mut self.ci_failed,
-            FilterKind::HasPrs => &mut self.has_prs,
-            FilterKind::HasStashes => &mut self.has_stashes,
-        };
-        *flag = !*flag;
-    }
-
     pub fn is_active(&self, kind: FilterKind) -> bool {
         match kind {
             FilterKind::Dirty => self.dirty,
@@ -65,22 +72,88 @@ impl QuickFilters {
 
 }
 
+/// Short names quick filters answer to as `#tag` tokens in the search bar,
+/// prefix-matched case-insensitively (so `#d` alone resolves to Dirty) --
+/// mirrors notez/todoz's own `#tag` filter syntax.
+pub const FILTER_TAGS: [(FilterKind, &str); 6] = [
+    (FilterKind::Dirty, "dirty"),
+    (FilterKind::Behind, "behind"),
+    (FilterKind::Ahead, "ahead"),
+    (FilterKind::CiFailed, "ci"),
+    (FilterKind::HasPrs, "prs"),
+    (FilterKind::HasStashes, "stash"),
+];
+
+fn set_filter(filters: &mut QuickFilters, kind: FilterKind) {
+    match kind {
+        FilterKind::Dirty => filters.dirty = true,
+        FilterKind::Behind => filters.behind = true,
+        FilterKind::Ahead => filters.ahead = true,
+        FilterKind::CiFailed => filters.ci_failed = true,
+        FilterKind::HasPrs => filters.has_prs = true,
+        FilterKind::HasStashes => filters.has_stashes = true,
+    }
+}
+
+/// Split a search-bar query into its free-text portion and the quick filters
+/// it activates. A `#name` word is always consumed as filter syntax -- never
+/// falls back to literal text, even if the prefix matches nothing -- and is
+/// prefix-matched against `FILTER_TAGS` (a bare `#` activates every filter).
+/// Replaces binding quick filters directly to number keys: filters live in
+/// the same search text as the substring query, combine the same way, and
+/// never occupy a keybinding that a panel-focus jump could use instead.
+pub fn parse_query(query: &str) -> (String, QuickFilters) {
+    let mut filters = QuickFilters::default();
+    let mut text_words = Vec::new();
+
+    for word in query.split_whitespace() {
+        let Some(name) = word.strip_prefix('#') else {
+            text_words.push(word);
+            continue;
+        };
+        let name = name.to_lowercase();
+        if name.is_empty() {
+            for &(kind, _) in &FILTER_TAGS {
+                set_filter(&mut filters, kind);
+            }
+            continue;
+        }
+        for &(kind, tag) in &FILTER_TAGS {
+            if tag.starts_with(&name) {
+                set_filter(&mut filters, kind);
+            }
+        }
+    }
+
+    (text_words.join(" "), filters)
+}
+
 /// Overlay shown on top of the main view.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Overlay {
     None,
     Help,
     Branches(BranchOverlay),
 }
 
-/// State for the branch cleanup overlay.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// State for the branch overlay (switch + cleanup + preview).
+#[derive(Debug, Clone)]
 pub struct BranchOverlay {
     pub repo_name: String,
     pub repo_path: String,
     pub branches: Vec<BranchEntry>,
     pub selected: usize,
     pub confirm_delete: bool,
+    /// Read-only "what happened here" preview: recent commits per branch,
+    /// fetched lazily as branches are highlighted (see `main::ensure_preview`).
+    pub previews: std::collections::HashMap<String, Vec<crate::model::Commit>>,
+}
+
+impl BranchOverlay {
+    /// The name of the currently highlighted branch, if any.
+    pub fn selected_branch(&self) -> Option<&str> {
+        self.branches.get(self.selected).map(|b| b.name.as_str())
+    }
 }
 
 /// A branch entry in the cleanup overlay.
@@ -159,7 +232,14 @@ pub struct App {
     pub last_refreshed: Option<DateTime<Local>>,
     pub group_names: Vec<String>,
     pub active_group: Option<usize>,
-    pub filters: QuickFilters,
+    pub focused_panel: FocusedPanel,
+    pub detail_scroll: u16,
+    /// Index of the commit highlighted in the detail pane's recent-commits
+    /// list, which the inspector shows in full. Reset to 0 when the selected
+    /// repo changes.
+    pub detail_selected: usize,
+    /// Scroll offset for the inspector pane (long commit bodies).
+    pub inspector_scroll: u16,
 }
 
 /// Below this width or height, `Detail`'s list+detail split doesn't have
@@ -203,13 +283,20 @@ impl App {
             last_refreshed: Some(Local::now()),
             group_names: Vec::new(),
             active_group: None,
-            filters: QuickFilters::default(),
+            focused_panel: FocusedPanel::RepoList,
+            detail_scroll: 0,
+            detail_selected: 0,
+            inspector_scroll: 0,
         }
     }
 
-    /// Repos filtered by the current search query, active group, and quick filters.
+    /// Repos filtered by the current search query, active group, and quick
+    /// filters -- the latter two both parsed out of `search_query`'s `#tag`
+    /// words (see `parse_query`), so there's a single source of truth for
+    /// "what's typed" rather than a separate toggled-by-keypress field.
     pub fn visible_repos(&self) -> Vec<(usize, &RepoStatus)> {
         let active_group = self.active_group.and_then(|i| self.group_names.get(i));
+        let (text_query, filters) = parse_query(&self.search_query);
 
         self.repos
             .iter()
@@ -222,14 +309,14 @@ impl App {
                     }
                 }
                 // Search filter
-                if !self.search_query.is_empty() {
-                    let q = self.search_query.to_lowercase();
+                if !text_query.is_empty() {
+                    let q = text_query.to_lowercase();
                     if !r.name.to_lowercase().contains(&q) {
                         return false;
                     }
                 }
                 // Quick filters (dirty/behind/ahead/CI/PRs/stashes)
-                if !self.filters.matches(r) {
+                if !filters.matches(r) {
                     return false;
                 }
                 true
@@ -237,15 +324,17 @@ impl App {
             .collect()
     }
 
-    /// Toggle one quick filter on/off; filters combine with AND.
-    pub fn toggle_filter(&mut self, kind: FilterKind) {
-        self.filters.toggle(kind);
-        self.selected = 0;
+    /// The quick filters currently active per the search query's `#tag`
+    /// words -- for the filter-strip dots to light up against.
+    pub fn active_filters(&self) -> QuickFilters {
+        parse_query(&self.search_query).1
     }
 
-    /// Clear all active quick filters.
+    /// Strip any `#tag` filter words from the search query, keeping free
+    /// text intact.
     pub fn clear_filters(&mut self) {
-        self.filters = QuickFilters::default();
+        let (text, _) = parse_query(&self.search_query);
+        self.search_query = text;
         self.selected = 0;
     }
 
@@ -290,6 +379,7 @@ impl App {
     pub fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
+            self.reset_detail_view();
         }
     }
 
@@ -297,7 +387,71 @@ impl App {
         let max = self.visible_repos().len().saturating_sub(1);
         if self.selected < max {
             self.selected += 1;
+            self.reset_detail_view();
         }
+    }
+
+    /// Reset the detail pane's scroll + commit selection + inspector scroll,
+    /// so moving to a different repo always starts its detail from the top
+    /// with the first commit selected rather than inheriting stale offsets.
+    fn reset_detail_view(&mut self) {
+        self.detail_scroll = 0;
+        self.detail_selected = 0;
+        self.inspector_scroll = 0;
+    }
+
+    /// Number of commits in the recent-commits list of the selected repo --
+    /// the range the inspector's commit cursor moves over.
+    pub fn selected_commit_count(&self) -> usize {
+        self.selected_repo().map_or(0, |r| r.commits.len())
+    }
+
+    /// Move the inspector's commit cursor within the selected repo's commits.
+    pub fn select_commit_up(&mut self) {
+        if self.detail_selected > 0 {
+            self.detail_selected -= 1;
+            self.inspector_scroll = 0;
+        }
+    }
+
+    pub fn select_commit_down(&mut self) {
+        let max = self.selected_commit_count().saturating_sub(1);
+        if self.detail_selected < max {
+            self.detail_selected += 1;
+            self.inspector_scroll = 0;
+        }
+    }
+
+    /// Detail-pane down-navigation: step the commit cursor through the recent
+    /// commits, then -- once past the last one -- scroll the pane so the
+    /// history/reflog/CI sections below the commits become reachable.
+    pub fn detail_nav_down(&mut self) {
+        if self.detail_selected + 1 < self.selected_commit_count() {
+            self.select_commit_down();
+        } else {
+            self.scroll_detail(1);
+        }
+    }
+
+    /// Detail-pane up-navigation: unwind any content scroll first, then step
+    /// the commit cursor back up -- the mirror of `detail_nav_down`.
+    pub fn detail_nav_up(&mut self) {
+        if self.detail_scroll > 0 {
+            self.scroll_detail(-1);
+        } else {
+            self.select_commit_up();
+        }
+    }
+
+    /// The commit the inspector is currently showing, if any.
+    pub fn inspected_commit(&self) -> Option<&crate::model::Commit> {
+        self.selected_repo()
+            .and_then(|r| r.commits.get(self.detail_selected))
+    }
+
+    pub fn scroll_inspector(&mut self, delta: i32) {
+        let current = self.inspector_scroll as i32;
+        self.inspector_scroll = (current + delta).clamp(0, DETAIL_SCROLL_CAP as i32) as u16;
     }
 
     pub fn toggle_view(&mut self) {
@@ -305,6 +459,44 @@ impl App {
             View::Detail => View::Compact,
             View::Compact => View::Detail,
         };
+        // Compact has no detail pane to focus, and switching views should
+        // always land somewhere predictable rather than carry over whatever
+        // was focused/scrolled before.
+        self.focused_panel = FocusedPanel::RepoList;
+        self.detail_scroll = 0;
+    }
+
+    /// Cycle keyboard focus: repo list -> detail -> inspector -> repo list.
+    /// Only meaningful in `Detail` view.
+    pub fn toggle_panel_focus(&mut self) {
+        if self.view != View::Detail {
+            return;
+        }
+        self.focused_panel = match self.focused_panel {
+            FocusedPanel::RepoList => FocusedPanel::Detail,
+            FocusedPanel::Detail => FocusedPanel::Inspector,
+            FocusedPanel::Inspector => FocusedPanel::RepoList,
+        };
+    }
+
+    /// Jump keyboard focus directly to `panel` (the `1`/`2` bindings).
+    /// Only meaningful in `Detail` view.
+    pub fn focus_panel(&mut self, panel: FocusedPanel) {
+        if self.view != View::Detail {
+            return;
+        }
+        self.focused_panel = panel;
+    }
+
+    /// Scroll the detail pane by `delta` lines (negative scrolls up),
+    /// clamped to `[0, DETAIL_SCROLL_CAP]`. The renderer clamps further
+    /// against actual content length, so overshoot here just means a couple
+    /// of extra keypresses before movement is visible again -- not a stuck
+    /// scroll, since detail content is always small (bounded by the commit/
+    /// reflog/graph limits in main.rs).
+    pub fn scroll_detail(&mut self, delta: i32) {
+        let current = self.detail_scroll as i32;
+        self.detail_scroll = (current + delta).clamp(0, DETAIL_SCROLL_CAP as i32) as u16;
     }
 
     pub fn toggle_help(&mut self) {
@@ -394,7 +586,7 @@ mod tests {
                 dirty: 0,
                 pr_count: 0,
                 prs: vec![],
-                ci_status: model::CiStatus::Unknown,
+                ci_status: crate::model::CiStatus::Unknown,
                 ci_workflow: None,
                 ci_duration: None,
                 pushed_at: None,
@@ -404,6 +596,9 @@ mod tests {
                 worktrees: vec![],
                 reflog: vec![],
                 graph: vec![],
+                repo_kind: crate::model::RepoKind::Unknown,
+                remote_url: None,
+                remote_only_branches: vec![],
             })
             .collect();
         App::new(repos, "test".to_string(), false, false, 120, 40)
@@ -495,7 +690,7 @@ mod tests {
     fn dirty_filter_shows_only_dirty_repos() {
         let mut app = make_app(3);
         app.repos[1].dirty = 2;
-        app.toggle_filter(FilterKind::Dirty);
+        app.search_query = "#dirty".to_string();
         let visible = app.visible_repos();
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].1.name, "repo-1");
@@ -509,8 +704,7 @@ mod tests {
         app.repos[1].behind = 1; // dirty AND behind
         app.repos[2].behind = 1; // behind only
 
-        app.toggle_filter(FilterKind::Dirty);
-        app.toggle_filter(FilterKind::Behind);
+        app.search_query = "#dirty #behind".to_string();
 
         let visible = app.visible_repos();
         assert_eq!(visible.len(), 1);
@@ -518,32 +712,64 @@ mod tests {
     }
 
     #[test]
-    fn toggling_same_filter_twice_clears_it() {
-        let mut app = make_app(3);
+    fn filter_tag_prefix_matches() {
+        let mut app = make_app(2);
         app.repos[1].dirty = 1;
-        app.toggle_filter(FilterKind::Dirty);
-        app.toggle_filter(FilterKind::Dirty);
-        assert_eq!(app.visible_repos().len(), 3);
+        app.search_query = "#d".to_string(); // prefix of "dirty"
+        let visible = app.visible_repos();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].1.name, "repo-1");
     }
 
     #[test]
-    fn clear_filters_shows_all() {
+    fn clear_filters_strips_tags_but_keeps_text() {
         let mut app = make_app(3);
         app.repos[1].dirty = 1;
-        app.toggle_filter(FilterKind::Dirty);
+        app.repos[1].name = "repo-1-target".to_string();
+        app.search_query = "target #dirty".to_string();
         assert_eq!(app.visible_repos().len(), 1);
         app.clear_filters();
-        assert_eq!(app.visible_repos().len(), 3);
+        assert_eq!(app.search_query, "target");
+        assert_eq!(app.visible_repos().len(), 1); // text query alone still narrows it
     }
 
     #[test]
     fn ci_failed_filter_matches_only_failed_ci() {
         let mut app = make_app(2);
-        app.repos[0].ci_status = model::CiStatus::Passed;
-        app.repos[1].ci_status = model::CiStatus::Failed;
-        app.toggle_filter(FilterKind::CiFailed);
+        app.repos[0].ci_status = crate::model::CiStatus::Passed;
+        app.repos[1].ci_status = crate::model::CiStatus::Failed;
+        app.search_query = "#ci".to_string();
         let visible = app.visible_repos();
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].1.name, "repo-1");
+    }
+
+    #[test]
+    fn parse_query_extracts_tag_and_text() {
+        let (text, filters) = parse_query("repo #dirty");
+        assert_eq!(text, "repo");
+        assert!(filters.dirty);
+        assert!(!filters.behind);
+    }
+
+    #[test]
+    fn parse_query_bare_hash_activates_all() {
+        let (text, filters) = parse_query("#");
+        assert_eq!(text, "");
+        assert!(
+            filters.dirty
+                && filters.behind
+                && filters.ahead
+                && filters.ci_failed
+                && filters.has_prs
+                && filters.has_stashes
+        );
+    }
+
+    #[test]
+    fn parse_query_unmatched_tag_is_dropped_not_kept_as_text() {
+        let (text, filters) = parse_query("#nonsense hello");
+        assert_eq!(text, "hello");
+        assert_eq!(filters, QuickFilters::default());
     }
 }

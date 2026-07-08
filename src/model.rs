@@ -9,12 +9,17 @@ pub struct BranchStatus {
     pub ahead: u32,
 }
 
-/// A single commit.
+/// A single commit. `message` is the subject line; `body` is the rest of the
+/// commit message (empty for single-line commits). `date` is a relative
+/// string like "3 days ago". `author` is the full author name -- the tight
+/// lists show a short code (ui::author_code), but the inspector shows this.
 #[derive(Debug, Clone)]
 pub struct Commit {
     pub hash: String,
     pub message: String,
+    pub body: String,
     pub author: String,
+    pub date: String,
     pub insertions: u32,
     pub deletions: u32,
 }
@@ -106,6 +111,13 @@ pub struct RepoStatus {
     pub worktrees: Vec<Worktree>,
     pub reflog: Vec<ReflogEntry>,
     pub graph: Vec<GraphLine>,
+    pub repo_kind: RepoKind,
+    /// URL of the `origin` remote, if configured.
+    pub remote_url: Option<String>,
+    /// Remote-tracking branches (e.g. "origin/feature-x") with no local
+    /// branch of the same name -- never fetched/checked out locally, or
+    /// checked out once and deleted locally after merging.
+    pub remote_only_branches: Vec<String>,
 }
 
 /// An active git worktree.
@@ -126,13 +138,26 @@ pub struct ReflogEntry {
 
 /// One rendered line of `git log --graph`: the ASCII graph prefix plus the
 /// commit it points at. Pure connector lines (no commit on that row) carry
-/// an empty hash/refs/message and only the prefix.
+/// an empty hash/refs/author/message and only the prefix.
 #[derive(Debug, Clone)]
 pub struct GraphLine {
     pub prefix: String,
     pub hash: String,
     pub refs: String,
+    pub author: String,
     pub message: String,
+}
+
+/// Which kind of GitHub owner a repo belongs to, for the org/private/public
+/// glyph shown next to its name (mirrors repoz's glyph logic). `Unknown`
+/// means there's no GitHub metadata to go on (local-only repos), so no
+/// glyph is shown at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepoKind {
+    Org,
+    Private,
+    Public,
+    Unknown,
 }
 
 impl RepoStatus {
@@ -144,7 +169,10 @@ impl RepoStatus {
         self.behind > 0 || self.ahead > 0
     }
 
-    /// A short status string like "3↓", "2↑", "4!", or "synced".
+    /// A short status string like "3↓", "2↑", "4!", or "✓" (synced). The
+    /// synced case is a bare checkmark rather than the word -- in a list
+    /// that's mostly synced repos, the glyph reads as "all good" at a glance
+    /// without a column of repeated "synced" text.
     pub fn short_status(&self) -> String {
         let mut parts = Vec::new();
         if self.behind > 0 {
@@ -157,7 +185,7 @@ impl RepoStatus {
             parts.push(format!("{}!", self.dirty));
         }
         if parts.is_empty() {
-            "synced".to_string()
+            "✓".to_string()
         } else {
             parts.join(" ")
         }
@@ -244,6 +272,9 @@ mod tests {
             worktrees: vec![],
             reflog: vec![],
             graph: vec![],
+            repo_kind: RepoKind::Unknown,
+            remote_url: None,
+            remote_only_branches: vec![],
         }
     }
 
@@ -252,7 +283,7 @@ mod tests {
         let r = make_repo("clean", 0, 0, 0);
         assert!(r.is_synced());
         assert!(!r.has_divergence());
-        assert_eq!(r.short_status(), "synced");
+        assert_eq!(r.short_status(), "✓");
         assert_eq!(r.long_status(), "synced");
     }
 

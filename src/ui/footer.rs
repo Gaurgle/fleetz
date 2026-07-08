@@ -17,14 +17,24 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let summary = app.summary();
     let width = area.width as usize;
 
-    let full_summary = summary_spans(&summary, app.show_prs);
+    // A transient status message (fetch/switch/refresh result) takes over the
+    // left side while present, so single-shot actions actually report back --
+    // otherwise the summary just sits there and the action looks like a no-op.
+    let left = match &app.status_message {
+        Some(msg) => {
+            let color = if msg.is_error { colors::RED } else { colors::GREEN };
+            vec![Span::styled(msg.text.clone(), Style::default().fg(color))]
+        }
+        None => summary_spans(&summary, app.show_prs),
+    };
+
     let full_hints = keybind_hints(app.view, true);
     let compact_hints = keybind_hints(app.view, false);
 
-    let (mut spans, hints) = if fits(width, &full_summary, &full_hints) {
-        (full_summary, full_hints)
-    } else if fits(width, &full_summary, &compact_hints) {
-        (full_summary, compact_hints)
+    let (mut spans, hints) = if fits(width, &left, &full_hints) {
+        (left, full_hints)
+    } else if fits(width, &left, &compact_hints) {
+        (left, compact_hints)
     } else {
         (Vec::new(), compact_hints)
     };
@@ -116,9 +126,14 @@ fn keybind_hints(view: View, with_desc: bool) -> Vec<Span<'static>> {
         hints.push(Span::styled(" lazygit", desc_style));
     }
     hints.push(gap.clone());
-    hints.push(Span::styled("[p]", key_style));
+    hints.push(Span::styled("[f]", key_style));
     if with_desc {
-        hints.push(Span::styled(" pull", desc_style));
+        hints.push(Span::styled(" fetch", desc_style));
+    }
+    hints.push(gap.clone());
+    hints.push(Span::styled("[s]", key_style));
+    if with_desc {
+        hints.push(Span::styled(" switch", desc_style));
     }
     hints.push(gap.clone());
     hints.push(Span::styled("[v]", key_style));
