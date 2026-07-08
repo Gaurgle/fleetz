@@ -23,7 +23,7 @@ Only the **github activity** section (repos pushed since the cutoff). The
 **local changes** section is about uncommitted/unpushed work, not push
 recency, so it should stay visible regardless of the window. Otherwise
 narrowing would hide dirty repos you are actively working on, which is the
-opposite of useful.
+opposite of useful!
 
 ### How to trigger it (two candidates, likely both)
 
