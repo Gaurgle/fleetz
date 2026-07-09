@@ -1,4 +1,4 @@
-use crate::model::{BranchStatus, Commit, GraphLine, ReflogEntry};
+use crate::model::{BranchStatus, Commit, FileStat, GraphLine, ReflogEntry};
 use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
@@ -179,6 +179,10 @@ pub async fn commits(
         "--format=%x1e%h%x1f%aN%x1f%ad%x1f%s%x1f%b".to_string(),
     ];
     if with_stat {
+        // --numstat gives the per-file breakdown (for the inspector's file
+        // list); --shortstat adds the "N files changed, ..." summary line the
+        // totals are parsed from. Combined, both trail the body in the record.
+        args.push("--numstat".to_string());
         args.push("--shortstat".to_string());
     }
     if let Some(author) = author_filter {
@@ -215,11 +219,13 @@ fn parse_commit_output(output: &str) -> Vec<Commit> {
         let date = fields[2].to_string();
         let message = fields[3].to_string();
 
-        // The 5th field is the body, possibly with a trailing --shortstat
-        // line. Pull the shortstat out and keep the rest as the body.
+        // The 5th field is the body, possibly followed by --numstat file
+        // lines and a --shortstat summary. Pull the stats out (per-file into
+        // `files`, totals into insertions/deletions) and keep the rest as body.
         let mut body_lines: Vec<&str> = Vec::new();
         let mut insertions = 0;
         let mut deletions = 0;
+        let mut files: Vec<FileStat> = Vec::new();
         if let Some(tail) = fields.get(4) {
             for line in tail.lines() {
                 if line.contains("changed")
@@ -227,6 +233,8 @@ fn parse_commit_output(output: &str) -> Vec<Commit> {
                 {
                     insertions = extract_stat_number(line, "insertion");
                     deletions = extract_stat_number(line, "deletion");
+                } else if let Some(file) = parse_numstat_line(line) {
+                    files.push(file);
                 } else {
                     body_lines.push(line);
                 }
@@ -242,10 +250,39 @@ fn parse_commit_output(output: &str) -> Vec<Commit> {
             date,
             insertions,
             deletions,
+            files,
         });
     }
 
     result
+}
+
+/// Parse one `git log --numstat` line: `<added>\t<removed>\t<path>`. Binary
+/// files report `-` for both counts, which we store as 0. Returns None for
+/// any line that isn't numstat-shaped (body text, the shortstat summary, etc.)
+/// so the caller can fall through to treating it as body.
+fn parse_numstat_line(line: &str) -> Option<FileStat> {
+    let mut parts = line.splitn(3, '\t');
+    let added_raw = parts.next()?;
+    let removed_raw = parts.next()?;
+    let path = parts.next()?;
+    if path.is_empty() {
+        return None;
+    }
+    // Both count fields must be a number or the binary `-`, else this isn't a
+    // numstat line (e.g. a body line that merely contains a tab).
+    let parse_count = |s: &str| -> Option<u32> {
+        if s == "-" {
+            Some(0)
+        } else {
+            s.parse::<u32>().ok()
+        }
+    };
+    Some(FileStat {
+        added: parse_count(added_raw)?,
+        removed: parse_count(removed_raw)?,
+        path: path.to_string(),
+    })
 }
 
 fn extract_stat_number(line: &str, keyword: &str) -> u32 {
@@ -746,6 +783,36 @@ mod tests {
         assert_eq!(commits[0].message, "feat: thing");
         assert_eq!(commits[0].body, "Longer explanation.\n\nSecond paragraph.");
         assert_eq!(commits[0].insertions, 9);
+    }
+
+    #[test]
+    fn parse_commit_output_collects_numstat_files() {
+        // Body, then numstat lines, then the shortstat summary -- as emitted
+        // by `git log --numstat --shortstat`. Files land in `files`, totals in
+        // insertions/deletions, and neither leaks into the body.
+        let output = "\u{1e}a1b2c3d\u{1f}Alice\u{1f}2 days ago\u{1f}feat: add feature\u{1f}Body text.\n12\t3\tsrc/main.rs\n0\t7\tREADME.md\n-\t-\tlogo.png\n 3 files changed, 12 insertions(+), 10 deletions(-)\n";
+        let commits = parse_commit_output(output);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].body, "Body text.");
+        assert_eq!(commits[0].insertions, 12);
+        assert_eq!(commits[0].deletions, 10);
+        assert_eq!(commits[0].files.len(), 3);
+        assert_eq!(commits[0].files[0], FileStat { path: "src/main.rs".into(), added: 12, removed: 3 });
+        assert_eq!(commits[0].files[1], FileStat { path: "README.md".into(), added: 0, removed: 7 });
+        // Binary file: numstat reports `-` for both counts, stored as 0/0.
+        assert_eq!(commits[0].files[2], FileStat { path: "logo.png".into(), added: 0, removed: 0 });
+    }
+
+    #[test]
+    fn parse_numstat_line_rejects_non_numstat() {
+        // A body line that merely contains a tab is not a numstat line.
+        assert!(parse_numstat_line("just some\tprose here").is_none());
+        assert!(parse_numstat_line("no tabs at all").is_none());
+        assert!(parse_numstat_line("12\t3").is_none()); // missing path
+        assert_eq!(
+            parse_numstat_line("5\t2\tsrc/app.rs"),
+            Some(FileStat { path: "src/app.rs".into(), added: 5, removed: 2 })
+        );
     }
 
     #[test]

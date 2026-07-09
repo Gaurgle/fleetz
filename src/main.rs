@@ -734,9 +734,10 @@ async fn load_repos(
                 .to_string();
             let display = tilde_display(&path);
 
-            let show_stat = args.stat;
             let author = args.author.as_deref();
-            let commits = git::commits(&path, &format!("-{RECENT_COMMIT_COUNT}"), show_stat, author).await;
+            // Always fetch the diffstat for recent commits so every commit
+            // (not just those in a dirty repo) shows its +/- and file list.
+            let commits = git::commits(&path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await;
             let reflog = git::reflog(&path, REFLOG_COUNT).await;
             let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
             let graph = git::graph(&path, &branch_names, GRAPH_COMMIT_COUNT).await;
@@ -1011,13 +1012,12 @@ async fn build_repo_status(
         total_ahead += b.ahead;
     }
 
-    let has_changes = total_behind > 0 || total_ahead > 0 || dirty > 0;
-    let show_stat = has_changes || args.stat;
     let author = args.author.as_deref();
 
     // Recent history on HEAD, not just the divergent commits -- a glance at
     // "what's been happening here" shouldn't depend on being ahead/behind.
-    let commits = git::commits(path, &format!("-{RECENT_COMMIT_COUNT}"), show_stat, author).await;
+    // Always with the diffstat so every commit shows its +/- and file list.
+    let commits = git::commits(path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await;
     let reflog = git::reflog(path, REFLOG_COUNT).await;
 
     let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();

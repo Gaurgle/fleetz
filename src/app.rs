@@ -477,20 +477,12 @@ impl App {
     }
 
     /// Scroll the focused pane's content by `delta` lines (Shift+scroll)
-    /// without moving the selection cursor -- so the inspector keeps showing
-    /// the same commit while the detail pane scrolls into the history below.
-    /// The repo list has no scroll distinct from its selection, so there a
-    /// Shift+scroll just steps the selection as plain nav would.
+    /// without moving the selection cursor. From the repo list it drives the
+    /// detail pane (window 2), so you can skim the selected repo's history
+    /// while browsing the list; from the inspector it scrolls the inspector.
     pub fn scroll_focused(&mut self, delta: i32) {
         match self.focused_panel {
-            FocusedPanel::RepoList => {
-                if delta > 0 {
-                    self.move_down();
-                } else {
-                    self.move_up();
-                }
-            }
-            FocusedPanel::Detail => self.scroll_detail(delta),
+            FocusedPanel::RepoList | FocusedPanel::Detail => self.scroll_detail(delta),
             FocusedPanel::Inspector => self.scroll_inspector(delta),
         }
     }

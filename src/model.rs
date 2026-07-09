@@ -9,10 +9,21 @@ pub struct BranchStatus {
     pub ahead: u32,
 }
 
+/// One file touched by a commit, from `git log --numstat`. `added`/`removed`
+/// are line counts (both 0 for a binary file, which numstat reports as `-`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStat {
+    pub path: String,
+    pub added: u32,
+    pub removed: u32,
+}
+
 /// A single commit. `message` is the subject line; `body` is the rest of the
 /// commit message (empty for single-line commits). `date` is a relative
 /// string like "3 days ago". `author` is the full author name -- the tight
 /// lists show a short code (ui::author_code), but the inspector shows this.
+/// `files` is the per-file diffstat, shown in the inspector (empty for merge
+/// commits, which have no single diffstat).
 #[derive(Debug, Clone)]
 pub struct Commit {
     pub hash: String,
@@ -22,6 +33,7 @@ pub struct Commit {
     pub date: String,
     pub insertions: u32,
     pub deletions: u32,
+    pub files: Vec<FileStat>,
 }
 
 /// CI/check status for the default branch.

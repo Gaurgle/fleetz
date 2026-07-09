@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap,
+};
 use ratatui::Frame;
 
 use crate::app::{App, FocusedPanel};
@@ -14,6 +16,11 @@ use crate::ui::colors;
 /// Enough for the header line, a blank, a few message lines, and the stat;
 /// only shown when the right column is tall enough to spare it.
 pub const INSPECTOR_HEIGHT: u16 = 10;
+
+/// Most changed files listed in the inspector before the rest are collapsed
+/// into a "… and N more" line -- keeps a huge commit from turning the pane
+/// into an endless scroll.
+const INSPECTOR_FILE_CAP: usize = 30;
 
 /// Render the detail view: repo list (left 35%) + a right column (65%) that
 /// stacks the detail pane over the inspector pane.
@@ -44,8 +51,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     let mut items: Vec<ListItem> = Vec::new();
-    // Available width inside the block (minus border)
-    let col_width = area.width.saturating_sub(2) as usize;
+    // Width available for a row inside the block: the pane minus its border (2)
+    // and horizontal padding (2, from `Padding::horizontal(1)` on the block).
+    let col_width = area.width.saturating_sub(4) as usize;
 
     let primary = app.primary_repos();
     let elsewhere = app.elsewhere_repos();
@@ -106,6 +114,7 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
+        .padding(Padding::horizontal(1))
         .title_top(crate::ui::panel_title(1, "repos", focused))
         .title_top(
             Line::from(Span::styled(
@@ -197,7 +206,8 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     let panel = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(Style::default().fg(border_color))
+        .padding(Padding::new(1, 1, 1, 0));
 
     let repo = match app.selected_repo() {
         Some(r) => r,
@@ -615,9 +625,11 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Render the `[3] inspector` pane: the full details of the commit the detail
-/// pane's cursor is on -- hash, author, relative date, the complete message
-/// (subject + body, untruncated), and the diffstat -- so you can read a
-/// commit in full without leaving the dashboard.
+/// pane's cursor is on -- a two-line masthead (hash, then author · date), the
+/// full message (subject bold, body untruncated), and the per-file diffstat --
+/// so you can read a commit in full without leaving the dashboard. The block's
+/// padding insets every line uniformly, so wrapped prose keeps its left edge
+/// instead of falling back to column zero.
 fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focused_panel == FocusedPanel::Inspector;
     let border_color = if focused { colors::LAVENDER } else { colors::SURFACE };
@@ -625,69 +637,142 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
+        .padding(Padding::new(2, 2, 1, 0))
         .title_top(crate::ui::panel_title(3, "inspector", focused));
     let inner = block.inner(area);
-    frame.render_widget(block, area);
 
     let Some(c) = app.inspected_commit() else {
-        let empty = Paragraph::new("  no commit selected")
-            .style(Style::default().fg(colors::OVERLAY));
-        frame.render_widget(empty, inner);
+        let empty = Paragraph::new("no commit selected")
+            .style(Style::default().fg(colors::OVERLAY))
+            .block(block);
+        frame.render_widget(empty, area);
         return;
     };
 
-    let mut lines: Vec<Line> = Vec::new();
+    // Masthead: hash on its own line (bold, the pane's anchor), then author and
+    // relative date beneath -- two calm lines rather than one crowded row --
+    // a blank, then the subject (bold, the heading). Body and files follow.
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            c.hash.clone(),
+            Style::default()
+                .fg(colors::HASH_CLR)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled(
+                c.author.clone(),
+                Style::default().fg(colors::author_color(&c.author)),
+            ),
+            Span::styled(" · ", Style::default().fg(colors::SURFACE)),
+            Span::styled(c.date.clone(), Style::default().fg(colors::OVERLAY)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            c.message.clone(),
+            Style::default()
+                .fg(colors::TEXT)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
 
-    // Header: hash, full author name, relative date.
-    lines.push(Line::from(vec![
-        Span::styled(format!("  {}", c.hash), Style::default().fg(colors::HASH_CLR)),
-        Span::raw("  "),
-        Span::styled(c.author.clone(), Style::default().fg(colors::author_color(&c.author))),
-        Span::styled(format!("  {}", c.date), Style::default().fg(colors::OVERLAY)),
-    ]));
-
-    // Diffstat, if any.
-    if c.insertions > 0 || c.deletions > 0 {
-        let mut stat_spans = vec![Span::raw("  ")];
-        if c.insertions > 0 {
-            stat_spans.push(Span::styled(
-                format!("+{}", c.insertions),
-                Style::default().fg(colors::DIFF_ADD),
-            ));
-            stat_spans.push(Span::raw(" "));
-        }
-        if c.deletions > 0 {
-            stat_spans.push(Span::styled(
-                format!("-{}", c.deletions),
-                Style::default().fg(colors::DIFF_DEL),
-            ));
-        }
-        lines.push(Line::from(stat_spans));
-    }
-
-    lines.push(Line::from(""));
-
-    // Subject, then body (untruncated -- the pane wraps and scrolls).
-    lines.push(Line::from(Span::styled(
-        format!("  {}", c.message),
-        Style::default().fg(colors::TEXT).add_modifier(Modifier::BOLD),
-    )));
+    // Body below the subject, untruncated; wraps within the block padding.
     if !c.body.is_empty() {
         lines.push(Line::from(""));
         for body_line in c.body.lines() {
             lines.push(Line::from(Span::styled(
-                format!("  {body_line}"),
+                body_line.to_string(),
                 Style::default().fg(colors::TEXT),
             )));
         }
     }
 
-    let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
+    // Changed files, with the commit's totals on the section header. Capped so
+    // a sprawling commit can't wall off the pane -- the rest collapse into a
+    // trailing "… and N more".
+    if !c.files.is_empty() {
+        lines.push(Line::from(""));
+        let mut header = vec![section_label(&format!(
+            "changed files ({})",
+            c.files.len()
+        ))];
+        if c.insertions > 0 {
+            header.push(Span::styled(
+                format!("   +{}", c.insertions),
+                Style::default().fg(colors::DIFF_ADD),
+            ));
+        }
+        if c.deletions > 0 {
+            header.push(Span::styled(
+                format!(" -{}", c.deletions),
+                Style::default().fg(colors::DIFF_DEL),
+            ));
+        }
+        lines.push(Line::from(header));
+
+        for f in c.files.iter().take(INSPECTOR_FILE_CAP) {
+            lines.push(file_stat_line(f));
+        }
+        if c.files.len() > INSPECTOR_FILE_CAP {
+            lines.push(Line::from(Span::styled(
+                format!("… and {} more", c.files.len() - INSPECTOR_FILE_CAP),
+                Style::default().fg(colors::OVERLAY),
+            )));
+        }
+    }
+
+    // Clamp against the *wrapped* row count, not the raw line count -- long
+    // prose wraps to several rows, so a raw count would stop scrolling short of
+    // the real end.
+    let max_scroll = wrapped_row_count(&lines, inner.width).saturating_sub(inner.height);
     let scroll = app.inspector_scroll.min(max_scroll);
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
-    frame.render_widget(paragraph, inner);
+        .scroll((scroll, 0))
+        .block(block);
+    frame.render_widget(paragraph, area);
+}
+
+/// One "changed file" row for the inspector: a fixed-width +A/-B stat column
+/// (green adds, red deletes) then the path, so paths line up in a column no
+/// matter how big each file's diff is. Binary files (0/0) show only the path.
+fn file_stat_line(f: &crate::model::FileStat) -> Line<'static> {
+    const STAT_W: usize = 9;
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut stat_len = 0;
+    if f.added > 0 {
+        let s = format!("+{}", f.added);
+        stat_len += s.chars().count();
+        spans.push(Span::styled(s, Style::default().fg(colors::DIFF_ADD)));
+    }
+    if f.removed > 0 {
+        if stat_len > 0 {
+            spans.push(Span::raw(" "));
+            stat_len += 1;
+        }
+        let s = format!("-{}", f.removed);
+        stat_len += s.chars().count();
+        spans.push(Span::styled(s, Style::default().fg(colors::DIFF_DEL)));
+    }
+    // Pad the stat column so every path starts at the same column (+1 so even
+    // an over-long stat keeps a gap before the path).
+    spans.push(Span::raw(" ".repeat(STAT_W.saturating_sub(stat_len) + 1)));
+    spans.push(Span::styled(f.path.clone(), Style::default().fg(colors::TEXT)));
+    Line::from(spans)
+}
+
+/// Estimate how many terminal rows `lines` occupy once wrapped to `width`, so
+/// the inspector's scroll offset can be clamped to real content height. A
+/// `Paragraph` wraps long lines, so a raw line count under-counts. Guards a
+/// zero width so a degenerate pane can't divide by zero.
+fn wrapped_row_count(lines: &[Line], width: u16) -> u16 {
+    let w = width.max(1) as usize;
+    let mut rows = 0usize;
+    for line in lines {
+        let len: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+        rows += if len == 0 { 1 } else { len.div_ceil(w) };
+    }
+    rows.min(u16::MAX as usize) as u16
 }
 
 /// Colorize a `git log --graph` ASCII prefix by character column ("lane"),
