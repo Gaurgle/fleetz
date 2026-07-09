@@ -84,8 +84,13 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    // "local changes" section
+    // "local changes" section, set off by a blank row from the github-activity
+    // / also-active repos above it so it reads as its own block rather than
+    // butting up against the last entry above (only when something precedes it).
     if !local_only.is_empty() {
+        if !items.is_empty() {
+            items.push(ListItem::new(Line::from("")));
+        }
         items.push(section_header_item("local changes"));
         for (idx, repo) in &local_only {
             if *idx == selected_idx {

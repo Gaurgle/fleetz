@@ -17,6 +17,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ("1 / 2 / 3", "Focus repo list / detail / inspector (Tab cycles)"),
         ("mouse", "Click a panel to focus · scroll wheel scrolls any panel"),
         ("j/k ↑/↓", "Repo list: move · Detail: pick commit · Inspector: scroll"),
+        ("⇧ J/K ↑/↓", "Scroll focused pane (Detail: hold the selected commit)"),
         ("PgUp/PgDn", "Scroll focused pane by a page"),
         ("v", "Toggle detail ↔ compact view"),
         ("enter", "Open repo in lazygit (pull/merge live here)"),

@@ -22,7 +22,7 @@ use crossterm::terminal::{
 use model::{RepoLocation, RepoStatus};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
 use std::process::Command as StdCommand;
@@ -446,6 +446,16 @@ async fn handle_normal_input(
         // cleared by Esc -- matching the strip's "esc to clear" hint.
         KeyCode::Esc if !app.search_query.is_empty() => app.clear_search(),
         KeyCode::Tab | KeyCode::BackTab => app.toggle_panel_focus(),
+        // Shift+scroll: scroll the focused pane's *content* without moving the
+        // selection cursor -- so you can hold one commit in the inspector while
+        // scrolling the detail pane down into the history/reflog below. Plain
+        // ↓/j (below) still drive the cursor; these are pure scroll. Shift+j/k
+        // arrive as uppercase `J`/`K` (no modifier needed), Shift+arrow as an
+        // arrow carrying the SHIFT modifier.
+        KeyCode::Char('J') => app.scroll_focused(1),
+        KeyCode::Char('K') => app.scroll_focused(-1),
+        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_focused(1),
+        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_focused(-1),
         KeyCode::Char('j') | KeyCode::Down => match app.focused_panel {
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
@@ -693,10 +703,16 @@ async fn load_repos(
     mode: &Mode,
     bypass_cache: bool,
 ) -> Result<(Vec<RepoStatus>, String), Box<dyn std::error::Error>> {
+    // Local scan roots: the primary repo_dir plus any configured extra dirs
+    // (e.g. ~/.dotfiles), so repos outside the main tree still surface under
+    // "local changes" -- the fleetz equivalent of repoz's EXTRA_DIRS.
+    let mut scan_roots = vec![repo_dir.to_path_buf()];
+    scan_roots.extend(config.resolved_extra_dirs());
+
     // Dirty mode: local only, no GitHub
     if *mode == Mode::Dirty {
         let header = "local changes".to_string();
-        let local_paths = discovery::find_all_local(repo_dir);
+        let local_paths = discovery::find_all_local(&scan_roots);
         let mut repos = Vec::new();
 
         for path in local_paths {
@@ -764,6 +780,15 @@ async fn load_repos(
     let api_cache = cache::ApiCache::new(config.cache_ttl);
     let gh_repos =
         github::fetch_repos(config.repo_limit, args.prs, &api_cache, bypass_cache).await?;
+
+    // name -> org/private/public, from the *full* fetch (before the activity
+    // cutoff filters it down), so a local-only repo can still show its glyph
+    // even though it wasn't pushed recently enough to be "active". Mirrors
+    // repoz's `meta_lookup`.
+    let kind_by_name: HashMap<String, model::RepoKind> = gh_repos
+        .iter()
+        .map(|r| (r.name.to_lowercase(), r.repo_kind))
+        .collect();
 
     // Determine cutoff and header
     let (cutoff, header) = match mode {
@@ -856,7 +881,75 @@ async fn load_repos(
         repos.push(repo);
     }
 
-    // Not-cloned repos
+    // Pass 3: local repos (under repo_dir or any configured extra_dir, e.g.
+    // ~/.dotfiles) with uncommitted or unpushed changes, not already shown
+    // above. Runs *before* the not-cloned loop so a dirty local clone claims
+    // the repo as LocalOnly rather than being mislabeled "not cloned" when
+    // it lives at a hidden path passes 1/2 don't reach.
+    let all_local = discovery::find_all_local(&scan_roots);
+    for path in all_local {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        if checked_names.contains(&name.to_lowercase()) {
+            continue;
+        }
+
+        let dirty = git::dirty_count(&path).await;
+        let branches = git::branch_statuses(&path).await;
+        let mut total_ahead = 0u32;
+        for b in &branches {
+            total_ahead += b.ahead;
+        }
+
+        if dirty == 0 && total_ahead == 0 {
+            continue;
+        }
+
+        let display = tilde_display(&path);
+        let remote_url = git::remote_url(&path).await;
+        let remote = git::remote_branches(&path).await;
+        let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
+        let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
+        // Glyph metadata by name from the full GitHub fetch, so a local-only
+        // repo (e.g. dotfiles) still shows its org/private/public glyph.
+        let repo_kind = kind_by_name
+            .get(&name.to_lowercase())
+            .copied()
+            .unwrap_or(model::RepoKind::Unknown);
+
+        checked_names.insert(name.to_lowercase());
+        repos.push(RepoStatus {
+            name,
+            path: Some(display),
+            location: RepoLocation::LocalOnly,
+            branches,
+            commits: Vec::new(),
+            behind: 0,
+            ahead: total_ahead,
+            dirty,
+            pr_count: 0,
+            prs: Vec::new(),
+            ci_status: model::CiStatus::Unknown,
+            ci_workflow: None,
+            ci_duration: None,
+            pushed_at: None,
+            groups: vec![],
+            stash_count: 0,
+            stash_entries: vec![],
+            worktrees: vec![],
+            reflog: vec![],
+            graph: vec![],
+            repo_kind,
+            remote_url,
+            remote_only_branches,
+        });
+    }
+
+    // Not-cloned repos: active on GitHub but found nowhere locally (passes
+    // 1-3 all missed them). Last, so a local clone always wins over this.
     for gh_repo in &active {
         if checked_names.contains(&gh_repo.name.to_lowercase()) {
             continue;
@@ -885,62 +978,6 @@ async fn load_repos(
             repo_kind: gh_repo.repo_kind,
             remote_url: None,
             remote_only_branches: vec![],
-        });
-    }
-
-    // Pass 3: local dirty repos not already included
-    let all_local = discovery::find_all_local(repo_dir);
-    for path in all_local {
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-        if checked_names.contains(&name.to_lowercase()) {
-            continue;
-        }
-
-        let dirty = git::dirty_count(&path).await;
-        let branches = git::branch_statuses(&path).await;
-        let mut total_ahead = 0u32;
-        for b in &branches {
-            total_ahead += b.ahead;
-        }
-
-        if dirty == 0 && total_ahead == 0 {
-            continue;
-        }
-
-        let display = tilde_display(&path);
-        let remote_url = git::remote_url(&path).await;
-        let remote = git::remote_branches(&path).await;
-        let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
-        let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
-
-        repos.push(RepoStatus {
-            name,
-            path: Some(display),
-            location: RepoLocation::LocalOnly,
-            branches,
-            commits: Vec::new(),
-            behind: 0,
-            ahead: total_ahead,
-            dirty,
-            pr_count: 0,
-            prs: Vec::new(),
-            ci_status: model::CiStatus::Unknown,
-            ci_workflow: None,
-            ci_duration: None,
-            pushed_at: None,
-            groups: vec![],
-            stash_count: 0,
-            stash_entries: vec![],
-            worktrees: vec![],
-            reflog: vec![],
-            graph: vec![],
-            repo_kind: model::RepoKind::Unknown,
-            remote_url,
-            remote_only_branches,
         });
     }
 

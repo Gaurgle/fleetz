@@ -75,14 +75,23 @@ pub fn find_elsewhere(
     found
 }
 
-/// Pass 3: Find all dirty repos under repo_dir (maxdepth 4),
-/// regardless of whether they have GitHub activity.
-/// Returns paths — the caller checks git status to filter for dirty ones.
-pub fn find_all_local(repo_dir: &Path) -> Vec<PathBuf> {
+/// Pass 3: Find all local git repos under each of `roots` (maxdepth 4),
+/// regardless of whether they have GitHub activity. `roots` is the primary
+/// repo_dir plus any configured extra dirs (e.g. `~/.dotfiles`). A root that
+/// is itself a git repo is picked up directly, since the hidden-dir skip in
+/// the walker only prunes *descended* entries, not the root handed in.
+/// Returns de-duplicated paths — the caller checks git status to filter for
+/// the dirty ones.
+pub fn find_all_local(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
     let mut repos = Vec::new();
-    scan_for_git_repos(repo_dir, 4, &mut |path| {
-        repos.push(path.to_path_buf());
-    });
+    for root in roots {
+        scan_for_git_repos(root, 4, &mut |path| {
+            if seen.insert(path.to_path_buf()) {
+                repos.push(path.to_path_buf());
+            }
+        });
+    }
     repos
 }
 
@@ -197,7 +206,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         setup_test_repos(&dir);
 
-        let all = find_all_local(&dir);
+        let all = find_all_local(std::slice::from_ref(&dir));
         assert_eq!(all.len(), 3);
 
         fs::remove_dir_all(dir).ok();

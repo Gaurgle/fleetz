@@ -11,6 +11,12 @@ pub struct Config {
     pub repo_dir: String,
     pub refresh_interval: u64,
     pub cache_ttl: u64,
+    /// Extra directories to scan for local repos alongside `repo_dir` --
+    /// e.g. `~/.dotfiles`. Mirrors repoz's `EXTRA_DIRS`; lets repos outside
+    /// the main repo dir (or under a hidden path the walker skips) surface
+    /// under "local changes".
+    #[serde(default)]
+    pub extra_dirs: Vec<String>,
     #[serde(default)]
     pub groups: HashMap<String, Vec<String>>,
 }
@@ -24,24 +30,25 @@ impl Default for Config {
             repo_dir: "~/repos".to_string(),
             refresh_interval: 300,
             cache_ttl: 120,
+            extra_dirs: Vec::new(),
             groups: HashMap::new(),
         }
     }
 }
 
 impl Config {
-    /// Load config from `~/.config/fleetz/config.toml`, falling back to the
-    /// legacy `~/.config/epoz/config.toml` (pre-rename), then to defaults.
+    /// Load config from the first candidate path that exists, else defaults.
+    /// XDG `~/.config/fleetz/` is checked before the platform config dir so
+    /// macOS behaves like repoz (whose config lives in `~/.config/repoz/`)
+    /// rather than burying the file under `~/Library/Application Support`.
+    /// The legacy `epoz` name (pre-rename) is checked last in both roots.
     pub fn load() -> Self {
-        let path = config_path("fleetz");
-        let legacy = config_path("epoz");
-        if path.exists() {
-            Self::load_from(&path).unwrap_or_default()
-        } else if legacy.exists() {
-            Self::load_from(&legacy).unwrap_or_default()
-        } else {
-            Self::default()
+        for path in config_candidates() {
+            if path.exists() {
+                return Self::load_from(&path).unwrap_or_default();
+            }
         }
+        Self::default()
     }
 
     /// Load from a specific path. Returns Err if file can't be read or parsed.
@@ -57,13 +64,40 @@ impl Config {
         let expanded = shellexpand::tilde(&self.repo_dir);
         PathBuf::from(expanded.as_ref())
     }
+
+    /// Extra scan directories with `~` expanded, dropping any that don't
+    /// exist -- so a stale config entry silently no-ops rather than erroring
+    /// the whole discovery pass (matching repoz's `[ -d "$_d" ]` guard).
+    pub fn resolved_extra_dirs(&self) -> Vec<PathBuf> {
+        self.extra_dirs
+            .iter()
+            .map(|d| PathBuf::from(shellexpand::tilde(d).as_ref()))
+            .filter(|p| p.is_dir())
+            .collect()
+    }
 }
 
-fn config_path(app_dir: &str) -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join(app_dir)
-        .join("config.toml")
+/// Candidate config paths in priority order: XDG `~/.config/<app>/` first
+/// (repoz parity), then the platform config dir, each for `fleetz` then the
+/// legacy `epoz` name.
+fn config_candidates() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".config"));
+    }
+    if let Some(cfg) = dirs::config_dir() {
+        // Avoid a duplicate probe when the platform dir *is* ~/.config (Linux).
+        if !roots.contains(&cfg) {
+            roots.push(cfg);
+        }
+    }
+    let mut paths = Vec::new();
+    for root in &roots {
+        for app in ["fleetz", "epoz"] {
+            paths.push(root.join(app).join("config.toml"));
+        }
+    }
+    paths
 }
 
 #[cfg(test)]
@@ -111,6 +145,38 @@ mod tests {
         let resolved = c.resolved_repo_dir();
         assert!(!resolved.to_string_lossy().contains('~'));
         assert!(resolved.to_string_lossy().contains("repos"));
+    }
+
+    #[test]
+    fn parses_extra_dirs() {
+        let toml = r#"
+            extra_dirs = ["~/.dotfiles", "~/work"]
+        "#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert_eq!(c.extra_dirs, vec!["~/.dotfiles", "~/work"]);
+    }
+
+    #[test]
+    fn resolved_extra_dirs_expands_tilde_and_drops_missing() {
+        let dir = std::env::temp_dir().join("fleetz_test_extra_dirs");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut c = Config::default();
+        c.extra_dirs = vec![
+            dir.to_string_lossy().to_string(),
+            "/definitely/not/a/real/path".to_string(),
+        ];
+        let resolved = c.resolved_extra_dirs();
+        // Missing dir dropped, existing one kept.
+        assert_eq!(resolved, vec![dir.clone()]);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn resolved_extra_dirs_defaults_empty() {
+        assert!(Config::default().resolved_extra_dirs().is_empty());
     }
 
     #[test]
