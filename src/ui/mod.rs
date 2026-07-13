@@ -290,6 +290,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     match &app.overlay {
         Overlay::Help => help::render(frame, area),
         Overlay::Branches(bo) => branches::render(frame, area, bo),
+        Overlay::TimeWindow(_) => {}
         Overlay::None => {}
     }
 }

@@ -217,6 +217,12 @@ async fn run_event_loop(
                             handle_branch_input(app, key).await;
                             continue;
                         }
+                        Overlay::TimeWindow(_) => {
+                            if let KeyCode::Esc = key.code {
+                                app.overlay = Overlay::None;
+                            }
+                            continue;
+                        }
                         Overlay::None => {}
                     }
 
