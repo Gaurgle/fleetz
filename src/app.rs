@@ -138,6 +138,42 @@ pub enum Overlay {
     TimeWindow(TimeWindowOverlay),
 }
 
+/// Progress of an in-flight time-window apply, shown as a footer gauge.
+/// `Statting` is the determinate phase over the GitHub-matched repos;
+/// `Discovering` and `Finishing` bracket it (their counts are not known).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyProgress {
+    Discovering,
+    Statting { done: usize, total: usize },
+    Finishing,
+}
+
+impl ApplyProgress {
+    /// Fill fraction for the gauge, in 0.0..=1.0.
+    pub fn ratio(&self) -> f64 {
+        match self {
+            ApplyProgress::Discovering => 0.0,
+            ApplyProgress::Statting { done, total } => {
+                if *total == 0 {
+                    0.0
+                } else {
+                    (*done as f64 / *total as f64).clamp(0.0, 1.0)
+                }
+            }
+            ApplyProgress::Finishing => 1.0,
+        }
+    }
+
+    /// Gauge label text.
+    pub fn label(&self) -> String {
+        match self {
+            ApplyProgress::Discovering => "discovering…".to_string(),
+            ApplyProgress::Statting { done, total } => format!("{done}/{total} repos"),
+            ApplyProgress::Finishing => "finishing…".to_string(),
+        }
+    }
+}
+
 /// State for the branch overlay (switch + cleanup + preview).
 #[derive(Debug, Clone)]
 pub struct BranchOverlay {
@@ -387,6 +423,9 @@ pub struct App {
     /// to re-assemble the view (it needs args/config/repo_dir context the
     /// key handler doesn't have). Mirrors `reload_requested`.
     pub window_apply_requested: bool,
+    /// Progress of an in-flight window apply, or None when idle. Drives the
+    /// footer gauge; set/cleared by apply_time_window's animate loop.
+    pub apply_progress: Option<ApplyProgress>,
 }
 
 /// Below this width or height, `Detail`'s list+detail split doesn't have
@@ -439,6 +478,7 @@ impl App {
             window: None,
             dirty_mode: false,
             window_apply_requested: false,
+            apply_progress: None,
         }
     }
 
@@ -1098,5 +1138,19 @@ mod tests {
         o.step_down(); // Months -> Years (max 10): 24 clamps to 10
         assert_eq!(o.unit, WindowUnit::Years);
         assert_eq!(o.n, 10);
+    }
+
+    #[test]
+    fn apply_progress_ratio_and_label() {
+        assert_eq!(ApplyProgress::Discovering.ratio(), 0.0);
+        assert_eq!(ApplyProgress::Discovering.label(), "discovering…");
+        let s = ApplyProgress::Statting { done: 12, total: 48 };
+        assert!((s.ratio() - 0.25).abs() < 1e-9);
+        assert_eq!(s.label(), "12/48 repos");
+        // total 0 must not divide by zero.
+        let z = ApplyProgress::Statting { done: 0, total: 0 };
+        assert_eq!(z.ratio(), 0.0);
+        assert_eq!(ApplyProgress::Finishing.ratio(), 1.0);
+        assert_eq!(ApplyProgress::Finishing.label(), "finishing…");
     }
 }

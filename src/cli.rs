@@ -1,6 +1,6 @@
 use clap::Parser;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(
     name = "fleetz",
     about = "Multi-repo dashboard TUI: see what changed across your repos"

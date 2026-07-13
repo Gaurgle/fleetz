@@ -162,7 +162,7 @@ async fn apply_time_window(
     let Some(w) = app.window else { return };
     let cutoff = w.cutoff(config.work_start, config.work_end);
     let label = w.label(config.work_start, config.work_end);
-    match assemble_view(&app.dataset, Some(cutoff), label, args, config, repo_dir, false).await {
+    match assemble_view(&app.dataset, Some(cutoff), label, args, config, repo_dir, false, None).await {
         Ok((repos, header)) => {
             app.repos = repos;
             apply_groups(&mut app.repos, config);
@@ -875,7 +875,7 @@ async fn load_repos(
 
     let (cutoff, header) = resolve_cutoff(window, mode, config)?;
     let (repos, full_header) =
-        assemble_view(&dataset, cutoff, header, args, config, repo_dir, true).await?;
+        assemble_view(&dataset, cutoff, header, args, config, repo_dir, true, None).await?;
 
     Ok((repos, full_header, dataset))
 }
@@ -935,6 +935,7 @@ async fn assemble_view(
     config: &config::Config,
     repo_dir: &Path,
     git_fetch: bool,
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<app::ApplyProgress>>,
 ) -> Result<(Vec<RepoStatus>, String), Box<dyn std::error::Error>> {
     // name -> org/private/public, from the *full* fetch (before the activity
     // cutoff filters it down), so a local-only repo can still show its glyph
@@ -983,6 +984,15 @@ async fn assemble_view(
     let elsewhere_found =
         discovery::find_elsewhere(&home, repo_dir, &active_names, &found_set);
 
+    // Determinate total: the GitHub-matched repos are the expensive stat
+    // loop. The pass-3 local tail is counted only as it is walked, so it is
+    // reported as the Finishing phase rather than folded into the fraction.
+    let stat_total = primary_found.len() + elsewhere_found.len();
+    if let Some(tx) = progress {
+        let _ = tx.send(app::ApplyProgress::Discovering);
+        let _ = tx.send(app::ApplyProgress::Statting { done: 0, total: stat_total });
+    }
+
     // Parallel fetch for all found repos
     let all_found: Vec<_> = primary_found
         .iter()
@@ -1008,10 +1018,15 @@ async fn assemble_view(
     let mut checked_names: HashSet<String> = HashSet::new();
 
     // Process primary repos
+    let mut stat_done = 0usize;
     for found in &primary_found {
         let repo = build_repo_status(found, &active, args, RepoLocation::Primary).await;
         checked_names.insert(found.name.to_lowercase());
         repos.push(repo);
+        stat_done += 1;
+        if let Some(tx) = progress {
+            let _ = tx.send(app::ApplyProgress::Statting { done: stat_done, total: stat_total });
+        }
     }
 
     // Process elsewhere repos
@@ -1022,6 +1037,14 @@ async fn assemble_view(
         let repo = build_repo_status(found, &active, args, RepoLocation::Elsewhere).await;
         checked_names.insert(found.name.to_lowercase());
         repos.push(repo);
+        stat_done += 1;
+        if let Some(tx) = progress {
+            let _ = tx.send(app::ApplyProgress::Statting { done: stat_done, total: stat_total });
+        }
+    }
+
+    if let Some(tx) = progress {
+        let _ = tx.send(app::ApplyProgress::Finishing);
     }
 
     // Pass 3: local repos (under repo_dir or any configured extra_dir, e.g.
