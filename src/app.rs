@@ -248,6 +248,21 @@ pub struct App {
     /// the existing list. Lets a just-pushed or newly-dirty repo appear
     /// without restarting fleetz.
     pub reload_requested: bool,
+    /// The last unfiltered GitHub fetch (top repo_limit repos by push date).
+    /// The time-window overlay re-filters this in memory, so applying a new
+    /// window needs no network round trip.
+    pub dataset: Vec<crate::github::GithubRepo>,
+    /// The active time window. None means "follow the CLI flags", which is
+    /// the state until the user opens the selector (or a saved window was
+    /// loaded at startup).
+    pub window: Option<crate::time::TimeWindow>,
+    /// True when launched with -d: there is no GitHub dataset, so the
+    /// time-window selector is unavailable.
+    pub dirty_mode: bool,
+    /// Set by Enter in the time-window overlay; the event loop consumes it
+    /// to re-assemble the view (it needs args/config/repo_dir context the
+    /// key handler doesn't have). Mirrors `reload_requested`.
+    pub window_apply_requested: bool,
 }
 
 /// Below this width or height, `Detail`'s list+detail split doesn't have
@@ -296,6 +311,10 @@ impl App {
             detail_selected: 0,
             inspector_scroll: 0,
             reload_requested: false,
+            dataset: Vec::new(),
+            window: None,
+            dirty_mode: false,
+            window_apply_requested: false,
         }
     }
 

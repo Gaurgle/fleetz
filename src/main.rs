@@ -59,12 +59,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| config.resolved_repo_dir());
 
     let mode = args.mode();
-    let (repos, header) = load_repos(&args, &config, &repo_dir, &mode, false).await?;
+    // "Remember last choice": only a plain launch (no explicit time-mode
+    // flags) adopts the saved window; flags are one-off overrides that
+    // neither read nor write it.
+    let initial_window = if mode == Mode::Auto && args.before.is_none() {
+        window_state::WindowState::new().load()
+    } else {
+        None
+    };
+    let (repos, header, dataset) =
+        load_repos(&args, &config, &repo_dir, &mode, initial_window, false).await?;
 
     let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
     let mut app = App::new(repos, header, args.prs, args.stat, term_width, term_height);
     app.watch_mode = args.watch;
     app.refresh_interval = config.refresh_interval;
+    app.dataset = dataset;
+    app.window = initial_window;
+    app.dirty_mode = mode == Mode::Dirty;
 
     // Set up groups from config
     if !config.groups.is_empty() {
@@ -123,9 +135,10 @@ async fn reload_all(
     terminal.draw(|frame| ui::render(frame, app))?;
 
     let mode = args.mode();
-    match load_repos(args, config, repo_dir, &mode, true).await {
-        Ok((repos, header)) => {
+    match load_repos(args, config, repo_dir, &mode, app.window, true).await {
+        Ok((repos, header, dataset)) => {
             app.repos = repos;
+            app.dataset = dataset;
             apply_groups(&mut app.repos, config);
             app.header = header;
             app.clamp_after_reload();
@@ -697,13 +710,16 @@ async fn refresh_single_repo(repo: &mut RepoStatus) {
 }
 
 /// Load all repo data: GitHub API + local discovery + git status.
+/// Returns the assembled view plus the unfiltered dataset so the TUI can
+/// re-filter it live (time-window overlay) without re-fetching.
 async fn load_repos(
     args: &Args,
     config: &config::Config,
     repo_dir: &Path,
     mode: &Mode,
+    window: Option<time::TimeWindow>,
     bypass_cache: bool,
-) -> Result<(Vec<RepoStatus>, String), Box<dyn std::error::Error>> {
+) -> Result<(Vec<RepoStatus>, String, Vec<github::GithubRepo>), Box<dyn std::error::Error>> {
     // Local scan roots: the primary repo_dir plus any configured extra dirs
     // (e.g. ~/.dotfiles), so repos outside the main tree still surface under
     // "local changes" -- the fleetz equivalent of repoz's EXTRA_DIRS.
@@ -775,42 +791,90 @@ async fn load_repos(
                 remote_only_branches,
             });
         }
-        return Ok((repos, header));
+        return Ok((repos, header, Vec::new()));
     }
 
     // Fetch from GitHub (with caching)
     let api_cache = cache::ApiCache::new(config.cache_ttl);
-    let gh_repos =
-        github::fetch_repos(config.repo_limit, args.prs, &api_cache, bypass_cache).await?;
+    let dataset = fetch_dataset(config, args, &api_cache, bypass_cache).await?;
 
+    let (cutoff, header) = resolve_cutoff(window, mode, config)?;
+    let (repos, full_header) =
+        assemble_view(&dataset, cutoff, header, args, config, repo_dir, true).await?;
+
+    Ok((repos, full_header, dataset))
+}
+
+/// The GitHub GraphQL fetch (with disk cache), unfiltered: the top
+/// repo_limit repos by push date.
+async fn fetch_dataset(
+    config: &config::Config,
+    args: &Args,
+    cache: &cache::ApiCache,
+    bypass_cache: bool,
+) -> Result<Vec<github::GithubRepo>, String> {
+    github::fetch_repos(config.repo_limit, args.prs, cache, bypass_cache).await
+}
+
+/// Cutoff + header for the current view. An active TimeWindow (set by the
+/// in-TUI selector or loaded from state) takes precedence over the launch
+/// mode; Dirty mode never reaches here.
+fn resolve_cutoff(
+    window: Option<time::TimeWindow>,
+    mode: &Mode,
+    config: &config::Config,
+) -> Result<(Option<chrono::DateTime<chrono::Utc>>, String), String> {
+    if let Some(w) = window {
+        return Ok((
+            Some(w.cutoff(config.work_start, config.work_end)),
+            w.label(config.work_start, config.work_end),
+        ));
+    }
+    match mode {
+        Mode::Auto => {
+            let (c, h) = time::auto_cutoff(config.work_start, config.work_end);
+            Ok((Some(c), h))
+        }
+        Mode::Since(s) => {
+            let date = time::parse_relative_date(s)?;
+            Ok((Some(time::date_to_utc_midnight(date)), format!("since {s}")))
+        }
+        Mode::Today => {
+            let today = chrono::Local::now().date_naive();
+            Ok((Some(time::date_to_utc_midnight(today)), "today".to_string()))
+        }
+        Mode::All => Ok((None, "all divergence".to_string())),
+        Mode::Dirty => Err("dirty mode has no time cutoff".to_string()),
+    }
+}
+
+/// Everything downstream of the GitHub fetch: time filtering, local
+/// discovery, optional per-repo git fetch, statting, and header assembly.
+/// `git_fetch: false` makes this purely local (used by the time-window
+/// overlay so applying a window is instant).
+async fn assemble_view(
+    dataset: &[github::GithubRepo],
+    cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    header: String,
+    args: &Args,
+    config: &config::Config,
+    repo_dir: &Path,
+    git_fetch: bool,
+) -> Result<(Vec<RepoStatus>, String), Box<dyn std::error::Error>> {
     // name -> org/private/public, from the *full* fetch (before the activity
     // cutoff filters it down), so a local-only repo can still show its glyph
     // even though it wasn't pushed recently enough to be "active". Mirrors
     // repoz's `meta_lookup`.
-    let kind_by_name: HashMap<String, model::RepoKind> = gh_repos
+    let kind_by_name: HashMap<String, model::RepoKind> = dataset
         .iter()
         .map(|r| (r.name.to_lowercase(), r.repo_kind))
         .collect();
 
-    // Determine cutoff and header
-    let (cutoff, header) = match mode {
-        Mode::Auto => {
-            let (c, h) = time::auto_cutoff(config.work_start, config.work_end);
-            (Some(c), h)
-        }
-        Mode::Since(s) => {
-            let date = time::parse_relative_date(s)?;
-            let c = time::date_to_utc_midnight(date);
-            (Some(c), format!("since {s}"))
-        }
-        Mode::Today => {
-            let today = chrono::Local::now().date_naive();
-            let c = time::date_to_utc_midnight(today);
-            (Some(c), "today".to_string())
-        }
-        Mode::All => (None, "all divergence".to_string()),
-        Mode::Dirty => unreachable!(),
-    };
+    // Local scan roots: the primary repo_dir plus any configured extra dirs
+    // (e.g. ~/.dotfiles), so repos outside the main tree still surface under
+    // "local changes" -- the fleetz equivalent of repoz's EXTRA_DIRS.
+    let mut scan_roots = vec![repo_dir.to_path_buf()];
+    scan_roots.extend(config.resolved_extra_dirs());
 
     // Apply --before filter
     let before_cutoff = match &args.before {
@@ -822,7 +886,7 @@ async fn load_repos(
     };
 
     // Filter active repos
-    let mut active = gh_repos;
+    let mut active: Vec<github::GithubRepo> = dataset.to_vec();
     if let Some(c) = cutoff {
         active = github::filter_since(&active, c);
     }
@@ -850,16 +914,18 @@ async fn load_repos(
         .chain(elsewhere_found.iter())
         .collect();
 
-    let fetch_handles: Vec<_> = all_found
-        .iter()
-        .map(|f| {
-            let path = f.path.clone();
-            tokio::spawn(async move { git::fetch(&path).await })
-        })
-        .collect();
+    if git_fetch {
+        let fetch_handles: Vec<_> = all_found
+            .iter()
+            .map(|f| {
+                let path = f.path.clone();
+                tokio::spawn(async move { git::fetch(&path).await })
+            })
+            .collect();
 
-    for handle in fetch_handles {
-        let _ = handle.await;
+        for handle in fetch_handles {
+            let _ = handle.await;
+        }
     }
 
     // Build repo statuses
@@ -991,6 +1057,16 @@ async fn load_repos(
     if let Some(ref a) = args.author {
         full_header = format!("{full_header} (author: {a})");
     }
+    // The dataset only reaches back repo_limit repos; flag a window that
+    // outruns it so an incomplete view never masquerades as complete.
+    if let Some(c) = cutoff {
+        if github::window_exceeds_dataset(dataset, c, config.repo_limit) {
+            full_header = format!(
+                "{full_header} (window exceeds fetched repos, repo_limit={})",
+                config.repo_limit
+            );
+        }
+    }
 
     Ok((repos, full_header))
 }
@@ -1071,5 +1147,33 @@ async fn build_repo_status(
         repo_kind,
         remote_url,
         remote_only_branches,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_cutoff_window_overrides_mode() {
+        let config = config::Config::default();
+        let w = time::TimeWindow { n: 2, unit: time::WindowUnit::Weeks };
+        let (cutoff, header) = resolve_cutoff(Some(w), &Mode::All, &config).unwrap();
+        assert!(cutoff.is_some());
+        assert_eq!(header, "since 2 weeks");
+    }
+
+    #[test]
+    fn resolve_cutoff_all_mode_has_no_cutoff() {
+        let config = config::Config::default();
+        let (cutoff, header) = resolve_cutoff(None, &Mode::All, &config).unwrap();
+        assert!(cutoff.is_none());
+        assert_eq!(header, "all divergence");
+    }
+
+    #[test]
+    fn resolve_cutoff_dirty_mode_is_error() {
+        let config = config::Config::default();
+        assert!(resolve_cutoff(None, &Mode::Dirty, &config).is_err());
     }
 }

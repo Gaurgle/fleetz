@@ -348,6 +348,25 @@ pub fn filter_before(repos: &[GithubRepo], before: DateTime<Utc>) -> Vec<GithubR
         .collect()
 }
 
+/// Whether a cutoff reaches further back than the fetched dataset can
+/// vouch for. The GraphQL fetch returns only the top `repo_limit` repos by
+/// push date; when the dataset is at that limit AND the cutoff predates its
+/// oldest entry, repos may exist on GitHub that the view silently omits.
+pub fn window_exceeds_dataset(
+    repos: &[GithubRepo],
+    cutoff: DateTime<Utc>,
+    repo_limit: u32,
+) -> bool {
+    if (repos.len() as u32) < repo_limit {
+        return false;
+    }
+    repos
+        .iter()
+        .map(|r| r.pushed_at)
+        .min()
+        .is_some_and(|oldest| cutoff < oldest)
+}
+
 /// Get the GitHub auth token from the `gh` CLI.
 async fn get_gh_token() -> Result<String, String> {
     let output = tokio::process::Command::new("gh")
@@ -543,5 +562,28 @@ mod tests {
         assert!(q.contains("first: 25"));
         assert!(q.contains("pullRequests"));
         assert!(q.contains("reviewDecision"));
+    }
+
+    #[test]
+    fn window_exceeds_dataset_when_full_and_cutoff_older() {
+        let repos = vec![
+            make_gh_repo("a", "2026-07-01T00:00:00Z"),
+            make_gh_repo("b", "2026-07-10T00:00:00Z"),
+        ];
+        let old_cutoff = DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        // Dataset is at the fetch limit (2) and the cutoff predates the
+        // oldest entry: repos may be missing.
+        assert!(window_exceeds_dataset(&repos, old_cutoff, 2));
+        // Cutoff inside the dataset range: nothing can be missing.
+        let new_cutoff = DateTime::parse_from_rfc3339("2026-07-05T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(!window_exceeds_dataset(&repos, new_cutoff, 2));
+        // Dataset below the limit means the fetch got everything.
+        assert!(!window_exceeds_dataset(&repos, old_cutoff, 50));
+        // Empty dataset: nothing to warn about.
+        assert!(!window_exceeds_dataset(&[], old_cutoff, 50));
     }
 }
