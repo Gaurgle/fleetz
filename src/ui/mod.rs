@@ -5,6 +5,7 @@ pub mod compact;
 pub mod detail;
 pub mod footer;
 pub mod help;
+pub mod timewindow;
 
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -290,7 +291,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     match &app.overlay {
         Overlay::Help => help::render(frame, area),
         Overlay::Branches(bo) => branches::render(frame, area, bo),
-        Overlay::TimeWindow(_) => {}
+        Overlay::TimeWindow(two) => timewindow::render(frame, area, two),
         Overlay::None => {}
     }
 }

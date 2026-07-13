@@ -27,6 +27,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ("f", "Fetch selected repo (no merge)"),
         ("F", "Fetch all repos"),
         ("b / s", "Branches: preview + switch (enter), clean up merged (space+d)"),
+        ("t", "Time window: pick how far back to show activity"),
         ("g", "Cycle group filter"),
         ("G", "Show all (clear group)"),
         ("/", "Search repos, or type #dirty #behind #ahead #ci #prs #stash to filter"),
