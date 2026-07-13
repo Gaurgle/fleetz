@@ -56,7 +56,9 @@ fleetz [options]
 
 The window can also be changed live inside the TUI with `t`. A window applied
 there is remembered across launches; explicit mode flags override it for that
-session without overwriting it.
+session without overwriting it. Applying a window shows a progress bar in the
+footer as repos are re-stat'd. The count field is capped per unit (hours up to
+48, days 31, weeks 52, months 24, years 10).
 
 ### Options (combinable)
 
