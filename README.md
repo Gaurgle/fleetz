@@ -54,6 +54,10 @@ fleetz [options]
 | `-a, --all` | Show all divergence regardless of time |
 | `-d, --dirty` | Local only: uncommitted/untracked/unpushed (no GitHub call) |
 
+The window can also be changed live inside the TUI with `t`. A window applied
+there is remembered across launches; explicit mode flags override it for that
+session without overwriting it.
+
 ### Options (combinable)
 
 | Flag | Description |
@@ -87,6 +91,7 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `p` | Pull selected repo (ff-only) |
 | `P` | Pull all clean repos (ff-only) |
 | `b` | Branch cleanup overlay (multi-select delete) |
+| `t` | Time window: pick how far back to show activity (slot / hours / days / weeks / months / years) |
 | `g` | Cycle group filter |
 | `G` | Show all (clear group) |
 | `1`-`6` | Toggle quick filter: dirty / behind / ahead / CI failed / has PRs / has stashes (combine freely) |
