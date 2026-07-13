@@ -150,6 +150,34 @@ async fn reload_all(
     Ok(())
 }
 
+/// Re-assemble the view for the window the overlay just applied: re-filter
+/// the cached dataset, rediscover and re-stat local clones (no git fetch,
+/// so this is instant), persist the choice, and refresh the header.
+async fn apply_time_window(
+    app: &mut App,
+    args: &Args,
+    config: &config::Config,
+    repo_dir: &Path,
+) {
+    let Some(w) = app.window else { return };
+    let cutoff = w.cutoff(config.work_start, config.work_end);
+    let label = w.label(config.work_start, config.work_end);
+    match assemble_view(&app.dataset, Some(cutoff), label, args, config, repo_dir, false).await {
+        Ok((repos, header)) => {
+            app.repos = repos;
+            apply_groups(&mut app.repos, config);
+            app.header = header;
+            app.clamp_after_reload();
+            window_state::WindowState::new().save(&w);
+            app.set_status(
+                format!("Window: {}", w.label(config.work_start, config.work_end)),
+                false,
+            );
+        }
+        Err(e) => app.set_status(format!("Window apply failed: {e}"), true),
+    }
+}
+
 async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -218,8 +246,16 @@ async fn run_event_loop(
                             continue;
                         }
                         Overlay::TimeWindow(_) => {
-                            if let KeyCode::Esc = key.code {
-                                app.overlay = Overlay::None;
+                            handle_time_window_input(app, key);
+                            // Serviced inline rather than via the bottom-of-loop
+                            // block: this arm `continue`s straight back to the top,
+                            // and static mode then blocks in event::poll for up to
+                            // an hour, so a deferred apply would not land until the
+                            // next keystroke. We have args/config/repo_dir here, so
+                            // apply now and the new window takes effect immediately.
+                            if app.window_apply_requested {
+                                app.window_apply_requested = false;
+                                apply_time_window(app, args, config, repo_dir).await;
                             }
                             continue;
                         }
@@ -245,6 +281,7 @@ async fn run_event_loop(
             app.reload_requested = false;
             reload_all(terminal, app, args, config, repo_dir).await?;
         }
+
     }
 }
 
@@ -371,6 +408,29 @@ async fn handle_branch_input(app: &mut App, key: KeyEvent) {
                     bo.confirm_delete = true;
                 }
             }
+        }
+        _ => {}
+    }
+}
+
+/// Modal input for the time-window overlay. All keys are consumed here
+/// while it's open, so hjkl/arrows can't leak into list navigation.
+fn handle_time_window_input(app: &mut App, key: KeyEvent) {
+    let Overlay::TimeWindow(ref mut two) = app.overlay else { return };
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('q') => {
+            app.overlay = Overlay::None;
+        }
+        KeyCode::Char('h') | KeyCode::Char('l') | KeyCode::Left | KeyCode::Right
+        | KeyCode::Tab => two.toggle_field(),
+        KeyCode::Char('k') | KeyCode::Up => two.step_up(),
+        KeyCode::Char('j') | KeyCode::Down => two.step_down(),
+        KeyCode::Char(c) if c.is_ascii_digit() => two.push_digit(c as u8 - b'0'),
+        KeyCode::Enter => {
+            let w = two.window();
+            app.window = Some(w);
+            app.window_apply_requested = true;
+            app.overlay = Overlay::None;
         }
         _ => {}
     }
@@ -590,6 +650,15 @@ async fn handle_normal_input(
         // the "switch" mnemonic the pull-removal left room for.
         KeyCode::Char('b') | KeyCode::Char('s') => {
             open_branch_overlay(app).await;
+        }
+        // Time window overlay: pick how far back "activity" reaches. Not
+        // available in -d mode, which never fetched a GitHub dataset.
+        KeyCode::Char('t') => {
+            if app.dirty_mode {
+                app.set_status("Time window needs GitHub data (not in -d mode)".to_string(), true);
+            } else {
+                app.open_time_window();
+            }
         }
         KeyCode::Char('O') => {
             // Open first PR in browser (Shift+O)
