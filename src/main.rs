@@ -1082,6 +1082,12 @@ async fn assemble_view(
     // Process elsewhere repos
     for found in &elsewhere_found {
         if checked_names.contains(&found.name.to_lowercase()) {
+            // Already stat'd in the primary pass, but it was counted in
+            // stat_total, so account for it or the gauge stops short.
+            stat_done += 1;
+            if let Some(tx) = progress {
+                let _ = tx.send(app::ApplyProgress::Statting { done: stat_done, total: stat_total });
+            }
             continue;
         }
         let repo = build_repo_status(found, &active, args, RepoLocation::Elsewhere).await;

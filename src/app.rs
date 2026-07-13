@@ -340,10 +340,13 @@ impl TimeWindowOverlay {
     }
 
     fn after_unit_change(&mut self) {
-        self.n = self.n.clamp(WINDOW_N_MIN, self.unit.max_count());
         if self.unit == WindowUnit::Slot {
+            // Slot ignores the count, so clamping to its nominal max of 1
+            // here would wipe the user's number just for cycling past it.
             self.field = WindowField::Unit;
+            return;
         }
+        self.n = self.n.clamp(WINDOW_N_MIN, self.unit.max_count());
     }
 
     /// Typed digits set the count directly. Two digits combine ("2" "9" ->
@@ -1136,6 +1139,22 @@ mod tests {
         assert_eq!(o.unit, WindowUnit::Months);
         assert_eq!(o.n, 24);
         o.step_down(); // Months -> Years (max 10): 24 clamps to 10
+        assert_eq!(o.unit, WindowUnit::Years);
+        assert_eq!(o.n, 10);
+    }
+
+    #[test]
+    fn window_overlay_cycling_through_slot_preserves_count() {
+        // Slot ignores the count, so passing through it must not squash n.
+        let mut o = TimeWindowOverlay::new(TimeWindow { n: 14, unit: WindowUnit::Days });
+        o.toggle_field(); // focus unit
+        o.step_up(); // Days -> Hours (max 48): 14 fits
+        assert_eq!(o.unit, WindowUnit::Hours);
+        assert_eq!(o.n, 14);
+        o.step_up(); // Hours -> Slot: count must be preserved, not clamped to 1
+        assert_eq!(o.unit, WindowUnit::Slot);
+        assert_eq!(o.n, 14);
+        o.step_up(); // Slot -> Years (max 10): NOW it clamps, to 10
         assert_eq!(o.unit, WindowUnit::Years);
         assert_eq!(o.n, 10);
     }
