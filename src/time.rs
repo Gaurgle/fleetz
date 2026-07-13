@@ -30,11 +30,9 @@ impl TimeSlot {
     }
 }
 
-/// Bounds for the user-adjustable window count. 0 would mean an empty
-/// window, so the floor is 1; 31 covers "a month of days" and keeps the
-/// spinner wrap cycle short.
+/// Minimum for the user-adjustable window count. A count of 0 would mean
+/// an empty window, so the floor is 1.
 pub const WINDOW_N_MIN: u8 = 1;
-pub const WINDOW_N_MAX: u8 = 31;
 
 /// Unit for the interactive time window. `Slot` reproduces the classic
 /// auto mode (previous work/evening/night boundary); the rest are rolling
@@ -48,6 +46,23 @@ pub enum WindowUnit {
     Weeks,
     Months,
     Years,
+}
+
+impl WindowUnit {
+    /// The largest count that reads naturally for this unit. Practical
+    /// caps: they still allow useful overlap ("36 hours", "18 months")
+    /// rather than snapping to the next unit. Slot ignores the count, so
+    /// its max is a nominal 1.
+    pub fn max_count(&self) -> u8 {
+        match self {
+            WindowUnit::Slot => 1,
+            WindowUnit::Hours => 48,
+            WindowUnit::Days => 31,
+            WindowUnit::Weeks => 52,
+            WindowUnit::Months => 24,
+            WindowUnit::Years => 10,
+        }
+    }
 }
 
 /// The activity window selected in the TUI: show repos pushed within the
@@ -68,7 +83,7 @@ impl TimeWindow {
     /// Construct with `n` clamped into the valid range, so persisted or
     /// hand-edited values can never produce an empty or absurd window.
     pub fn clamped(n: u8, unit: WindowUnit) -> Self {
-        Self { n: n.clamp(WINDOW_N_MIN, WINDOW_N_MAX), unit }
+        Self { n: n.clamp(WINDOW_N_MIN, unit.max_count()), unit }
     }
 
     /// The cutoff instant for this window, evaluated against the real clock.
@@ -81,7 +96,7 @@ impl TimeWindow {
     /// panic on impossible dates. `Slot` ignores `now`: it delegates to
     /// `auto_cutoff`, which reads the local clock itself.
     pub fn cutoff_from(&self, now: DateTime<Utc>, work_start: u8, work_end: u8) -> DateTime<Utc> {
-        let n = self.n.clamp(WINDOW_N_MIN, WINDOW_N_MAX) as i64;
+        let n = self.n.clamp(WINDOW_N_MIN, self.unit.max_count()) as i64;
         match self.unit {
             WindowUnit::Slot => auto_cutoff(work_start, work_end).0,
             WindowUnit::Hours => now - Duration::hours(n),
@@ -106,7 +121,7 @@ impl TimeWindow {
             WindowUnit::Months => "month",
             WindowUnit::Years => "year",
         };
-        let n = self.n.clamp(WINDOW_N_MIN, WINDOW_N_MAX);
+        let n = self.n.clamp(WINDOW_N_MIN, self.unit.max_count());
         let s = if n == 1 { "" } else { "s" };
         format!("since {n} {unit}{s}")
     }
@@ -343,5 +358,23 @@ mod tests {
         assert!(s.contains("unit = \"weeks\""));
         let back: TimeWindow = toml::from_str(&s).unwrap();
         assert_eq!(back, w);
+    }
+
+    #[test]
+    fn window_unit_max_count_per_unit() {
+        assert_eq!(WindowUnit::Slot.max_count(), 1);
+        assert_eq!(WindowUnit::Hours.max_count(), 48);
+        assert_eq!(WindowUnit::Days.max_count(), 31);
+        assert_eq!(WindowUnit::Weeks.max_count(), 52);
+        assert_eq!(WindowUnit::Months.max_count(), 24);
+        assert_eq!(WindowUnit::Years.max_count(), 10);
+    }
+
+    #[test]
+    fn window_clamped_bounds_per_unit() {
+        assert_eq!(TimeWindow::clamped(40, WindowUnit::Days).n, 31);
+        assert_eq!(TimeWindow::clamped(40, WindowUnit::Hours).n, 40);
+        assert_eq!(TimeWindow::clamped(60, WindowUnit::Weeks).n, 52);
+        assert_eq!(TimeWindow::clamped(0, WindowUnit::Hours).n, 1);
     }
 }

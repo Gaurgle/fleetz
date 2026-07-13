@@ -1,6 +1,6 @@
 use chrono::{DateTime, Local};
 use crate::model::{CiStatus, RepoLocation, RepoStatus, Summary};
-use crate::time::{TimeWindow, WindowUnit, WINDOW_N_MAX, WINDOW_N_MIN};
+use crate::time::{TimeWindow, WindowUnit, WINDOW_N_MIN};
 
 /// Which TUI view is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,7 +248,7 @@ impl TimeWindowOverlay {
             WindowField::Number
         };
         Self {
-            n: current.n.clamp(WINDOW_N_MIN, WINDOW_N_MAX),
+            n: current.n.clamp(WINDOW_N_MIN, current.unit.max_count()),
             unit: current.unit,
             field,
             digits: String::new(),
@@ -277,7 +277,8 @@ impl TimeWindowOverlay {
         self.digits.clear();
         match self.field {
             WindowField::Number => {
-                self.n = if self.n >= WINDOW_N_MAX { WINDOW_N_MIN } else { self.n + 1 };
+                let max = self.unit.max_count();
+                self.n = if self.n >= max { WINDOW_N_MIN } else { self.n + 1 };
             }
             WindowField::Unit => {
                 let len = WINDOW_UNITS.len();
@@ -292,7 +293,8 @@ impl TimeWindowOverlay {
         self.digits.clear();
         match self.field {
             WindowField::Number => {
-                self.n = if self.n <= WINDOW_N_MIN { WINDOW_N_MAX } else { self.n - 1 };
+                let max = self.unit.max_count();
+                self.n = if self.n <= WINDOW_N_MIN { max } else { self.n - 1 };
             }
             WindowField::Unit => {
                 self.unit = WINDOW_UNITS[(self.unit_index() + 1) % WINDOW_UNITS.len()];
@@ -302,6 +304,7 @@ impl TimeWindowOverlay {
     }
 
     fn after_unit_change(&mut self) {
+        self.n = self.n.clamp(WINDOW_N_MIN, self.unit.max_count());
         if self.unit == WindowUnit::Slot {
             self.field = WindowField::Unit;
         }
@@ -319,7 +322,7 @@ impl TimeWindowOverlay {
         }
         self.digits.push((b'0' + d) as char);
         let parsed: u8 = self.digits.parse().unwrap_or(WINDOW_N_MIN);
-        self.n = parsed.clamp(WINDOW_N_MIN, WINDOW_N_MAX);
+        self.n = parsed.clamp(WINDOW_N_MIN, self.unit.max_count());
     }
 
     /// The window this overlay currently describes.
@@ -1063,5 +1066,37 @@ mod tests {
             }
             _ => panic!("expected time window overlay"),
         }
+    }
+
+    #[test]
+    fn window_overlay_number_wraps_at_unit_max() {
+        // Hours cap is 48, so 48 -> step_up wraps to 1.
+        let mut o = TimeWindowOverlay::new(TimeWindow { n: 48, unit: WindowUnit::Hours });
+        o.step_up();
+        assert_eq!(o.n, 1);
+        o.step_down();
+        assert_eq!(o.n, 48);
+    }
+
+    #[test]
+    fn window_overlay_digit_clamps_to_unit_max() {
+        // Years cap is 10: typing 4 then 0 (=40) clamps to 10.
+        let mut o = TimeWindowOverlay::new(TimeWindow { n: 1, unit: WindowUnit::Years });
+        o.push_digit(4);
+        o.push_digit(0);
+        assert_eq!(o.n, 10);
+    }
+
+    #[test]
+    fn window_overlay_unit_change_clamps_n_down() {
+        // 52 weeks, switch forward to Years (max 10): n must clamp to 10.
+        let mut o = TimeWindowOverlay::new(TimeWindow { n: 52, unit: WindowUnit::Weeks });
+        o.toggle_field(); // focus unit
+        o.step_down(); // Weeks -> Months (max 24): 52 clamps to 24
+        assert_eq!(o.unit, WindowUnit::Months);
+        assert_eq!(o.n, 24);
+        o.step_down(); // Months -> Years (max 10): 24 clamps to 10
+        assert_eq!(o.unit, WindowUnit::Years);
+        assert_eq!(o.n, 10);
     }
 }
