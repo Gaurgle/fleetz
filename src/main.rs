@@ -10,7 +10,7 @@ mod time;
 mod ui;
 mod window_state;
 
-use app::{App, BranchEntry, BranchOverlay, FocusedPanel, Overlay};
+use app::{App, ApplyProgress, BranchEntry, BranchOverlay, FocusedPanel, Overlay};
 use clap::Parser;
 use cli::{Args, Mode};
 use crossterm::event::{
@@ -150,10 +150,14 @@ async fn reload_all(
     Ok(())
 }
 
-/// Re-assemble the view for the window the overlay just applied: re-filter
-/// the cached dataset, rediscover and re-stat local clones (no git fetch,
-/// so this is instant), persist the choice, and refresh the header.
+/// Apply the just-chosen window on a background task so the UI can paint a
+/// progress bar as repos are stat'd, instead of freezing. Spawns the
+/// assemble work with owned inputs, animates the footer gauge from the
+/// progress channel until the task finishes, then swaps in the result and
+/// persists the window. No git fetch and no GitHub call: this is a pure
+/// re-filter of the already-fetched dataset.
 async fn apply_time_window(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     args: &Args,
     config: &config::Config,
@@ -162,19 +166,67 @@ async fn apply_time_window(
     let Some(w) = app.window else { return };
     let cutoff = w.cutoff(config.work_start, config.work_end);
     let label = w.label(config.work_start, config.work_end);
-    match assemble_view(&app.dataset, Some(cutoff), label, args, config, repo_dir, false, None).await {
-        Ok((repos, header)) => {
+
+    // Owned copies so the assemble work can move onto a spawned task.
+    let dataset = app.dataset.clone();
+    let args_owned = args.clone();
+    let config_owned = config.clone();
+    let repo_dir_owned = repo_dir.to_path_buf();
+    let header = label.clone();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    // Box<dyn Error> is not Send, so map the assemble error to a String to
+    // keep the task's output Send.
+    let mut handle = tokio::spawn(async move {
+        assemble_view(
+            &dataset,
+            Some(cutoff),
+            header,
+            &args_owned,
+            &config_owned,
+            &repo_dir_owned,
+            false,
+            Some(&tx),
+        )
+        .await
+        .map_err(|e| e.to_string())
+    });
+
+    app.apply_progress = Some(ApplyProgress::Discovering);
+    let _ = terminal.draw(|frame| ui::render(frame, app));
+
+    let result = loop {
+        match tokio::time::timeout(std::time::Duration::from_millis(80), &mut handle).await {
+            Ok(joined) => {
+                // Task finished; drain any last progress then break with it.
+                while let Ok(p) = rx.try_recv() {
+                    app.apply_progress = Some(p);
+                }
+                break joined;
+            }
+            Err(_) => {
+                // Still running: pull the latest progress and repaint.
+                while let Ok(p) = rx.try_recv() {
+                    app.apply_progress = Some(p);
+                }
+                let _ = terminal.draw(|frame| ui::render(frame, app));
+            }
+        }
+    };
+
+    app.apply_progress = None;
+
+    match result {
+        Ok(Ok((repos, new_header))) => {
             app.repos = repos;
             apply_groups(&mut app.repos, config);
-            app.header = header;
+            app.header = new_header;
             app.clamp_after_reload();
             window_state::WindowState::new().save(&w);
-            app.set_status(
-                format!("Window: {}", w.label(config.work_start, config.work_end)),
-                false,
-            );
+            app.set_status(format!("Window: {label}"), false);
         }
-        Err(e) => app.set_status(format!("Window apply failed: {e}"), true),
+        Ok(Err(e)) => app.set_status(format!("Window apply failed: {e}"), true),
+        Err(e) => app.set_status(format!("Window apply task failed: {e}"), true),
     }
 }
 
@@ -247,15 +299,13 @@ async fn run_event_loop(
                         }
                         Overlay::TimeWindow(_) => {
                             handle_time_window_input(app, key);
-                            // Serviced inline rather than via the bottom-of-loop
-                            // block: this arm `continue`s straight back to the top,
-                            // and static mode then blocks in event::poll for up to
-                            // an hour, so a deferred apply would not land until the
-                            // next keystroke. We have args/config/repo_dir here, so
-                            // apply now and the new window takes effect immediately.
+                            // Apply inline (this arm `continue`s past the
+                            // bottom service block, and static mode then
+                            // blocks in event::poll). apply_time_window drives
+                            // its own progress-bar redraw loop while it runs.
                             if app.window_apply_requested {
                                 app.window_apply_requested = false;
-                                apply_time_window(app, args, config, repo_dir).await;
+                                apply_time_window(terminal, app, args, config, repo_dir).await;
                             }
                             continue;
                         }

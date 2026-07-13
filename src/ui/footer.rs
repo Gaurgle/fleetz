@@ -1,7 +1,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{App, View};
@@ -14,6 +14,22 @@ use crate::ui::colors;
 /// (keys only) when tight, and the summary drops entirely if even that
 /// doesn't fit, rather than risk a negative spacer width.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    // An in-flight window apply takes over the whole footer with a gauge,
+    // so the user sees real-time progress instead of a frozen list.
+    if let Some(progress) = app.apply_progress {
+        let gauge = Gauge::default()
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(colors::SURFACE)),
+            )
+            .gauge_style(Style::default().fg(colors::GREEN))
+            .ratio(progress.ratio())
+            .label(progress.label());
+        frame.render_widget(gauge, area);
+        return;
+    }
+
     let summary = app.summary();
     let width = area.width as usize;
 
