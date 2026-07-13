@@ -8,6 +8,7 @@ mod github;
 mod model;
 mod time;
 mod ui;
+mod window_state;
 
 use app::{App, BranchEntry, BranchOverlay, FocusedPanel, Overlay};
 use clap::Parser;
