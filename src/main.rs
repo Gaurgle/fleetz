@@ -131,7 +131,7 @@ async fn reload_all(
     config: &config::Config,
     repo_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    app.set_status("Refreshing…".to_string(), false);
+    app.set_status("Reloading…".to_string(), false);
     terminal.draw(|frame| ui::render(frame, app))?;
 
     let mode = args.mode();
@@ -143,9 +143,9 @@ async fn reload_all(
             app.header = header;
             app.clamp_after_reload();
             app.last_refreshed = Some(chrono::Local::now());
-            app.set_status("Refreshed".to_string(), false);
+            app.set_status("Reloaded".to_string(), false);
         }
-        Err(e) => app.set_status(format!("Refresh failed: {e}"), true),
+        Err(e) => app.set_status(format!("Reload failed: {e}"), true),
     }
     Ok(())
 }
@@ -326,7 +326,7 @@ async fn run_event_loop(
 
         // Serviced here rather than inline in the key handler so the reload has
         // access to args/config/repo_dir; the draw at the loop top already
-        // showed the "Refreshing…" status set by `reload_all`.
+        // showed the "Reloading…" status set by `reload_all`.
         if app.reload_requested {
             app.reload_requested = false;
             reload_all(terminal, app, args, config, repo_dir).await?;
