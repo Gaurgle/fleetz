@@ -163,7 +163,7 @@ fn build_query(repo_limit: u32, include_prs: bool) -> String {
 }
 
 /// Fetch repos from GitHub GraphQL API with disk caching.
-/// `bypass_cache`: if true, skips reading cache but still writes (used by `r` refresh).
+/// `bypass_cache`: if true, skips reading cache but still writes (used by the `R` reload).
 pub async fn fetch_repos(
     repo_limit: u32,
     include_prs: bool,

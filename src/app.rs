@@ -406,7 +406,7 @@ pub struct App {
     pub detail_selected: usize,
     /// Scroll offset for the inspector pane (long commit bodies).
     pub inspector_scroll: u16,
-    /// Set by the `r` key; the event loop consumes it to re-run the full
+    /// Set by the `R` key; the event loop consumes it to re-run the full
     /// `load_repos` (GitHub fetch + discovery), rather than only re-statting
     /// the existing list. Lets a just-pushed or newly-dirty repo appear
     /// without restarting fleetz.

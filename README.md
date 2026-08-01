@@ -6,11 +6,11 @@
 ![TUI](https://img.shields.io/badge/TUI-ratatui-cba6f7)
 
 ![GitHub](https://img.shields.io/badge/GitHub-API%20·%20cache%20·%20stale--if--offline-89b4fa)
-![Git](https://img.shields.io/badge/git-pull%20·%20branches%20·%20worktrees%20·%20stash-fab387)
+![Git](https://img.shields.io/badge/git-fetch%20·%20branches%20·%20worktrees%20·%20stash-fab387)
 
 Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/Gaurgle/repoz).
 
-`repoz` answers "what's the state right now?" in one shot. `fleetz` is the dashboard you leave open: live status across all your repos, with pulls, branch cleanup, PR details, and CI badges one keystroke away.
+`repoz` answers "what's the state right now?" in one shot. `fleetz` is the dashboard you leave open: live status across all your repos, with fetches, branch cleanup, PR details, and CI badges one keystroke away.
 
 ## What it shows
 
@@ -84,22 +84,28 @@ fleetz --watch                        # live dashboard, auto-refreshes
 
 | Key | Action |
 |-----|--------|
-| `j` / `k`, `↑` / `↓` | Move selection |
+| `1` / `2` / `3` | Focus repo list / detail / inspector |
+| `Tab` | Cycle panel focus |
+| mouse | Click a panel to focus; scroll wheel scrolls whichever panel the cursor is over |
+| `j` / `k`, `↑` / `↓` | Repo list: move selection · Detail: pick commit · Inspector: scroll |
+| `J` / `K` | Scroll the detail pane (works from the repo list too) |
+| `PgUp` / `PgDn` | Scroll focused pane by a page |
 | `v` | Toggle detail vs compact view |
-| `Enter` | Open repo in lazygit |
+| `Enter` | Open repo in lazygit (pull / merge live here) |
 | `e` | Open repo in `$EDITOR` |
 | `o` | Open shell in repo dir |
 | `O` | Open PR in browser |
-| `p` | Pull selected repo (ff-only) |
-| `P` | Pull all clean repos (ff-only) |
-| `b` | Branch cleanup overlay (multi-select delete) |
+| `f` | Fetch selected repo (updates ahead/behind, no merge) |
+| `F` | Fetch all repos |
+| `b` / `s` | Branches overlay: preview + switch (`Enter`), clean up merged (`space` to mark, `d` to delete) |
 | `t` | Time window: pick how far back to show activity (slot / hours / days / weeks / months / years) |
 | `g` | Cycle group filter |
 | `G` | Show all (clear group) |
-| `1`-`6` | Toggle quick filter: dirty / behind / ahead / CI failed / has PRs / has stashes (combine freely) |
-| `0` | Clear all quick filters |
-| `r` | Refresh data |
-| `/` | Search / filter |
+| `/` | Search repos, or type `#dirty` `#behind` `#ahead` `#ci` `#prs` `#stash` to filter |
+| `0` | Clear `#tag` filters (keeps free-text search) |
+| `r` | Refresh: re-stat the listed repos only (fast, offline, no new repos) |
+| `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear |
+| `w` | Toggle watch: auto-refresh listed repos every `refresh_interval` seconds |
 | `?` | Toggle help overlay |
 | `Esc` | Close search or help |
 | `q` | Quit |
@@ -147,7 +153,7 @@ The three time slots are derived from `work_start` and `work_end`:
 |---|---|---|
 | Form | Bash one-shot | Rust TUI |
 | Output | Static text dump | Interactive dashboard |
-| Pulls | No (read-only) | Yes (`p` / `P`) |
+| Fetch | No (read-only) | Yes (`f` / `F`, no merge) |
 | Branch cleanup | No | Yes (`b`) |
 | CI status | No | Yes (✓/✗/○) |
 | Worktrees / stashes | No | Yes (badges) |

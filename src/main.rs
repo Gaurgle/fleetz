@@ -122,7 +122,7 @@ fn apply_groups(repos: &mut [RepoStatus], config: &config::Config) {
 /// Re-run the full `load_repos` (GitHub fetch + discovery + git status),
 /// bypassing the API cache so a just-pushed repo shows up, and swap the result
 /// into `app` while preserving UI state (selection is clamped, groups
-/// re-applied). This is what `r` triggers -- unlike `refresh_single_repo`, it
+/// re-applied). This is what `R` triggers -- unlike `refresh_single_repo`, it
 /// can add or drop repos, not just re-stat the ones already listed.
 async fn reload_all(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -720,18 +720,12 @@ async fn handle_normal_input(
                 }
             }
         }
-        // Full reload: re-fetch GitHub (cache-bypassed) and re-run discovery,
-        // so a just-pushed or newly-dirty repo appears. Deferred to the event
-        // loop via a flag because the reload needs the args/config/repo_dir
-        // context that only `run_event_loop` holds.
-        KeyCode::Char('r') => {
-            app.reload_requested = true;
-        }
         // Lightweight refresh: re-stat only the repos already listed (git
         // status, ahead/behind, dirty). Fast and offline -- no GitHub, no
         // discovery -- so it won't surface a new repo, but it reflects local
-        // work on the ones already shown. `r` is the full rediscover.
-        KeyCode::Char('R') => {
+        // work on the ones already shown. Gets the unshifted key because it's
+        // the cheap one you reach for constantly; `R` is the full rediscover.
+        KeyCode::Char('r') => {
             app.set_status("Refreshing…".to_string(), false);
             for repo in &mut app.repos {
                 refresh_single_repo(repo).await;
@@ -739,8 +733,16 @@ async fn handle_normal_input(
             app.last_refreshed = Some(chrono::Local::now());
             app.set_status("Refreshed".to_string(), false);
         }
+        // Full reload: re-fetch GitHub (cache-bypassed) and re-run discovery,
+        // so a just-pushed or newly-cloned repo appears. Shifted because it
+        // costs a network round trip and GitHub rate limit. Deferred to the
+        // event loop via a flag because the reload needs the args/config/
+        // repo_dir context that only `run_event_loop` holds.
+        KeyCode::Char('R') => {
+            app.reload_requested = true;
+        }
         // Toggle watch mode: auto re-stat the listed repos every
-        // `refresh_interval` seconds (the same lightweight pass as `R`). Reset
+        // `refresh_interval` seconds (the same lightweight pass as `r`). Reset
         // the clock on enable so the first auto-refresh is a full interval out.
         KeyCode::Char('w') => {
             app.watch_mode = !app.watch_mode;

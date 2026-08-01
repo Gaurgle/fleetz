@@ -144,12 +144,12 @@ fn keybind_hints(view: View, with_desc: bool) -> Vec<Span<'static>> {
     hints.push(gap.clone());
     hints.push(Span::styled("[r]", key_style));
     if with_desc {
-        hints.push(Span::styled(" reload", desc_style));
+        hints.push(Span::styled(" refresh", desc_style));
     }
     hints.push(gap.clone());
     hints.push(Span::styled("[R]", key_style));
     if with_desc {
-        hints.push(Span::styled(" refresh", desc_style));
+        hints.push(Span::styled(" reload", desc_style));
     }
     hints.push(gap.clone());
     hints.push(Span::styled("[f]", key_style));
