@@ -418,11 +418,17 @@ pub struct App {
     pub detail_selected: usize,
     /// Scroll offset for the inspector pane (long commit bodies).
     pub inspector_scroll: u16,
-    /// Set by the `R` key; the event loop consumes it to re-run the full
-    /// `load_repos` (GitHub fetch + discovery), rather than only re-statting
-    /// the existing list. Lets a just-pushed or newly-dirty repo appear
-    /// without restarting fleetz.
-    pub reload_requested: bool,
+    /// Repaint on the next loop pass. Set by every state change; ticks also
+    /// force a paint every 4th frame so the clock and spinner stay live.
+    pub needs_redraw: bool,
+    /// Advances every 250ms tick; drives the loading/sweep spinner.
+    pub spinner_frame: usize,
+    /// Flips every 500ms; drives the pending-CI blink.
+    pub blink_on: bool,
+    /// True once the user pressed v; stops resize from auto-switching views.
+    pub view_overridden: bool,
+    /// True while the initial load or an R reload is in flight.
+    pub loading: bool,
     /// The last unfiltered GitHub fetch (top repo_limit repos by push date).
     /// The time-window overlay re-filters this in memory, so applying a new
     /// window needs no network round trip.
@@ -434,12 +440,8 @@ pub struct App {
     /// True when launched with -d: there is no GitHub dataset, so the
     /// time-window selector is unavailable.
     pub dirty_mode: bool,
-    /// Set by Enter in the time-window overlay; the event loop consumes it
-    /// to re-assemble the view (it needs args/config/repo_dir context the
-    /// key handler doesn't have). Mirrors `reload_requested`.
-    pub window_apply_requested: bool,
     /// Progress of an in-flight window apply, or None when idle. Drives the
-    /// footer gauge; set/cleared by apply_time_window's animate loop.
+    /// footer gauge; set when the apply is spawned, cleared when it lands.
     pub apply_progress: Option<ApplyProgress>,
 }
 
@@ -486,12 +488,24 @@ impl App {
             detail_scroll: 0,
             detail_selected: 0,
             inspector_scroll: 0,
-            reload_requested: false,
+            needs_redraw: true,
+            spinner_frame: 0,
+            blink_on: true,
+            view_overridden: false,
+            loading: false,
             dataset: Vec::new(),
             window: None,
             dirty_mode: false,
-            window_apply_requested: false,
             apply_progress: None,
+        }
+    }
+
+    /// Called on every 250ms tick from the event loop. The spinner advances
+    /// each tick; the blink flips every other tick, so it pulses at 1Hz.
+    pub fn on_tick(&mut self) {
+        self.spinner_frame = self.spinner_frame.wrapping_add(1);
+        if self.spinner_frame.is_multiple_of(2) {
+            self.blink_on = !self.blink_on;
         }
     }
 
@@ -683,7 +697,10 @@ impl App {
         }
     }
 
+    /// Flip between the detail and compact views. Marks the view as
+    /// user-chosen so a later terminal resize stops re-picking it.
     pub fn toggle_view(&mut self) {
+        self.view_overridden = true;
         self.view = match self.view {
             View::Detail => View::Compact,
             View::Compact => View::Detail,

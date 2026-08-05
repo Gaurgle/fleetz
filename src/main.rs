@@ -45,6 +45,119 @@ const OPENER: &str = "open";
 #[cfg(not(target_os = "macos"))]
 const OPENER: &str = "xdg-open";
 
+/// How often the event loop ticks: fast enough for a smooth spinner and a
+/// responsive status-message TTL, slow enough to stay invisible in top.
+const TICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How long the input thread waits for a key before looping. Bounds how long
+/// a suspend (lazygit, $EDITOR) has to wait for the input gate.
+const INPUT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// How long the input thread sleeps between checks while input is paused.
+const INPUT_PAUSE_BACKOFF: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Everything the event loop reacts to. Terminal input, the periodic tick,
+/// and the results of background work all arrive on one channel, so the loop
+/// never blocks on any single source.
+pub enum AppEvent {
+    Input(Event),
+    Tick,
+    Loaded(Result<Box<LoadResult>, String>),
+    RepoUpdated {
+        path: String,
+        status: Box<RepoStatus>,
+    },
+    Github(Result<Vec<github::GithubRepo>, String>),
+    Progress(ApplyProgress),
+    SweepDone {
+        at: chrono::DateTime<chrono::Local>,
+    },
+}
+
+/// Why a load ran, which decides what the loop does with the result.
+pub enum LoadKind {
+    /// First load at startup: no status message, nothing to announce.
+    Initial,
+    /// `R`: full rediscover, announces "Reloaded".
+    Reload,
+    /// Time-window overlay: pure re-filter, persists the chosen window.
+    WindowApply(time::TimeWindow),
+}
+
+pub struct LoadResult {
+    pub kind: LoadKind,
+    pub repos: Vec<RepoStatus>,
+    pub header: String,
+    /// None for WindowApply (dataset unchanged by a pure re-filter).
+    pub dataset: Option<Vec<github::GithubRepo>>,
+}
+
+/// True while a child program (lazygit, $EDITOR, a shell) owns the terminal.
+/// The input thread backs off instead of contending for the gate.
+static INPUT_PAUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Held by the input thread around each poll+read pair, and by the suspend
+/// helpers for a whole child run. Without it the reader thread would race the
+/// child for keystrokes and swallow them.
+static INPUT_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Stop reading terminal input, run `body` with the terminal to itself, then
+/// resume reading.
+fn with_input_paused<T>(body: impl FnOnce() -> T) -> T {
+    use std::sync::atomic::Ordering;
+    INPUT_PAUSED.store(true, Ordering::SeqCst);
+    let guard = INPUT_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let out = body();
+    drop(guard);
+    INPUT_PAUSED.store(false, Ordering::SeqCst);
+    out
+}
+
+/// Read terminal input on a dedicated OS thread: crossterm's read is blocking
+/// and must never park a runtime worker. Polls rather than blocking outright
+/// so `with_input_paused` can take the gate promptly.
+fn spawn_input_thread(tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || {
+        loop {
+            if INPUT_PAUSED.load(Ordering::SeqCst) {
+                std::thread::sleep(INPUT_PAUSE_BACKOFF);
+                continue;
+            }
+            let event = {
+                let _gate = INPUT_GATE.lock().unwrap_or_else(|e| e.into_inner());
+                match event::poll(INPUT_POLL) {
+                    Ok(true) => match event::read() {
+                        Ok(ev) => Some(ev),
+                        Err(_) => break,
+                    },
+                    Ok(false) => None,
+                    Err(_) => break,
+                }
+            };
+            if let Some(ev) = event
+                && tx.send(AppEvent::Input(ev)).is_err()
+            {
+                break; // loop ended, channel closed
+            }
+        }
+    });
+}
+
+/// Drive the clock, the spinner, the status-message TTL, and (later) the
+/// watch cadence, independently of whether the user is typing.
+fn spawn_tick_task(tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(TICK_INTERVAL);
+        loop {
+            interval.tick().await;
+            if tx.send(AppEvent::Tick).is_err() {
+                break;
+            }
+        }
+    });
+}
+
 /// Format a path for display, using `~/` shorthand when it's under the home dir.
 /// Unlike a bare `~{suffix}` concatenation, this always produces a string
 /// `shellexpand::tilde` can correctly re-expand back to the original path.
@@ -98,7 +211,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_event_loop(&mut terminal, &mut app, &args, &config, &repo_dir).await;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+    spawn_input_thread(tx.clone());
+    spawn_tick_task(tx.clone());
+
+    let result = run_event_loop(&mut terminal, &mut app, &args, &config, &repo_dir, tx, rx).await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -109,7 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     terminal.show_cursor()?;
 
-    result
+    result.map_err(|e| e.into())
 }
 
 /// Assign each repo to the config-defined groups whose member list names it.
@@ -125,219 +242,264 @@ fn apply_groups(repos: &mut [RepoStatus], config: &config::Config) {
     }
 }
 
-/// Re-run the full `load_repos` (GitHub fetch + discovery + git status),
-/// bypassing the API cache so a just-pushed repo shows up, and swap the result
-/// into `app` while preserving UI state (selection is clamped, groups
-/// re-applied). This is what `R` triggers -- unlike `refresh_single_repo`, it
-/// can add or drop repos, not just re-stat the ones already listed.
-async fn reload_all(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
+/// Run the full `load_repos` (GitHub fetch + discovery + git status) on a
+/// background task and deliver the result as `AppEvent::Loaded`, so the UI
+/// keeps painting and accepting keys throughout. `bypass_cache` is what makes
+/// `R` see a just-pushed repo. Not for window applies: those are a pure
+/// re-filter and go through `spawn_window_apply`.
+fn spawn_load(
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     args: &Args,
     config: &config::Config,
     repo_dir: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    app.set_status("Reloading…".to_string(), false);
-    terminal.draw(|frame| ui::render(frame, app))?;
-
-    let mode = args.mode();
-    match load_repos(args, config, repo_dir, &mode, app.window, true).await {
-        Ok((repos, header, dataset)) => {
-            app.repos = repos;
-            app.dataset = dataset;
-            apply_groups(&mut app.repos, config);
-            app.header = header;
-            app.clamp_after_reload();
-            app.last_refreshed = Some(chrono::Local::now());
-            app.set_status("Reloaded".to_string(), false);
-        }
-        Err(e) => app.set_status(format!("Reload failed: {e}"), true),
-    }
-    Ok(())
+    window: Option<time::TimeWindow>,
+    kind: LoadKind,
+    bypass_cache: bool,
+) {
+    debug_assert!(
+        !matches!(kind, LoadKind::WindowApply(_)),
+        "window applies belong in spawn_window_apply"
+    );
+    let tx = tx.clone();
+    let args = args.clone();
+    let config = config.clone();
+    let repo_dir = repo_dir.to_path_buf();
+    tokio::spawn(async move {
+        let mode = args.mode();
+        let result = load_repos(&args, &config, &repo_dir, &mode, window, bypass_cache)
+            .await
+            .map(|(repos, header, dataset)| {
+                Box::new(LoadResult {
+                    kind,
+                    repos,
+                    header,
+                    dataset: Some(dataset),
+                })
+            });
+        let _ = tx.send(AppEvent::Loaded(result));
+    });
 }
 
-/// Apply the just-chosen window on a background task so the UI can paint a
-/// progress bar as repos are stat'd, instead of freezing. Spawns the
-/// assemble work with owned inputs, animates the footer gauge from the
-/// progress channel until the task finishes, then swaps in the result and
-/// persists the window. No git fetch and no GitHub call: this is a pure
-/// re-filter of the already-fetched dataset.
-async fn apply_time_window(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
+/// Re-filter the already-fetched dataset against a newly chosen time window,
+/// on a background task. No git fetch and no GitHub call, so this is cheap;
+/// it still reports statting progress so the footer gauge animates.
+fn spawn_window_apply(
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    app: &App,
     args: &Args,
     config: &config::Config,
     repo_dir: &Path,
+    w: time::TimeWindow,
 ) {
-    let Some(w) = app.window else { return };
-    let cutoff = w.cutoff(config.work_start, config.work_end);
-    let label = w.label(config.work_start, config.work_end);
-
-    // Owned copies so the assemble work can move onto a spawned task.
+    let tx = tx.clone();
     let dataset = app.dataset.clone();
-    let args_owned = args.clone();
-    let config_owned = config.clone();
-    let repo_dir_owned = repo_dir.to_path_buf();
-    let header = label.clone();
-
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    // Box<dyn Error> is not Send, so map the assemble error to a String to
-    // keep the task's output Send.
-    let mut handle = tokio::spawn(async move {
-        assemble_view(
+    let args = args.clone();
+    let config = config.clone();
+    let repo_dir = repo_dir.to_path_buf();
+    tokio::spawn(async move {
+        let cutoff = w.cutoff(config.work_start, config.work_end);
+        let header = w.label(config.work_start, config.work_end);
+        let result = assemble_view(
             &dataset,
             Some(cutoff),
             header,
-            &args_owned,
-            &config_owned,
-            &repo_dir_owned,
+            &args,
+            &config,
+            &repo_dir,
             false,
             Some(&tx),
         )
         .await
-        .map_err(|e| e.to_string())
+        .map(|(repos, header)| {
+            Box::new(LoadResult {
+                kind: LoadKind::WindowApply(w),
+                repos,
+                header,
+                dataset: None,
+            })
+        });
+        let _ = tx.send(AppEvent::Loaded(result));
     });
+}
 
-    app.apply_progress = Some(ApplyProgress::Discovering);
-    let _ = terminal.draw(|frame| ui::render(frame, app));
-
-    let result = loop {
-        match tokio::time::timeout(std::time::Duration::from_millis(80), &mut handle).await {
-            Ok(joined) => {
-                // Task finished; drain any last progress then break with it.
-                while let Ok(p) = rx.try_recv() {
-                    app.apply_progress = Some(p);
-                }
-                break joined;
-            }
-            Err(_) => {
-                // Still running: pull the latest progress and repaint.
-                while let Ok(p) = rx.try_recv() {
-                    app.apply_progress = Some(p);
-                }
-                let _ = terminal.draw(|frame| ui::render(frame, app));
-            }
-        }
-    };
-
+/// Swap a finished load into the app, preserving UI state (selection is
+/// clamped, groups re-applied), and say what happened.
+fn apply_load_result(
+    app: &mut App,
+    config: &config::Config,
+    result: Result<Box<LoadResult>, String>,
+) {
     app.apply_progress = None;
-
+    app.loading = false;
     match result {
-        Ok(Ok((repos, new_header))) => {
-            app.repos = repos;
+        Ok(lr) => {
+            app.repos = lr.repos;
             apply_groups(&mut app.repos, config);
-            app.header = new_header;
+            app.header = lr.header;
+            if let Some(ds) = lr.dataset {
+                app.dataset = ds;
+            }
             app.clamp_after_reload();
-            window_state::WindowState::new().save(&w);
-            app.set_status(format!("Window: {label}"), false);
+            app.last_refreshed = Some(chrono::Local::now());
+            match lr.kind {
+                LoadKind::Initial => {}
+                LoadKind::Reload => app.set_status("Reloaded".to_string(), false),
+                LoadKind::WindowApply(w) => {
+                    window_state::WindowState::new().save(&w);
+                    let label = app.header.clone();
+                    app.set_status(format!("Window: {label}"), false);
+                }
+            }
         }
-        Ok(Err(e)) => app.set_status(format!("Window apply failed: {e}"), true),
-        Err(e) => app.set_status(format!("Window apply task failed: {e}"), true),
+        Err(e) => app.set_status(format!("Load failed: {e}"), true),
     }
 }
 
+/// The event loop: one channel carries input, ticks, and the results of every
+/// background task, so nothing the user does ever waits on git or the network.
+/// Painting is dirty-flag driven: an event that changes nothing costs nothing.
 async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     args: &Args,
     config: &config::Config,
     repo_dir: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    loop {
-        // Drop a status message once it's outlived its TTL, so it fades on its
-        // own rather than sitting frozen until the next keypress.
-        if app.status_expired(STATUS_TTL) {
-            app.clear_status();
-        }
+    tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Result<(), String> {
+    terminal
+        .draw(|frame| ui::render(frame, app))
+        .map_err(|e| e.to_string())?;
 
-        terminal.draw(|frame| ui::render(frame, app))?;
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            AppEvent::Tick => {
+                app.on_tick();
+                // Drop a status message once it's outlived its TTL, so it
+                // fades on its own rather than sitting frozen until the next
+                // keypress.
+                if app.status_expired(STATUS_TTL) {
+                    app.clear_status();
+                    app.needs_redraw = true;
+                }
+                // Keep spinner/blink/clock moving: paint every 4th tick while
+                // anything animated is on screen, else stay idle.
+                let animated = app.loading || app.watch_mode || app.apply_progress.is_some();
+                if animated && app.spinner_frame.is_multiple_of(4) {
+                    app.needs_redraw = true;
+                }
+            }
+            AppEvent::Input(Event::Key(key)) => {
+                // Any keypress clears a transient status message before it's
+                // handled, so the message shows until the next interaction and
+                // then yields the footer back to the summary. The handler for
+                // this same key may set a fresh one, which survives (set after
+                // this clear).
+                app.clear_status();
+                if let Err(e) = handle_key(app, terminal, key, &tx, args, config, repo_dir).await {
+                    app.set_status(format!("Error: {e}"), true);
+                }
+                app.needs_redraw = true;
+            }
+            AppEvent::Input(Event::Mouse(m)) => {
+                handle_mouse_input(app, terminal, m);
+                app.needs_redraw = true;
+            }
+            AppEvent::Input(Event::Resize(w, h)) => {
+                // Follow the terminal back to the view that fits, unless the
+                // user has taken the wheel with `v`.
+                if !app.view_overridden {
+                    app.view = app::initial_view(w, h);
+                }
+                app.needs_redraw = true;
+            }
+            AppEvent::Input(_) => {}
+            AppEvent::Loaded(result) => {
+                apply_load_result(app, config, result);
+                app.needs_redraw = true;
+            }
+            AppEvent::Progress(p) => {
+                app.apply_progress = Some(p);
+                app.needs_redraw = true;
+            }
+            AppEvent::RepoUpdated { path, status } => {
+                if let Some(repo) = app
+                    .repos
+                    .iter_mut()
+                    .find(|r| r.path.as_deref() == Some(path.as_str()))
+                {
+                    *repo = *status;
+                }
+                app.needs_redraw = true;
+            }
+            AppEvent::Github(result) => {
+                if let Err(e) = result {
+                    app.set_status(format!("GitHub refresh failed: {e}"), true);
+                }
+                app.needs_redraw = true;
+            }
+            AppEvent::SweepDone { at } => {
+                app.last_refreshed = Some(at);
+                app.needs_redraw = true;
+            }
+        }
 
         if app.should_quit {
             return Ok(());
         }
-
-        // Recomputed each iteration so the `w` toggle takes effect immediately.
-        // A visible status message forces a short poll so the loop wakes up to
-        // expire it; otherwise watch mode polls once a second to check if a
-        // refresh is due, and static mode blocks until the next keypress.
-        let poll_timeout = if app.status_message.is_some() {
-            std::time::Duration::from_millis(150)
-        } else if app.watch_mode {
-            std::time::Duration::from_secs(1)
-        } else {
-            std::time::Duration::from_secs(3600)
-        };
-
-        // Check if watch mode refresh is due
-        if app.watch_mode
-            && let Some(last) = app.last_refreshed
-        {
-            let elapsed = (chrono::Local::now() - last).num_seconds();
-            if elapsed >= app.refresh_interval as i64 {
-                for repo in &mut app.repos {
-                    refresh_single_repo(repo).await;
-                }
-                app.last_refreshed = Some(chrono::Local::now());
-            }
-        }
-
-        if event::poll(poll_timeout)? {
-            match event::read()? {
-                Event::Key(key) => {
-                    // Any keypress clears a transient status message before it's
-                    // handled, so the message shows until the next interaction and
-                    // then yields the footer back to the summary. The handler for
-                    // this same key may set a fresh one, which survives (set after
-                    // this clear).
-                    app.clear_status();
-
-                    match &app.overlay {
-                        Overlay::Help => {
-                            match key.code {
-                                KeyCode::Char('?') | KeyCode::Esc => app.toggle_help(),
-                                _ => {}
-                            }
-                            continue;
-                        }
-                        Overlay::Branches(_) => {
-                            handle_branch_input(app, key).await;
-                            continue;
-                        }
-                        Overlay::TimeWindow(_) => {
-                            handle_time_window_input(app, key);
-                            // Apply inline (this arm `continue`s past the
-                            // bottom service block, and static mode then
-                            // blocks in event::poll). apply_time_window drives
-                            // its own progress-bar redraw loop while it runs.
-                            if app.window_apply_requested {
-                                app.window_apply_requested = false;
-                                apply_time_window(terminal, app, args, config, repo_dir).await;
-                            }
-                            continue;
-                        }
-                        Overlay::None => {}
-                    }
-
-                    if app.search_active {
-                        handle_search_input(app, key);
-                        continue;
-                    }
-
-                    handle_normal_input(app, terminal, key).await?;
-                }
-                Event::Mouse(m) => handle_mouse_input(app, terminal, m),
-                _ => {}
-            }
-        }
-
-        // Serviced here rather than inline in the key handler so the reload has
-        // access to args/config/repo_dir; the draw at the loop top already
-        // showed the "Reloading…" status set by `reload_all`.
-        if app.reload_requested {
-            app.reload_requested = false;
-            reload_all(terminal, app, args, config, repo_dir).await?;
+        if app.needs_redraw {
+            app.needs_redraw = false;
+            terminal
+                .draw(|frame| ui::render(frame, app))
+                .map_err(|e| e.to_string())?;
         }
     }
+    Ok(())
+}
+
+/// Dispatch one key to the overlay, the search box, or the normal bindings.
+/// Overlays are modal: they consume the key and nothing else sees it.
+async fn handle_key(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    key: KeyEvent,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    args: &Args,
+    config: &config::Config,
+    repo_dir: &Path,
+) -> Result<(), String> {
+    match &app.overlay {
+        Overlay::Help => {
+            match key.code {
+                KeyCode::Char('?') | KeyCode::Esc => app.toggle_help(),
+                _ => {}
+            }
+            return Ok(());
+        }
+        Overlay::Branches(_) => {
+            handle_branch_input(app, key).await;
+            return Ok(());
+        }
+        Overlay::TimeWindow(_) => {
+            // Enter closes the overlay and hands the chosen window to a
+            // background re-filter; the gauge animates from its progress.
+            if handle_time_window_input(app, key)
+                && let Some(w) = app.window
+            {
+                app.apply_progress = Some(ApplyProgress::Discovering);
+                spawn_window_apply(tx, app, args, config, repo_dir, w);
+            }
+            return Ok(());
+        }
+        Overlay::None => {}
+    }
+
+    if app.search_active {
+        handle_search_input(app, key);
+        return Ok(());
+    }
+
+    handle_normal_input(app, terminal, key, tx, args, config, repo_dir).await
 }
 
 /// Mouse: left-click focuses the panel under the cursor; the scroll wheel
@@ -474,9 +636,10 @@ async fn handle_branch_input(app: &mut App, key: KeyEvent) {
 
 /// Modal input for the time-window overlay. All keys are consumed here
 /// while it's open, so hjkl/arrows can't leak into list navigation.
-fn handle_time_window_input(app: &mut App, key: KeyEvent) {
+/// Returns true when Enter confirmed a window, which the caller applies.
+fn handle_time_window_input(app: &mut App, key: KeyEvent) -> bool {
     let Overlay::TimeWindow(ref mut two) = app.overlay else {
-        return;
+        return false;
     };
     match key.code {
         KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('q') => {
@@ -491,11 +654,12 @@ fn handle_time_window_input(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => {
             let w = two.window();
             app.window = Some(w);
-            app.window_apply_requested = true;
             app.overlay = Overlay::None;
+            return true;
         }
         _ => {}
     }
+    false
 }
 
 /// Build and show the branches overlay for the selected repo: every local
@@ -586,11 +750,16 @@ fn handle_search_input(app: &mut App, key: KeyEvent) {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // the key handler needs the whole context
 async fn handle_normal_input(
     app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     key: KeyEvent,
-) -> Result<(), Box<dyn std::error::Error>> {
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    args: &Args,
+    config: &config::Config,
+    repo_dir: &Path,
+) -> Result<(), String> {
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         // A leftover search query (set, then Enter'd out of edit mode) is
@@ -641,7 +810,9 @@ async fn handle_normal_input(
                 // the indicator actually appears rather than being set and
                 // immediately overwritten by the result on the next frame.
                 app.set_status(format!("\u{27f3} Fetching {}…", repo.name), false);
-                terminal.draw(|frame| ui::render(frame, app))?;
+                terminal
+                    .draw(|frame| ui::render(frame, app))
+                    .map_err(|e| e.to_string())?;
                 let ok = git::fetch(Path::new(&expanded)).await;
                 if ok {
                     if let Some(idx) = app.selected_repo_index() {
@@ -665,7 +836,9 @@ async fn handle_normal_input(
             for (n, (i, path)) in paths.iter().enumerate() {
                 // Live progress indicator, redrawn before each blocking fetch.
                 app.set_status(format!("\u{27f3} Fetching {}/{total}…", n + 1), false);
-                terminal.draw(|frame| ui::render(frame, app))?;
+                terminal
+                    .draw(|frame| ui::render(frame, app))
+                    .map_err(|e| e.to_string())?;
                 let expanded = shellexpand::tilde(path).to_string();
                 if git::fetch(Path::new(&expanded)).await {
                     fetched += 1;
@@ -762,11 +935,20 @@ async fn handle_normal_input(
         }
         // Full reload: re-fetch GitHub (cache-bypassed) and re-run discovery,
         // so a just-pushed or newly-cloned repo appears. Shifted because it
-        // costs a network round trip and GitHub rate limit. Deferred to the
-        // event loop via a flag because the reload needs the args/config/
-        // repo_dir context that only `run_event_loop` holds.
+        // costs a network round trip and GitHub rate limit. Runs on a
+        // background task, so the list stays scrollable while it works.
         KeyCode::Char('R') => {
-            app.reload_requested = true;
+            app.loading = true;
+            app.set_status("Reloading…".to_string(), false);
+            spawn_load(
+                tx,
+                args,
+                config,
+                repo_dir,
+                app.window,
+                LoadKind::Reload,
+                true,
+            );
         }
         // Toggle watch mode: auto re-stat the listed repos every
         // `refresh_interval` seconds (the same lightweight pass as `r`). Reset
@@ -791,24 +973,25 @@ async fn handle_normal_input(
     Ok(())
 }
 
-/// Suspend the TUI, run a command, then resume.
+/// Suspend the TUI, run a command, then resume. Input reading is paused for
+/// the whole child run so the reader thread cannot swallow its keystrokes.
 fn suspend_and_run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     cmd: &str,
     args: &[&str],
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), String> {
     // Leave alternate screen
-    disable_raw_mode()?;
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    disable_raw_mode().map_err(|e| e.to_string())?;
+    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen).map_err(|e| e.to_string())?;
+    terminal.show_cursor().map_err(|e| e.to_string())?;
 
     // Run the command
-    let _ = StdCommand::new(cmd).args(args).status();
+    let _ = with_input_paused(|| StdCommand::new(cmd).args(args).status());
 
     // Re-enter alternate screen
-    crossterm::execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-    enable_raw_mode()?;
-    terminal.clear()?;
+    crossterm::execute!(terminal.backend_mut(), EnterAlternateScreen).map_err(|e| e.to_string())?;
+    enable_raw_mode().map_err(|e| e.to_string())?;
+    terminal.clear().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -818,20 +1001,22 @@ fn suspend_and_run_in_dir(
     cmd: &str,
     args: &[&str],
     dir: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    disable_raw_mode()?;
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+) -> Result<(), String> {
+    disable_raw_mode().map_err(|e| e.to_string())?;
+    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen).map_err(|e| e.to_string())?;
+    terminal.show_cursor().map_err(|e| e.to_string())?;
 
     let expanded = shellexpand::tilde(dir);
-    let _ = StdCommand::new(cmd)
-        .args(args)
-        .current_dir(expanded.as_ref())
-        .status();
+    let _ = with_input_paused(|| {
+        StdCommand::new(cmd)
+            .args(args)
+            .current_dir(expanded.as_ref())
+            .status()
+    });
 
-    crossterm::execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-    enable_raw_mode()?;
-    terminal.clear()?;
+    crossterm::execute!(terminal.backend_mut(), EnterAlternateScreen).map_err(|e| e.to_string())?;
+    enable_raw_mode().map_err(|e| e.to_string())?;
+    terminal.clear().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -873,7 +1058,7 @@ async fn load_repos(
     mode: &Mode,
     window: Option<time::TimeWindow>,
     bypass_cache: bool,
-) -> Result<(Vec<RepoStatus>, String, Vec<github::GithubRepo>), Box<dyn std::error::Error>> {
+) -> Result<(Vec<RepoStatus>, String, Vec<github::GithubRepo>), String> {
     // Local scan roots: the primary repo_dir plus any configured extra dirs
     // (e.g. ~/.dotfiles), so repos outside the main tree still surface under
     // "local changes" -- the fleetz equivalent of repoz's EXTRA_DIRS.
@@ -1015,8 +1200,8 @@ async fn assemble_view(
     config: &config::Config,
     repo_dir: &Path,
     git_fetch: bool,
-    progress: Option<&tokio::sync::mpsc::UnboundedSender<app::ApplyProgress>>,
-) -> Result<(Vec<RepoStatus>, String), Box<dyn std::error::Error>> {
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+) -> Result<(Vec<RepoStatus>, String), String> {
     // name -> org/private/public, from the *full* fetch (before the activity
     // cutoff filters it down), so a local-only repo can still show its glyph
     // even though it wasn't pushed recently enough to be "active". Mirrors
@@ -1068,11 +1253,11 @@ async fn assemble_view(
     // reported as the Finishing phase rather than folded into the fraction.
     let stat_total = primary_found.len() + elsewhere_found.len();
     if let Some(tx) = progress {
-        let _ = tx.send(app::ApplyProgress::Discovering);
-        let _ = tx.send(app::ApplyProgress::Statting {
+        let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Discovering));
+        let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Statting {
             done: 0,
             total: stat_total,
-        });
+        }));
     }
 
     // Parallel fetch for all found repos
@@ -1104,10 +1289,10 @@ async fn assemble_view(
         repos.push(repo);
         stat_done += 1;
         if let Some(tx) = progress {
-            let _ = tx.send(app::ApplyProgress::Statting {
+            let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Statting {
                 done: stat_done,
                 total: stat_total,
-            });
+            }));
         }
     }
 
@@ -1118,10 +1303,10 @@ async fn assemble_view(
             // stat_total, so account for it or the gauge stops short.
             stat_done += 1;
             if let Some(tx) = progress {
-                let _ = tx.send(app::ApplyProgress::Statting {
+                let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Statting {
                     done: stat_done,
                     total: stat_total,
-                });
+                }));
             }
             continue;
         }
@@ -1130,15 +1315,15 @@ async fn assemble_view(
         repos.push(repo);
         stat_done += 1;
         if let Some(tx) = progress {
-            let _ = tx.send(app::ApplyProgress::Statting {
+            let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Statting {
                 done: stat_done,
                 total: stat_total,
-            });
+            }));
         }
     }
 
     if let Some(tx) = progress {
-        let _ = tx.send(app::ApplyProgress::Finishing);
+        let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Finishing));
     }
 
     // Pass 3: local repos (under repo_dir or any configured extra_dir, e.g.

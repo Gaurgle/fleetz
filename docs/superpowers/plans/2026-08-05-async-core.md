@@ -403,7 +403,7 @@ pub struct LoadResult {
 - `RepoUpdated`/`Github`/`SweepDone` are emitted by Tasks 5-6; this task only defines them and their loop arms.
 - Consumes: 5-param `App::new` from Task 2.
 
-- [ ] **Step 1: Add the app fields**
+- [x] **Step 1: Add the app fields**
 
 In `App` (app.rs:384) add, and initialize in `App::new`:
 
@@ -431,7 +431,7 @@ In `App` (app.rs:384) add, and initialize in `App::new`:
     }
 ```
 
-- [ ] **Step 2: Spawn input thread and tick task**
+- [x] **Step 2: Spawn input thread and tick task**
 
 In main.rs:
 
@@ -463,7 +463,7 @@ fn spawn_tick_task(tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
 }
 ```
 
-- [ ] **Step 3: Rewrite `run_event_loop`**
+- [x] **Step 3: Rewrite `run_event_loop`**
 
 ```rust
 async fn run_event_loop(
@@ -554,7 +554,7 @@ async fn run_event_loop(
 
 `handle_key` is the old overlay/search/normal dispatch (main.rs:288-320) moved into a function; `handle_normal_input` keeps its body except: `v` also sets `app.view_overridden = true`; the `R` arm and the time-window Enter no longer use deferred flags (Step 4). Delete the `poll_timeout` computation, the inline watch block (main.rs:265-276), and the `reload_requested` service block; delete the `reload_requested` and `window_apply_requested` fields from App.
 
-- [ ] **Step 4: Background load path**
+- [x] **Step 4: Background load path**
 
 Replace `reload_all` and `apply_time_window` with spawns; change `load_repos`/`assemble_view` error type to `String` and `assemble_view`'s progress param to `Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>` sending `AppEvent::Progress(...)`:
 
@@ -643,12 +643,12 @@ fn apply_load_result(app: &mut App, config: &config::Config, result: Result<Box<
 
 Key arms change to: `R` sets `app.loading = true`, status "Reloading", `spawn_load(&tx, args, config, repo_dir, app.window, LoadKind::Reload, true)`. Time-window Enter calls `spawn_window_apply(&tx, app, args, config, repo_dir, w)` and sets `app.apply_progress = Some(ApplyProgress::Discovering)`. Simplify `unreachable!` away by making spawn_load's match a plain call (the WindowApply variant is only ever constructed by spawn_window_apply; add a debug_assert instead of the match if cleaner).
 
-- [ ] **Step 5: Run gates and verify by hand**
+- [x] **Step 5: Run gates and verify by hand**
 
 Run: `cargo build && cargo test && cargo clippy --all-targets -- -D warnings`
 Manual: `cargo run --release` then press keys rapidly during an R reload; the UI must stay responsive (selection moves while "Reloading" shows). Resize the terminal below 70 columns: view flips to Compact; press v: it stays put on further resizes.
 
-- [ ] **Step 6: Stage and present the commit**
+- [x] **Step 6: Stage and present the commit**
 
 ```bash
 git add src/main.rs src/app.rs
