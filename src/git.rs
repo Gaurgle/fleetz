@@ -1,4 +1,5 @@
 use crate::model::{BranchStatus, Commit, FileStat, GraphLine, ReflogEntry};
+use chrono::DateTime;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
@@ -223,8 +224,7 @@ pub async fn branch_commits(repo_path: &Path, branch: &str, limit: u32) -> Vec<C
         &[
             "log",
             &format!("-{limit}"),
-            "--date=relative",
-            "--format=%x1e%h%x1f%aN%x1f%ad%x1f%s%x1f%b",
+            "--format=%x1e%h%x1f%aN%x1f%at%x1f%s%x1f%b",
             branch,
         ],
     )
@@ -249,8 +249,7 @@ pub async fn commits(
     // trails the body inside the same record.
     let mut args = vec![
         "log".to_string(),
-        "--date=relative".to_string(),
-        "--format=%x1e%h%x1f%aN%x1f%ad%x1f%s%x1f%b".to_string(),
+        "--format=%x1e%h%x1f%aN%x1f%at%x1f%s%x1f%b".to_string(),
     ];
     if with_stat {
         // --numstat gives the per-file breakdown (for the inspector's file
@@ -294,7 +293,13 @@ fn parse_commit_output(output: &str) -> Vec<Commit> {
         }
         let hash = fields[0].trim().to_string();
         let author = fields[1].to_string();
-        let date = fields[2].to_string();
+        // `%at` is unix epoch seconds; anything else means a git format we
+        // don't understand, which drops the age rather than the whole commit.
+        let date = fields[2]
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .and_then(|secs| DateTime::from_timestamp(secs, 0));
         let message = fields[3].to_string();
 
         // The 5th field is the body, possibly followed by --numstat file
@@ -798,21 +803,36 @@ mod tests {
 
     #[test]
     fn parse_commit_output_without_stat() {
-        // Records: RS h US author US date US subject US body
-        let output = "\u{1e}a1b2c3d\u{1f}Alice\u{1f}2 days ago\u{1f}feat: add feature\u{1f}\u{1e}e4f5g6h\u{1f}Bob\u{1f}5 hours ago\u{1f}fix: bug\u{1f}";
+        // Records: RS h US author US epoch US subject US body
+        let output = "\u{1e}a1b2c3d\u{1f}Alice\u{1f}1712000000\u{1f}feat: add feature\u{1f}\u{1e}e4f5g6h\u{1f}Bob\u{1f}1712080000\u{1f}fix: bug\u{1f}";
         let commits = parse_commit_output(output);
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0].hash, "a1b2c3d");
         assert_eq!(commits[0].author, "Alice");
-        assert_eq!(commits[0].date, "2 days ago");
+        assert_eq!(
+            commits[0].date,
+            DateTime::from_timestamp(1712000000, 0),
+            "%at is parsed into an absolute timestamp, not a frozen string"
+        );
         assert_eq!(commits[0].message, "feat: add feature");
         assert_eq!(commits[0].body, "");
         assert_eq!(commits[0].insertions, 0);
     }
 
     #[test]
+    fn parse_commit_output_survives_an_unparseable_date() {
+        // A git that hands back something other than %at must cost the age,
+        // not the whole commit row.
+        let output = "\u{1e}a1b2c3d\u{1f}Alice\u{1f}not-a-timestamp\u{1f}feat: x\u{1f}";
+        let commits = parse_commit_output(output);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].hash, "a1b2c3d");
+        assert_eq!(commits[0].date, None);
+    }
+
+    #[test]
     fn parse_commit_output_with_stat() {
-        let output = "\u{1e}a1b2c3d\u{1f}Alice\u{1f}2 days ago\u{1f}feat: add feature\u{1f} 3 files changed, 18 insertions(+), 4 deletions(-)\n\u{1e}e4f5g6h\u{1f}Bob\u{1f}5 hours ago\u{1f}fix: bug\u{1f} 1 file changed, 2 insertions(+)\n";
+        let output = "\u{1e}a1b2c3d\u{1f}Alice\u{1f}1712000000\u{1f}feat: add feature\u{1f} 3 files changed, 18 insertions(+), 4 deletions(-)\n\u{1e}e4f5g6h\u{1f}Bob\u{1f}1712080000\u{1f}fix: bug\u{1f} 1 file changed, 2 insertions(+)\n";
         let commits = parse_commit_output(output);
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0].insertions, 18);
@@ -838,7 +858,7 @@ mod tests {
         // Body, then numstat lines, then the shortstat summary -- as emitted
         // by `git log --numstat --shortstat`. Files land in `files`, totals in
         // insertions/deletions, and neither leaks into the body.
-        let output = "\u{1e}a1b2c3d\u{1f}Alice\u{1f}2 days ago\u{1f}feat: add feature\u{1f}Body text.\n12\t3\tsrc/main.rs\n0\t7\tREADME.md\n-\t-\tlogo.png\n 3 files changed, 12 insertions(+), 10 deletions(-)\n";
+        let output = "\u{1e}a1b2c3d\u{1f}Alice\u{1f}1712000000\u{1f}feat: add feature\u{1f}Body text.\n12\t3\tsrc/main.rs\n0\t7\tREADME.md\n-\t-\tlogo.png\n 3 files changed, 12 insertions(+), 10 deletions(-)\n";
         let commits = parse_commit_output(output);
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].body, "Body text.");

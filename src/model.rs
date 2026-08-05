@@ -30,7 +30,10 @@ pub struct Commit {
     pub message: String,
     pub body: String,
     pub author: String,
-    pub date: String,
+    /// Author timestamp, absolute. Stored absolute rather than as a
+    /// pre-rendered "3 minutes ago" so the age is computed at draw time and
+    /// stays current between sweeps. None when git gave an unparseable value.
+    pub date: Option<DateTime<Utc>>,
     pub insertions: u32,
     pub deletions: u32,
     pub files: Vec<FileStat>,

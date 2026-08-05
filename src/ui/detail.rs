@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -8,9 +7,10 @@ use ratatui::widgets::{
 };
 
 use crate::app::{App, FocusedPanel};
-use crate::model::{CiStatus, RepoStatus};
+use crate::model::{CiStatus, Commit, RepoStatus};
 use crate::ui::badges;
 use crate::ui::colors;
+use crate::ui::format_age;
 
 /// Height (incl. border) of the inspector pane docked under the detail pane.
 /// Enough for the header line, a blank, a few message lines, and the stat;
@@ -217,6 +217,13 @@ fn repo_list_item(
     ListItem::new(Line::from(spans))
 }
 
+/// A commit's age, rendered fresh on every draw. Empty when git handed back
+/// a timestamp we couldn't parse, so the separator collapses rather than the
+/// row showing a bogus age.
+pub fn commit_age(commit: &Commit) -> String {
+    commit.date.map(format_age).unwrap_or_default()
+}
+
 /// Minimum blank columns between the path and the right-aligned owner group.
 /// Below this the two read as one run-on string, so the group is dropped.
 const MIN_IDENTITY_GAP: usize = 2;
@@ -230,47 +237,55 @@ fn identity_gap(width: usize, left_w: usize, identity_w: usize) -> Option<usize>
         .filter(|gap| *gap >= MIN_IDENTITY_GAP)
 }
 
-/// The `owner/name` group shown at the right of the detail pane's status
-/// line, plus its display width. Empty when no owner is known (no GitHub
-/// match and no parseable remote), since `name` alone would just repeat the
-/// panel title.
+/// Total display width of a span run.
+fn span_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|s| s.content.chars().count()).sum()
+}
+
+/// The owner group shown flush right on the detail pane's status row: the
+/// kind glyph plus the owner login. Empty when no owner is known (no GitHub
+/// match and no parseable remote), which also suppresses the name row below
+/// it, since `name` alone would just repeat the panel title.
 ///
-/// The kind glyph and the owner share `badges::kind_color`, so org/private/
-/// public reads the same here as in the repo list.
-fn identity_spans(repo: &RepoStatus) -> (Vec<Span<'static>>, usize) {
+/// The glyph and the owner share `badges::kind_color`, so org/private/public
+/// reads the same here as in the repo list.
+fn owner_spans(repo: &RepoStatus) -> (Vec<Span<'static>>, usize) {
     let Some(owner) = repo.owner_display() else {
         return (Vec::new(), 0);
     };
 
     let color = badges::kind_color(repo.repo_kind);
     let mut spans = Vec::new();
-    let mut width = 0usize;
 
     if let Some(glyph) = badges::kind_glyph(repo.repo_kind) {
         spans.push(Span::styled(
             format!("{glyph} "),
             Style::default().fg(color),
         ));
-        width += badges::GLYPH_W;
     }
-
-    width += owner.chars().count();
     spans.push(Span::styled(
         owner,
         Style::default().fg(color).add_modifier(Modifier::BOLD),
     ));
 
-    width += 1;
-    spans.push(Span::styled("/", Style::default().fg(colors::SURFACE)));
+    let width = span_width(&spans);
+    (spans, width)
+}
 
-    width += repo.name.chars().count();
-    spans.push(Span::styled(
+/// The repo name, rendered flush right on the row under the owner. Paired
+/// with `owner_spans`: empty whenever that one is, so the block is all or
+/// nothing.
+fn name_spans(repo: &RepoStatus) -> (Vec<Span<'static>>, usize) {
+    if repo.owner_display().is_none() {
+        return (Vec::new(), 0);
+    }
+    let spans = vec![Span::styled(
         repo.name.clone(),
         Style::default()
             .fg(colors::SAPPHIRE)
             .add_modifier(Modifier::BOLD),
-    ));
-
+    )];
+    let width = span_width(&spans);
     (spans, width)
 }
 
@@ -311,8 +326,11 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             CiStatus::Pending => ("○", colors::PEACH, "pending"),
             CiStatus::Unknown => ("", colors::OVERLAY, ""),
         };
+        // Named, not just a glyph: "✓ passed" in a pane frame reads as
+        // ambiguous praise for whatever the pane holds, whereas "CI passed"
+        // says what actually passed.
         right_title.push(Span::styled(
-            format!(" {ci_sym} {ci_label} "),
+            format!(" {ci_sym} CI {ci_label} "),
             Style::default().fg(ci_color),
         ));
     }
@@ -361,23 +379,36 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         Span::raw("   "),
         Span::styled(path_str.to_string(), Style::default().fg(colors::OVERLAY)),
     ];
-    // Owner identity, flush to the pane's right edge on the same row. Dropped
-    // whole rather than truncated when the pane is too narrow: half an owner
-    // name is worse than none, and the title still carries the repo name.
-    let (identity, identity_w) = identity_spans(repo);
-    if !identity.is_empty() {
-        let left_w: usize = status_line.iter().map(|s| s.content.chars().count()).sum();
-        if let Some(gap) = identity_gap(width, left_w, identity_w) {
-            status_line.push(Span::raw(" ".repeat(gap)));
-            status_line.extend(identity);
-        }
-    }
-    lines.push(Line::from(status_line));
+    let mut url_line: Vec<Span> = Vec::new();
     if let Some(ref url) = repo.remote_url {
-        lines.push(Line::from(Span::styled(
+        url_line.push(Span::styled(
             format!("  {url}"),
             Style::default().fg(colors::OVERLAY),
-        )));
+        ));
+    }
+
+    // Identity, stacked flush to the pane's right edge: owner on the status
+    // row, repo name directly beneath it on the remote-URL row. Both rows are
+    // placed together or not at all, so the pair never renders half-aligned.
+    let (owner_group, owner_w) = owner_spans(repo);
+    let (name_group, name_w) = name_spans(repo);
+    if !owner_group.is_empty() {
+        let status_w = span_width(&status_line);
+        let url_w = span_width(&url_line);
+        if let (Some(owner_gap), Some(name_gap)) = (
+            identity_gap(width, status_w, owner_w),
+            identity_gap(width, url_w, name_w),
+        ) {
+            status_line.push(Span::raw(" ".repeat(owner_gap)));
+            status_line.extend(owner_group);
+            url_line.push(Span::raw(" ".repeat(name_gap)));
+            url_line.extend(name_group);
+        }
+    }
+
+    lines.push(Line::from(status_line));
+    if !url_line.is_empty() {
+        lines.push(Line::from(url_line));
     }
     lines.push(Line::from(""));
 
@@ -782,7 +813,7 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(colors::author_color(&c.author)),
             ),
             Span::styled(" · ", Style::default().fg(colors::SURFACE)),
-            Span::styled(c.date.clone(), Style::default().fg(colors::OVERLAY)),
+            Span::styled(commit_age(c), Style::default().fg(colors::OVERLAY)),
         ]),
         Line::from(""),
         Line::from(Span::styled(
@@ -938,25 +969,6 @@ fn section_label(text: &str) -> Span<'static> {
     )
 }
 
-fn format_age(created: DateTime<Utc>) -> String {
-    let diff = Utc::now() - created;
-    let days = diff.num_days();
-    if days == 0 {
-        let hours = diff.num_hours();
-        if hours == 0 {
-            format!("{}m ago", diff.num_minutes().max(1))
-        } else {
-            format!("{hours}h ago")
-        }
-    } else if days == 1 {
-        "1d ago".to_string()
-    } else if days < 30 {
-        format!("{days}d ago")
-    } else {
-        format!("{}mo ago", days / 30)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -998,34 +1010,51 @@ mod tests {
     }
 
     #[test]
-    fn identity_renders_owner_and_name() {
-        let (spans, width) = identity_spans(&repo("fleetz", RepoKind::Public, Some("Gaurgle")));
-        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.ends_with("Gaurgle/fleetz"), "got {text:?}");
-        assert_eq!(width, drawn_width(&spans));
+    fn identity_splits_owner_above_name() {
+        let r = repo("fleetz", RepoKind::Public, Some("Gaurgle"));
+        let (owner, owner_w) = owner_spans(&r);
+        let (name, name_w) = name_spans(&r);
+
+        let owner_text: String = owner.iter().map(|s| s.content.as_ref()).collect();
+        let name_text: String = name.iter().map(|s| s.content.as_ref()).collect();
+        assert!(owner_text.ends_with("Gaurgle"), "got {owner_text:?}");
+        assert!(
+            !owner_text.contains("fleetz"),
+            "name belongs on its own row: {owner_text:?}"
+        );
+        assert_eq!(name_text, "fleetz");
+
+        assert_eq!(owner_w, drawn_width(&owner));
+        assert_eq!(name_w, drawn_width(&name));
     }
 
     #[test]
     fn identity_is_empty_without_an_owner() {
-        // Name alone would just repeat the panel title, so nothing renders.
-        let (spans, width) = identity_spans(&repo("fleetz", RepoKind::Unknown, None));
-        assert!(spans.is_empty());
-        assert_eq!(width, 0);
+        // Name alone would just repeat the panel title, so neither row
+        // renders: the block is all or nothing.
+        let r = repo("fleetz", RepoKind::Unknown, None);
+        assert!(owner_spans(&r).0.is_empty());
+        assert_eq!(owner_spans(&r).1, 0);
+        assert!(name_spans(&r).0.is_empty());
+        assert_eq!(name_spans(&r).1, 0);
     }
 
     #[test]
     fn identity_falls_back_to_the_remote_url() {
         let mut r = repo("fleetz", RepoKind::Unknown, None);
         r.remote_url = Some("git@github.com:Gaurgle/fleetz.git".to_string());
-        let (spans, _) = identity_spans(&r);
-        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "Gaurgle/fleetz");
+        let owner_text: String = owner_spans(&r)
+            .0
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(owner_text, "Gaurgle");
     }
 
     #[test]
     fn identity_kind_glyph_is_only_drawn_when_known() {
-        let (org, org_w) = identity_spans(&repo("svc", RepoKind::Org, Some("acme")));
-        let (unknown, unknown_w) = identity_spans(&repo("svc", RepoKind::Unknown, Some("acme")));
+        let (org, org_w) = owner_spans(&repo("svc", RepoKind::Org, Some("acme")));
+        let (unknown, unknown_w) = owner_spans(&repo("svc", RepoKind::Unknown, Some("acme")));
         // Same text, but the org row carries the leading building glyph.
         assert_eq!(org_w - unknown_w, badges::GLYPH_W);
         assert_eq!(org_w, drawn_width(&org));
@@ -1049,10 +1078,12 @@ mod tests {
         assert_eq!(identity_gap(20, 10, 14), None);
     }
 
-    /// Renders the real pane and reads the status row back out, so the
-    /// flush-right placement is verified against actual output rather than
-    /// against the arithmetic that produces it.
-    fn status_row(repo: RepoStatus, width: u16) -> String {
+    /// Renders the real pane and reads rows back out, so placement is
+    /// verified against actual output rather than the arithmetic behind it.
+    /// Row 2 is the status line, row 3 the remote-URL line (rows 0 and 1 are
+    /// the border and the block's top padding). The border and padding are
+    /// stripped so assertions are about content, not the frame around it.
+    fn pane_rows(repo: RepoStatus, width: u16) -> (String, String) {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -1065,41 +1096,78 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        // Row 0 is the border, row 1 the padding; the status line is row 2.
-        // The block's own border and padding are stripped so assertions are
-        // about the content, not about the frame around it.
-        (0..width)
-            .map(|x| buffer[(x, 2)].symbol())
-            .collect::<String>()
-            .trim_matches(|c: char| c == '│' || c.is_whitespace())
-            .to_string()
+        // Leading whitespace is kept deliberately: the URL row is indented,
+        // so trimming the front would make two flush-right rows measure
+        // different lengths and hide a real misalignment.
+        let row = |y: u16| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_matches('│')
+                .trim_end()
+                .to_string()
+        };
+        (row(2), row(3))
+    }
+
+    fn cloned_repo() -> RepoStatus {
+        let mut r = repo("fleetz", RepoKind::Public, Some("Gaurgle"));
+        r.path = Some("~/repos/fleetz".to_string());
+        r.remote_url = Some("git@github.com:Gaurgle/fleetz.git".to_string());
+        r
     }
 
     #[test]
-    fn owner_renders_flush_to_the_right_edge() {
-        let mut r = repo("fleetz", RepoKind::Public, Some("Gaurgle"));
-        r.path = Some("~/repos/fleetz".to_string());
-        let row = status_row(r, 60);
+    fn owner_and_name_stack_flush_to_the_right_edge() {
+        let (status, url) = pane_rows(cloned_repo(), 60);
 
-        assert!(row.contains("~/repos/fleetz"), "path missing: {row:?}");
-        assert!(row.ends_with("Gaurgle/fleetz"), "not flush right: {row:?}");
-        // Two spans separated by real whitespace, not run together.
         assert!(
-            row.contains("   "),
-            "no gap between path and owner: {row:?}"
+            status.contains("~/repos/fleetz"),
+            "path missing: {status:?}"
+        );
+        assert!(url.contains("git@github.com"), "url missing: {url:?}");
+        assert!(
+            status.ends_with("Gaurgle"),
+            "owner not flush right: {status:?}"
+        );
+        assert!(url.ends_with("fleetz"), "name not flush right: {url:?}");
+        // The name sits directly under the owner, not merged onto one row.
+        assert!(
+            !status.contains("Gaurgle/fleetz"),
+            "rows should not be joined: {status:?}"
         );
     }
 
     #[test]
-    fn owner_is_dropped_on_a_narrow_pane() {
-        let mut r = repo("fleetz", RepoKind::Public, Some("Gaurgle"));
-        r.path = Some("~/repos/fleetz".to_string());
-        let row = status_row(r, 34);
+    fn stacked_identity_is_right_aligned_on_both_rows() {
+        // Both rows must end at the same column, which is the whole point of
+        // stacking them; the left content differs in length, so this only
+        // holds if each row is padded independently.
+        let (status, url) = pane_rows(cloned_repo(), 60);
+        let owner_end = status.chars().count();
+        let name_end = url.chars().count();
+        assert_eq!(
+            owner_end, name_end,
+            "rows end at different columns: {status:?} vs {url:?}"
+        );
+    }
 
-        assert!(row.contains("~/repos/fleetz"), "path must survive: {row:?}");
+    #[test]
+    fn identity_is_dropped_whole_on_a_narrow_pane() {
+        let (status, url) = pane_rows(cloned_repo(), 34);
+
         assert!(
-            !row.contains("Gaurgle"),
-            "owner should be dropped, not truncated: {row:?}"
+            status.contains("~/repos/fleetz"),
+            "path must survive: {status:?}"
+        );
+        assert!(
+            !status.contains("Gaurgle"),
+            "owner should be dropped, not truncated: {status:?}"
+        );
+        // Dropping is all-or-nothing: no orphan name row without its owner.
+        assert!(
+            !url.ends_with("fleetz") || url.contains("git@github.com:Gaurgle/fleetz.git"),
+            "name row orphaned: {url:?}"
         );
     }
 }

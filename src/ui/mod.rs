@@ -15,6 +15,32 @@ use ratatui::widgets::{Block, Borders};
 
 use crate::app::{App, FilterKind, FocusedPanel, Overlay, View};
 
+/// A compact relative age ("3m ago", "5h ago", "2d ago", "4mo ago").
+///
+/// Computed from an absolute timestamp at draw time, deliberately: commit
+/// ages used to be pre-rendered by `git log --date=relative` and frozen into
+/// the model, so they sat stale until the next sweep. Formatting here instead
+/// costs one subtraction per drawn row and keeps every age current on any
+/// repaint, which watch mode already triggers.
+pub fn format_age(created: chrono::DateTime<chrono::Utc>) -> String {
+    let diff = chrono::Utc::now() - created;
+    let days = diff.num_days();
+    if days == 0 {
+        let hours = diff.num_hours();
+        if hours == 0 {
+            format!("{}m ago", diff.num_minutes().max(1))
+        } else {
+            format!("{hours}h ago")
+        }
+    } else if days == 1 {
+        "1d ago".to_string()
+    } else if days < 30 {
+        format!("{days}d ago")
+    } else {
+        format!("{}mo ago", days / 30)
+    }
+}
+
 /// Braille spinner frames, stepped by `app.spinner_frame` (one per 250ms
 /// tick). Every frame is a single cell wide, so the header never jitters.
 pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];

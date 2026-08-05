@@ -169,7 +169,7 @@ pub fn render(frame: &mut Frame, area: Rect, overlay: &BranchOverlay) {
                                 Style::default().fg(colors::TEXT),
                             ),
                             Span::styled(
-                                format!("  {}", c.date),
+                                format!("  {}", crate::ui::detail::commit_age(c)),
                                 Style::default().fg(colors::OVERLAY),
                             ),
                         ]));
