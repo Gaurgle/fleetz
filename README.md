@@ -134,6 +134,11 @@ refresh_interval = 60
 # GitHub API cache TTL in seconds
 cache_ttl = 120
 
+# Startup view: "detail", "compact", or "auto" (default). Auto drops to
+# compact only when the terminal is too small for three panels; pin it here
+# if you always want one or the other. `v` still toggles for the session.
+view = "detail"
+
 # Optional: named repo groups for the g/G filter
 [groups]
 work = ["api", "infra", "frontend-app"]

@@ -389,6 +389,16 @@ async fn run_event_loop(
     tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 ) -> Result<(), String> {
+    // Pick the view from the real drawing area rather than the size probed
+    // before the alternate screen existed: that probe can report the outer
+    // shell's geometry and land on Compact in a terminal with ample room.
+    if !app.view_overridden
+        && let Ok(size) = terminal.size()
+    {
+        app.view = config
+            .forced_view()
+            .unwrap_or_else(|| app::initial_view(size.width, size.height));
+    }
     terminal
         .draw(|frame| ui::render(frame, app))
         .map_err(|e| e.to_string())?;
@@ -462,9 +472,11 @@ async fn run_event_loop(
             }
             AppEvent::Input(Event::Resize(w, h)) => {
                 // Follow the terminal back to the view that fits, unless the
-                // user has taken the wheel with `v`.
+                // user has taken the wheel with `v` or pinned one in config.
                 if !app.view_overridden {
-                    app.view = app::initial_view(w, h);
+                    app.view = config
+                        .forced_view()
+                        .unwrap_or_else(|| app::initial_view(w, h));
                 }
                 app.needs_redraw = true;
             }

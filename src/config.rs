@@ -19,6 +19,11 @@ pub struct Config {
     pub extra_dirs: Vec<String>,
     #[serde(default)]
     pub groups: HashMap<String, Vec<String>>,
+    /// Pin the startup view: "detail", "compact", or "auto" (the default,
+    /// which picks Compact only on a terminal too small for three panels).
+    /// `v` still toggles it for the session.
+    #[serde(default)]
+    pub view: Option<String>,
 }
 
 impl Default for Config {
@@ -32,6 +37,7 @@ impl Default for Config {
             cache_ttl: 120,
             extra_dirs: Vec::new(),
             groups: HashMap::new(),
+            view: None,
         }
     }
 }
@@ -56,6 +62,16 @@ impl Config {
         let content =
             std::fs::read_to_string(path).map_err(|e| format!("failed to read config: {e}"))?;
         toml::from_str(&content).map_err(|e| format!("failed to parse config: {e}"))
+    }
+
+    /// The view the user pinned in config, if any. Anything unrecognized
+    /// (including "auto") means "decide from the terminal size".
+    pub fn forced_view(&self) -> Option<crate::app::View> {
+        match self.view.as_deref()?.trim().to_lowercase().as_str() {
+            "detail" => Some(crate::app::View::Detail),
+            "compact" => Some(crate::app::View::Compact),
+            _ => None,
+        }
     }
 
     /// Resolved repo directory with ~ expanded to an absolute path.
@@ -110,6 +126,25 @@ mod tests {
         assert_eq!(c.work_end, 18);
         assert_eq!(c.repo_limit, 50);
         assert_eq!(c.repo_dir, "~/repos");
+    }
+
+    #[test]
+    fn forced_view_reads_the_config_key() {
+        let mut c = Config::default();
+        assert_eq!(c.forced_view(), None, "unset means decide by size");
+
+        c.view = Some("detail".to_string());
+        assert_eq!(c.forced_view(), Some(crate::app::View::Detail));
+
+        c.view = Some("  COMPACT ".to_string());
+        assert_eq!(c.forced_view(), Some(crate::app::View::Compact));
+
+        // "auto" and typos both fall back to size-based selection rather
+        // than erroring the whole config.
+        c.view = Some("auto".to_string());
+        assert_eq!(c.forced_view(), None);
+        c.view = Some("detial".to_string());
+        assert_eq!(c.forced_view(), None);
     }
 
     #[test]
