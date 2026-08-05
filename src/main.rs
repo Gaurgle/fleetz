@@ -203,7 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
     let mut app = App::new(Vec::new(), String::new(), args.prs, term_width, term_height);
     app.watch_mode = args.watch;
-    app.refresh_interval = config.refresh_interval;
+    app.refresh_interval = args.interval.unwrap_or(config.refresh_interval);
     app.window = initial_window;
     app.dirty_mode = mode == Mode::Dirty;
     app.loading = true;
@@ -357,6 +357,9 @@ fn apply_load_result(
             app.header = lr.header;
             if let Some(ds) = lr.dataset {
                 app.dataset = ds;
+                // This dataset just came from GitHub, so the watch re-poll
+                // clock starts here rather than firing again immediately.
+                app.last_github_poll = Some(chrono::Local::now());
             }
             app.clamp_after_reload();
             app.last_refreshed = Some(chrono::Local::now());
@@ -407,6 +410,35 @@ async fn run_event_loop(
                 if animated && app.spinner_frame.is_multiple_of(4) {
                     app.needs_redraw = true;
                 }
+
+                // A sweep that never reported back must not block watch forever.
+                if let Some(started) = app.sweep_started
+                    && started.elapsed() > SWEEP_STUCK_AFTER
+                {
+                    app.sweep_started = None;
+                }
+                if app.watch_mode && !app.loading && app.sweep_started.is_none() {
+                    // A missing timestamp means "due now", so watch can never
+                    // silently die the way a Some-only guard could.
+                    let due = app.last_refreshed.is_none_or(|t| {
+                        (chrono::Local::now() - t).num_seconds() >= app.refresh_interval as i64
+                    });
+                    if due {
+                        start_sweep(app, &tx, true, args.author.clone());
+                    }
+                }
+                if app.watch_mode && !app.dirty_mode && !app.loading && !app.github_poll_inflight {
+                    // Never faster than the cache TTL, and never faster than
+                    // two minutes: GitHub rate limit is the scarce resource.
+                    let poll_every = config.cache_ttl.max(120) as i64;
+                    let due = app
+                        .last_github_poll
+                        .is_none_or(|t| (chrono::Local::now() - t).num_seconds() >= poll_every);
+                    if due {
+                        app.github_poll_inflight = true;
+                        spawn_github_poll(&tx, args, config);
+                    }
+                }
             }
             AppEvent::Input(Event::Key(key)) => {
                 // Any keypress clears a transient status message before it's
@@ -452,12 +484,33 @@ async fn run_event_loop(
                 app.needs_redraw = true;
             }
             AppEvent::Github(result) => {
-                if let Err(e) = result {
-                    app.set_status(format!("GitHub refresh failed: {e}"), true);
+                app.github_poll_inflight = false;
+                app.last_github_poll = Some(chrono::Local::now());
+                match result {
+                    Ok(dataset) => {
+                        // Overwrite only the GitHub-owned fields: the local
+                        // git state is the sweep's business, not this poll's.
+                        for repo in &mut app.repos {
+                            if let Some(gh) = dataset
+                                .iter()
+                                .find(|g| g.name.eq_ignore_ascii_case(&repo.name))
+                            {
+                                repo.pr_count = gh.pr_count;
+                                repo.prs = gh.prs.clone();
+                                repo.ci_status = gh.ci_status.clone();
+                                repo.ci_workflow = gh.ci_workflow.clone();
+                                repo.ci_duration = gh.ci_duration.clone();
+                                repo.repo_kind = gh.repo_kind;
+                            }
+                        }
+                        app.dataset = dataset;
+                    }
+                    Err(e) => app.set_status(format!("GitHub refresh failed: {e}"), true),
                 }
                 app.needs_redraw = true;
             }
             AppEvent::SweepDone { at } => {
+                app.sweep_started = None;
                 app.last_refreshed = Some(at);
                 app.needs_redraw = true;
             }
@@ -496,7 +549,7 @@ async fn handle_key(
             return Ok(());
         }
         Overlay::Branches(_) => {
-            handle_branch_input(app, key).await;
+            handle_branch_input(app, key, tx, args).await;
             return Ok(());
         }
         Overlay::TimeWindow(_) => {
@@ -559,7 +612,12 @@ fn handle_mouse_input(
     }
 }
 
-async fn handle_branch_input(app: &mut App, key: KeyEvent) {
+async fn handle_branch_input(
+    app: &mut App,
+    key: KeyEvent,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    args: &Args,
+) {
     // Extract overlay data — need to work around borrow checker
     let is_confirming = matches!(&app.overlay, Overlay::Branches(bo) if bo.confirm_delete);
 
@@ -615,8 +673,10 @@ async fn handle_branch_input(app: &mut App, key: KeyEvent) {
                     match git::switch_branch(Path::new(&expanded), &branch).await {
                         Ok(()) => {
                             app.set_status(format!("Switched to {branch}"), false);
+                            // Rebuild in the background: the new HEAD changes
+                            // ahead/behind, the branch list, and the history.
                             if let Some(idx) = app.selected_repo_index() {
-                                refresh_single_repo(&mut app.repos[idx]).await;
+                                start_single_sweep(app, tx, idx, false, args.author.clone());
                             }
                         }
                         Err(e) => app.set_status(format!("Switch failed: {e}"), true),
@@ -822,49 +882,16 @@ async fn handle_normal_input(
         // safe and non-destructive, merging is not.
         KeyCode::Char('f') => {
             if let Some(repo) = app.selected_repo().cloned()
-                && let Some(ref path) = repo.path
+                && repo.path.is_some()
+                && let Some(idx) = app.selected_repo_index()
             {
-                let expanded = shellexpand::tilde(path).to_string();
-                // Draw the "fetching" state before the blocking fetch, so
-                // the indicator actually appears rather than being set and
-                // immediately overwritten by the result on the next frame.
                 app.set_status(format!("\u{27f3} Fetching {}…", repo.name), false);
-                terminal
-                    .draw(|frame| ui::render(frame, app))
-                    .map_err(|e| e.to_string())?;
-                let ok = git::fetch(Path::new(&expanded)).await;
-                if ok {
-                    if let Some(idx) = app.selected_repo_index() {
-                        refresh_single_repo(&mut app.repos[idx]).await;
-                    }
-                    app.set_status(format!("Fetched {}", repo.name), false);
-                } else {
-                    app.set_status(format!("Fetch failed for {}", repo.name), true);
-                }
+                start_single_sweep(app, tx, idx, true, args.author.clone());
             }
         }
         KeyCode::Char('F') => {
-            let paths: Vec<(usize, String)> = app
-                .repos
-                .iter()
-                .enumerate()
-                .filter_map(|(i, r)| r.path.clone().map(|p| (i, p)))
-                .collect();
-            let total = paths.len();
-            let mut fetched = 0u32;
-            for (n, (i, path)) in paths.iter().enumerate() {
-                // Live progress indicator, redrawn before each blocking fetch.
-                app.set_status(format!("\u{27f3} Fetching {}/{total}…", n + 1), false);
-                terminal
-                    .draw(|frame| ui::render(frame, app))
-                    .map_err(|e| e.to_string())?;
-                let expanded = shellexpand::tilde(path).to_string();
-                if git::fetch(Path::new(&expanded)).await {
-                    fetched += 1;
-                    refresh_single_repo(&mut app.repos[*i]).await;
-                }
-            }
-            app.set_status(format!("Fetched {fetched} of {total} repos"), false);
+            app.set_status("\u{27f3} Fetching all…".to_string(), false);
+            start_sweep(app, tx, true, args.author.clone());
         }
         KeyCode::Enter => {
             // Open lazygit in selected repo
@@ -939,18 +966,15 @@ async fn handle_normal_input(
                 }
             }
         }
-        // Lightweight refresh: re-stat only the repos already listed (git
-        // status, ahead/behind, dirty). Fast and offline -- no GitHub, no
-        // discovery -- so it won't surface a new repo, but it reflects local
-        // work on the ones already shown. Gets the unshifted key because it's
-        // the cheap one you reach for constantly; `R` is the full rediscover.
+        // Local refresh: rebuild the repos already listed (status,
+        // ahead/behind, dirty, commits, reflog, graph, stashes, worktrees).
+        // Offline -- no fetch, no GitHub, no discovery -- so it won't surface
+        // a new repo, but it reflects local work on the ones already shown.
+        // Gets the unshifted key because it's the one you reach for
+        // constantly; `R` is the full rediscover.
         KeyCode::Char('r') => {
             app.set_status("Refreshing…".to_string(), false);
-            for repo in &mut app.repos {
-                refresh_single_repo(repo).await;
-            }
-            app.last_refreshed = Some(chrono::Local::now());
-            app.set_status("Refreshed".to_string(), false);
+            start_sweep(app, tx, false, args.author.clone());
         }
         // Full reload: re-fetch GitHub (cache-bypassed) and re-run discovery,
         // so a just-pushed or newly-cloned repo appears. Shifted because it
@@ -969,9 +993,10 @@ async fn handle_normal_input(
                 true,
             );
         }
-        // Toggle watch mode: auto re-stat the listed repos every
-        // `refresh_interval` seconds (the same lightweight pass as `r`). Reset
-        // the clock on enable so the first auto-refresh is a full interval out.
+        // Toggle watch mode: sweep the listed repos every `refresh_interval`
+        // seconds (fetch included, unlike `r`), and re-poll GitHub for PR and
+        // CI data. Reset the clock on enable so the first sweep is a full
+        // interval out.
         KeyCode::Char('w') => {
             app.watch_mode = !app.watch_mode;
             if app.watch_mode {
@@ -1039,32 +1064,162 @@ fn suspend_and_run_in_dir(
     Ok(())
 }
 
-/// Refresh git status for a single repo in-place.
-async fn refresh_single_repo(repo: &mut RepoStatus) {
-    let path = match &repo.path {
-        Some(p) => p.clone(),
-        None => return,
+/// One repo queued for a sweep.
+struct SweepTarget {
+    /// Display path as stored in RepoStatus.path (tilde form), the update key.
+    display_path: String,
+    fs_path: std::path::PathBuf,
+    /// Existing status, carried so GitHub-only fields survive the rebuild.
+    old: Box<RepoStatus>,
+}
+
+/// A sweep that never reported back must not hold the watch lock forever.
+const SWEEP_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Snapshot the repos that have a local path, as sweep targets.
+fn sweep_targets(app: &App, only: Option<usize>) -> Vec<SweepTarget> {
+    let to_target = |r: &RepoStatus| {
+        let display = r.path.clone()?;
+        let expanded = shellexpand::tilde(&display).to_string();
+        Some(SweepTarget {
+            display_path: display,
+            fs_path: std::path::PathBuf::from(expanded),
+            old: Box::new(r.clone()),
+        })
     };
-    let expanded = shellexpand::tilde(&path).to_string();
-    let path = Path::new(&expanded);
+    match only {
+        Some(i) => app.repos.get(i).and_then(to_target).into_iter().collect(),
+        None => app.repos.iter().filter_map(to_target).collect(),
+    }
+}
+
+/// Kick off a background sweep of every repo with a local path. Each repo is
+/// fetched (optionally), rebuilt in full, and streamed back as RepoUpdated;
+/// SweepDone closes the books. No-op if a sweep is already running.
+fn start_sweep(
+    app: &mut App,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    do_fetch: bool,
+    author: Option<String>,
+) {
+    if app.sweep_started.is_some() {
+        return;
+    }
+    let targets = sweep_targets(app, None);
+    if targets.is_empty() {
+        return;
+    }
+    app.sweep_started = Some(std::time::Instant::now());
+    spawn_sweep(tx.clone(), targets, do_fetch, author, true);
+}
+
+/// Sweep a single repo (the `f` fetch and the post-branch-switch refresh).
+/// Does not take the sweep lock: it is one repo, and it must work while a
+/// full sweep is running.
+fn start_single_sweep(
+    app: &App,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    index: usize,
+    do_fetch: bool,
+    author: Option<String>,
+) {
+    let targets = sweep_targets(app, Some(index));
+    if targets.is_empty() {
+        return;
+    }
+    spawn_sweep(tx.clone(), targets, do_fetch, author, false);
+}
+
+/// The shared sweep body: fetch (capped) then rebuild (capped), streaming
+/// each repo back as it lands so the list updates progressively.
+fn spawn_sweep(
+    tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    targets: Vec<SweepTarget>,
+    do_fetch: bool,
+    author: Option<String>,
+    report_done: bool,
+) {
+    tokio::spawn(async move {
+        let probe_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
+        let fetch_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(FETCH_CONCURRENCY));
+        let mut set = tokio::task::JoinSet::new();
+        for target in targets {
+            let probe_sem = probe_sem.clone();
+            let fetch_sem = fetch_sem.clone();
+            let tx = tx.clone();
+            let author = author.clone();
+            set.spawn(async move {
+                if do_fetch {
+                    let _permit = fetch_sem.acquire().await;
+                    git::fetch(&target.fs_path).await;
+                }
+                let _permit = probe_sem.acquire().await;
+                let status = rebuild_repo_status(&target, author.as_deref()).await;
+                let _ = tx.send(AppEvent::RepoUpdated {
+                    path: target.display_path.clone(),
+                    status: Box::new(status),
+                });
+            });
+        }
+        while set.join_next().await.is_some() {}
+        if report_done {
+            let _ = tx.send(AppEvent::SweepDone {
+                at: chrono::Local::now(),
+            });
+        }
+    });
+}
+
+/// Full per-repo rebuild, preserving GitHub-only fields from the old status.
+async fn rebuild_repo_status(target: &SweepTarget, author: Option<&str>) -> RepoStatus {
+    let path = &target.fs_path;
+    let old = &target.old;
 
     let branches = git::branch_statuses(path).await;
     let dirty = git::dirty_count(path).await;
     let remote = git::remote_branches(path).await;
-    let local_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
+    let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
+    let (total_behind, total_ahead) = branches
+        .iter()
+        .fold((0u32, 0u32), |(b, a), s| (b + s.behind, a + s.ahead));
 
-    let mut total_behind = 0u32;
-    let mut total_ahead = 0u32;
-    for b in &branches {
-        total_behind += b.behind;
-        total_ahead += b.ahead;
+    let commits = git::commits(path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await;
+    let reflog = git::reflog(path, REFLOG_COUNT).await;
+    let graph = git::graph(path, &branch_names, GRAPH_COMMIT_COUNT).await;
+    let stash_entries = git::stash_list(path).await;
+    let worktrees = git::worktree_list(path).await;
+
+    RepoStatus {
+        branches,
+        dirty,
+        behind: total_behind,
+        ahead: total_ahead,
+        remote_only_branches: git::unfetched_branches(&remote, &branch_names),
+        stash_count: stash_entries.len() as u32,
+        stash_entries,
+        commits,
+        reflog,
+        graph,
+        worktrees,
+        ..(*old.clone())
     }
+}
 
-    repo.remote_only_branches = git::unfetched_branches(&remote, &local_names);
-    repo.branches = branches;
-    repo.dirty = dirty;
-    repo.behind = total_behind;
-    repo.ahead = total_ahead;
+/// Re-poll GitHub for PR and CI data in the background, so badges stop being
+/// frozen at whatever they were when fleetz launched.
+fn spawn_github_poll(
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    args: &Args,
+    config: &config::Config,
+) {
+    let tx = tx.clone();
+    let repo_limit = config.repo_limit;
+    let include_prs = args.prs;
+    let cache = cache::ApiCache::new(config.cache_ttl, repo_limit, include_prs);
+    tokio::spawn(async move {
+        let result = github::fetch_repos(repo_limit, include_prs, &cache, true).await;
+        let _ = tx.send(AppEvent::Github(result));
+    });
 }
 
 /// Load all repo data: GitHub API + local discovery + git status.

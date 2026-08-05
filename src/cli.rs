@@ -37,6 +37,10 @@ pub struct Args {
     /// Auto-refresh mode for persistent tmux pane
     #[arg(long)]
     pub watch: bool,
+
+    /// Watch refresh interval in seconds (default: config refresh_interval)
+    #[arg(long)]
+    pub interval: Option<u64>,
 }
 
 /// Resolved operating mode from the CLI args.

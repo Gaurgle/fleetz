@@ -876,11 +876,11 @@ const SWEEP_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(18
 - Produces (cli.rs): `#[arg(long)] pub interval: Option<u64>` ("Watch refresh interval in seconds (default: config refresh_interval)").
 - Consumes: `AppEvent::{RepoUpdated, SweepDone, Github}`, semaphores from Task 5.
 
-- [ ] **Step 1: CLI flag and config default**
+- [x] **Step 1: CLI flag and config default**
 
 cli.rs: add the `interval` field as above. main.rs after config load: `app.refresh_interval = args.interval.unwrap_or(config.refresh_interval);`. config.rs:31: `refresh_interval: 60`. README: config snippet comment becomes `# Auto-refresh interval in seconds (used with --watch, default 60)`; add `--interval SECS` to the options table.
 
-- [ ] **Step 2: The sweep**
+- [x] **Step 2: The sweep**
 
 ```rust
 /// Kick off a background sweep of every repo with a local path. Each repo is
@@ -980,7 +980,7 @@ async fn rebuild_repo_status(target: &SweepTarget, author: Option<&str>) -> Repo
 
 Delete `refresh_single_repo` (main.rs:811-837). Rework the callers: `r` sets status "Refreshing" and calls `start_sweep(app, &tx, false, args.author.clone())`; `F` sets status "Fetching all" and calls `start_sweep(app, &tx, true, args.author.clone())` (the old sequential loop at main.rs:635-655 goes away); `f` and the branch-switch refresh (main.rs:429, 626) build a single-target `SweepTarget` for the selected repo and spawn the same task body via a `start_single_sweep(app, tx, index, do_fetch)` helper that shares the spawn code with `start_sweep`.
 
-- [ ] **Step 3: Tick-driven watch cadence and GitHub re-poll**
+- [x] **Step 3: Tick-driven watch cadence and GitHub re-poll**
 
 In the `AppEvent::Tick` arm from Task 3, after `app.on_tick()`:
 
@@ -1060,7 +1060,7 @@ The `AppEvent::Github(Ok(dataset))` arm now does real work:
             }
 ```
 
-- [ ] **Step 4: Visible cadence in the header**
+- [x] **Step 4: Visible cadence in the header**
 
 In `render_header`, replace the `ts_span` "refreshed HH:MM" builder (ui/mod.rs:329-334) with an age label, and show a spinner while sweeping:
 
@@ -1087,7 +1087,7 @@ In `render_header`, replace the `ts_span` "refreshed HH:MM" builder (ui/mod.rs:3
 
 (The `SPINNER` const from Task 4 moves to module scope in ui/mod.rs so both spans share it.)
 
-- [ ] **Step 5: Verify by hand**
+- [x] **Step 5: Verify by hand**
 
 Run: `cargo test && cargo clippy --all-targets -- -D warnings`, then:
 - `cargo run --release -- --watch --interval 10`. Touch a file in a listed repo (`touch ~/repos/<name>/x.tmp`): the repo's `!` count changes within ~10s with no keypress, and "swept Ns ago" resets. Remove the file.
@@ -1095,7 +1095,7 @@ Run: `cargo test && cargo clippy --all-targets -- -D warnings`, then:
 - Watch a repo with a running GitHub Action: the CI badge updates within `max(cache_ttl, 120)` seconds.
 - UI stays fully responsive during sweeps (scroll while the spinner runs).
 
-- [ ] **Step 6: Stage and present the commit**
+- [x] **Step 6: Stage and present the commit**
 
 ```bash
 git add src/main.rs src/app.rs src/cli.rs src/config.rs src/ui/mod.rs README.md

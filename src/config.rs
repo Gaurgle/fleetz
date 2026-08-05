@@ -28,7 +28,7 @@ impl Default for Config {
             work_end: 18,
             repo_limit: 50,
             repo_dir: "~/repos".to_string(),
-            refresh_interval: 300,
+            refresh_interval: 60,
             cache_ttl: 120,
             extra_dirs: Vec::new(),
             groups: HashMap::new(),

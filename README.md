@@ -70,6 +70,7 @@ footer as repos are re-stat'd. The count field is capped per unit (hours up to
 | `--author NAME` | Filter displayed commits by author (substring match) |
 | `-p, --prs` | Include open pull request counts |
 | `--watch` | Auto-refresh mode for a persistent tmux pane |
+| `--interval SECS` | Watch refresh interval, overriding `refresh_interval` |
 
 ### Examples
 
@@ -105,9 +106,9 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `G` | Show all (clear group) |
 | `/` | Search repos, or type `#dirty` `#behind` `#ahead` `#ci` `#prs` `#stash` to filter |
 | `0` | Clear `#tag` filters (keeps free-text search) |
-| `r` | Refresh: re-stat the listed repos only (fast, offline, no new repos) |
+| `r` | Refresh: rebuild the listed repos only (offline, no fetch, no new repos) |
 | `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear |
-| `w` | Toggle watch: auto-refresh listed repos every `refresh_interval` seconds |
+| `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub |
 | `?` | Toggle help overlay |
 | `Esc` | Close search or help |
 | `q` | Quit |
@@ -127,8 +128,8 @@ repo_limit = 50
 # Where to look for local clones (~ expanded)
 repo_dir = "~/repos"
 
-# Auto-refresh interval in seconds (used with --watch)
-refresh_interval = 300
+# Auto-refresh interval in seconds (used with --watch, default 60)
+refresh_interval = 60
 
 # GitHub API cache TTL in seconds
 cache_ttl = 120
@@ -174,10 +175,9 @@ Personal project, used daily. Public API and config keys may shift before a 1.0 
 
 ## Roadmap
 
-Toward a true realtime dashboard (today `--watch` re-reads local git state on an
-interval, and GitHub data is fetched once at startup):
+Toward a true realtime dashboard (today `--watch` sweeps on an interval; what is
+left is reacting to change rather than polling for it):
 
-- `git fetch` in the refresh cycle so ahead/behind stops going stale mid-session.
 - Filesystem events (`notify` on `.git/HEAD`, `.git/refs/`, index) with a
   debounce: dirty/branch changes appear in milliseconds, not on the interval.
 - GitHub conditional polling with stored ETags (`If-None-Match`) so PR and CI

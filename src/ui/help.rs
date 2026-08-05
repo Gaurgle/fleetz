@@ -50,14 +50,17 @@ pub fn render(frame: &mut Frame, area: Rect) {
             "Search repos, or type #dirty #behind #ahead #ci #prs #stash to filter",
         ),
         ("0", "Clear #tag filters (keeps free-text search)"),
-        ("r", "Refresh: re-stat listed repos only (fast, offline)"),
+        (
+            "r",
+            "Refresh: rebuild listed repos only (offline, no fetch)",
+        ),
         (
             "R",
             "Reload: re-fetch GitHub + rediscover repos (finds new ones)",
         ),
         (
             "w",
-            "Toggle watch: auto-refresh listed repos on the interval",
+            "Toggle watch: sweep listed repos on the interval, fetch included",
         ),
         ("Esc", "Close search / help"),
         ("?", "Toggle this help"),

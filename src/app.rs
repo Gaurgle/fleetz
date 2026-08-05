@@ -429,6 +429,13 @@ pub struct App {
     pub view_overridden: bool,
     /// True while the initial load or an R reload is in flight.
     pub loading: bool,
+    /// When the in-flight watch sweep started, or None when idle. Doubles as
+    /// the "one sweep at a time" lock and as the stuck-sweep timer.
+    pub sweep_started: Option<std::time::Instant>,
+    /// When GitHub was last re-polled in watch mode.
+    pub last_github_poll: Option<DateTime<Local>>,
+    /// True while a GitHub re-poll is in flight, so ticks do not stack them.
+    pub github_poll_inflight: bool,
     /// The last unfiltered GitHub fetch (top repo_limit repos by push date).
     /// The time-window overlay re-filters this in memory, so applying a new
     /// window needs no network round trip.
@@ -480,7 +487,7 @@ impl App {
             should_quit: false,
             show_prs,
             watch_mode: false,
-            refresh_interval: 300,
+            refresh_interval: 60,
             last_refreshed: Some(Local::now()),
             group_names: Vec::new(),
             active_group: None,
@@ -493,6 +500,9 @@ impl App {
             blink_on: true,
             view_overridden: false,
             loading: false,
+            sweep_started: None,
+            last_github_poll: None,
+            github_poll_inflight: false,
             dataset: Vec::new(),
             window: None,
             dirty_mode: false,

@@ -338,12 +338,30 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(colors::PEACH),
         )
     });
-    let ts_span = app.last_refreshed.map(|ts| {
-        Span::styled(
-            format!(" refreshed {}  ", ts.format("%H:%M")),
-            Style::default().fg(colors::SURFACE),
-        )
-    });
+    // Age, not a wall-clock stamp: "swept 8s ago" answers the question the
+    // header is actually asked ("is this current?") without arithmetic. While
+    // a sweep runs it becomes a spinner instead.
+    let ts_span = if app.sweep_started.is_some() {
+        Some(Span::styled(
+            format!(" {} sweeping ", SPINNER[app.spinner_frame % SPINNER.len()]),
+            Style::default().fg(colors::PEACH),
+        ))
+    } else {
+        app.last_refreshed.map(|ts| {
+            let secs = (chrono::Local::now() - ts).num_seconds().max(0);
+            let label = if secs < 5 {
+                "just now".to_string()
+            } else if secs < 90 {
+                format!("{secs}s ago")
+            } else {
+                format!("{}m ago", secs / 60)
+            };
+            Span::styled(
+                format!(" swept {label}  "),
+                Style::default().fg(colors::SURFACE),
+            )
+        })
+    };
     // Persistent indicator so the `w` toggle's state is visible at a glance,
     // not just in the transient status message when it flips.
     let watch_span = app
