@@ -72,7 +72,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 let pad = col_width.saturating_sub(prev_len) + 2;
                 row_spans.push(Span::raw(" ".repeat(pad)));
             }
-            row_spans.extend(compact_repo_spans(entry.1, entry.0 == selected, col_width));
+            row_spans.extend(compact_repo_spans(
+                entry.1,
+                entry.0 == selected,
+                col_width,
+                app.watch_mode && !app.blink_on,
+            ));
         }
         lines.push(Line::from(row_spans));
     }
@@ -85,6 +90,7 @@ fn compact_repo_spans(
     repo: &RepoStatus,
     is_selected: bool,
     max_width: usize,
+    dim_pending: bool,
 ) -> Vec<Span<'static>> {
     let marker = if is_selected { "▸ " } else { "  " };
     let name_style = if is_selected {
@@ -100,7 +106,7 @@ fn compact_repo_spans(
     // room for marker, glyph, at least one dot, and the badges; whatever
     // remains is the name's budget -- truncate rather than overflow into the
     // next column.
-    let (badge_spans, badge_w) = badges::badge_spans(repo);
+    let (badge_spans, badge_w) = badges::badge_spans(repo, dim_pending);
     let right_len = badge_w + 1; // +1 for space after dots
     let reserved = badges::MARKER_W + badges::GLYPH_W + 1 + right_len;
     let name_budget = max_width.saturating_sub(reserved).max(3);

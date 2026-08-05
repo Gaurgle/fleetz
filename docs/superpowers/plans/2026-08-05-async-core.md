@@ -1292,7 +1292,7 @@ worktrees. Idle watch sweeps drop from 9+ to 4 subprocesses per repo."
 - Produces: `pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>, usize)`. Callers pass `app.watch_mode && !app.blink_on` (both views hold `&App`).
 - Consumes: `app.blink_on` from Task 3, live CI data from Task 6's GitHub re-poll.
 
-- [ ] **Step 1: Change the badge color logic**
+- [x] **Step 1: Change the badge color logic**
 
 In `badge_spans`, replace the CI color match (ui/badges.rs:98-103):
 
@@ -1316,16 +1316,16 @@ In `badge_spans`, replace the CI color match (ui/badges.rs:98-103):
 
 Update every `badge_spans(repo)` call site in ui/detail.rs and ui/compact.rs to `badge_spans(repo, app.watch_mode && !app.blink_on)`. In the detail pane's CI section, change the Pending line color from YELLOW to PEACH (steady there; the blink lives in the badge only).
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 Run: `cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check`
 Manual: push a commit to a repo with a GitHub Action, run `cargo run --release -- --watch --interval 15`, and confirm: the CI badge shows orange and pulses at ~1Hz while the action runs (watch on), goes steady green or red when it finishes (via the Task 6 re-poll), and does not blink when watch is off.
 
-- [ ] **Step 3: Update README**
+- [x] **Step 3: Update README**
 
 "What it shows" CI bullet becomes: `CI status (green check, red cross, blinking orange circle while running) from GitHub's statusCheckRollup, kept live in watch mode`. Move the now-implemented Roadmap bullets (background refresh, fetch in the refresh cycle, tick-based redraw, GitHub re-polling) out of Roadmap; leave the notify/ETag bullets, annotated as the next step.
 
-- [ ] **Step 4: Stage and present the commit**
+- [x] **Step 4: Stage and present the commit**
 
 ```bash
 git add src/ui/badges.rs src/ui/detail.rs src/ui/compact.rs README.md

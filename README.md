@@ -17,7 +17,7 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 - Repos with recent GitHub activity (commits behind, ahead, divergence)
 - Repos with local uncommitted, untracked, or unpushed changes
 - Open pull requests per repo
-- CI status (✓ / ✗ / ○) from GitHub's `statusCheckRollup`
+- CI status (green check, red cross, blinking orange circle while running) from GitHub's `statusCheckRollup`, kept live in watch mode
 - Active worktrees (`w` badge) and stashes (`s` badge)
 - Repo groups defined in your config (cycle with `g`)
 
@@ -175,8 +175,9 @@ Personal project, used daily. Public API and config keys may shift before a 1.0 
 
 ## Roadmap
 
-Toward a true realtime dashboard (today `--watch` sweeps on an interval; what is
-left is reacting to change rather than polling for it):
+Toward a true realtime dashboard. Background sweeps, fetch in the refresh
+cycle, tick-based redraw, and GitHub re-polling all landed; what is left is
+reacting to change rather than polling for it:
 
 - Filesystem events (`notify` on `.git/HEAD`, `.git/refs/`, index) with a
   debounce: dirty/branch changes appear in milliseconds, not on the interval.

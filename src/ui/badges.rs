@@ -84,7 +84,11 @@ fn status_color(repo: &RepoStatus) -> Color {
 /// the way out to them (rather than stopping at a fixed column and leaving a
 /// gap). Order is status, CI, PRs, stashes, worktrees; each optional field
 /// carries its own leading space, so the group is self-separating.
-pub fn badge_spans(repo: &RepoStatus) -> (Vec<Span<'static>>, usize) {
+///
+/// `dim_pending` is the off phase of the pending-CI blink: callers pass
+/// `app.watch_mode && !app.blink_on`, so a running job pulses only while the
+/// dashboard is actually live.
+pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>, usize) {
     let mut spans = Vec::new();
     let mut width = 0usize;
 
@@ -98,10 +102,19 @@ pub fn badge_spans(repo: &RepoStatus) -> (Vec<Span<'static>>, usize) {
     let ci = ci_text(repo);
     if !ci.is_empty() {
         width += ci.chars().count();
+        // Pending is orange; under watch it blinks (dim phase drops to
+        // SURFACE, same glyph, so column widths never jitter). Passed and
+        // Failed stay steady.
         let ci_color = match repo.ci_status {
             CiStatus::Passed => colors::GREEN,
             CiStatus::Failed => colors::RED,
-            CiStatus::Pending => colors::YELLOW,
+            CiStatus::Pending => {
+                if dim_pending {
+                    colors::SURFACE
+                } else {
+                    colors::PEACH
+                }
+            }
             CiStatus::Unknown => colors::OVERLAY,
         };
         spans.push(Span::styled(ci, Style::default().fg(ci_color)));

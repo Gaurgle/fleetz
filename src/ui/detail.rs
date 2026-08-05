@@ -72,7 +72,12 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         if *idx == selected_idx {
             selected_display_idx = Some(items.len());
         }
-        items.push(repo_list_item(repo, *idx == selected_idx, col_width));
+        items.push(repo_list_item(
+            repo,
+            *idx == selected_idx,
+            col_width,
+            app.watch_mode && !app.blink_on,
+        ));
     }
 
     // "also active" section
@@ -82,7 +87,12 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
             if *idx == selected_idx {
                 selected_display_idx = Some(items.len());
             }
-            items.push(repo_list_item(repo, *idx == selected_idx, col_width));
+            items.push(repo_list_item(
+                repo,
+                *idx == selected_idx,
+                col_width,
+                app.watch_mode && !app.blink_on,
+            ));
         }
     }
 
@@ -98,7 +108,12 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
             if *idx == selected_idx {
                 selected_display_idx = Some(items.len());
             }
-            items.push(repo_list_item(repo, *idx == selected_idx, col_width));
+            items.push(repo_list_item(
+                repo,
+                *idx == selected_idx,
+                col_width,
+                app.watch_mode && !app.blink_on,
+            ));
         }
     }
 
@@ -156,7 +171,12 @@ fn section_header_item(label: &str) -> ListItem<'static> {
     ]))
 }
 
-fn repo_list_item(repo: &RepoStatus, is_selected: bool, col_width: usize) -> ListItem<'static> {
+fn repo_list_item(
+    repo: &RepoStatus,
+    is_selected: bool,
+    col_width: usize,
+    dim_pending: bool,
+) -> ListItem<'static> {
     let marker = if is_selected { "▸ " } else { "  " };
     let name_style = if is_selected {
         Style::default()
@@ -172,7 +192,7 @@ fn repo_list_item(repo: &RepoStatus, is_selected: bool, col_width: usize) -> Lis
     // badges land at the same right edge whether or not the row is selected;
     // only differing badge sets between rows shift a status token, exactly
     // as in repoz. Truncate the name rather than let it overflow when narrow.
-    let (badge_spans, badge_w) = badges::badge_spans(repo);
+    let (badge_spans, badge_w) = badges::badge_spans(repo, dim_pending);
     let right_len = badge_w + 1; // +1 for space after dots
     let reserved = badges::MARKER_W + badges::GLYPH_W + 1 + right_len;
     let name_budget = col_width.saturating_sub(reserved).max(3);
@@ -227,7 +247,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         let (ci_sym, ci_color, ci_label) = match repo.ci_status {
             CiStatus::Passed => ("✓", colors::GREEN, "passed"),
             CiStatus::Failed => ("✗", colors::RED, "failed"),
-            CiStatus::Pending => ("○", colors::YELLOW, "pending"),
+            CiStatus::Pending => ("○", colors::PEACH, "pending"),
             CiStatus::Unknown => ("", colors::OVERLAY, ""),
         };
         right_title.push(Span::styled(
@@ -522,7 +542,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         let (ci_sym, ci_color, ci_label) = match repo.ci_status {
             CiStatus::Passed => ("✓", colors::GREEN, "passed"),
             CiStatus::Failed => ("✗", colors::RED, "failed"),
-            CiStatus::Pending => ("○", colors::YELLOW, "pending"),
+            CiStatus::Pending => ("○", colors::PEACH, "pending"),
             CiStatus::Unknown => ("", colors::OVERLAY, ""),
         };
         let mut ci_spans = vec![
