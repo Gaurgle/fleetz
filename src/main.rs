@@ -395,9 +395,7 @@ async fn run_event_loop(
     if !app.view_overridden
         && let Ok(size) = terminal.size()
     {
-        app.view = config
-            .forced_view()
-            .unwrap_or_else(|| app::initial_view(size.width, size.height));
+        app.view = config.startup_view(size.width, size.height);
     }
     terminal
         .draw(|frame| ui::render(frame, app))
@@ -474,9 +472,7 @@ async fn run_event_loop(
                 // Follow the terminal back to the view that fits, unless the
                 // user has taken the wheel with `v` or pinned one in config.
                 if !app.view_overridden {
-                    app.view = config
-                        .forced_view()
-                        .unwrap_or_else(|| app::initial_view(w, h));
+                    app.view = config.startup_view(w, h);
                 }
                 app.needs_redraw = true;
             }

@@ -74,6 +74,14 @@ impl Config {
         }
     }
 
+    /// The view to start in for a terminal of this size: the pinned one when
+    /// the config names it, otherwise whatever fits. Single source of truth
+    /// for both the first frame and every later resize.
+    pub fn startup_view(&self, width: u16, height: u16) -> crate::app::View {
+        self.forced_view()
+            .unwrap_or_else(|| crate::app::initial_view(width, height))
+    }
+
     /// Resolved repo directory with ~ expanded to an absolute path.
     pub fn resolved_repo_dir(&self) -> PathBuf {
         let expanded = shellexpand::tilde(&self.repo_dir);
@@ -145,6 +153,30 @@ mod tests {
         assert_eq!(c.forced_view(), None);
         c.view = Some("detial".to_string());
         assert_eq!(c.forced_view(), None);
+    }
+
+    #[test]
+    fn pinned_view_beats_a_small_terminal() {
+        // The whole point of the key: a narrow window must not override an
+        // explicit choice, in either direction.
+        let mut c = Config::default();
+        assert_eq!(c.startup_view(40, 15), crate::app::View::Compact);
+
+        c.view = Some("detail".to_string());
+        assert_eq!(c.startup_view(40, 15), crate::app::View::Detail);
+
+        c.view = Some("compact".to_string());
+        assert_eq!(c.startup_view(200, 60), crate::app::View::Compact);
+    }
+
+    #[test]
+    fn partial_config_keeps_defaults_for_everything_else() {
+        // A config naming only `view` must parse: serde(default) on the
+        // struct fills the rest, so a one-line file is valid.
+        let c: Config = toml::from_str("view = \"detail\"").expect("partial config parses");
+        assert_eq!(c.forced_view(), Some(crate::app::View::Detail));
+        assert_eq!(c.repo_limit, 50, "untouched keys keep their defaults");
+        assert_eq!(c.refresh_interval, 60);
     }
 
     #[test]
