@@ -244,3 +244,88 @@ CI conventional. Candidates:
 - Whatever is chosen, keep pass and fail distinguishable without color.
 - `short_status()` has direct test coverage (`src/model.rs:297`), so the new
   glyph should be asserted there.
+
+---
+
+## Owner and identity in the detail pane
+
+**Problem.** Pane 2 tells you almost nothing about *whose* repo you are looking
+at. The name appears once in the panel title, and the only ownership signal is
+the remote URL rendered in flat `OVERLAY` grey under the status line:
+
+```
+ [2] fleetz ✓ ─────────────────────────────
+ ● synced   ~/repos/fleetz
+   git@github.com:Gaurgle/fleetz.git
+```
+
+You have to read a git URL to learn the owner, and nothing distinguishes a
+personal repo from one owned by an org. Wanted: repo name, owner, and the org
+name when org-owned, in color and bold, right-aligned on the same line as
+`synced   ~/path`.
+
+### The blocker: the owner login is never fetched
+
+`RepoKind` (`src/model.rs:172`) knows *whether* a repo is org-owned, private,
+or public, but not *who* owns it. The GraphQL query asks only for the owner's
+type:
+
+```graphql
+owner { __typename }    // src/github.rs:158
+```
+
+So "Organization" vs "User" is known and the login is thrown away. Two ways to
+get the name, and they are complementary rather than competing:
+
+1. **Add `login` to the existing selection**: `owner { __typename, login }`.
+   Same request, same rate-limit cost, no extra round trip. Then carry
+   `owner: Option<String>` through `GithubRepo` (`src/github.rs:8`) into
+   `RepoStatus` (`src/model.rs:105`). Authoritative, and it is the smallest
+   possible change to the query.
+2. **Parse `remote_url`** (`git@github.com:Gaurgle/fleetz.git` -> `Gaurgle`).
+   Covers local-only repos that never matched a GitHub result, and works with
+   no network at all. Needs care across SSH, HTTPS, scp-style, and
+   self-hosted-host forms.
+
+Do both: prefer the API login, fall back to the parsed remote, show nothing if
+neither exists. That way org repos are exact and local-only clones still get
+an owner instead of a blank.
+
+### Layout
+
+The target line already exists at `src/ui/detail.rs:299-306`. `width` is in
+scope (`:284`), so right-aligning a trailing group is the same fill trick the
+repo list already uses for its dot-aligned badges
+(`src/ui/detail.rs:200-213`): measure the left spans, measure the right
+group, insert a spacer span of the difference.
+
+Note that `Line::right_aligned()` is not usable here. It pushes the *whole*
+line right, and this line has to stay left-anchored on `● synced   ~/path`.
+
+```
+ ● synced   ~/repos/fleetz                          Gaurgle/fleetz
+ ● synced   ~/repos/some-service              Acme  Acme/some-service
+```
+
+Colors should reuse the vocabulary already established by
+`badges::glyph_span` (`src/ui/badges.rs:26-31`) rather than inventing a second
+scheme: `MAUVE` for org-owned, `PEACH` for private, `GREEN` for public. Owner
+bold, repo name bold, separator dim. Rendering the matching Nerd Font
+building/lock/globe glyph ahead of the owner would carry the kind visually and
+costs one call to a function that already exists.
+
+### Open questions
+
+- **Title or body?** The panel title already right-aligns the CI badge
+  (`src/ui/detail.rs:280`), so `owner/name` could live there instead, next to
+  it. The body keeps the title short but duplicates the name, which is already
+  in the title at `:268`. Body is what was asked for; worth eyeballing both.
+- **Redundant with the remote URL line?** Once `Gaurgle/fleetz` renders
+  explicitly, the `git@github.com:...` line below it carries little extra
+  signal. Candidate for dropping, or for shortening to just the host so
+  self-hosted remotes stay visible.
+- **Narrow panes.** In compact view or a narrow terminal the right group will
+  collide with a long path. Needs a drop order: shed the owner prefix first,
+  then truncate the path (`crate::ui::truncate` already exists).
+- Whether a repo with no GitHub match and no remote should render a dim
+  placeholder or nothing at all.
