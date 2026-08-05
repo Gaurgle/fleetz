@@ -670,7 +670,7 @@ driven, reload and window-apply run as tasks, resize re-picks the view."
 - Consumes: `spawn_load`, `LoadKind::Initial`, `app.loading`, `app.spinner_frame` from Task 3.
 - Produces: header shows a braille spinner while `app.loading`.
 
-- [ ] **Step 1: Reorder `main`**
+- [x] **Step 1: Reorder `main`**
 
 Terminal first, data never blocks the first frame:
 
@@ -710,7 +710,7 @@ Terminal first, data never blocks the first frame:
 
 The teardown block stays; map the `String` error into the outer `Box<dyn Error>` at the end (`result.map_err(|e| e.into())`).
 
-- [ ] **Step 2: Loading spinner in the header**
+- [x] **Step 2: Loading spinner in the header**
 
 In `render_header` (ui/mod.rs:306), before `ts_span` is built, add:
 
@@ -726,12 +726,12 @@ In `render_header` (ui/mod.rs:306), before `ts_span` is built, add:
 
 Push it first in the `right` vec (before the watch span), unconditionally included in every drop-out iteration (it is small and the most important signal while it lasts). While `app.loading` and `app.repos.is_empty()`, the repo list panel already renders empty; that is acceptable for this task.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `cargo build --release && time cargo run --release` (with a cold cache: `rm ~/Library/Caches/fleetz/github-*.json`).
 Expected: the TUI frame with the spinner appears in well under a second; repos pop in when the load lands. `cargo test`, clippy, fmt gates pass.
 
-- [ ] **Step 4: Stage and present the commit**
+- [x] **Step 4: Stage and present the commit**
 
 ```bash
 git add src/main.rs src/ui/mod.rs README.md

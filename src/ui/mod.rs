@@ -15,6 +15,10 @@ use ratatui::widgets::{Block, Borders};
 
 use crate::app::{App, FilterKind, FocusedPanel, Overlay, View};
 
+/// Braille spinner frames, stepped by `app.spinner_frame` (one per 250ms
+/// tick). Every frame is a single cell wide, so the header never jitters.
+pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 /// The screen rectangles of the main panels, recomputed from the terminal
 /// area with the same layout math as `render`, so mouse coordinates can be
 /// hit-tested against them. `detail`/`inspector` are None in Compact view (or
@@ -325,6 +329,15 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         View::Detail => "[v] compact",
         View::Compact => "[v] detail",
     };
+    // Shown while the initial load or an R reload is in flight. Never dropped
+    // by the fit loop below: it is small, and while it lasts it is the most
+    // important thing on the line.
+    let loading_span = app.loading.then(|| {
+        Span::styled(
+            format!(" {} loading ", SPINNER[app.spinner_frame % SPINNER.len()]),
+            Style::default().fg(colors::PEACH),
+        )
+    });
     let ts_span = app.last_refreshed.map(|ts| {
         Span::styled(
             format!(" refreshed {}  ", ts.format("%H:%M")),
@@ -354,6 +367,9 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         }
 
         let mut right: Vec<Span> = Vec::new();
+        if let Some(ref l) = loading_span {
+            right.push(l.clone());
+        }
         if let Some(ref w) = watch_span {
             right.push(w.clone());
         }

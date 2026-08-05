@@ -21,6 +21,9 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 - Active worktrees (`w` badge) and stashes (`s` badge)
 - Repo groups defined in your config (cycle with `g`)
 
+The dashboard opens immediately: the first frame paints before any GitHub or
+filesystem work, and a spinner in the header marks the load until repos land.
+
 ## Install
 
 Requires the Rust toolchain (`cargo`).
@@ -171,12 +174,9 @@ Personal project, used daily. Public API and config keys may shift before a 1.0 
 
 ## Roadmap
 
-Toward a true realtime dashboard (today `--watch` only re-reads local git state
-on an interval, inline on the UI task, and GitHub data is fetched once at startup):
+Toward a true realtime dashboard (today `--watch` re-reads local git state on an
+interval, and GitHub data is fetched once at startup):
 
-- Background refresh: per-repo `tokio::spawn` tasks feeding the UI over an mpsc
-  channel, `tokio::select!` with the crossterm `EventStream` so refresh never
-  freezes the UI; tick-based redraw so updates paint without a keypress.
 - `git fetch` in the refresh cycle so ahead/behind stops going stale mid-session.
 - Filesystem events (`notify` on `.git/HEAD`, `.git/refs/`, index) with a
   debounce: dirty/branch changes appear in milliseconds, not on the interval.

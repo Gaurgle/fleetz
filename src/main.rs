@@ -186,23 +186,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
-    let (repos, header, dataset) =
-        load_repos(&args, &config, &repo_dir, &mode, initial_window, false).await?;
-
+    // Empty app first: the terminal comes up before any network or
+    // filesystem work, and the initial load fills it in from the background.
     let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
-    let mut app = App::new(repos, header, args.prs, term_width, term_height);
+    let mut app = App::new(Vec::new(), String::new(), args.prs, term_width, term_height);
     app.watch_mode = args.watch;
     app.refresh_interval = config.refresh_interval;
-    app.dataset = dataset;
     app.window = initial_window;
     app.dirty_mode = mode == Mode::Dirty;
+    app.loading = true;
 
     // Set up groups from config
     if !config.groups.is_empty() {
         app.group_names = config.groups.keys().cloned().collect();
         app.group_names.sort();
     }
-    apply_groups(&mut app.repos, &config);
 
     // Enter TUI
     enable_raw_mode()?;
@@ -214,6 +212,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
     spawn_input_thread(tx.clone());
     spawn_tick_task(tx.clone());
+    spawn_load(
+        &tx,
+        &args,
+        &config,
+        &repo_dir,
+        initial_window,
+        LoadKind::Initial,
+        false,
+    );
 
     let result = run_event_loop(&mut terminal, &mut app, &args, &config, &repo_dir, tx, rx).await;
 
