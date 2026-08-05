@@ -1,6 +1,6 @@
-use chrono::{DateTime, Local};
 use crate::model::{CiStatus, RepoLocation, RepoStatus, Summary};
-use crate::time::{TimeWindow, WindowUnit, WINDOW_N_MIN};
+use crate::time::{TimeWindow, WINDOW_N_MIN, WindowUnit};
+use chrono::{DateTime, Local};
 
 /// Which TUI view is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +70,6 @@ impl QuickFilters {
             && (!self.has_prs || repo.pr_count > 0)
             && (!self.has_stashes || repo.stash_count > 0)
     }
-
 }
 
 /// Short names quick filters answer to as `#tag` tokens in the search bar,
@@ -225,15 +224,18 @@ impl BranchOverlay {
     }
 
     pub fn toggle_selected(&mut self) {
-        if let Some(b) = self.branches.get_mut(self.selected) {
-            if b.can_delete() {
-                b.selected_for_delete = !b.selected_for_delete;
-            }
+        if let Some(b) = self.branches.get_mut(self.selected)
+            && b.can_delete()
+        {
+            b.selected_for_delete = !b.selected_for_delete;
         }
     }
 
     pub fn selected_count(&self) -> usize {
-        self.branches.iter().filter(|b| b.selected_for_delete).count()
+        self.branches
+            .iter()
+            .filter(|b| b.selected_for_delete)
+            .count()
     }
 
     pub fn selected_branch_names(&self) -> Vec<String> {
@@ -305,7 +307,10 @@ impl TimeWindowOverlay {
     }
 
     fn unit_index(&self) -> usize {
-        WINDOW_UNITS.iter().position(|u| *u == self.unit).unwrap_or(0)
+        WINDOW_UNITS
+            .iter()
+            .position(|u| *u == self.unit)
+            .unwrap_or(0)
     }
 
     /// k / Up: number +1 (wrapping), or previous unit.
@@ -314,7 +319,11 @@ impl TimeWindowOverlay {
         match self.field {
             WindowField::Number => {
                 let max = self.unit.max_count();
-                self.n = if self.n >= max { WINDOW_N_MIN } else { self.n + 1 };
+                self.n = if self.n >= max {
+                    WINDOW_N_MIN
+                } else {
+                    self.n + 1
+                };
             }
             WindowField::Unit => {
                 let len = WINDOW_UNITS.len();
@@ -330,7 +339,11 @@ impl TimeWindowOverlay {
         match self.field {
             WindowField::Number => {
                 let max = self.unit.max_count();
-                self.n = if self.n <= WINDOW_N_MIN { max } else { self.n - 1 };
+                self.n = if self.n <= WINDOW_N_MIN {
+                    max
+                } else {
+                    self.n - 1
+                };
             }
             WindowField::Unit => {
                 self.unit = WINDOW_UNITS[(self.unit_index() + 1) % WINDOW_UNITS.len()];
@@ -392,6 +405,9 @@ pub struct App {
     pub header: String,
     pub should_quit: bool,
     pub show_prs: bool,
+    /// Parsed from the dead -s flag; never read. Slated for removal together
+    /// with the flag itself in the async-core work.
+    #[allow(dead_code)]
     pub show_stat: bool,
     pub watch_mode: bool,
     pub refresh_interval: u64,
@@ -511,10 +527,10 @@ impl App {
             .enumerate()
             .filter(|(_, r)| {
                 // Group filter
-                if let Some(group) = active_group {
-                    if !r.groups.contains(group) {
-                        return false;
-                    }
+                if let Some(group) = active_group
+                    && !r.groups.contains(group)
+                {
+                    return false;
                 }
                 // Search filter
                 if !text_query.is_empty() {
@@ -827,7 +843,6 @@ mod tests {
                 ci_status: crate::model::CiStatus::Unknown,
                 ci_workflow: None,
                 ci_duration: None,
-                pushed_at: None,
                 groups: vec![],
                 stash_count: 0,
                 stash_entries: vec![],
@@ -1013,7 +1028,10 @@ mod tests {
 
     #[test]
     fn window_overlay_opens_on_number_field() {
-        let o = TimeWindowOverlay::new(TimeWindow { n: 2, unit: WindowUnit::Weeks });
+        let o = TimeWindowOverlay::new(TimeWindow {
+            n: 2,
+            unit: WindowUnit::Weeks,
+        });
         assert_eq!(o.field, WindowField::Number);
         assert_eq!(o.n, 2);
     }
@@ -1029,7 +1047,10 @@ mod tests {
 
     #[test]
     fn window_overlay_toggle_field_flips() {
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 1, unit: WindowUnit::Days });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 1,
+            unit: WindowUnit::Days,
+        });
         assert_eq!(o.field, WindowField::Number);
         o.toggle_field();
         assert_eq!(o.field, WindowField::Unit);
@@ -1039,7 +1060,10 @@ mod tests {
 
     #[test]
     fn window_overlay_number_wraps_both_ways() {
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 31, unit: WindowUnit::Days });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 31,
+            unit: WindowUnit::Days,
+        });
         o.step_up();
         assert_eq!(o.n, 1);
         o.step_down();
@@ -1048,7 +1072,10 @@ mod tests {
 
     #[test]
     fn window_overlay_unit_cycles_forward_and_back() {
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 1, unit: WindowUnit::Days });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 1,
+            unit: WindowUnit::Days,
+        });
         o.toggle_field(); // focus unit
         o.step_down(); // Days -> Weeks
         assert_eq!(o.unit, WindowUnit::Weeks);
@@ -1058,7 +1085,10 @@ mod tests {
 
     #[test]
     fn window_overlay_unit_wraps_and_slot_grabs_focus() {
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 1, unit: WindowUnit::Years });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 1,
+            unit: WindowUnit::Years,
+        });
         o.toggle_field(); // focus unit
         o.step_down(); // Years wraps to Slot
         assert_eq!(o.unit, WindowUnit::Slot);
@@ -1067,25 +1097,37 @@ mod tests {
 
     #[test]
     fn window_overlay_digit_entry_two_digit_and_clamp() {
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 1, unit: WindowUnit::Days });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 1,
+            unit: WindowUnit::Days,
+        });
         o.push_digit(2);
         assert_eq!(o.n, 2);
         o.push_digit(9);
         assert_eq!(o.n, 29); // "2" then "9" = 29
         o.push_digit(5);
         assert_eq!(o.n, 5); // third digit starts a fresh entry
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 1, unit: WindowUnit::Days });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 1,
+            unit: WindowUnit::Days,
+        });
         o.push_digit(3);
         o.push_digit(5);
         assert_eq!(o.n, 31); // 35 clamps to max
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 5, unit: WindowUnit::Days });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 5,
+            unit: WindowUnit::Days,
+        });
         o.push_digit(0);
         assert_eq!(o.n, 1); // 0 clamps to min
     }
 
     #[test]
     fn window_overlay_digits_ignored_on_unit_field() {
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 4, unit: WindowUnit::Days });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 4,
+            unit: WindowUnit::Days,
+        });
         o.toggle_field();
         o.push_digit(9);
         assert_eq!(o.n, 4);
@@ -1093,14 +1135,26 @@ mod tests {
 
     #[test]
     fn window_overlay_window_returns_clamped() {
-        let o = TimeWindowOverlay::new(TimeWindow { n: 3, unit: WindowUnit::Months });
-        assert_eq!(o.window(), TimeWindow { n: 3, unit: WindowUnit::Months });
+        let o = TimeWindowOverlay::new(TimeWindow {
+            n: 3,
+            unit: WindowUnit::Months,
+        });
+        assert_eq!(
+            o.window(),
+            TimeWindow {
+                n: 3,
+                unit: WindowUnit::Months
+            }
+        );
     }
 
     #[test]
     fn open_time_window_prefills_from_app_window() {
         let mut app = make_app(1);
-        app.window = Some(TimeWindow { n: 2, unit: WindowUnit::Weeks });
+        app.window = Some(TimeWindow {
+            n: 2,
+            unit: WindowUnit::Weeks,
+        });
         app.open_time_window();
         match &app.overlay {
             Overlay::TimeWindow(o) => {
@@ -1114,7 +1168,10 @@ mod tests {
     #[test]
     fn window_overlay_number_wraps_at_unit_max() {
         // Hours cap is 48, so 48 -> step_up wraps to 1.
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 48, unit: WindowUnit::Hours });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 48,
+            unit: WindowUnit::Hours,
+        });
         o.step_up();
         assert_eq!(o.n, 1);
         o.step_down();
@@ -1124,7 +1181,10 @@ mod tests {
     #[test]
     fn window_overlay_digit_clamps_to_unit_max() {
         // Years cap is 10: typing 4 then 0 (=40) clamps to 10.
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 1, unit: WindowUnit::Years });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 1,
+            unit: WindowUnit::Years,
+        });
         o.push_digit(4);
         o.push_digit(0);
         assert_eq!(o.n, 10);
@@ -1133,7 +1193,10 @@ mod tests {
     #[test]
     fn window_overlay_unit_change_clamps_n_down() {
         // 52 weeks, switch forward to Years (max 10): n must clamp to 10.
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 52, unit: WindowUnit::Weeks });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 52,
+            unit: WindowUnit::Weeks,
+        });
         o.toggle_field(); // focus unit
         o.step_down(); // Weeks -> Months (max 24): 52 clamps to 24
         assert_eq!(o.unit, WindowUnit::Months);
@@ -1146,7 +1209,10 @@ mod tests {
     #[test]
     fn window_overlay_cycling_through_slot_preserves_count() {
         // Slot ignores the count, so passing through it must not squash n.
-        let mut o = TimeWindowOverlay::new(TimeWindow { n: 14, unit: WindowUnit::Days });
+        let mut o = TimeWindowOverlay::new(TimeWindow {
+            n: 14,
+            unit: WindowUnit::Days,
+        });
         o.toggle_field(); // focus unit
         o.step_up(); // Days -> Hours (max 48): 14 fits
         assert_eq!(o.unit, WindowUnit::Hours);
@@ -1163,7 +1229,10 @@ mod tests {
     fn apply_progress_ratio_and_label() {
         assert_eq!(ApplyProgress::Discovering.ratio(), 0.0);
         assert_eq!(ApplyProgress::Discovering.label(), "discovering…");
-        let s = ApplyProgress::Statting { done: 12, total: 48 };
+        let s = ApplyProgress::Statting {
+            done: 12,
+            total: 48,
+        };
         assert!((s.ratio() - 0.25).abs() < 1e-9);
         assert_eq!(s.label(), "12/48 repos");
         // total 0 must not divide by zero.

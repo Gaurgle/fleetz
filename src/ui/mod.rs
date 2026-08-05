@@ -7,11 +7,11 @@ pub mod footer;
 pub mod help;
 pub mod timewindow;
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders};
-use ratatui::Frame;
 
 use crate::app::{App, FilterKind, FocusedPanel, Overlay, View};
 
@@ -182,11 +182,10 @@ fn query_spans(query: &str) -> Vec<Span<'static>> {
 
 /// A commit author's short code, for the tight author column in the
 /// commit/history lists. Sized to fit a 3-wide column (see AUTHOR_W):
-/// - one word          -> its first three letters, original case
-///                        ("Gaurgle" -> "Gau", "torvalds" -> "tor")
-/// - two or more words  -> the first two words' initials, uppercased
-///                        ("Andreas Roos" -> "AR", "Lars Nils Andreas" -> "LN",
-///                         "Maria-Hazell" -> "MH")
+/// - one word -> its first three letters, original case
+///   ("Gaurgle" -> "Gau", "torvalds" -> "tor")
+/// - two or more words -> the first two words' initials, uppercased
+///   ("Andreas Roos" -> "AR", "Lars Nils Andreas" -> "LN", "Maria-Hazell" -> "MH")
 ///
 /// Words split on whitespace and '-'. The caller left-pads the result to
 /// AUTHOR_W, so two-initial codes render as "AR " in the 3-wide field.
@@ -318,9 +317,9 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(colors::OVERLAY),
         )
     });
-    let group_span = app.active_group_label().map(|group| {
-        Span::styled(format!("  [{group}]"), Style::default().fg(colors::MAUVE))
-    });
+    let group_span = app
+        .active_group_label()
+        .map(|group| Span::styled(format!("  [{group}]"), Style::default().fg(colors::MAUVE)));
 
     let view_hint = match app.view {
         View::Detail => "[v] compact",
@@ -334,9 +333,9 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     });
     // Persistent indicator so the `w` toggle's state is visible at a glance,
     // not just in the transient status message when it flips.
-    let watch_span = app.watch_mode.then(|| {
-        Span::styled(" ◉ watch ", Style::default().fg(colors::GREEN))
-    });
+    let watch_span = app
+        .watch_mode
+        .then(|| Span::styled(" ◉ watch ", Style::default().fg(colors::GREEN)));
     let view_span = Span::styled(view_hint, Style::default().fg(colors::SURFACE));
     let help_span = Span::styled("[?] help ", Style::default().fg(colors::SURFACE));
 
@@ -347,15 +346,11 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 
     loop {
         let mut left: Vec<Span> = vec![name.clone()];
-        if include_header {
-            if let Some(ref h) = header_span {
-                left.push(h.clone());
-            }
+        if include_header && let Some(ref h) = header_span {
+            left.push(h.clone());
         }
-        if include_group {
-            if let Some(ref g) = group_span {
-                left.push(g.clone());
-            }
+        if include_group && let Some(ref g) = group_span {
+            left.push(g.clone());
         }
 
         let mut right: Vec<Span> = Vec::new();

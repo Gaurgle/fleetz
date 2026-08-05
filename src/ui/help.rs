@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Frame;
 
 use crate::ui::colors;
 
@@ -14,10 +14,22 @@ pub fn render(frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, popup_area);
 
     let keybinds = [
-        ("1 / 2 / 3", "Focus repo list / detail / inspector (Tab cycles)"),
-        ("mouse", "Click a panel to focus · scroll wheel scrolls any panel"),
-        ("j/k ↑/↓", "Repo list: move · Detail: pick commit · Inspector: scroll"),
-        ("⇧ J/K ↑/↓", "Scroll the detail pane (works from the repo list too)"),
+        (
+            "1 / 2 / 3",
+            "Focus repo list / detail / inspector (Tab cycles)",
+        ),
+        (
+            "mouse",
+            "Click a panel to focus · scroll wheel scrolls any panel",
+        ),
+        (
+            "j/k ↑/↓",
+            "Repo list: move · Detail: pick commit · Inspector: scroll",
+        ),
+        (
+            "⇧ J/K ↑/↓",
+            "Scroll the detail pane (works from the repo list too)",
+        ),
         ("PgUp/PgDn", "Scroll focused pane by a page"),
         ("v", "Toggle detail ↔ compact view"),
         ("enter", "Open repo in lazygit (pull/merge live here)"),
@@ -26,15 +38,27 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ("O", "Open PR in browser"),
         ("f", "Fetch selected repo (no merge)"),
         ("F", "Fetch all repos"),
-        ("b / s", "Branches: preview + switch (enter), clean up merged (space+d)"),
+        (
+            "b / s",
+            "Branches: preview + switch (enter), clean up merged (space+d)",
+        ),
         ("t", "Time window: pick how far back to show activity"),
         ("g", "Cycle group filter"),
         ("G", "Show all (clear group)"),
-        ("/", "Search repos, or type #dirty #behind #ahead #ci #prs #stash to filter"),
+        (
+            "/",
+            "Search repos, or type #dirty #behind #ahead #ci #prs #stash to filter",
+        ),
         ("0", "Clear #tag filters (keeps free-text search)"),
         ("r", "Refresh: re-stat listed repos only (fast, offline)"),
-        ("R", "Reload: re-fetch GitHub + rediscover repos (finds new ones)"),
-        ("w", "Toggle watch: auto-refresh listed repos on the interval"),
+        (
+            "R",
+            "Reload: re-fetch GitHub + rediscover repos (finds new ones)",
+        ),
+        (
+            "w",
+            "Toggle watch: auto-refresh listed repos on the interval",
+        ),
         ("Esc", "Close search / help"),
         ("?", "Toggle this help"),
         ("q", "Quit"),

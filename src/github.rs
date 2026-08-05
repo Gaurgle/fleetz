@@ -171,14 +171,12 @@ pub async fn fetch_repos(
     bypass_cache: bool,
 ) -> Result<Vec<GithubRepo>, String> {
     // Try cache first
-    if !bypass_cache {
-        if let Some(cached_json) = cache.read() {
-            if let Ok(response) = serde_json::from_str::<GraphQlResponse>(&cached_json) {
-                if let Some(data) = response.data {
-                    return Ok(parse_repos(data.viewer.repositories.nodes));
-                }
-            }
-        }
+    if !bypass_cache
+        && let Some(cached_json) = cache.read()
+        && let Ok(response) = serde_json::from_str::<GraphQlResponse>(&cached_json)
+        && let Some(data) = response.data
+    {
+        return Ok(parse_repos(data.viewer.repositories.nodes));
     }
 
     // Fetch fresh
@@ -197,12 +195,11 @@ pub async fn fetch_repos(
 
     if !resp.status().is_success() {
         // Fallback to stale cache
-        if let Some(stale) = cache.read_stale() {
-            if let Ok(response) = serde_json::from_str::<GraphQlResponse>(&stale) {
-                if let Some(data) = response.data {
-                    return Ok(parse_repos(data.viewer.repositories.nodes));
-                }
-            }
+        if let Some(stale) = cache.read_stale()
+            && let Ok(response) = serde_json::from_str::<GraphQlResponse>(&stale)
+            && let Some(data) = response.data
+        {
+            return Ok(parse_repos(data.viewer.repositories.nodes));
         }
         return Err(format!("GitHub API returned {}", resp.status()));
     }
@@ -215,8 +212,8 @@ pub async fn fetch_repos(
     // Cache the raw response
     cache.write(&body_text);
 
-    let body: GraphQlResponse = serde_json::from_str(&body_text)
-        .map_err(|e| format!("failed to parse response: {e}"))?;
+    let body: GraphQlResponse =
+        serde_json::from_str(&body_text).map_err(|e| format!("failed to parse response: {e}"))?;
 
     if let Some(errors) = body.errors {
         let msgs: Vec<_> = errors.iter().map(|e| e.message.as_str()).collect();
@@ -260,8 +257,12 @@ fn parse_repos(nodes: Vec<RepoNode>) -> Vec<GithubRepo> {
 }
 
 fn parse_prs(pr_conn: &Option<PrConnectionNode>) -> Vec<PullRequest> {
-    let Some(conn) = pr_conn else { return Vec::new() };
-    let Some(nodes) = &conn.nodes else { return Vec::new() };
+    let Some(conn) = pr_conn else {
+        return Vec::new();
+    };
+    let Some(nodes) = &conn.nodes else {
+        return Vec::new();
+    };
 
     nodes
         .iter()
@@ -278,7 +279,10 @@ fn parse_prs(pr_conn: &Option<PrConnectionNode>) -> Vec<PullRequest> {
             Some(PullRequest {
                 number: pr.number,
                 title: pr.title.clone(),
-                author: pr.author.as_ref().map_or("unknown".to_string(), |a| a.login.clone()),
+                author: pr
+                    .author
+                    .as_ref()
+                    .map_or("unknown".to_string(), |a| a.login.clone()),
                 created_at,
                 review_status,
                 url: pr.url.clone(),
@@ -498,7 +502,9 @@ mod tests {
             name: "org_repo".to_string(),
             pushed_at: Some("2026-04-01T10:00:00Z".to_string()),
             is_private: Some(true),
-            owner: Some(OwnerNode { typename: "Organization".to_string() }),
+            owner: Some(OwnerNode {
+                typename: "Organization".to_string(),
+            }),
             pull_requests: None,
             default_branch_ref: None,
         }];
@@ -512,7 +518,9 @@ mod tests {
             name: "priv_repo".to_string(),
             pushed_at: Some("2026-04-01T10:00:00Z".to_string()),
             is_private: Some(true),
-            owner: Some(OwnerNode { typename: "User".to_string() }),
+            owner: Some(OwnerNode {
+                typename: "User".to_string(),
+            }),
             pull_requests: None,
             default_branch_ref: None,
         }];
@@ -526,7 +534,9 @@ mod tests {
             name: "pub_repo".to_string(),
             pushed_at: Some("2026-04-01T10:00:00Z".to_string()),
             is_private: Some(false),
-            owner: Some(OwnerNode { typename: "User".to_string() }),
+            owner: Some(OwnerNode {
+                typename: "User".to_string(),
+            }),
             pull_requests: None,
             default_branch_ref: None,
         }];

@@ -24,9 +24,9 @@ pub const MARKER_W: usize = 2;
 /// every row regardless.
 pub fn glyph_span(repo: &RepoStatus) -> Span<'static> {
     let (glyph, color) = match repo.repo_kind {
-        RepoKind::Org => ("\u{f1ad}", colors::MAUVE),      // building
-        RepoKind::Private => ("\u{f023}", colors::PEACH),  // lock
-        RepoKind::Public => ("\u{f0ac}", colors::GREEN),   // globe
+        RepoKind::Org => ("\u{f1ad}", colors::MAUVE), // building
+        RepoKind::Private => ("\u{f023}", colors::PEACH), // lock
+        RepoKind::Public => ("\u{f0ac}", colors::GREEN), // globe
         RepoKind::Unknown => return Span::raw(" ".repeat(GLYPH_W)),
     };
     Span::styled(format!("{glyph} "), Style::default().fg(color))
@@ -90,7 +90,10 @@ pub fn badge_spans(repo: &RepoStatus) -> (Vec<Span<'static>>, usize) {
 
     let status = repo.short_status();
     width += status.chars().count();
-    spans.push(Span::styled(status, Style::default().fg(status_color(repo))));
+    spans.push(Span::styled(
+        status,
+        Style::default().fg(status_color(repo)),
+    ));
 
     let ci = ci_text(repo);
     if !ci.is_empty() {

@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Frame;
 
 use crate::app::{TimeWindowOverlay, WindowField};
 use crate::time::WindowUnit;
@@ -28,7 +28,11 @@ pub fn render(frame: &mut Frame, area: Rect, overlay: &TimeWindowOverlay) {
     } else {
         idle
     };
-    let unit_style = if overlay.field == WindowField::Unit { focused } else { idle };
+    let unit_style = if overlay.field == WindowField::Unit {
+        focused
+    } else {
+        idle
+    };
 
     let unit_label = match overlay.unit {
         WindowUnit::Slot => "last slot",
@@ -38,7 +42,11 @@ pub fn render(frame: &mut Frame, area: Rect, overlay: &TimeWindowOverlay) {
         WindowUnit::Months => "months",
         WindowUnit::Years => "years",
     };
-    let number_label = if slot { " -".to_string() } else { format!("{:2}", overlay.n) };
+    let number_label = if slot {
+        " -".to_string()
+    } else {
+        format!("{:2}", overlay.n)
+    };
 
     let lines = vec![
         Line::from(""),

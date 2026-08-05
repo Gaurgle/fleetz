@@ -18,11 +18,11 @@ use crossterm::event::{
     MouseButton, MouseEvent, MouseEventKind,
 };
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use model::{RepoLocation, RepoStatus};
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
@@ -263,15 +263,15 @@ async fn run_event_loop(
         };
 
         // Check if watch mode refresh is due
-        if app.watch_mode {
-            if let Some(last) = app.last_refreshed {
-                let elapsed = (chrono::Local::now() - last).num_seconds();
-                if elapsed >= app.refresh_interval as i64 {
-                    for repo in &mut app.repos {
-                        refresh_single_repo(repo).await;
-                    }
-                    app.last_refreshed = Some(chrono::Local::now());
+        if app.watch_mode
+            && let Some(last) = app.last_refreshed
+        {
+            let elapsed = (chrono::Local::now() - last).num_seconds();
+            if elapsed >= app.refresh_interval as i64 {
+                for repo in &mut app.repos {
+                    refresh_single_repo(repo).await;
                 }
+                app.last_refreshed = Some(chrono::Local::now());
             }
         }
 
@@ -331,7 +331,6 @@ async fn run_event_loop(
             app.reload_requested = false;
             reload_all(terminal, app, args, config, repo_dir).await?;
         }
-
     }
 }
 
@@ -349,7 +348,9 @@ fn handle_mouse_input(
     let Ok(size) = terminal.size() else { return };
     let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
     let rects = ui::panel_rects(area, app);
-    let Some(panel) = rects.at(m.column, m.row) else { return };
+    let Some(panel) = rects.at(m.column, m.row) else {
+        return;
+    };
 
     match m.kind {
         MouseEventKind::Down(MouseButton::Left) => {
@@ -413,7 +414,9 @@ async fn handle_branch_input(app: &mut App, key: KeyEvent) {
         // branch list reflect the new HEAD.
         KeyCode::Enter => {
             let target = if let Overlay::Branches(ref bo) = app.overlay {
-                bo.branches.get(bo.selected).map(|b| (bo.repo_path.clone(), b.name.clone(), b.is_current))
+                bo.branches
+                    .get(bo.selected)
+                    .map(|b| (bo.repo_path.clone(), b.name.clone(), b.is_current))
             } else {
                 None
             };
@@ -453,10 +456,10 @@ async fn handle_branch_input(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Char('d') => {
-            if let Overlay::Branches(ref mut bo) = app.overlay {
-                if bo.selected_count() > 0 {
-                    bo.confirm_delete = true;
-                }
+            if let Overlay::Branches(ref mut bo) = app.overlay
+                && bo.selected_count() > 0
+            {
+                bo.confirm_delete = true;
             }
         }
         _ => {}
@@ -466,13 +469,16 @@ async fn handle_branch_input(app: &mut App, key: KeyEvent) {
 /// Modal input for the time-window overlay. All keys are consumed here
 /// while it's open, so hjkl/arrows can't leak into list navigation.
 fn handle_time_window_input(app: &mut App, key: KeyEvent) {
-    let Overlay::TimeWindow(ref mut two) = app.overlay else { return };
+    let Overlay::TimeWindow(ref mut two) = app.overlay else {
+        return;
+    };
     match key.code {
         KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('q') => {
             app.overlay = Overlay::None;
         }
-        KeyCode::Char('h') | KeyCode::Char('l') | KeyCode::Left | KeyCode::Right
-        | KeyCode::Tab => two.toggle_field(),
+        KeyCode::Char('h') | KeyCode::Char('l') | KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+            two.toggle_field()
+        }
         KeyCode::Char('k') | KeyCode::Up => two.step_up(),
         KeyCode::Char('j') | KeyCode::Down => two.step_down(),
         KeyCode::Char(c) if c.is_ascii_digit() => two.push_digit(c as u8 - b'0'),
@@ -490,7 +496,9 @@ fn handle_time_window_input(app: &mut App, key: KeyEvent) {
 /// branch, with merged ones flagged for cleanup and the current one marked.
 /// Enter switches to a branch; space+d deletes merged ones.
 async fn open_branch_overlay(app: &mut App) {
-    let Some(repo) = app.selected_repo() else { return };
+    let Some(repo) = app.selected_repo() else {
+        return;
+    };
     let Some(ref path) = repo.path else { return };
     let repo_name = repo.name.clone();
     let path = path.clone();
@@ -536,8 +544,12 @@ const BRANCH_PREVIEW_COUNT: u32 = 6;
 /// preview cache, so the overlay can show "what happened on that branch"
 /// without checking it out. A no-op once a branch is cached.
 async fn ensure_preview(app: &mut App) {
-    let Overlay::Branches(ref bo) = app.overlay else { return };
-    let Some(branch) = bo.selected_branch() else { return };
+    let Overlay::Branches(ref bo) = app.overlay else {
+        return;
+    };
+    let Some(branch) = bo.selected_branch() else {
+        return;
+    };
     if bo.previews.contains_key(branch) {
         return;
     }
@@ -612,23 +624,23 @@ async fn handle_normal_input(
         // pull/merge is left to lazygit (Enter) on purpose -- fetching is
         // safe and non-destructive, merging is not.
         KeyCode::Char('f') => {
-            if let Some(repo) = app.selected_repo().cloned() {
-                if let Some(ref path) = repo.path {
-                    let expanded = shellexpand::tilde(path).to_string();
-                    // Draw the "fetching" state before the blocking fetch, so
-                    // the indicator actually appears rather than being set and
-                    // immediately overwritten by the result on the next frame.
-                    app.set_status(format!("\u{27f3} Fetching {}…", repo.name), false);
-                    terminal.draw(|frame| ui::render(frame, app))?;
-                    let ok = git::fetch(Path::new(&expanded)).await;
-                    if ok {
-                        if let Some(idx) = app.selected_repo_index() {
-                            refresh_single_repo(&mut app.repos[idx]).await;
-                        }
-                        app.set_status(format!("Fetched {}", repo.name), false);
-                    } else {
-                        app.set_status(format!("Fetch failed for {}", repo.name), true);
+            if let Some(repo) = app.selected_repo().cloned()
+                && let Some(ref path) = repo.path
+            {
+                let expanded = shellexpand::tilde(path).to_string();
+                // Draw the "fetching" state before the blocking fetch, so
+                // the indicator actually appears rather than being set and
+                // immediately overwritten by the result on the next frame.
+                app.set_status(format!("\u{27f3} Fetching {}…", repo.name), false);
+                terminal.draw(|frame| ui::render(frame, app))?;
+                let ok = git::fetch(Path::new(&expanded)).await;
+                if ok {
+                    if let Some(idx) = app.selected_repo_index() {
+                        refresh_single_repo(&mut app.repos[idx]).await;
                     }
+                    app.set_status(format!("Fetched {}", repo.name), false);
+                } else {
+                    app.set_status(format!("Fetch failed for {}", repo.name), true);
                 }
             }
         }
@@ -655,31 +667,31 @@ async fn handle_normal_input(
         }
         KeyCode::Enter => {
             // Open lazygit in selected repo
-            if let Some(repo) = app.selected_repo() {
-                if let Some(ref path) = repo.path {
-                    let expanded = shellexpand::tilde(path).to_string();
-                    suspend_and_run(terminal, "lazygit", &["-p", &expanded])?;
-                }
+            if let Some(repo) = app.selected_repo()
+                && let Some(ref path) = repo.path
+            {
+                let expanded = shellexpand::tilde(path).to_string();
+                suspend_and_run(terminal, "lazygit", &["-p", &expanded])?;
             }
         }
         KeyCode::Char('e') => {
             // Open $EDITOR in selected repo
-            if let Some(repo) = app.selected_repo() {
-                if let Some(ref path) = repo.path {
-                    let expanded = shellexpand::tilde(path).to_string();
-                    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
-                    suspend_and_run(terminal, &editor, &[&expanded])?;
-                }
+            if let Some(repo) = app.selected_repo()
+                && let Some(ref path) = repo.path
+            {
+                let expanded = shellexpand::tilde(path).to_string();
+                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+                suspend_and_run(terminal, &editor, &[&expanded])?;
             }
         }
         KeyCode::Char('o') => {
             // Open shell in repo dir
-            if let Some(repo) = app.selected_repo() {
-                if let Some(ref path) = repo.path {
-                    let expanded = shellexpand::tilde(path).to_string();
-                    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-                    suspend_and_run_in_dir(terminal, &shell, &[], &expanded)?;
-                }
+            if let Some(repo) = app.selected_repo()
+                && let Some(ref path) = repo.path
+            {
+                let expanded = shellexpand::tilde(path).to_string();
+                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+                suspend_and_run_in_dir(terminal, &shell, &[], &expanded)?;
             }
         }
         KeyCode::Char('g') => {
@@ -705,7 +717,10 @@ async fn handle_normal_input(
         // available in -d mode, which never fetched a GitHub dataset.
         KeyCode::Char('t') => {
             if app.dirty_mode {
-                app.set_status("Time window needs GitHub data (not in -d mode)".to_string(), true);
+                app.set_status(
+                    "Time window needs GitHub data (not in -d mode)".to_string(),
+                    true,
+                );
             } else {
                 app.open_time_window();
             }
@@ -716,7 +731,10 @@ async fn handle_normal_input(
                 if let Some(pr) = repo.prs.first() {
                     let _ = StdCommand::new("open").arg(&pr.url).status();
                 } else if repo.pr_count > 0 {
-                    app.set_status("Use -p flag to fetch PR details for browser open".to_string(), false);
+                    app.set_status(
+                        "Use -p flag to fetch PR details for browser open".to_string(),
+                        false,
+                    );
                 }
             }
         }
@@ -881,7 +899,8 @@ async fn load_repos(
             let author = args.author.as_deref();
             // Always fetch the diffstat for recent commits so every commit
             // (not just those in a dirty repo) shows its +/- and file list.
-            let commits = git::commits(&path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await;
+            let commits =
+                git::commits(&path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await;
             let reflog = git::reflog(&path, REFLOG_COUNT).await;
             let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
             let graph = git::graph(&path, &branch_names, GRAPH_COMMIT_COUNT).await;
@@ -906,7 +925,6 @@ async fn load_repos(
                 ci_status: model::CiStatus::Unknown,
                 ci_workflow: None,
                 ci_duration: None,
-                pushed_at: None,
                 groups: vec![],
                 stash_count,
                 stash_entries,
@@ -979,6 +997,7 @@ fn resolve_cutoff(
 /// discovery, optional per-repo git fetch, statting, and header assembly.
 /// `git_fetch: false` makes this purely local (used by the time-window
 /// overlay so applying a window is instant).
+#[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 async fn assemble_view(
     dataset: &[github::GithubRepo],
     cutoff: Option<chrono::DateTime<chrono::Utc>>,
@@ -1033,8 +1052,7 @@ async fn assemble_view(
 
     // Pass 2: find elsewhere
     let home = dirs::home_dir().unwrap_or_default();
-    let elsewhere_found =
-        discovery::find_elsewhere(&home, repo_dir, &active_names, &found_set);
+    let elsewhere_found = discovery::find_elsewhere(&home, repo_dir, &active_names, &found_set);
 
     // Determinate total: the GitHub-matched repos are the expensive stat
     // loop. The pass-3 local tail is counted only as it is walked, so it is
@@ -1042,14 +1060,14 @@ async fn assemble_view(
     let stat_total = primary_found.len() + elsewhere_found.len();
     if let Some(tx) = progress {
         let _ = tx.send(app::ApplyProgress::Discovering);
-        let _ = tx.send(app::ApplyProgress::Statting { done: 0, total: stat_total });
+        let _ = tx.send(app::ApplyProgress::Statting {
+            done: 0,
+            total: stat_total,
+        });
     }
 
     // Parallel fetch for all found repos
-    let all_found: Vec<_> = primary_found
-        .iter()
-        .chain(elsewhere_found.iter())
-        .collect();
+    let all_found: Vec<_> = primary_found.iter().chain(elsewhere_found.iter()).collect();
 
     if git_fetch {
         let fetch_handles: Vec<_> = all_found
@@ -1077,7 +1095,10 @@ async fn assemble_view(
         repos.push(repo);
         stat_done += 1;
         if let Some(tx) = progress {
-            let _ = tx.send(app::ApplyProgress::Statting { done: stat_done, total: stat_total });
+            let _ = tx.send(app::ApplyProgress::Statting {
+                done: stat_done,
+                total: stat_total,
+            });
         }
     }
 
@@ -1088,7 +1109,10 @@ async fn assemble_view(
             // stat_total, so account for it or the gauge stops short.
             stat_done += 1;
             if let Some(tx) = progress {
-                let _ = tx.send(app::ApplyProgress::Statting { done: stat_done, total: stat_total });
+                let _ = tx.send(app::ApplyProgress::Statting {
+                    done: stat_done,
+                    total: stat_total,
+                });
             }
             continue;
         }
@@ -1097,7 +1121,10 @@ async fn assemble_view(
         repos.push(repo);
         stat_done += 1;
         if let Some(tx) = progress {
-            let _ = tx.send(app::ApplyProgress::Statting { done: stat_done, total: stat_total });
+            let _ = tx.send(app::ApplyProgress::Statting {
+                done: stat_done,
+                total: stat_total,
+            });
         }
     }
 
@@ -1159,7 +1186,6 @@ async fn assemble_view(
             ci_status: model::CiStatus::Unknown,
             ci_workflow: None,
             ci_duration: None,
-            pushed_at: None,
             groups: vec![],
             stash_count: 0,
             stash_entries: vec![],
@@ -1192,7 +1218,6 @@ async fn assemble_view(
             ci_status: gh_repo.ci_status.clone(),
             ci_workflow: gh_repo.ci_workflow.clone(),
             ci_duration: gh_repo.ci_duration.clone(),
-            pushed_at: Some(gh_repo.pushed_at),
             groups: vec![],
             stash_count: 0,
             stash_entries: vec![],
@@ -1215,13 +1240,13 @@ async fn assemble_view(
     }
     // The dataset only reaches back repo_limit repos; flag a window that
     // outruns it so an incomplete view never masquerades as complete.
-    if let Some(c) = cutoff {
-        if github::window_exceeds_dataset(dataset, c, config.repo_limit) {
-            full_header = format!(
-                "{full_header} (window exceeds fetched repos, repo_limit={})",
-                config.repo_limit
-            );
-        }
+    if let Some(c) = cutoff
+        && github::window_exceeds_dataset(dataset, c, config.repo_limit)
+    {
+        full_header = format!(
+            "{full_header} (window exceeds fetched repos, repo_limit={})",
+            config.repo_limit
+        );
     }
 
     Ok((repos, full_header))
@@ -1265,7 +1290,6 @@ async fn build_repo_status(
     let ci_status = gh_match.map_or(model::CiStatus::Unknown, |r| r.ci_status.clone());
     let ci_workflow = gh_match.and_then(|r| r.ci_workflow.clone());
     let ci_duration = gh_match.and_then(|r| r.ci_duration.clone());
-    let pushed_at = gh_match.map(|r| r.pushed_at);
     let repo_kind = gh_match.map_or(model::RepoKind::Unknown, |r| r.repo_kind);
 
     let display = tilde_display(path);
@@ -1293,7 +1317,6 @@ async fn build_repo_status(
         ci_status,
         ci_workflow,
         ci_duration,
-        pushed_at,
         groups: vec![],
         stash_count,
         stash_entries,
@@ -1313,7 +1336,10 @@ mod tests {
     #[test]
     fn resolve_cutoff_window_overrides_mode() {
         let config = config::Config::default();
-        let w = time::TimeWindow { n: 2, unit: time::WindowUnit::Weeks };
+        let w = time::TimeWindow {
+            n: 2,
+            unit: time::WindowUnit::Weeks,
+        };
         let (cutoff, header) = resolve_cutoff(Some(w), &Mode::All, &config).unwrap();
         assert!(cutoff.is_some());
         assert_eq!(header, "since 2 weeks");

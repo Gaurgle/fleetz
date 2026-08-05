@@ -44,11 +44,6 @@ impl ApiCache {
         }
         let _ = std::fs::write(&self.path, data);
     }
-
-    /// Check if cache exists (even if stale).
-    pub fn exists(&self) -> bool {
-        self.path.exists()
-    }
 }
 
 #[cfg(test)]

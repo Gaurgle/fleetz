@@ -14,10 +14,13 @@ impl WindowState {
         let dir = dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("~/.cache"))
             .join("fleetz");
-        Self { path: dir.join("window.toml") }
+        Self {
+            path: dir.join("window.toml"),
+        }
     }
 
     /// Test constructor with an explicit path.
+    #[cfg(test)]
     pub fn at(path: PathBuf) -> Self {
         Self { path }
     }
@@ -57,7 +60,10 @@ mod tests {
     #[test]
     fn save_and_load_roundtrip() {
         let state = temp_state("fleetz_window_roundtrip");
-        let w = TimeWindow { n: 2, unit: WindowUnit::Weeks };
+        let w = TimeWindow {
+            n: 2,
+            unit: WindowUnit::Weeks,
+        };
         state.save(&w);
         assert_eq!(state.load(), Some(w));
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join("fleetz_window_roundtrip"));
@@ -74,7 +80,9 @@ mod tests {
         let state = temp_state("fleetz_window_corrupt");
         state.save(&TimeWindow::default());
         std::fs::write(
-            std::env::temp_dir().join("fleetz_window_corrupt").join("window.toml"),
+            std::env::temp_dir()
+                .join("fleetz_window_corrupt")
+                .join("window.toml"),
             "not = [valid {{",
         )
         .unwrap();
@@ -87,13 +95,18 @@ mod tests {
         let state = temp_state("fleetz_window_clamp");
         std::fs::create_dir_all(std::env::temp_dir().join("fleetz_window_clamp")).unwrap();
         std::fs::write(
-            std::env::temp_dir().join("fleetz_window_clamp").join("window.toml"),
+            std::env::temp_dir()
+                .join("fleetz_window_clamp")
+                .join("window.toml"),
             "n = 99\nunit = \"days\"\n",
         )
         .unwrap();
         assert_eq!(
             state.load(),
-            Some(TimeWindow { n: 31, unit: WindowUnit::Days })
+            Some(TimeWindow {
+                n: 31,
+                unit: WindowUnit::Days
+            })
         );
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join("fleetz_window_clamp"));
     }

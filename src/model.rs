@@ -116,7 +116,6 @@ pub struct RepoStatus {
     pub ci_status: CiStatus,
     pub ci_workflow: Option<String>,
     pub ci_duration: Option<String>,
-    pub pushed_at: Option<DateTime<Utc>>,
     pub groups: Vec<String>,
     pub stash_count: u32,
     pub stash_entries: Vec<String>,
@@ -175,10 +174,6 @@ pub enum RepoKind {
 impl RepoStatus {
     pub fn is_synced(&self) -> bool {
         self.behind == 0 && self.ahead == 0 && self.dirty == 0
-    }
-
-    pub fn has_divergence(&self) -> bool {
-        self.behind > 0 || self.ahead > 0
     }
 
     /// A short status string like "3↓", "2↑", "4!", or "✓" (synced). The
@@ -277,7 +272,6 @@ mod tests {
             ci_status: CiStatus::Unknown,
             ci_workflow: None,
             ci_duration: None,
-            pushed_at: None,
             groups: vec![],
             stash_count: 0,
             stash_entries: vec![],
@@ -294,7 +288,6 @@ mod tests {
     fn synced_repo_reports_synced() {
         let r = make_repo("clean", 0, 0, 0);
         assert!(r.is_synced());
-        assert!(!r.has_divergence());
         assert_eq!(r.short_status(), "✓");
         assert_eq!(r.long_status(), "synced");
     }
@@ -303,7 +296,6 @@ mod tests {
     fn behind_repo_status_strings() {
         let r = make_repo("behind", 3, 0, 0);
         assert!(!r.is_synced());
-        assert!(r.has_divergence());
         assert_eq!(r.short_status(), "3↓");
         assert_eq!(r.long_status(), "3 behind");
     }

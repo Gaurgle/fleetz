@@ -53,10 +53,9 @@ impl Config {
 
     /// Load from a specific path. Returns Err if file can't be read or parsed.
     pub fn load_from(path: &Path) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("failed to read config: {e}"))?;
-        toml::from_str(&content)
-            .map_err(|e| format!("failed to parse config: {e}"))
+        let content =
+            std::fs::read_to_string(path).map_err(|e| format!("failed to read config: {e}"))?;
+        toml::from_str(&content).map_err(|e| format!("failed to parse config: {e}"))
     }
 
     /// Resolved repo directory with ~ expanded to an absolute path.
@@ -162,11 +161,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let mut c = Config::default();
-        c.extra_dirs = vec![
-            dir.to_string_lossy().to_string(),
-            "/definitely/not/a/real/path".to_string(),
-        ];
+        let c = Config {
+            extra_dirs: vec![
+                dir.to_string_lossy().to_string(),
+                "/definitely/not/a/real/path".to_string(),
+            ],
+            ..Config::default()
+        };
         let resolved = c.resolved_extra_dirs();
         // Missing dir dropped, existing one kept.
         assert_eq!(resolved, vec![dir.clone()]);

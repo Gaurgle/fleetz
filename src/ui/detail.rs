@@ -1,11 +1,11 @@
 use chrono::{DateTime, Utc};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap,
 };
-use ratatui::Frame;
 
 use crate::app::{App, FocusedPanel};
 use crate::model::{CiStatus, RepoStatus};
@@ -25,23 +25,17 @@ const INSPECTOR_FILE_CAP: usize = 30;
 /// Render the detail view: repo list (left 35%) + a right column (65%) that
 /// stacks the detail pane over the inspector pane.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let chunks = Layout::horizontal([
-        Constraint::Percentage(35),
-        Constraint::Percentage(65),
-    ])
-    .spacing(1)
-    .split(area);
+    let chunks = Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)])
+        .spacing(1)
+        .split(area);
 
     render_repo_list(frame, chunks[0], app);
 
     // Dock the inspector under the detail pane, but only when there's room --
     // on a short terminal the detail pane keeps the whole column.
     if chunks[1].height > INSPECTOR_HEIGHT + 6 {
-        let right = Layout::vertical([
-            Constraint::Min(1),
-            Constraint::Length(INSPECTOR_HEIGHT),
-        ])
-        .split(chunks[1]);
+        let right = Layout::vertical([Constraint::Min(1), Constraint::Length(INSPECTOR_HEIGHT)])
+            .split(chunks[1]);
         render_detail_pane(frame, right[0], app);
         render_inspector(frame, right[1], app);
     } else {
@@ -109,7 +103,11 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let focused = app.focused_panel == FocusedPanel::RepoList;
-    let border_color = if focused { colors::LAVENDER } else { colors::SURFACE };
+    let border_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -158,11 +156,7 @@ fn section_header_item(label: &str) -> ListItem<'static> {
     ]))
 }
 
-fn repo_list_item(
-    repo: &RepoStatus,
-    is_selected: bool,
-    col_width: usize,
-) -> ListItem<'static> {
+fn repo_list_item(repo: &RepoStatus, is_selected: bool, col_width: usize) -> ListItem<'static> {
     let marker = if is_selected { "▸ " } else { "  " };
     let name_style = if is_selected {
         Style::default()
@@ -201,8 +195,16 @@ fn repo_list_item(
 
 fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focused_panel == FocusedPanel::Detail;
-    let border_color = if focused { colors::LAVENDER } else { colors::SURFACE };
-    let num_color = if focused { colors::LAVENDER } else { colors::SURFACE };
+    let border_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
+    let num_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
     let panel = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -308,8 +310,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
                 ));
             }
             if b.behind == 0 && b.ahead == 0 && b.upstream.is_some() {
-                branch_spans
-                    .push(Span::styled(" ✓", Style::default().fg(colors::GREEN)));
+                branch_spans.push(Span::styled(" ✓", Style::default().fg(colors::GREEN)));
             }
             lines.push(Line::from(branch_spans));
 
@@ -361,7 +362,9 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             let is_sel = ci == sel;
             let marker = if is_sel { "▸ " } else { "  " };
             let marker_style = if is_sel && commits_active {
-                Style::default().fg(colors::SAPPHIRE).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(colors::SAPPHIRE)
+                    .add_modifier(Modifier::BOLD)
             } else if is_sel {
                 Style::default().fg(colors::SAPPHIRE)
             } else {
@@ -429,7 +432,12 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // what's on a given row.
     if !repo.graph.is_empty() {
         lines.push(Line::from(section_label("history")));
-        let prefix_w = repo.graph.iter().map(|g| g.prefix.chars().count()).max().unwrap_or(0);
+        let prefix_w = repo
+            .graph
+            .iter()
+            .map(|g| g.prefix.chars().count())
+            .max()
+            .unwrap_or(0);
         // Fixed-width author code, same as the recent-commits column.
         let author_w = crate::ui::AUTHOR_W;
         for g in &repo.graph {
@@ -456,9 +464,15 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             let mut graph_spans = vec![Span::raw("  ")];
             graph_spans.extend(graph_prefix_spans(&g.prefix));
             graph_spans.push(Span::raw(prefix_pad));
-            graph_spans.push(Span::styled(g.hash.clone(), Style::default().fg(colors::HASH_CLR)));
+            graph_spans.push(Span::styled(
+                g.hash.clone(),
+                Style::default().fg(colors::HASH_CLR),
+            ));
             graph_spans.push(Span::raw(" "));
-            graph_spans.push(Span::styled(author, Style::default().fg(colors::author_color(&g.author))));
+            graph_spans.push(Span::styled(
+                author,
+                Style::default().fg(colors::author_color(&g.author)),
+            ));
             graph_spans.push(Span::raw(author_pad));
             if !g.refs.is_empty() {
                 graph_spans.push(Span::styled(
@@ -590,8 +604,14 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(section_label("other worktrees")));
         for wt in orphan_worktrees {
             lines.push(Line::from(vec![
-                Span::styled(format!("  {}", wt.branch), Style::default().fg(colors::TEXT)),
-                Span::styled(format!("  {}", wt.path), Style::default().fg(colors::OVERLAY)),
+                Span::styled(
+                    format!("  {}", wt.branch),
+                    Style::default().fg(colors::TEXT),
+                ),
+                Span::styled(
+                    format!("  {}", wt.path),
+                    Style::default().fg(colors::OVERLAY),
+                ),
             ]));
         }
     }
@@ -632,7 +652,11 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
 /// instead of falling back to column zero.
 fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focused_panel == FocusedPanel::Inspector;
-    let border_color = if focused { colors::LAVENDER } else { colors::SURFACE };
+    let border_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -692,10 +716,7 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     // trailing "… and N more".
     if !c.files.is_empty() {
         lines.push(Line::from(""));
-        let mut header = vec![section_label(&format!(
-            "changed files ({})",
-            c.files.len()
-        ))];
+        let mut header = vec![section_label(&format!("changed files ({})", c.files.len()))];
         if c.insertions > 0 {
             header.push(Span::styled(
                 format!("   +{}", c.insertions),
@@ -757,7 +778,10 @@ fn file_stat_line(f: &crate::model::FileStat) -> Line<'static> {
     // Pad the stat column so every path starts at the same column (+1 so even
     // an over-long stat keeps a gap before the path).
     spans.push(Span::raw(" ".repeat(STAT_W.saturating_sub(stat_len) + 1)));
-    spans.push(Span::styled(f.path.clone(), Style::default().fg(colors::TEXT)));
+    spans.push(Span::styled(
+        f.path.clone(),
+        Style::default().fg(colors::TEXT),
+    ));
     Line::from(spans)
 }
 

@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-use ratatui::Frame;
 
 use crate::app::App;
 use crate::model::RepoStatus;
@@ -45,8 +45,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let content = rows[2];
 
     if visible.is_empty() {
-        let empty = Paragraph::new("No repos to display")
-            .style(Style::default().fg(colors::OVERLAY));
+        let empty =
+            Paragraph::new("No repos to display").style(Style::default().fg(colors::OVERLAY));
         frame.render_widget(empty, content);
         return;
     }
@@ -54,7 +54,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // Below this width a second column would squeeze each repo's name/status
     // below a usable minimum, so fall back to one dense column instead.
     const MIN_TWO_COL_WIDTH: usize = 48;
-    let columns = if content.width as usize >= MIN_TWO_COL_WIDTH { 2 } else { 1 };
+    let columns = if content.width as usize >= MIN_TWO_COL_WIDTH {
+        2
+    } else {
+        1
+    };
     let col_width = (content.width as usize / columns).saturating_sub(1);
 
     let selected = app.selected_repo_index().unwrap_or(usize::MAX);

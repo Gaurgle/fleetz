@@ -75,7 +75,10 @@ pub struct TimeWindow {
 
 impl Default for TimeWindow {
     fn default() -> Self {
-        Self { n: 1, unit: WindowUnit::Slot }
+        Self {
+            n: 1,
+            unit: WindowUnit::Slot,
+        }
     }
 }
 
@@ -83,7 +86,10 @@ impl TimeWindow {
     /// Construct with `n` clamped into the valid range, so persisted or
     /// hand-edited values can never produce an empty or absurd window.
     pub fn clamped(n: u8, unit: WindowUnit) -> Self {
-        Self { n: n.clamp(WINDOW_N_MIN, unit.max_count()), unit }
+        Self {
+            n: n.clamp(WINDOW_N_MIN, unit.max_count()),
+            unit,
+        }
     }
 
     /// The cutoff instant for this window, evaluated against the real clock.
@@ -102,9 +108,7 @@ impl TimeWindow {
             WindowUnit::Hours => now - Duration::hours(n),
             WindowUnit::Days => now - Duration::days(n),
             WindowUnit::Weeks => now - Duration::weeks(n),
-            WindowUnit::Months => now
-                .checked_sub_months(Months::new(n as u32))
-                .unwrap_or(now),
+            WindowUnit::Months => now.checked_sub_months(Months::new(n as u32)).unwrap_or(now),
             WindowUnit::Years => now
                 .checked_sub_months(Months::new(n as u32 * 12))
                 .unwrap_or(now),
@@ -137,16 +141,14 @@ pub fn auto_cutoff(work_start: u8, work_end: u8) -> (DateTime<Utc>, String) {
     let (cutoff_local, label) = match slot {
         TimeSlot::Evening => {
             // Currently evening — show since work_start today
-            let t = today
-                .and_time(NaiveTime::from_hms_opt(work_start as u32, 0, 0).unwrap());
+            let t = today.and_time(NaiveTime::from_hms_opt(work_start as u32, 0, 0).unwrap());
             let label = format!("since {}  {}", today, slot.label(work_start, work_end));
             (t, label)
         }
         TimeSlot::Work => {
             // Currently working hours — show since yesterday evening (work_end)
             let yesterday = today - chrono::Duration::days(1);
-            let t = yesterday
-                .and_time(NaiveTime::from_hms_opt(work_end as u32, 0, 0).unwrap());
+            let t = yesterday.and_time(NaiveTime::from_hms_opt(work_end as u32, 0, 0).unwrap());
             let label = format!(
                 "since {}  {}",
                 yesterday,
@@ -157,8 +159,7 @@ pub fn auto_cutoff(work_start: u8, work_end: u8) -> (DateTime<Utc>, String) {
         TimeSlot::Night => {
             // Currently night — show since yesterday work_end
             let yesterday = today - chrono::Duration::days(1);
-            let t = yesterday
-                .and_time(NaiveTime::from_hms_opt(work_end as u32, 0, 0).unwrap());
+            let t = yesterday.and_time(NaiveTime::from_hms_opt(work_end as u32, 0, 0).unwrap());
             let label = format!(
                 "since {}  {}",
                 yesterday,
@@ -195,8 +196,9 @@ pub fn parse_relative_date(input: &str) -> Result<NaiveDate, String> {
                 .map_err(|_| format!("invalid week count: {s}"))?;
             Ok(today - chrono::Duration::days(n * 7))
         }
-        s => NaiveDate::parse_from_str(s, "%Y-%m-%d")
-            .map_err(|e| format!("invalid date '{s}': {e}")),
+        s => {
+            NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| format!("invalid date '{s}': {e}"))
+        }
     }
 }
 
@@ -290,11 +292,20 @@ mod tests {
     #[test]
     fn window_cutoff_hours_days_weeks() {
         let now = utc("2026-07-13T12:00:00Z");
-        let w = TimeWindow { n: 6, unit: WindowUnit::Hours };
+        let w = TimeWindow {
+            n: 6,
+            unit: WindowUnit::Hours,
+        };
         assert_eq!(w.cutoff_from(now, 9, 18), utc("2026-07-13T06:00:00Z"));
-        let w = TimeWindow { n: 3, unit: WindowUnit::Days };
+        let w = TimeWindow {
+            n: 3,
+            unit: WindowUnit::Days,
+        };
         assert_eq!(w.cutoff_from(now, 9, 18), utc("2026-07-10T12:00:00Z"));
-        let w = TimeWindow { n: 2, unit: WindowUnit::Weeks };
+        let w = TimeWindow {
+            n: 2,
+            unit: WindowUnit::Weeks,
+        };
         assert_eq!(w.cutoff_from(now, 9, 18), utc("2026-06-29T12:00:00Z"));
     }
 
@@ -302,20 +313,29 @@ mod tests {
     fn window_cutoff_months_is_calendar_aware() {
         // March 31 minus one month clamps to February's last day.
         let now = utc("2026-03-31T10:00:00Z");
-        let w = TimeWindow { n: 1, unit: WindowUnit::Months };
+        let w = TimeWindow {
+            n: 1,
+            unit: WindowUnit::Months,
+        };
         assert_eq!(w.cutoff_from(now, 9, 18), utc("2026-02-28T10:00:00Z"));
     }
 
     #[test]
     fn window_cutoff_years_via_months() {
         let now = utc("2026-07-13T12:00:00Z");
-        let w = TimeWindow { n: 2, unit: WindowUnit::Years };
+        let w = TimeWindow {
+            n: 2,
+            unit: WindowUnit::Years,
+        };
         assert_eq!(w.cutoff_from(now, 9, 18), utc("2024-07-13T12:00:00Z"));
     }
 
     #[test]
     fn window_cutoff_slot_matches_auto_cutoff() {
-        let w = TimeWindow { n: 1, unit: WindowUnit::Slot };
+        let w = TimeWindow {
+            n: 1,
+            unit: WindowUnit::Slot,
+        };
         let (expected, _) = auto_cutoff(9, 18);
         let got = w.cutoff(9, 18);
         // Two separate now() reads: allow a small skew.
@@ -331,14 +351,38 @@ mod tests {
 
     #[test]
     fn window_label_pluralizes() {
-        assert_eq!(TimeWindow { n: 1, unit: WindowUnit::Days }.label(9, 18), "since 1 day");
-        assert_eq!(TimeWindow { n: 2, unit: WindowUnit::Weeks }.label(9, 18), "since 2 weeks");
-        assert_eq!(TimeWindow { n: 3, unit: WindowUnit::Months }.label(9, 18), "since 3 months");
+        assert_eq!(
+            TimeWindow {
+                n: 1,
+                unit: WindowUnit::Days
+            }
+            .label(9, 18),
+            "since 1 day"
+        );
+        assert_eq!(
+            TimeWindow {
+                n: 2,
+                unit: WindowUnit::Weeks
+            }
+            .label(9, 18),
+            "since 2 weeks"
+        );
+        assert_eq!(
+            TimeWindow {
+                n: 3,
+                unit: WindowUnit::Months
+            }
+            .label(9, 18),
+            "since 3 months"
+        );
     }
 
     #[test]
     fn window_label_slot_uses_auto_label() {
-        let w = TimeWindow { n: 1, unit: WindowUnit::Slot };
+        let w = TimeWindow {
+            n: 1,
+            unit: WindowUnit::Slot,
+        };
         let (_, expected) = auto_cutoff(9, 18);
         assert_eq!(w.label(9, 18), expected);
     }
@@ -352,7 +396,10 @@ mod tests {
 
     #[test]
     fn window_unit_serde_roundtrip() {
-        let w = TimeWindow { n: 2, unit: WindowUnit::Weeks };
+        let w = TimeWindow {
+            n: 2,
+            unit: WindowUnit::Weeks,
+        };
         let s = toml::to_string(&w).unwrap();
         assert!(s.contains("n = 2"));
         assert!(s.contains("unit = \"weeks\""));

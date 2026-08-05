@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 pub struct FoundRepo {
     pub name: String,
     pub path: PathBuf,
-    pub is_primary: bool, // found under configured repo_dir (pass 1)
 }
 
 /// Pass 1: Find repos under the configured repo_dir (maxdepth 3).
@@ -24,7 +23,6 @@ pub fn find_in_primary(repo_dir: &Path, names: &[String]) -> Vec<FoundRepo> {
             found.push(FoundRepo {
                 name: dir_name.to_string(),
                 path: path.to_path_buf(),
-                is_primary: true,
             });
         }
     });
@@ -67,7 +65,6 @@ pub fn find_elsewhere(
             found.push(FoundRepo {
                 name: dir_name.to_string(),
                 path: path.to_path_buf(),
-                is_primary: false,
             });
         }
     });
@@ -170,7 +167,6 @@ mod tests {
         assert!(found_names.contains("alpha"));
         assert!(found_names.contains("beta"));
         assert!(found_names.contains("gamma"));
-        assert!(found.iter().all(|f| f.is_primary));
 
         fs::remove_dir_all(dir).ok();
     }

@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
-use ratatui::Frame;
 
 use crate::app::{App, View};
 use crate::model::Summary;
@@ -38,7 +38,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // otherwise the summary just sits there and the action looks like a no-op.
     let left = match &app.status_message {
         Some(msg) => {
-            let color = if msg.is_error { colors::RED } else { colors::GREEN };
+            let color = if msg.is_error {
+                colors::RED
+            } else {
+                colors::GREEN
+            };
             vec![Span::styled(msg.text.clone(), Style::default().fg(color))]
         }
         None => summary_spans(&summary, app.show_prs),
@@ -116,7 +120,11 @@ fn summary_spans(summary: &Summary, show_prs: bool) -> Vec<Span<'static>> {
     }
 
     // Remove trailing dot
-    if spans.last().map(|s| s.content.contains('·')).unwrap_or(false) {
+    if spans
+        .last()
+        .map(|s| s.content.contains('·'))
+        .unwrap_or(false)
+    {
         spans.pop();
     }
 
