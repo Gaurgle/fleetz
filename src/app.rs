@@ -405,10 +405,6 @@ pub struct App {
     pub header: String,
     pub should_quit: bool,
     pub show_prs: bool,
-    /// Parsed from the dead -s flag; never read. Slated for removal together
-    /// with the flag itself in the async-core work.
-    #[allow(dead_code)]
-    pub show_stat: bool,
     pub watch_mode: bool,
     pub refresh_interval: u64,
     pub last_refreshed: Option<DateTime<Local>>,
@@ -467,7 +463,6 @@ impl App {
         repos: Vec<RepoStatus>,
         header: String,
         show_prs: bool,
-        show_stat: bool,
         term_width: u16,
         term_height: u16,
     ) -> Self {
@@ -482,7 +477,6 @@ impl App {
             header,
             should_quit: false,
             show_prs,
-            show_stat,
             watch_mode: false,
             refresh_interval: 300,
             last_refreshed: Some(Local::now()),
@@ -854,7 +848,7 @@ mod tests {
                 remote_only_branches: vec![],
             })
             .collect();
-        App::new(repos, "test".to_string(), false, false, 120, 40)
+        App::new(repos, "test".to_string(), false, 120, 40)
     }
 
     #[test]

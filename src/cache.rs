@@ -9,12 +9,16 @@ pub struct ApiCache {
 }
 
 impl ApiCache {
-    pub fn new(ttl_secs: u64) -> Self {
+    pub fn new(ttl_secs: u64, repo_limit: u32, include_prs: bool) -> Self {
         let cache_dir = dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("~/.cache"))
             .join("fleetz");
+        // Pre-keying versions wrote a single github.json for every query
+        // shape; remove it so it cannot be served for the wrong flags.
+        let _ = std::fs::remove_file(cache_dir.join("github.json"));
+        let prs = if include_prs { "prs" } else { "noprs" };
         Self {
-            path: cache_dir.join("github.json"),
+            path: cache_dir.join(format!("github-{repo_limit}-{prs}.json")),
             ttl: Duration::from_secs(ttl_secs),
         }
     }
@@ -49,6 +53,15 @@ impl ApiCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_path_varies_by_query_shape() {
+        let a = ApiCache::new(300, 50, false);
+        let b = ApiCache::new(300, 50, true);
+        let c = ApiCache::new(300, 100, false);
+        assert_ne!(a.path, b.path);
+        assert_ne!(a.path, c.path);
+    }
 
     #[test]
     fn cache_write_and_read() {

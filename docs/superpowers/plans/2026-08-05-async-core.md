@@ -207,7 +207,7 @@ Adds the first real-repo integration test. Drops dead pull helpers."
 - Produces: `pub async fn default_branch(repo_path: &Path) -> Option<String>` in git.rs
 - Produces: `App::new(repos, header, show_prs, term_width, term_height)` loses the `show_stat` param; `App.show_stat` field is gone. Later tasks use the 5-param `App::new`.
 
-- [ ] **Step 1: Write the failing cache-key test** (in `src/cache.rs` tests)
+- [x] **Step 1: Write the failing cache-key test** (in `src/cache.rs` tests)
 
 ```rust
     #[test]
@@ -222,7 +222,7 @@ Adds the first real-repo integration test. Drops dead pull helpers."
 
 Make `path` visible to the test (it is in the same module; keep the field private, the test can read it). Run `cargo test cache_path_varies` and confirm it fails to compile against the old one-arg `new`.
 
-- [ ] **Step 2: Implement the keyed cache**
+- [x] **Step 2: Implement the keyed cache**
 
 ```rust
     pub fn new(ttl_secs: u64, repo_limit: u32, include_prs: bool) -> Self {
@@ -242,7 +242,7 @@ Make `path` visible to the test (it is in the same module; keep the field privat
 
 Update the call site `main.rs:925` to `cache::ApiCache::new(config.cache_ttl, config.repo_limit, args.prs)`. Update the two existing cache tests to construct via struct literal as they already do (unchanged) plus the new test.
 
-- [ ] **Step 3: Offline fallback on transport error** (`src/github.rs`)
+- [x] **Step 3: Offline fallback on transport error** (`src/github.rs`)
 
 Extract the repeated stale-parse into a helper above `fetch_repos`:
 
@@ -279,11 +279,11 @@ Replace the `send().await.map_err(...)` at github.rs:189-196 with:
 
 Also rewrite the two existing inline stale-parse blocks (cache hit at :175-181 and non-2xx at :199-206) to use `parse_cached(cache.read())` / `parse_cached(cache.read_stale())`.
 
-- [ ] **Step 4: Remove the dead `-s/--stat` flag**
+- [x] **Step 4: Remove the dead `-s/--stat` flag**
 
 It is parsed and stored but never read (App.show_stat has zero readers; commits are always fetched with stats). Wiring it up instead was considered and rejected: it would turn stats off by default, a silent behavior change. Remove: the `stat` field and its arg from `src/cli.rs:33-35`; `show_stat` from `App` and `App::new` (app.rs:395, 450-486); the fourth argument at main.rs:74; the `-s` assertions in cli.rs `combined_flags` test; the `-s, --stat` row in README's flags table and the `-s` example line.
 
-- [ ] **Step 5: Merged-branch base = default branch** (`src/git.rs`, `src/main.rs:500-502`)
+- [x] **Step 5: Merged-branch base = default branch** (`src/git.rs`, `src/main.rs:500-502`)
 
 Add to git.rs:
 
@@ -326,7 +326,7 @@ In `open_branch_overlay` (main.rs:500-502):
 
 Rename `merged_branches`'s parameter from `default_branch` to `base_branch` so the name stops lying. Add a real-repo test in `real_repo_tests`: create a repo on main, branch `feature`, merge it, sit on a third branch, assert `default_branch` returns `main` (via the main/master fallback) and `merged_branches(path, "main")` contains `feature`.
 
-- [ ] **Step 6: Discover linked worktrees** (`src/discovery.rs:109-113`)
+- [x] **Step 6: Discover linked worktrees** (`src/discovery.rs:109-113`)
 
 ```rust
     let git_dir = dir.join(".git");
@@ -340,7 +340,7 @@ Rename `merged_branches`'s parameter from `default_branch` to `base_branch` so t
 
 Add a test: create `wt/.git` as a plain file, assert `find_all_local` returns it.
 
-- [ ] **Step 7: Platform-aware browser opener** (`src/main.rs`)
+- [x] **Step 7: Platform-aware browser opener** (`src/main.rs`)
 
 Near the constants at main.rs:34-40:
 
@@ -354,7 +354,7 @@ const OPENER: &str = "xdg-open";
 
 At main.rs:717 replace `StdCommand::new("open")` with `StdCommand::new(OPENER)`.
 
-- [ ] **Step 8: Run the gates, stage, present the commit**
+- [x] **Step 8: Run the gates, stage, present the commit**
 
 Run: `cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check`
 

@@ -162,6 +162,12 @@ fn build_query(repo_limit: u32, include_prs: bool) -> String {
     )
 }
 
+/// Parse a cached raw response body into repos, if it parses at all.
+fn parse_cached(json: Option<String>) -> Option<Vec<GithubRepo>> {
+    let response: GraphQlResponse = serde_json::from_str(&json?).ok()?;
+    Some(parse_repos(response.data?.viewer.repositories.nodes))
+}
+
 /// Fetch repos from GitHub GraphQL API with disk caching.
 /// `bypass_cache`: if true, skips reading cache but still writes (used by the `R` reload).
 pub async fn fetch_repos(
@@ -171,12 +177,8 @@ pub async fn fetch_repos(
     bypass_cache: bool,
 ) -> Result<Vec<GithubRepo>, String> {
     // Try cache first
-    if !bypass_cache
-        && let Some(cached_json) = cache.read()
-        && let Ok(response) = serde_json::from_str::<GraphQlResponse>(&cached_json)
-        && let Some(data) = response.data
-    {
-        return Ok(parse_repos(data.viewer.repositories.nodes));
+    if !bypass_cache && let Some(repos) = parse_cached(cache.read()) {
+        return Ok(repos);
     }
 
     // Fetch fresh
@@ -184,22 +186,29 @@ pub async fn fetch_repos(
     let query = build_query(repo_limit, include_prs);
 
     let client = reqwest::Client::new();
-    let resp = client
+    let resp = match client
         .post("https://api.github.com/graphql")
         .header("Authorization", format!("bearer {token}"))
         .header("User-Agent", "fleetz")
         .json(&serde_json::json!({ "query": query }))
         .send()
         .await
-        .map_err(|e| format!("GitHub API request failed: {e}"))?;
+    {
+        Ok(r) => r,
+        // Transport failure (offline, DNS, TLS): serve stale cache if any,
+        // matching the non-2xx path below, so launch works offline.
+        Err(e) => {
+            if let Some(repos) = parse_cached(cache.read_stale()) {
+                return Ok(repos);
+            }
+            return Err(format!("GitHub API request failed: {e}"));
+        }
+    };
 
     if !resp.status().is_success() {
         // Fallback to stale cache
-        if let Some(stale) = cache.read_stale()
-            && let Ok(response) = serde_json::from_str::<GraphQlResponse>(&stale)
-            && let Some(data) = response.data
-        {
-            return Ok(parse_repos(data.viewer.repositories.nodes));
+        if let Some(repos) = parse_cached(cache.read_stale()) {
+            return Ok(repos);
         }
         return Err(format!("GitHub API returned {}", resp.status()));
     }

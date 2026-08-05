@@ -65,7 +65,6 @@ footer as repos are re-stat'd. The count field is capped per unit (hours up to
 | Flag | Description |
 |------|-------------|
 | `--author NAME` | Filter displayed commits by author (substring match) |
-| `-s, --stat` | Show diff stats per commit |
 | `-p, --prs` | Include open pull request counts |
 | `--watch` | Auto-refresh mode for a persistent tmux pane |
 

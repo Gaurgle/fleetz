@@ -432,7 +432,41 @@ pub async fn current_branch(repo_path: &Path) -> Option<String> {
     }
 }
 
-/// Get list of branches that have been merged into the default branch.
+/// The repo's default branch: origin/HEAD if known, else main/master if they
+/// exist locally. None when neither is resolvable (offline bare-ish repos).
+pub async fn default_branch(repo_path: &Path) -> Option<String> {
+    if let Some(o) = run_git(
+        repo_path,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )
+    .await
+        && o.status.success()
+    {
+        let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if let Some(name) = s.strip_prefix("origin/") {
+            return Some(name.to_string());
+        }
+    }
+    for cand in ["main", "master"] {
+        if let Some(o) = run_git(
+            repo_path,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{cand}"),
+            ],
+        )
+        .await
+            && o.status.success()
+        {
+            return Some(cand.to_string());
+        }
+    }
+    None
+}
+
+/// Get list of branches that have been merged into the given base branch.
 pub async fn merged_branches(repo_path: &Path, base_branch: &str) -> Vec<String> {
     let output = run_git(
         repo_path,
@@ -896,6 +930,42 @@ mod real_repo_tests {
         assert_eq!(dirty_count(&dir).await, 0);
         std::fs::write(dir.join("b.txt"), "two\n").unwrap();
         assert_eq!(dirty_count(&dir).await, 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn merged_branches_resolve_against_default_not_current() {
+        let dir = temp_repo("merged");
+
+        // Land a feature on main, then park on an unrelated branch. Asking
+        // about the current branch would miss the merge; the default branch
+        // is the answer the overlay actually wants.
+        sh(&dir, &["git", "switch", "-q", "-c", "feature"]);
+        std::fs::write(dir.join("f.txt"), "feat\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh(&dir, &["git", "commit", "-q", "-m", "feature work"]);
+        sh(&dir, &["git", "switch", "-q", "main"]);
+        sh(
+            &dir,
+            &["git", "merge", "-q", "--no-ff", "-m", "merge", "feature"],
+        );
+        sh(&dir, &["git", "switch", "-q", "-c", "elsewhere"]);
+
+        let base = default_branch(&dir).await;
+        assert_eq!(base.as_deref(), Some("main"), "no origin, so main fallback");
+
+        let merged = merged_branches(&dir, "main").await;
+        assert!(
+            merged.iter().any(|b| b == "feature"),
+            "feature merged into main, got {merged:?}"
+        );
+
+        let from_current = merged_branches(&dir, "elsewhere").await;
+        assert!(
+            from_current.iter().any(|b| b == "feature"),
+            "sanity: elsewhere descends from the merge too"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

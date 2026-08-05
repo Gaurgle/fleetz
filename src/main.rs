@@ -39,6 +39,12 @@ const GRAPH_COMMIT_COUNT: u32 = 10;
 /// it auto-dismisses back to the summary.
 const STATUS_TTL: std::time::Duration = std::time::Duration::from_millis(1500);
 
+/// Browser-opener binary: macOS ships `open`, everything else gets xdg-open.
+#[cfg(target_os = "macos")]
+const OPENER: &str = "open";
+#[cfg(not(target_os = "macos"))]
+const OPENER: &str = "xdg-open";
+
 /// Format a path for display, using `~/` shorthand when it's under the home dir.
 /// Unlike a bare `~{suffix}` concatenation, this always produces a string
 /// `shellexpand::tilde` can correctly re-expand back to the original path.
@@ -71,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         load_repos(&args, &config, &repo_dir, &mode, initial_window, false).await?;
 
     let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
-    let mut app = App::new(repos, header, args.prs, args.stat, term_width, term_height);
+    let mut app = App::new(repos, header, args.prs, term_width, term_height);
     app.watch_mode = args.watch;
     app.refresh_interval = config.refresh_interval;
     app.dataset = dataset;
@@ -506,8 +512,11 @@ async fn open_branch_overlay(app: &mut App) {
     let expanded = shellexpand::tilde(&path).to_string();
     let repo_path = Path::new(&expanded);
     let current = git::current_branch(repo_path).await.unwrap_or_default();
+    let base = git::default_branch(repo_path)
+        .await
+        .unwrap_or_else(|| current.clone());
     let all = git::all_branches(repo_path).await;
-    let merged = git::merged_branches(repo_path, &current).await;
+    let merged = git::merged_branches(repo_path, &base).await;
 
     let branches: Vec<BranchEntry> = all
         .into_iter()
@@ -729,7 +738,7 @@ async fn handle_normal_input(
             // Open first PR in browser (Shift+O)
             if let Some(repo) = app.selected_repo() {
                 if let Some(pr) = repo.prs.first() {
-                    let _ = StdCommand::new("open").arg(&pr.url).status();
+                    let _ = StdCommand::new(OPENER).arg(&pr.url).status();
                 } else if repo.pr_count > 0 {
                     app.set_status(
                         "Use -p flag to fetch PR details for browser open".to_string(),
@@ -940,7 +949,7 @@ async fn load_repos(
     }
 
     // Fetch from GitHub (with caching)
-    let api_cache = cache::ApiCache::new(config.cache_ttl);
+    let api_cache = cache::ApiCache::new(config.cache_ttl, config.repo_limit, args.prs);
     let dataset = fetch_dataset(config, args, &api_cache, bypass_cache).await?;
 
     let (cutoff, header) = resolve_cutoff(window, mode, config)?;

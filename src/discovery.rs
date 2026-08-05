@@ -104,7 +104,9 @@ fn scan_recursive(dir: &Path, depth: usize, max_depth: usize, callback: &mut dyn
     }
 
     let git_dir = dir.join(".git");
-    if git_dir.is_dir() {
+    // A .git *file* (gitdir pointer) marks a linked worktree or submodule
+    // checkout; both are real working trees worth listing.
+    if git_dir.is_dir() || git_dir.is_file() {
         callback(dir);
         return; // don't descend into git repos
     }
@@ -204,6 +206,21 @@ mod tests {
 
         let all = find_all_local(std::slice::from_ref(&dir));
         assert_eq!(all.len(), 3);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn find_all_local_includes_gitdir_pointer_worktrees() {
+        let dir = std::env::temp_dir().join("fleetz_test_wt_pointer");
+        let _ = fs::remove_dir_all(&dir);
+        let wt = dir.join("wt");
+        fs::create_dir_all(&wt).unwrap();
+        // A linked worktree has a .git *file* pointing at the real git dir.
+        fs::write(wt.join(".git"), "gitdir: /somewhere/.git/worktrees/wt\n").unwrap();
+
+        let all = find_all_local(std::slice::from_ref(&dir));
+        assert_eq!(all, vec![wt]);
 
         fs::remove_dir_all(dir).ok();
     }

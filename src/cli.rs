@@ -30,10 +30,6 @@ pub struct Args {
     #[arg(long)]
     pub author: Option<String>,
 
-    /// Force diff stats on all repos
-    #[arg(short = 's', long)]
-    pub stat: bool,
-
     /// Include open pull request counts
     #[arg(short = 'p', long)]
     pub prs: bool,
@@ -105,10 +101,9 @@ mod tests {
 
     #[test]
     fn combined_flags() {
-        let args = Args::parse_from(["fleetz", "--since", "1w", "--author", "andreas", "-s", "-p"]);
+        let args = Args::parse_from(["fleetz", "--since", "1w", "--author", "andreas", "-p"]);
         assert_eq!(args.mode(), Mode::Since("1w".to_string()));
         assert_eq!(args.author.as_deref(), Some("andreas"));
-        assert!(args.stat);
         assert!(args.prs);
     }
 }
