@@ -123,6 +123,10 @@ pub struct RepoStatus {
     pub reflog: Vec<ReflogEntry>,
     pub graph: Vec<GraphLine>,
     pub repo_kind: RepoKind,
+    /// Owner login as reported by the GitHub API, when a fetch matched this
+    /// repo. Local-only clones leave it None and fall back to the remote URL
+    /// via `owner_display`.
+    pub owner: Option<String>,
     /// URL of the `origin` remote, if configured.
     pub remote_url: Option<String>,
     /// Remote-tracking branches (e.g. "origin/feature-x") with no local
@@ -176,9 +180,43 @@ pub enum RepoKind {
     Unknown,
 }
 
+/// Pull the owner out of a git remote URL, covering the forms git actually
+/// writes: scp-style (`git@host:owner/repo.git`), HTTPS/SSH URLs
+/// (`https://host/owner/repo.git`, `ssh://git@host/owner/repo.git`), with or
+/// without the `.git` suffix. Anything that doesn't yield an `owner/repo`
+/// pair returns None rather than a guess.
+///
+/// Self-hosted hosts work too: only the path shape matters, not the host.
+pub fn owner_from_remote_url(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    // scp-style has no scheme and puts the path after a colon. Checking for
+    // "://" first keeps a URL's own "host:port" colon from matching here.
+    let path = if let Some((_, after)) = url.split_once("://") {
+        after.split_once('/').map(|(_, p)| p)?
+    } else {
+        url.split_once(':').map(|(_, p)| p)?
+    };
+
+    let mut segments = path.trim_start_matches('/').split('/');
+    let owner = segments.next().filter(|s| !s.is_empty())?;
+    // Require a repo segment as well, so a bare host never reads as an owner.
+    segments.next().filter(|s| !s.is_empty())?;
+    Some(owner.to_string())
+}
+
 impl RepoStatus {
     pub fn is_synced(&self) -> bool {
         self.behind == 0 && self.ahead == 0 && self.dirty == 0
+    }
+
+    /// The owner to show in the UI: the API login when a GitHub fetch matched
+    /// this repo, otherwise whatever the `origin` remote reveals. None when
+    /// the repo has neither, which is the "no identity to show" case.
+    pub fn owner_display(&self) -> Option<String> {
+        if let Some(owner) = &self.owner {
+            return Some(owner.clone());
+        }
+        owner_from_remote_url(self.remote_url.as_deref()?)
     }
 
     /// A short status string like "3↓", "2↑", "4!", or "✓" (synced). The
@@ -262,6 +300,61 @@ impl Summary {
 mod tests {
     use super::*;
 
+    #[test]
+    fn owner_parsed_from_every_remote_url_form() {
+        for (url, want) in [
+            ("git@github.com:Gaurgle/fleetz.git", "Gaurgle"),
+            ("git@github.com:Gaurgle/fleetz", "Gaurgle"),
+            ("https://github.com/Gaurgle/fleetz.git", "Gaurgle"),
+            ("https://github.com/Gaurgle/fleetz/", "Gaurgle"),
+            ("ssh://git@github.com/acme/service.git", "acme"),
+            // Self-hosted, and a non-default port, which must not be read as
+            // the scp-style path separator.
+            ("ssh://git@git.internal:2222/acme/service.git", "acme"),
+            ("https://gitlab.example.com/team/tool.git", "team"),
+        ] {
+            assert_eq!(
+                owner_from_remote_url(url).as_deref(),
+                Some(want),
+                "parsing {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn owner_is_none_for_urls_without_an_owner_repo_pair() {
+        for url in [
+            "",
+            "not a url",
+            "https://github.com",
+            "https://github.com/",
+            // An owner with no repo segment is not an owner.
+            "https://github.com/Gaurgle",
+            "git@github.com:",
+            "/local/path/repo",
+        ] {
+            assert_eq!(owner_from_remote_url(url), None, "parsing {url:?}");
+        }
+    }
+
+    #[test]
+    fn owner_display_prefers_the_api_over_the_remote_url() {
+        // The API login is authoritative: a remote can point at a fork or a
+        // mirror whose path no longer matches the owner GitHub reports.
+        let mut repo = make_repo("fleetz", 0, 0, 0);
+        repo.remote_url = Some("git@github.com:someone-else/fleetz.git".to_string());
+        assert_eq!(repo.owner_display().as_deref(), Some("someone-else"));
+
+        repo.owner = Some("Gaurgle".to_string());
+        assert_eq!(repo.owner_display().as_deref(), Some("Gaurgle"));
+    }
+
+    #[test]
+    fn owner_display_is_none_without_api_or_remote() {
+        let repo = make_repo("orphan", 0, 0, 0);
+        assert_eq!(repo.owner_display(), None);
+    }
+
     fn make_repo(name: &str, behind: u32, ahead: u32, dirty: u32) -> RepoStatus {
         RepoStatus {
             name: name.to_string(),
@@ -284,6 +377,7 @@ mod tests {
             reflog: vec![],
             graph: vec![],
             repo_kind: RepoKind::Unknown,
+            owner: None,
             remote_url: None,
             remote_only_branches: vec![],
             work_key: None,

@@ -20,6 +20,8 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 - CI status (green check, red cross, blinking orange circle while running) from GitHub's `statusCheckRollup`, kept live in watch mode
 - Active worktrees (`w` badge) and stashes (`s` badge)
 - Repo groups defined in your config (cycle with `g`)
+- Repo ownership in the detail pane: `owner/name` flush right on the status
+  line, colored and glyphed by kind (org, private, public)
 
 The dashboard opens immediately: the first frame paints before any GitHub or
 filesystem work, and a spinner in the header marks the load until repos land.

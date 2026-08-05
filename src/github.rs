@@ -14,6 +14,9 @@ pub struct GithubRepo {
     pub ci_workflow: Option<String>,
     pub ci_duration: Option<String>,
     pub repo_kind: RepoKind,
+    /// The owner's login (`Gaurgle`, or an org name). `repo_kind` says which
+    /// *kind* of owner it is; this says who.
+    pub owner: Option<String>,
 }
 
 // --- Raw deserialization types (match GraphQL response shape) ---
@@ -69,6 +72,7 @@ struct RepoNode {
 struct OwnerNode {
     #[serde(rename = "__typename")]
     typename: String,
+    login: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -155,7 +159,7 @@ fn build_query(repo_limit: u32, include_prs: bool) -> String {
     let repo_fields = format!(
         r#"nodes {{
       name, pushedAt, isPrivate
-      owner {{ __typename }}
+      owner {{ __typename, login }}
       {pr_field}
       defaultBranchRef {{
         target {{
@@ -299,6 +303,8 @@ fn parse_repos(nodes: Vec<RepoNode>) -> Vec<GithubRepo> {
                 _ => RepoKind::Unknown,
             };
 
+            let owner = node.owner.and_then(|o| o.login);
+
             Some(GithubRepo {
                 name: node.name,
                 pushed_at: dt.with_timezone(&Utc),
@@ -308,6 +314,7 @@ fn parse_repos(nodes: Vec<RepoNode>) -> Vec<GithubRepo> {
                 ci_workflow,
                 ci_duration,
                 repo_kind,
+                owner,
             })
         })
         .collect()
@@ -474,6 +481,7 @@ mod tests {
             ci_workflow: None,
             ci_duration: None,
             repo_kind: RepoKind::Unknown,
+            owner: None,
         }
     }
 
@@ -561,6 +569,7 @@ mod tests {
             is_private: Some(true),
             owner: Some(OwnerNode {
                 typename: "Organization".to_string(),
+                login: Some("acme".to_string()),
             }),
             pull_requests: None,
             default_branch_ref: None,
@@ -577,6 +586,7 @@ mod tests {
             is_private: Some(true),
             owner: Some(OwnerNode {
                 typename: "User".to_string(),
+                login: Some("Gaurgle".to_string()),
             }),
             pull_requests: None,
             default_branch_ref: None,
@@ -593,12 +603,39 @@ mod tests {
             is_private: Some(false),
             owner: Some(OwnerNode {
                 typename: "User".to_string(),
+                login: Some("Gaurgle".to_string()),
             }),
             pull_requests: None,
             default_branch_ref: None,
         }];
         let repos = parse_repos(nodes);
         assert_eq!(repos[0].repo_kind, RepoKind::Public);
+    }
+
+    #[test]
+    fn parse_repos_extracts_owner_login() {
+        let nodes = vec![RepoNode {
+            name: "org_repo".to_string(),
+            pushed_at: Some("2026-04-01T10:00:00Z".to_string()),
+            is_private: Some(true),
+            owner: Some(OwnerNode {
+                typename: "Organization".to_string(),
+                login: Some("acme".to_string()),
+            }),
+            pull_requests: None,
+            default_branch_ref: None,
+        }];
+        let repos = parse_repos(nodes);
+        assert_eq!(repos[0].owner.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn parse_repos_tolerates_missing_owner() {
+        // The login is nullable in the schema, and a repo can come back with
+        // no owner node at all; neither must drop the repo from the list.
+        let repos = parse_repos(vec![make_node("bare", Some("2026-04-01T10:00:00Z"))]);
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].owner, None);
     }
 
     #[test]

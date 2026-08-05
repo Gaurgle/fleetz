@@ -249,6 +249,14 @@ CI conventional. Candidates:
 
 ## Owner and identity in the detail pane
 
+**Status: shipped.** `owner { __typename, login }` is fetched, `RepoStatus`
+carries `owner`, and `identity_spans` renders `owner/name` flush right on the
+status line. Resolutions to the open questions below: kept in the **body**
+(not the title); the remote URL line **stays** for now since it is the only
+place a self-hosted host is visible; narrow panes **drop the whole group**
+rather than truncating it; a repo with neither an API match nor a parseable
+remote renders **nothing**.
+
 **Problem.** Pane 2 tells you almost nothing about *whose* repo you are looking
 at. The name appears once in the panel title, and the only ownership signal is
 the remote URL rendered in flat `OVERLAY` grey under the status line:

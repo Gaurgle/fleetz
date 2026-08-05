@@ -1363,6 +1363,7 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
         reflog,
         graph,
         repo_kind: model::RepoKind::Unknown,
+        owner: None,
         remote_url,
         remote_only_branches,
         work_key: None,
@@ -1622,6 +1623,7 @@ async fn assemble_view(
             reflog: vec![],
             graph: vec![],
             repo_kind: gh_repo.repo_kind,
+            owner: gh_repo.owner.clone(),
             remote_url: None,
             remote_only_branches: vec![],
             work_key: None,
@@ -1693,6 +1695,9 @@ async fn local_only_status(
         reflog: vec![],
         graph: vec![],
         repo_kind,
+        // No GitHub match, so the remote URL is the only identity available;
+        // `owner_display` parses it at render time.
+        owner: None,
         remote_url,
         remote_only_branches,
         work_key: None,
@@ -1738,6 +1743,7 @@ async fn build_repo_status(
     let ci_workflow = gh_match.and_then(|r| r.ci_workflow.clone());
     let ci_duration = gh_match.and_then(|r| r.ci_duration.clone());
     let repo_kind = gh_match.map_or(model::RepoKind::Unknown, |r| r.repo_kind);
+    let owner = gh_match.and_then(|r| r.owner.clone());
 
     let display = tilde_display(path);
 
@@ -1771,6 +1777,7 @@ async fn build_repo_status(
         reflog,
         graph,
         repo_kind,
+        owner,
         remote_url,
         remote_only_branches,
         // Taken last, after every probe above, so the first sweep that finds

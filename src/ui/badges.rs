@@ -23,13 +23,35 @@ pub const MARKER_W: usize = 2;
 /// (e.g. local-only repos), so the name column starts at the same place on
 /// every row regardless.
 pub fn glyph_span(repo: &RepoStatus) -> Span<'static> {
-    let (glyph, color) = match repo.repo_kind {
-        RepoKind::Org => ("\u{f1ad}", colors::MAUVE), // building
-        RepoKind::Private => ("\u{f023}", colors::PEACH), // lock
-        RepoKind::Public => ("\u{f0ac}", colors::GREEN), // globe
-        RepoKind::Unknown => return Span::raw(" ".repeat(GLYPH_W)),
+    let Some(glyph) = kind_glyph(repo.repo_kind) else {
+        return Span::raw(" ".repeat(GLYPH_W));
     };
-    Span::styled(format!("{glyph} "), Style::default().fg(color))
+    Span::styled(
+        format!("{glyph} "),
+        Style::default().fg(kind_color(repo.repo_kind)),
+    )
+}
+
+/// The Nerd Font icon for a repo kind, or None for `Unknown` (which has no
+/// icon and renders as blank padding).
+pub fn kind_glyph(kind: RepoKind) -> Option<&'static str> {
+    match kind {
+        RepoKind::Org => Some("\u{f1ad}"),     // building
+        RepoKind::Private => Some("\u{f023}"), // lock
+        RepoKind::Public => Some("\u{f0ac}"),  // globe
+        RepoKind::Unknown => None,
+    }
+}
+
+/// The color for a repo kind. Shared by the list glyph and the detail pane's
+/// owner line so the two can never disagree about what "org" looks like.
+pub fn kind_color(kind: RepoKind) -> Color {
+    match kind {
+        RepoKind::Org => colors::MAUVE,
+        RepoKind::Private => colors::PEACH,
+        RepoKind::Public => colors::GREEN,
+        RepoKind::Unknown => colors::OVERLAY,
+    }
 }
 
 fn ci_text(repo: &RepoStatus) -> String {
