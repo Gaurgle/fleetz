@@ -3,35 +3,64 @@ use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
 
-/// Run `git fetch --quiet` on a repo. Errors are silently ignored (matches repoz behavior).
+/// Hard ceiling per git invocation so one repo on a dead network mount or a
+/// credential prompt can never wedge a sweep. kill_on_drop reaps the child.
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Build a hardened git command: no optional locks (polling must not take
+/// index.lock and fight editors), no terminal prompts (a fetch that wants
+/// credentials fails instead of hanging), C locale (parsers match English
+/// words like "insertion"), no color, stdin closed.
+fn git_cmd(repo_path: &Path, args: &[&str]) -> Command {
+    let mut c = Command::new("git");
+    c.arg("--no-optional-locks")
+        .args(["-c", "color.ui=false"])
+        .args(["-C", &repo_path.to_string_lossy()])
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    c
+}
+
+/// Run a git command with the hardening and timeout. None means the process
+/// could not run or timed out; callers treat that like a failed status.
+pub(crate) async fn run_git(repo_path: &Path, args: &[&str]) -> Option<std::process::Output> {
+    match tokio::time::timeout(GIT_TIMEOUT, git_cmd(repo_path, args).output()).await {
+        Ok(Ok(output)) => Some(output),
+        _ => None,
+    }
+}
+
+/// Run `git fetch` on a repo. Prunes deleted remote branches so
+/// remote_only_branches does not accumulate stale entries.
 pub async fn fetch(repo_path: &Path) -> bool {
-    Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "fetch", "--quiet"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+    run_git(repo_path, &["fetch", "--quiet", "--prune"])
         .await
-        .map(|s| s.success())
+        .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
 /// Get all branch statuses for a repo (behind/ahead relative to upstream).
 pub async fn branch_statuses(repo_path: &Path) -> Vec<BranchStatus> {
-    let output = Command::new("git")
-        .args([
-            "-C",
-            &repo_path.to_string_lossy(),
+    let Some(output) = run_git(
+        repo_path,
+        &[
             "for-each-ref",
             "--format=%(refname:short)\t%(upstream:short)\t%(upstream:track)",
             "refs/heads/",
-        ])
-        .output()
-        .await;
-
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
+        ],
+    )
+    .await
+    else {
+        return Vec::new();
     };
+    if !output.status.success() {
+        return Vec::new();
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut statuses = parse_branch_output(&stdout);
@@ -52,21 +81,14 @@ pub async fn branch_statuses(repo_path: &Path) -> Vec<BranchStatus> {
 
 /// Count commits on `branch` not reachable from any remote-tracking ref.
 async fn count_unreachable_from_remotes(repo_path: &Path, branch: &str) -> u32 {
-    let output = Command::new("git")
-        .args([
-            "-C",
-            &repo_path.to_string_lossy(),
-            "rev-list",
-            "--count",
-            branch,
-            "--not",
-            "--remotes",
-        ])
-        .output()
-        .await;
+    let output = run_git(
+        repo_path,
+        &["rev-list", "--count", branch, "--not", "--remotes"],
+    )
+    .await;
 
     match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
             .trim()
             .parse()
             .unwrap_or(0),
@@ -82,7 +104,10 @@ fn parse_branch_output(output: &str) -> Vec<BranchStatus> {
         .map(|line| {
             let parts: Vec<&str> = line.split('\t').collect();
             let name = parts.first().unwrap_or(&"").to_string();
-            let upstream = parts.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string());
+            let upstream = parts
+                .get(1)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
             let track = parts.get(2).unwrap_or(&"");
 
             let (ahead, behind) = parse_track_info(track);
@@ -106,7 +131,7 @@ fn parse_track_info(track: &str) -> (u32, u32) {
         return (ahead, behind);
     }
 
-    for part in track.split(|c: char| c == '[' || c == ']' || c == ',') {
+    for part in track.split(['[', ']', ',']) {
         let part = part.trim();
         if let Some(n) = part.strip_prefix("ahead ") {
             ahead = n.trim().parse().unwrap_or(0);
@@ -120,18 +145,13 @@ fn parse_track_info(track: &str) -> (u32, u32) {
 
 /// Count uncommitted/untracked changes (like `git status --porcelain | wc -l`).
 pub async fn dirty_count(repo_path: &Path) -> u32 {
-    let output = Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "status", "--porcelain"])
-        .output()
-        .await;
+    let output = run_git(repo_path, &["status", "--porcelain"]).await;
 
     match output {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .count() as u32
-        }
+        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .count() as u32,
         _ => 0,
     }
 }
@@ -139,23 +159,20 @@ pub async fn dirty_count(repo_path: &Path) -> u32 {
 /// Recent commits on a specific branch (local or "origin/x"), for the
 /// read-only preview of what's happened on a branch without checking it out.
 pub async fn branch_commits(repo_path: &Path, branch: &str, limit: u32) -> Vec<Commit> {
-    let output = Command::new("git")
-        .args([
-            "-C",
-            &repo_path.to_string_lossy(),
+    let output = run_git(
+        repo_path,
+        &[
             "log",
             &format!("-{limit}"),
             "--date=relative",
             "--format=%x1e%h%x1f%aN%x1f%ad%x1f%s%x1f%b",
             branch,
-        ])
-        .output()
-        .await;
+        ],
+    )
+    .await;
 
     match output {
-        Ok(o) if o.status.success() => {
-            parse_commit_output(&String::from_utf8_lossy(&o.stdout))
-        }
+        Some(o) if o.status.success() => parse_commit_output(&String::from_utf8_lossy(&o.stdout)),
         _ => Vec::new(),
     }
 }
@@ -172,8 +189,6 @@ pub async fn commits(
     // split by US (0x1f). With --shortstat, a " N files changed..." line
     // trails the body inside the same record.
     let mut args = vec![
-        "-C".to_string(),
-        repo_path.to_string_lossy().to_string(),
         "log".to_string(),
         "--date=relative".to_string(),
         "--format=%x1e%h%x1f%aN%x1f%ad%x1f%s%x1f%b".to_string(),
@@ -190,10 +205,14 @@ pub async fn commits(
     }
     args.push(range.to_string());
 
-    let output = Command::new("git").args(&args).output().await;
+    let output = run_git(
+        repo_path,
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )
+    .await;
 
     let output = match output {
-        Ok(o) if o.status.success() => o,
+        Some(o) if o.status.success() => o,
         _ => return Vec::new(),
     };
 
@@ -229,7 +248,9 @@ fn parse_commit_output(output: &str) -> Vec<Commit> {
         if let Some(tail) = fields.get(4) {
             for line in tail.lines() {
                 if line.contains("changed")
-                    && (line.contains("insertion") || line.contains("deletion") || line.contains("file"))
+                    && (line.contains("insertion")
+                        || line.contains("deletion")
+                        || line.contains("file"))
                 {
                     insertions = extract_stat_number(line, "insertion");
                     deletions = extract_stat_number(line, "deletion");
@@ -289,10 +310,10 @@ fn extract_stat_number(line: &str, keyword: &str) -> u32 {
     // Find " N insertion" or " N deletion" pattern
     for part in line.split(',') {
         let part = part.trim();
-        if part.contains(keyword) {
-            if let Some(n) = part.split_whitespace().next() {
-                return n.parse().unwrap_or(0);
-            }
+        if part.contains(keyword)
+            && let Some(n) = part.split_whitespace().next()
+        {
+            return n.parse().unwrap_or(0);
         }
     }
     0
@@ -301,20 +322,14 @@ fn extract_stat_number(line: &str, keyword: &str) -> u32 {
 /// Get the last `limit` reflog entries -- HEAD movements, for a "what did I
 /// just do" recovery glance.
 pub async fn reflog(repo_path: &Path, limit: u32) -> Vec<ReflogEntry> {
-    let output = Command::new("git")
-        .args([
-            "-C",
-            &repo_path.to_string_lossy(),
-            "reflog",
-            "--format=REFLOG|%h|%gs",
-            "-n",
-            &limit.to_string(),
-        ])
-        .output()
-        .await;
+    let output = run_git(
+        repo_path,
+        &["reflog", "--format=REFLOG|%h|%gs", "-n", &limit.to_string()],
+    )
+    .await;
 
     let output = match output {
-        Ok(o) if o.status.success() => o,
+        Some(o) if o.status.success() => o,
         _ => return Vec::new(),
     };
 
@@ -354,8 +369,6 @@ pub async fn graph(repo_path: &Path, branches: &[String], limit: u32) -> Vec<Gra
     }
 
     let mut args = vec![
-        "-C".to_string(),
-        repo_path.to_string_lossy().to_string(),
         "log".to_string(),
         "--graph".to_string(),
         "--color=never".to_string(),
@@ -365,10 +378,14 @@ pub async fn graph(repo_path: &Path, branches: &[String], limit: u32) -> Vec<Gra
     ];
     args.extend(branches.iter().cloned());
 
-    let output = Command::new("git").args(&args).output().await;
+    let output = run_git(
+        repo_path,
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )
+    .await;
 
     let output = match output {
-        Ok(o) if o.status.success() => o,
+        Some(o) if o.status.success() => o,
         _ => return Vec::new(),
     };
 
@@ -404,46 +421,9 @@ fn parse_graph_output(output: &str) -> Vec<GraphLine> {
         .collect()
 }
 
-/// Check if a branch is fast-forward-able (not diverged).
-pub async fn is_ff_possible(repo_path: &Path, branch: &str, upstream: &str) -> bool {
-    // If the merge-base of branch and upstream equals branch, it's ff-able
-    let output = Command::new("git")
-        .args([
-            "-C",
-            &repo_path.to_string_lossy(),
-            "merge-base",
-            "--is-ancestor",
-            branch,
-            upstream,
-        ])
-        .status()
-        .await;
-
-    output.map(|s| s.success()).unwrap_or(false)
-}
-
-/// Execute `git pull --ff-only` on a repo.
-pub async fn pull_ff_only(repo_path: &Path) -> Result<String, String> {
-    let output = Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "pull", "--ff-only"])
-        .output()
-        .await
-        .map_err(|e| format!("failed to run git pull: {e}"))?;
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
-}
-
 /// Get the current branch name.
 pub async fn current_branch(repo_path: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .await
-        .ok()?;
+    let output = run_git(repo_path, &["rev-parse", "--abbrev-ref", "HEAD"]).await?;
 
     if output.status.success() {
         Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -453,45 +433,38 @@ pub async fn current_branch(repo_path: &Path) -> Option<String> {
 }
 
 /// Get list of branches that have been merged into the default branch.
-pub async fn merged_branches(repo_path: &Path, default_branch: &str) -> Vec<String> {
-    let output = Command::new("git")
-        .args([
-            "-C", &repo_path.to_string_lossy(),
-            "branch", "--merged", default_branch, "--format=%(refname:short)",
-        ])
-        .output()
-        .await;
+pub async fn merged_branches(repo_path: &Path, base_branch: &str) -> Vec<String> {
+    let output = run_git(
+        repo_path,
+        &[
+            "branch",
+            "--merged",
+            base_branch,
+            "--format=%(refname:short)",
+        ],
+    )
+    .await;
 
     match output {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(|l| l.trim().to_string())
-                .collect()
-        }
+        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.trim().to_string())
+            .collect(),
         _ => Vec::new(),
     }
 }
 
 /// Get all local branch names.
 pub async fn all_branches(repo_path: &Path) -> Vec<String> {
-    let output = Command::new("git")
-        .args([
-            "-C", &repo_path.to_string_lossy(),
-            "branch", "--format=%(refname:short)",
-        ])
-        .output()
-        .await;
+    let output = run_git(repo_path, &["branch", "--format=%(refname:short)"]).await;
 
     match output {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(|l| l.trim().to_string())
-                .collect()
-        }
+        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.trim().to_string())
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -499,23 +472,18 @@ pub async fn all_branches(repo_path: &Path) -> Vec<String> {
 /// Get all remote-tracking branch names (e.g. "origin/feature-x"), excluding
 /// symbolic refs like `origin/HEAD`.
 pub async fn remote_branches(repo_path: &Path) -> Vec<String> {
-    let output = Command::new("git")
-        .args([
-            "-C", &repo_path.to_string_lossy(),
-            "for-each-ref", "--format=%(refname:short)",
-            "refs/remotes/",
-        ])
-        .output()
-        .await;
+    let output = run_git(
+        repo_path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/remotes/"],
+    )
+    .await;
 
     match output {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty() && !l.ends_with("/HEAD"))
-                .map(|l| l.trim().to_string())
-                .collect()
-        }
+        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.is_empty() && !l.ends_with("/HEAD"))
+            .map(|l| l.trim().to_string())
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -537,11 +505,7 @@ pub fn unfetched_branches(remote: &[String], local: &[String]) -> Vec<String> {
 
 /// Get the URL of the "origin" remote, if configured.
 pub async fn remote_url(repo_path: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "remote", "get-url", "origin"])
-        .output()
-        .await
-        .ok()?;
+    let output = run_git(repo_path, &["remote", "get-url", "origin"]).await?;
 
     if output.status.success() {
         let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -561,11 +525,9 @@ pub async fn switch_branch(repo_path: &Path, branch: &str) -> Result<(), String>
         .filter(|(remote, _)| !remote.is_empty())
         .map_or(branch, |(_, name)| name);
 
-    let output = Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "switch", local])
-        .output()
+    let output = run_git(repo_path, &["switch", local])
         .await
-        .map_err(|e| format!("failed to switch branch: {e}"))?;
+        .ok_or_else(|| "failed to switch branch: git did not run".to_string())?;
 
     if output.status.success() {
         Ok(())
@@ -576,11 +538,9 @@ pub async fn switch_branch(repo_path: &Path, branch: &str) -> Result<(), String>
 
 /// Delete a local branch.
 pub async fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), String> {
-    let output = Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "branch", "-d", branch])
-        .output()
+    let output = run_git(repo_path, &["branch", "-d", branch])
         .await
-        .map_err(|e| format!("failed to delete branch: {e}"))?;
+        .ok_or_else(|| "failed to delete branch: git did not run".to_string())?;
 
     if output.status.success() {
         Ok(())
@@ -591,32 +551,24 @@ pub async fn delete_branch(repo_path: &Path, branch: &str) -> Result<(), String>
 
 /// List stash entries.
 pub async fn stash_list(repo_path: &Path) -> Vec<String> {
-    let output = Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "stash", "list", "--format=%s"])
-        .output()
-        .await;
+    let output = run_git(repo_path, &["stash", "list", "--format=%s"]).await;
 
     match output {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(|l| l.to_string())
-                .collect()
-        }
+        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect(),
         _ => Vec::new(),
     }
 }
 
 /// List active worktrees (excluding the main one).
 pub async fn worktree_list(repo_path: &Path) -> Vec<crate::model::Worktree> {
-    let output = Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "worktree", "list", "--porcelain"])
-        .output()
-        .await;
+    let output = run_git(repo_path, &["worktree", "list", "--porcelain"]).await;
 
     let output = match output {
-        Ok(o) if o.status.success() => o,
+        Some(o) if o.status.success() => o,
         _ => return Vec::new(),
     };
 
@@ -687,7 +639,10 @@ mod tests {
     fn unfetched_branches_skips_ones_with_local_counterpart() {
         let remote = vec!["origin/main".to_string(), "origin/feature-x".to_string()];
         let local = vec!["main".to_string()];
-        assert_eq!(unfetched_branches(&remote, &local), vec!["origin/feature-x"]);
+        assert_eq!(
+            unfetched_branches(&remote, &local),
+            vec!["origin/feature-x"]
+        );
     }
 
     #[test]
@@ -797,10 +752,31 @@ mod tests {
         assert_eq!(commits[0].insertions, 12);
         assert_eq!(commits[0].deletions, 10);
         assert_eq!(commits[0].files.len(), 3);
-        assert_eq!(commits[0].files[0], FileStat { path: "src/main.rs".into(), added: 12, removed: 3 });
-        assert_eq!(commits[0].files[1], FileStat { path: "README.md".into(), added: 0, removed: 7 });
+        assert_eq!(
+            commits[0].files[0],
+            FileStat {
+                path: "src/main.rs".into(),
+                added: 12,
+                removed: 3
+            }
+        );
+        assert_eq!(
+            commits[0].files[1],
+            FileStat {
+                path: "README.md".into(),
+                added: 0,
+                removed: 7
+            }
+        );
         // Binary file: numstat reports `-` for both counts, stored as 0/0.
-        assert_eq!(commits[0].files[2], FileStat { path: "logo.png".into(), added: 0, removed: 0 });
+        assert_eq!(
+            commits[0].files[2],
+            FileStat {
+                path: "logo.png".into(),
+                added: 0,
+                removed: 0
+            }
+        );
     }
 
     #[test]
@@ -811,14 +787,21 @@ mod tests {
         assert!(parse_numstat_line("12\t3").is_none()); // missing path
         assert_eq!(
             parse_numstat_line("5\t2\tsrc/app.rs"),
-            Some(FileStat { path: "src/app.rs".into(), added: 5, removed: 2 })
+            Some(FileStat {
+                path: "src/app.rs".into(),
+                added: 5,
+                removed: 2
+            })
         );
     }
 
     #[test]
     fn extract_stat_number_works() {
         assert_eq!(
-            extract_stat_number(" 3 files changed, 18 insertions(+), 4 deletions(-)", "insertion"),
+            extract_stat_number(
+                " 3 files changed, 18 insertions(+), 4 deletions(-)",
+                "insertion"
+            ),
             18
         );
         assert_eq!(
@@ -870,5 +853,50 @@ mod tests {
         assert_eq!(lines[2].prefix, "| * ");
         assert_eq!(lines[2].hash, "d4e5f6g");
         assert_eq!(lines[2].author, "Bob");
+    }
+}
+
+#[cfg(test)]
+mod real_repo_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::process::Command as StdCommand;
+
+    fn sh(dir: &Path, args: &[&str]) {
+        let status = StdCommand::new(args[0])
+            .args(&args[1..])
+            .current_dir(dir)
+            .status()
+            .expect("spawn");
+        assert!(status.success(), "command failed: {args:?}");
+    }
+
+    fn temp_repo(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fleetz_it_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        sh(&dir, &["git", "init", "-q", "-b", "main"]);
+        sh(&dir, &["git", "config", "user.email", "t@example.com"]);
+        sh(&dir, &["git", "config", "user.name", "t"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh(&dir, &["git", "commit", "-q", "-m", "init"]);
+        dir
+    }
+
+    #[tokio::test]
+    async fn branch_statuses_and_dirty_count_on_real_repo() {
+        let dir = temp_repo("basic");
+
+        let branches = branch_statuses(&dir).await;
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].name, "main");
+        assert_eq!(branches[0].upstream, None);
+
+        assert_eq!(dirty_count(&dir).await, 0);
+        std::fs::write(dir.join("b.txt"), "two\n").unwrap();
+        assert_eq!(dirty_count(&dir).await, 1);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
