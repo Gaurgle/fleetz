@@ -7,6 +7,11 @@ thinking captured so it is not lost.
 
 ## Interactive time scope
 
+**Status: shipped.** `t` opens the time-window overlay (`ui/timewindow.rs`),
+the window is applied as a view filter, and the last choice persists via
+`window_state.rs`. Kept here for the reasoning; the open questions below are
+resolved or moot.
+
 **Problem.** repoz sets the activity window with a flag (`--since 1d`, `2d`,
 `1w`, `1h`, etc.). fleetz has the same flag, but it is interactive, so you
 should be able to change the window live without relaunching, and see the
@@ -78,3 +83,105 @@ actually bites.
 - Key bindings: `[` / `]` vs `<` / `>`; and whether the `@`/`since:` token is
   worth it once the cycle key exists.
 - How this composes with `--before` (a second bound) interactively.
+
+---
+
+## Settings menu
+
+**Problem.** Every tunable lives in `~/.config/fleetz/config.toml` and is read
+exactly once at startup. Changing the watch interval, the repo limit, or the
+starting view means quitting, editing a file, and relaunching. For a tool you
+sit in all day that is the wrong loop. A modal settings overlay would fix it,
+and would give later parameters (themes, hidden repos) somewhere to land
+instead of accreting one-off keybindings.
+
+**Menu, not an in-app command.** A command line inside the TUI would need its
+own parser, its own discovery problem (you have to know the command exists),
+and its own help. A menu is self-documenting: open it and every tunable is
+visible with its current value.
+
+### Why the interval is nearly free
+
+`refresh_interval` is read once into app state, CLI flag winning:
+
+```rust
+// src/main.rs:206
+app.refresh_interval = args.interval.unwrap_or(config.refresh_interval);
+```
+
+The watch tick only ever compares elapsed seconds against that field
+(`src/main.rs:432-436`). Nothing caches it, nothing derives from it. Mutating
+`app.refresh_interval` at runtime takes effect on the next tick: no restart, no
+reload, no plumbing. It is the natural first setting.
+
+### The overlay machinery already exists
+
+`Overlay::{None, Help, Branches, TimeWindow}` (`src/app.rs:133`) is dispatched
+modally in `handle_key` (`src/main.rs:555`), and `ui/timewindow.rs` is already
+a one-purpose settings dialog: focusable fields, `h`/`l` to move, `j`/`k` to
+adjust, `0-9` to type, Enter to apply, Esc to cancel. A settings overlay is
+that same shape with a scrollable field list. Add `Overlay::Settings`, one arm
+in `handle_key`, one `ui/settings.rs`.
+
+Key: `,` is unbound and is the conventional preferences key. (`S` is also free;
+`s` is taken by branches.)
+
+### Persistence is the real decision
+
+`Config` derives `Deserialize` only and is never written back. Two options:
+
+1. **Write into `config.toml` with `toml_edit`.** One source of truth, and it
+   preserves hand-written comments and formatting. Costs one dependency (small,
+   well maintained, same author as `toml`).
+2. **A machine-local overrides file**, mirroring the existing `WindowState`
+   precedent (`~/.cache/fleetz/window.toml`). No new dependency, but two
+   sources of truth: set 30s in the menu, later hand-edit `config.toml` to 90,
+   and the invisible override still wins. That is a bug report waiting to
+   happen.
+
+Leaning toward `toml_edit`.
+
+**Precedence rule to settle first.** `--interval` currently beats config.
+Proposed: the menu edits the session value immediately, an explicit save writes
+`config.toml`, and CLI flags are authoritative only at startup.
+
+### Cost per setting
+
+| Setting | Cost | Notes |
+|---|---|---|
+| `refresh_interval` | trivial | live, next tick |
+| `view` (detail/compact) | trivial | `config.startup_view` exists, `v` toggles |
+| `work_start` / `work_end` | trivial | display only |
+| `repo_limit` | small | used at fetch time, so applying needs an implicit `R` reload |
+| `repo_dir` / `extra_dirs` | small | same, plus rediscovery |
+| hide repos | medium, and it is a feature not a setting | see below |
+| themes | large | see below |
+
+**Hidden repos.** No exclusion concept exists today. Needs a `hidden = [...]`
+config key filtered in `App::visible_repos()` (`src/app.rs:539`), a key to hide
+the selected repo from the list, and an unhide list inside the settings menu.
+Without the unhide screen a hidden repo is unrecoverable from inside the TUI,
+which makes the feature a trap.
+
+**Themes.** `ui/colors.rs` is 14 `pub const` items referenced directly from all
+nine `ui/*` modules plus `app.rs`. Runtime themes mean a `Theme` struct and
+either threading it through every render fn or a `OnceLock` global. Mechanical
+but wide. It deserves its own change, with the picker wired up afterwards.
+
+### Suggested phasing
+
+1. `Overlay::Settings` + `ui/settings.rs` + `,`, live-only fields (interval,
+   view, work hours), with write-back. Self-contained.
+2. Reload-requiring fields (`repo_limit`, `repo_dir`, `extra_dirs`), applied
+   through the existing reload path.
+3. Hidden repos as a real feature (config key, filter, hide key, unhide list).
+4. Themes as a standalone `colors` refactor, then expose the picker.
+
+### Open questions
+
+- `toml_edit` write-back vs the dependency-free overrides file.
+- Does saving need to be explicit (Enter/`s` writes config) or should every
+  change persist immediately, with Esc as the only way to revert?
+- Should the menu show which values came from CLI flags this session, so an
+  overridden value does not look like it is being ignored?
+- Bundled theme set vs user-defined palettes in `config.toml`.
