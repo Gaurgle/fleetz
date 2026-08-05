@@ -1,6 +1,6 @@
 use ratatui::style::Color;
 
-/// Catppuccin Mocha palette — matches repoz bash script colors.
+/// Catppuccin Mocha palette: matches repoz bash script colors.
 pub const PEACH: Color = Color::Rgb(250, 179, 135); // behind / warnings
 pub const GREEN: Color = Color::Rgb(166, 227, 161); // ahead / synced
 pub const YELLOW: Color = Color::Rgb(249, 226, 175); // uncommitted

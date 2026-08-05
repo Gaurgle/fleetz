@@ -77,7 +77,7 @@ pub fn find_elsewhere(
 /// repo_dir plus any configured extra dirs (e.g. `~/.dotfiles`). A root that
 /// is itself a git repo is picked up directly, since the hidden-dir skip in
 /// the walker only prunes *descended* entries, not the root handed in.
-/// Returns de-duplicated paths — the caller checks git status to filter for
+/// Returns de-duplicated paths: the caller checks git status to filter for
 /// the dirty ones.
 pub fn find_all_local(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
@@ -229,7 +229,7 @@ mod tests {
     fn scan_respects_max_depth() {
         let dir = std::env::temp_dir().join("fleetz_test_depth");
         let _ = fs::remove_dir_all(&dir);
-        // Create a repo at depth 5 — should not be found at maxdepth 3
+        // Create a repo at depth 5: should not be found at maxdepth 3
         let deep = dir.join("a").join("b").join("c").join("d").join("deep");
         fs::create_dir_all(deep.join(".git")).unwrap();
 

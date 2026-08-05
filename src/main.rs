@@ -618,7 +618,7 @@ async fn handle_branch_input(
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     args: &Args,
 ) {
-    // Extract overlay data — need to work around borrow checker
+    // Extract overlay data: need to work around borrow checker
     let is_confirming = matches!(&app.overlay, Overlay::Branches(bo) if bo.confirm_delete);
 
     if is_confirming {
@@ -1002,7 +1002,7 @@ async fn handle_normal_input(
             if app.watch_mode {
                 app.last_refreshed = Some(chrono::Local::now());
                 app.set_status(
-                    format!("Watch on — auto-refresh every {}s", app.refresh_interval),
+                    format!("Watch on: auto-refresh every {}s", app.refresh_interval),
                     false,
                 );
             } else {

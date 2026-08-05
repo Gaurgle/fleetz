@@ -22,7 +22,7 @@ pub struct Args {
     #[arg(short = 'a', long)]
     pub all: bool,
 
-    /// Local only — show uncommitted/untracked/unpushed (no GitHub)
+    /// Local only: show uncommitted/untracked/unpushed (no GitHub)
     #[arg(short = 'd', long)]
     pub dirty: bool,
 

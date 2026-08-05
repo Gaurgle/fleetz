@@ -140,13 +140,13 @@ pub fn auto_cutoff(work_start: u8, work_end: u8) -> (DateTime<Utc>, String) {
 
     let (cutoff_local, label) = match slot {
         TimeSlot::Evening => {
-            // Currently evening — show since work_start today
+            // Currently evening: show since work_start today
             let t = today.and_time(NaiveTime::from_hms_opt(work_start as u32, 0, 0).unwrap());
             let label = format!("since {}  {}", today, slot.label(work_start, work_end));
             (t, label)
         }
         TimeSlot::Work => {
-            // Currently working hours — show since yesterday evening (work_end)
+            // Currently working hours: show since yesterday evening (work_end)
             let yesterday = today - chrono::Duration::days(1);
             let t = yesterday.and_time(NaiveTime::from_hms_opt(work_end as u32, 0, 0).unwrap());
             let label = format!(
@@ -157,7 +157,7 @@ pub fn auto_cutoff(work_start: u8, work_end: u8) -> (DateTime<Utc>, String) {
             (t, label)
         }
         TimeSlot::Night => {
-            // Currently night — show since yesterday work_end
+            // Currently night: show since yesterday work_end
             let yesterday = today - chrono::Duration::days(1);
             let t = yesterday.and_time(NaiveTime::from_hms_opt(work_end as u32, 0, 0).unwrap());
             let label = format!(
@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn auto_cutoff_returns_utc_datetime_and_label() {
         let (cutoff, label) = auto_cutoff(9, 18);
-        // Just verify it produces something reasonable — exact value depends on current time
+        // Just verify it produces something reasonable: exact value depends on current time
         assert!(cutoff < Utc::now());
         assert!(label.contains("since"));
     }
