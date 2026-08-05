@@ -129,6 +129,11 @@ pub struct RepoStatus {
     /// branch of the same name -- never fetched/checked out locally, or
     /// checked out once and deleted locally after merging.
     pub remote_only_branches: Vec<String>,
+    /// Fingerprint of the repo state the expensive probes were taken from.
+    /// A sweep that finds the same key reuses commits/reflog/graph/stash/
+    /// worktrees instead of re-running those subprocesses. None means
+    /// "unknown", which always counts as changed.
+    pub work_key: Option<crate::git::WorkKey>,
 }
 
 /// An active git worktree.
@@ -281,6 +286,7 @@ mod tests {
             repo_kind: RepoKind::Unknown,
             remote_url: None,
             remote_only_branches: vec![],
+            work_key: None,
         }
     }
 

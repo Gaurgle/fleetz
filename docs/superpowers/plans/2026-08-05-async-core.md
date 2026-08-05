@@ -1134,7 +1134,7 @@ pub async fn work_key(repo_path: &Path) -> Option<WorkKey>;
 - Produces (model.rs): `pub work_key: Option<crate::git::WorkKey>` on RepoStatus (init `None` at every current literal construction site: main.rs dirty-mode, pass-3, not-cloned, build_repo_status).
 - Consumes: `run_git` (Task 1), `rebuild_repo_status` (Task 6), temp-repo harness (Task 1).
 
-- [ ] **Step 1: Implement the key**
+- [x] **Step 1: Implement the key**
 
 ```rust
 /// The repo's real git directory: `.git` itself, or the target of a
@@ -1180,7 +1180,7 @@ pub async fn work_key(repo_path: &Path) -> Option<WorkKey> {
 }
 ```
 
-- [ ] **Step 2: Write the failing tests** (in `real_repo_tests`)
+- [x] **Step 2: Write the failing tests** (in `real_repo_tests`)
 
 ```rust
     #[tokio::test]
@@ -1208,7 +1208,7 @@ pub async fn work_key(repo_path: &Path) -> Option<WorkKey> {
 
 Run: `cargo test work_key_stable` and confirm it fails (work_key undefined) before Step 1 lands, passes after.
 
-- [ ] **Step 3: Wire into the sweep**
+- [x] **Step 3: Wire into the sweep**
 
 `build_repo_status` sets `work_key: git::work_key(path).await` in its literal. `rebuild_repo_status` becomes two-tier:
 
@@ -1266,12 +1266,12 @@ async fn rebuild_repo_status(target: &SweepTarget, author: Option<&str>) -> Repo
 }
 ```
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `cargo test && cargo clippy --all-targets -- -D warnings`
 Manual: `cargo run --release -- --watch --interval 10` on a fleet of ~20+ repos; watch `btop` or Activity Monitor process spawn rate settle after the first sweep (subsequent idle sweeps spawn roughly 4 processes per repo instead of 9+).
 
-- [ ] **Step 5: Stage and present the commit**
+- [x] **Step 5: Stage and present the commit**
 
 ```bash
 git add src/git.rs src/model.rs src/main.rs

@@ -35,6 +35,65 @@ pub(crate) async fn run_git(repo_path: &Path, args: &[&str]) -> Option<std::proc
     }
 }
 
+/// A cheap fingerprint of everything the expensive probes depend on. Equal
+/// keys across two sweeps mean log, reflog, graph, stash, and worktree output
+/// cannot have changed, so those subprocesses can be skipped entirely.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkKey {
+    /// Output of rev-parse HEAD: one cheap subprocess buys exact commit identity.
+    pub head_sha: String,
+    pub index_mtime: Option<std::time::SystemTime>,
+    pub index_size: u64,
+    /// Size of the stash reflog (common dir aware); 0 when absent.
+    pub stash_size: u64,
+}
+
+/// The repo's real git directory: `.git` itself, or the target of a
+/// `gitdir:` pointer file (linked worktrees, submodule checkouts).
+pub fn resolve_git_dir(repo_path: &Path) -> Option<std::path::PathBuf> {
+    let dot = repo_path.join(".git");
+    if dot.is_dir() {
+        return Some(dot);
+    }
+    let text = std::fs::read_to_string(&dot).ok()?;
+    let target = text.strip_prefix("gitdir:")?.trim();
+    let p = std::path::PathBuf::from(target);
+    Some(if p.is_absolute() {
+        p
+    } else {
+        repo_path.join(p)
+    })
+}
+
+/// Cheap change detector: if none of these moved, the expensive probes
+/// (log, reflog, graph, stash, worktree) cannot have new answers. Untracked
+/// files do not touch the index, so dirty_count is always probed regardless.
+pub async fn work_key(repo_path: &Path) -> Option<WorkKey> {
+    let head = run_git(repo_path, &["rev-parse", "HEAD"]).await?;
+    if !head.status.success() {
+        return None; // unborn HEAD etc: treat as always-changed
+    }
+    let head_sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
+
+    let git_dir = resolve_git_dir(repo_path)?;
+    // Stash log lives in the COMMON dir for linked worktrees.
+    let common_dir = match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(rel) => git_dir.join(rel.trim()),
+        Err(_) => git_dir.clone(),
+    };
+    let index_meta = std::fs::metadata(git_dir.join("index")).ok();
+    let stash_size = std::fs::metadata(common_dir.join("logs/refs/stash"))
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    Some(WorkKey {
+        head_sha,
+        index_mtime: index_meta.as_ref().and_then(|m| m.modified().ok()),
+        index_size: index_meta.map(|m| m.len()).unwrap_or(0),
+        stash_size,
+    })
+}
+
 /// Run `git fetch` on a repo. Prunes deleted remote branches so
 /// remote_only_branches does not accumulate stale entries.
 pub async fn fetch(repo_path: &Path) -> bool {
@@ -966,6 +1025,28 @@ mod real_repo_tests {
             from_current.iter().any(|b| b == "feature"),
             "sanity: elsewhere descends from the merge too"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn work_key_stable_then_changes_on_commit_and_stash() {
+        let dir = temp_repo("workkey");
+
+        let k1 = work_key(&dir).await.expect("key");
+        let k2 = work_key(&dir).await.expect("key");
+        assert_eq!(k1, k2, "key must be stable when nothing changed");
+
+        std::fs::write(dir.join("a.txt"), "changed\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh(&dir, &["git", "commit", "-q", "-m", "second"]);
+        let k3 = work_key(&dir).await.expect("key");
+        assert_ne!(k1.head_sha, k3.head_sha, "commit must change the key");
+
+        std::fs::write(dir.join("a.txt"), "stash me\n").unwrap();
+        sh(&dir, &["git", "stash", "-q"]);
+        let k4 = work_key(&dir).await.expect("key");
+        assert_ne!(k3.stash_size, k4.stash_size, "stash must change the key");
 
         std::fs::remove_dir_all(&dir).ok();
     }

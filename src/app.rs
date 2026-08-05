@@ -873,6 +873,7 @@ mod tests {
                 repo_kind: crate::model::RepoKind::Unknown,
                 remote_url: None,
                 remote_only_branches: vec![],
+                work_key: None,
             })
             .collect();
         App::new(repos, "test".to_string(), false, 120, 40)

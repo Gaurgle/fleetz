@@ -1171,10 +1171,14 @@ fn spawn_sweep(
 }
 
 /// Full per-repo rebuild, preserving GitHub-only fields from the old status.
+/// Two-tier: the cheap probes always run, the expensive ones only when the
+/// repo's WorkKey says something actually moved.
 async fn rebuild_repo_status(target: &SweepTarget, author: Option<&str>) -> RepoStatus {
     let path = &target.fs_path;
     let old = &target.old;
 
+    // Cheap tier: always current. Untracked files never touch the WorkKey,
+    // so dirty_count must not be skipped.
     let branches = git::branch_statuses(path).await;
     let dirty = git::dirty_count(path).await;
     let remote = git::remote_branches(path).await;
@@ -1183,11 +1187,26 @@ async fn rebuild_repo_status(target: &SweepTarget, author: Option<&str>) -> Repo
         .iter()
         .fold((0u32, 0u32), |(b, a), s| (b + s.behind, a + s.ahead));
 
-    let commits = git::commits(path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await;
-    let reflog = git::reflog(path, REFLOG_COUNT).await;
-    let graph = git::graph(path, &branch_names, GRAPH_COMMIT_COUNT).await;
-    let stash_entries = git::stash_list(path).await;
-    let worktrees = git::worktree_list(path).await;
+    let key = git::work_key(path).await;
+    let unchanged = key.is_some() && key == old.work_key;
+
+    let (commits, reflog, graph, stash_entries, worktrees) = if unchanged {
+        (
+            old.commits.clone(),
+            old.reflog.clone(),
+            old.graph.clone(),
+            old.stash_entries.clone(),
+            old.worktrees.clone(),
+        )
+    } else {
+        (
+            git::commits(path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await,
+            git::reflog(path, REFLOG_COUNT).await,
+            git::graph(path, &branch_names, GRAPH_COMMIT_COUNT).await,
+            git::stash_list(path).await,
+            git::worktree_list(path).await,
+        )
+    };
 
     RepoStatus {
         branches,
@@ -1201,6 +1220,7 @@ async fn rebuild_repo_status(target: &SweepTarget, author: Option<&str>) -> Repo
         reflog,
         graph,
         worktrees,
+        work_key: key,
         ..(*old.clone())
     }
 }
@@ -1333,6 +1353,7 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
         repo_kind: model::RepoKind::Unknown,
         remote_url,
         remote_only_branches,
+        work_key: None,
     })
 }
 
@@ -1591,6 +1612,7 @@ async fn assemble_view(
             repo_kind: gh_repo.repo_kind,
             remote_url: None,
             remote_only_branches: vec![],
+            work_key: None,
         });
     }
 
@@ -1661,6 +1683,7 @@ async fn local_only_status(
         repo_kind,
         remote_url,
         remote_only_branches,
+        work_key: None,
     })
 }
 
@@ -1738,6 +1761,9 @@ async fn build_repo_status(
         repo_kind,
         remote_url,
         remote_only_branches,
+        // Taken last, after every probe above, so the first sweep that finds
+        // it unchanged can safely reuse all of them.
+        work_key: git::work_key(path).await,
     }
 }
 
