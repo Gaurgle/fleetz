@@ -185,3 +185,62 @@ but wide. It deserves its own change, with the picker wired up afterwards.
 - Should the menu show which values came from CLI flags this session, so an
   overridden value does not look like it is being ignored?
 - Bundled theme set vs user-defined palettes in `config.toml`.
+
+---
+
+## The double check mark
+
+**Problem.** A clean repo with green CI renders two identical badges: `✓ ✓`.
+They are two unrelated facts that happen to share a glyph *and* a color, so
+the row reads as a rendering bug rather than as information.
+
+- The first `✓` is **git sync**: `RepoStatus::short_status()`
+  (`src/model.rs:188`) builds `3↓ 2↑ 4!` from behind/ahead/dirty, and falls
+  back to a bare `✓` only when all three are zero.
+- The second `✓` is **CI**: `CiStatus::Passed.symbol()` (`src/model.rs:51`),
+  alongside `✗` failed and `○` pending.
+
+Both are `colors::GREEN`, so nothing separates them. Every other combination
+disambiguates itself (`3↓ ✓` is obviously sync-then-CI); only the all-clear
+case collides, which is also the most common row on the list.
+
+### Change the sync glyph, not the CI glyph
+
+`✓` / `✗` for CI is the universal idiom, and it is what GitHub's own UI shows.
+Moving it would trade one confusion for another.
+
+The sync side is the odd one out. Its vocabulary is otherwise arrows and
+counts (`↓ ↑ !`), and `✓` is a fallback that fires only when there is nothing
+to count. Replacing that fallback fixes the collision at its source and leaves
+CI conventional. Candidates:
+
+- `≡` for "in sync", keeping the affirmative "all good" read that the comment
+  at `src/model.rs:184-187` was after.
+- `·` for "nothing to report", quieter, lets CI carry the only strong glyph.
+- Render nothing at all. Cleanest, but it drops the affirmation, and the
+  right-aligned dot-fill would then run straight into the CI badge (or into
+  empty space for repos with no CI), so the column would need a look.
+
+### Rejected
+
+- **Recolor one of them.** Same glyph, and pass/fail would then rest on color
+  alone. Bad for colorblind users and for low-color terminals.
+- **CI as filled/hollow circles** (`●` passed, `●` failed, `○` pending). A
+  coherent family, but it makes pass vs fail purely a color distinction. Same
+  accessibility problem.
+- **Prefix the CI badge** (`CI✓`). Costs columns in a badge group that is
+  deliberately tight and right-aligned flush to the pane edge.
+- **A group divider** between sync and the GitHub badges. Cheap, but it adds a
+  column and only weakens the collision instead of removing it.
+
+### Notes for whoever picks this up
+
+- One change point. `badge_spans` (`src/ui/badges.rs:91`) feeds both views, so
+  compact (`ui/compact.rs:79`) and detail (`ui/detail.rs:79`, `:98`, `:119`)
+  update together.
+- The expanded CI line in the detail pane spells the state out as "passed"
+  (`src/ui/detail.rs:252`, `:547`), so it is already unambiguous and should
+  not change.
+- Whatever is chosen, keep pass and fail distinguishable without color.
+- `short_status()` has direct test coverage (`src/model.rs:297`), so the new
+  glyph should be asserted there.
