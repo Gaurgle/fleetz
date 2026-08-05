@@ -540,7 +540,8 @@ impl App {
         let active_group = self.active_group.and_then(|i| self.group_names.get(i));
         let (text_query, filters) = parse_query(&self.search_query);
 
-        self.repos
+        let mut visible: Vec<(usize, &RepoStatus)> = self
+            .repos
             .iter()
             .enumerate()
             .filter(|(_, r)| {
@@ -563,7 +564,19 @@ impl App {
                 }
                 true
             })
-            .collect()
+            .collect();
+
+        // Navigation order must match what the repo list draws, which groups
+        // by location (github activity, then also active, then local changes).
+        // Without this the cursor walks assembly order and appears to jump
+        // between sections. sort_by_key is stable, so order within a section
+        // is untouched.
+        visible.sort_by_key(|(_, r)| match r.location {
+            RepoLocation::Primary => 0,
+            RepoLocation::Elsewhere | RepoLocation::NotCloned => 1,
+            RepoLocation::LocalOnly => 2,
+        });
+        visible
     }
 
     /// The quick filters currently active per the search query's `#tag`
@@ -877,6 +890,43 @@ mod tests {
             })
             .collect();
         App::new(repos, "test".to_string(), false, 120, 40)
+    }
+
+    #[test]
+    fn visible_repos_are_grouped_in_display_order() {
+        // Assembly order deliberately interleaves the three sections; the
+        // repo list always draws them grouped, so navigation must too.
+        let mut app = make_app(5);
+        app.repos[0].location = RepoLocation::LocalOnly;
+        app.repos[1].location = RepoLocation::Primary;
+        app.repos[2].location = RepoLocation::NotCloned;
+        app.repos[3].location = RepoLocation::LocalOnly;
+        app.repos[4].location = RepoLocation::Primary;
+
+        let order: Vec<RepoLocation> = app
+            .visible_repos()
+            .iter()
+            .map(|(_, r)| r.location.clone())
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                RepoLocation::Primary,
+                RepoLocation::Primary,
+                RepoLocation::NotCloned,
+                RepoLocation::LocalOnly,
+                RepoLocation::LocalOnly,
+            ]
+        );
+
+        // Stability: within a section, assembly order is preserved.
+        let names: Vec<&str> = app
+            .visible_repos()
+            .iter()
+            .map(|(_, r)| r.name.as_str())
+            .collect();
+        assert_eq!(names[0], "repo-1");
+        assert_eq!(names[1], "repo-4");
     }
 
     #[test]

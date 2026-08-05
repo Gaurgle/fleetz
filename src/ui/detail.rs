@@ -80,8 +80,12 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
-    // "also active" section
+    // "also active" section, set off by the same blank row as the section
+    // below it so the three groups are spaced identically.
     if !elsewhere.is_empty() {
+        if !items.is_empty() {
+            items.push(ListItem::new(Line::from("")));
+        }
         items.push(section_header_item("also active"));
         for (idx, repo) in &elsewhere {
             if *idx == selected_idx {

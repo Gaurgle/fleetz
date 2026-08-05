@@ -404,10 +404,14 @@ async fn run_event_loop(
                     app.clear_status();
                     app.needs_redraw = true;
                 }
-                // Keep spinner/blink/clock moving: paint every 4th tick while
-                // anything animated is on screen, else stay idle.
-                let animated = app.loading || app.watch_mode || app.apply_progress.is_some();
-                if animated && app.spinner_frame.is_multiple_of(4) {
+                // A visible spinner has to paint on every tick, otherwise the
+                // frame index advances four steps between repaints and the
+                // animation reads as a slow stutter rather than a spin.
+                let spinning = app.loading || app.sweep_started.is_some();
+                // Everything else that moves on its own (the swept-ago clock,
+                // the CI blink) only needs about one repaint a second.
+                let slow_animated = app.watch_mode || app.apply_progress.is_some();
+                if spinning || (slow_animated && app.spinner_frame.is_multiple_of(4)) {
                     app.needs_redraw = true;
                 }
 

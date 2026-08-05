@@ -32,6 +32,21 @@ struct GraphQlData {
 #[derive(Deserialize)]
 struct Viewer {
     repositories: RepositoryConnection,
+    /// Repos reached through org membership rather than through an
+    /// affiliation on `repositories`. See `build_query` for why both are
+    /// needed; absent in cached payloads written before this was added.
+    #[serde(default)]
+    organizations: Option<OrganizationConnection>,
+}
+
+#[derive(Deserialize)]
+struct OrganizationConnection {
+    nodes: Vec<OrganizationNode>,
+}
+
+#[derive(Deserialize)]
+struct OrganizationNode {
+    repositories: RepositoryConnection,
 }
 
 #[derive(Deserialize)]
@@ -135,11 +150,10 @@ fn build_query(repo_limit: u32, include_prs: bool) -> String {
     } else {
         ""
     };
-    format!(
-        r#"{{ viewer {{
-  repositories(first: {repo_limit}, orderBy: {{field: PUSHED_AT, direction: DESC}},
-    affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {{
-    nodes {{
+    // The repo fields are identical for both sources, so they are built once
+    // and interpolated twice.
+    let repo_fields = format!(
+        r#"nodes {{
       name, pushedAt, isPrivate
       owner {{ __typename }}
       {pr_field}
@@ -156,16 +170,50 @@ fn build_query(repo_limit: u32, include_prs: bool) -> String {
           }}
         }}
       }}
+    }}"#
+    );
+    // Two sources, unioned, because a repo created directly inside an org and
+    // reached only through an owner/admin role does NOT surface under
+    // viewer.repositories at any affiliation. Without the second source those
+    // repos are invisible to fleetz even though you can push to them. repoz
+    // hits the same wall and solves it the same way.
+    format!(
+        r#"{{ viewer {{
+  repositories(first: {repo_limit}, orderBy: {{field: PUSHED_AT, direction: DESC}},
+    affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {{
+    {repo_fields}
+  }}
+  organizations(first: 25) {{
+    nodes {{
+      repositories(first: {repo_limit}, orderBy: {{field: PUSHED_AT, direction: DESC}}) {{
+        {repo_fields}
+      }}
     }}
   }}
 }}}}"#
     )
 }
 
+/// Flatten both repo sources into one list, newest push first, keeping the
+/// first entry per name so a repo returned by both sources appears once.
+fn merge_sources(viewer: Viewer) -> Vec<RepoNode> {
+    let mut nodes = viewer.repositories.nodes;
+    if let Some(orgs) = viewer.organizations {
+        for org in orgs.nodes {
+            nodes.extend(org.repositories.nodes);
+        }
+    }
+    // Sort before dedup so the survivor of a duplicate pair is the freshest.
+    nodes.sort_by(|a, b| b.pushed_at.cmp(&a.pushed_at));
+    let mut seen = std::collections::HashSet::new();
+    nodes.retain(|n| seen.insert(n.name.to_lowercase()));
+    nodes
+}
+
 /// Parse a cached raw response body into repos, if it parses at all.
 fn parse_cached(json: Option<String>) -> Option<Vec<GithubRepo>> {
     let response: GraphQlResponse = serde_json::from_str(&json?).ok()?;
-    Some(parse_repos(response.data?.viewer.repositories.nodes))
+    Some(parse_repos(merge_sources(response.data?.viewer)))
 }
 
 /// Fetch repos from GitHub GraphQL API with disk caching.
@@ -230,7 +278,7 @@ pub async fn fetch_repos(
     }
 
     let data = body.data.ok_or("GitHub response missing data field")?;
-    Ok(parse_repos(data.viewer.repositories.nodes))
+    Ok(parse_repos(merge_sources(data.viewer)))
 }
 
 /// Parse raw GraphQL nodes into GithubRepo structs.
