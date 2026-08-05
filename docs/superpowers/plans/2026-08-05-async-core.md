@@ -752,7 +752,7 @@ spinner until the initial load lands."
 - Produces: `fn probe_concurrency() -> usize` (available_parallelism clamped 2..=12), `const FETCH_CONCURRENCY: usize = 4;`
 - Consumes: `run_git` timeout semantics from Task 1 (a hung fetch dies at 30s, so the join cannot wedge).
 
-- [ ] **Step 1: Concurrency helpers**
+- [x] **Step 1: Concurrency helpers**
 
 ```rust
 /// Parallel git-status probes: enough to hide subprocess latency, capped so a
@@ -768,7 +768,7 @@ fn probe_concurrency() -> usize {
 const FETCH_CONCURRENCY: usize = 4;
 ```
 
-- [ ] **Step 2: Cap the fetch fan-out** (replaces main.rs:1054-1066)
+- [x] **Step 2: Cap the fetch fan-out** (replaces main.rs:1054-1066)
 
 ```rust
     if git_fetch {
@@ -786,7 +786,7 @@ const FETCH_CONCURRENCY: usize = 4;
     }
 ```
 
-- [ ] **Step 3: Parallelize the stat loops**
+- [x] **Step 3: Parallelize the stat loops**
 
 Replace the two sequential loops (primary then elsewhere) with one JoinSet keyed by index so output order is stable:
 
@@ -836,12 +836,12 @@ Replace the two sequential loops (primary then elsewhere) with one JoinSet keyed
 
 `checked_names` then feeds pass 3 unchanged. Note `stat_total` becomes `targets.len()` (dedup happens before counting, fixing the gauge-accounting workaround at main.rs:1086-1093). Parallelize pass 3's per-path `dirty_count`/`branch_statuses` filter with the same JoinSet pattern (spawn per path, collect `Option<RepoStatus>`); the dirty-mode loop in `load_repos` (main.rs:862-920) gets the identical treatment.
 
-- [ ] **Step 4: Verify timing**
+- [x] **Step 4: Verify timing**
 
 Run: `cargo test && cargo clippy --all-targets -- -D warnings`
 Manual: `time cargo run --release -- -a` before and after this task (note the wall time in the task notes; expect roughly a probe_concurrency-fold improvement on the stat phase).
 
-- [ ] **Step 5: Stage and present the commit**
+- [x] **Step 5: Stage and present the commit**
 
 ```bash
 git add src/main.rs

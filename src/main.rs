@@ -45,6 +45,18 @@ const OPENER: &str = "open";
 #[cfg(not(target_os = "macos"))]
 const OPENER: &str = "xdg-open";
 
+/// Parallel git-status probes: enough to hide subprocess latency, capped so a
+/// big fleet does not spawn hundreds of processes at once.
+fn probe_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(2, 12)
+}
+
+/// Network fetches are remote-bound, not CPU-bound: keep it polite.
+const FETCH_CONCURRENCY: usize = 4;
+
 /// How often the event loop ticks: fast enough for a smooth spinner and a
 /// responsive status-message TTL, slow enough to stay invisible in top.
 const TICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
@@ -1076,67 +1088,27 @@ async fn load_repos(
     if *mode == Mode::Dirty {
         let header = "local changes".to_string();
         let local_paths = discovery::find_all_local(&scan_roots);
-        let mut repos = Vec::new();
 
-        for path in local_paths {
-            let dirty = git::dirty_count(&path).await;
-            let branches = git::branch_statuses(&path).await;
-            let mut total_ahead = 0u32;
-            for b in &branches {
-                total_ahead += b.ahead;
-            }
-
-            if dirty == 0 && total_ahead == 0 {
-                continue;
-            }
-
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let display = tilde_display(&path);
-
-            let author = args.author.as_deref();
-            // Always fetch the diffstat for recent commits so every commit
-            // (not just those in a dirty repo) shows its +/- and file list.
-            let commits =
-                git::commits(&path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await;
-            let reflog = git::reflog(&path, REFLOG_COUNT).await;
-            let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
-            let graph = git::graph(&path, &branch_names, GRAPH_COMMIT_COUNT).await;
-            let stash_entries = git::stash_list(&path).await;
-            let stash_count = stash_entries.len() as u32;
-            let worktrees = git::worktree_list(&path).await;
-            let remote_url = git::remote_url(&path).await;
-            let remote = git::remote_branches(&path).await;
-            let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
-
-            repos.push(RepoStatus {
-                name,
-                path: Some(display),
-                location: RepoLocation::LocalOnly,
-                branches,
-                commits,
-                behind: 0,
-                ahead: total_ahead,
-                dirty,
-                pr_count: 0,
-                prs: Vec::new(),
-                ci_status: model::CiStatus::Unknown,
-                ci_workflow: None,
-                ci_duration: None,
-                groups: vec![],
-                stash_count,
-                stash_entries,
-                worktrees,
-                reflog,
-                graph,
-                repo_kind: model::RepoKind::Unknown,
-                remote_url,
-                remote_only_branches,
+        // Probe every candidate in parallel behind a semaphore, then put the
+        // survivors back in discovery order.
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
+        let mut set = tokio::task::JoinSet::new();
+        for (i, path) in local_paths.into_iter().enumerate() {
+            let sem = sem.clone();
+            let author = args.author.clone();
+            set.spawn(async move {
+                let _permit = sem.acquire().await;
+                (i, dirty_mode_status(&path, author.as_deref()).await)
             });
         }
+        let mut results: Vec<(usize, Option<RepoStatus>)> = Vec::new();
+        while let Some(joined) = set.join_next().await {
+            if let Ok(pair) = joined {
+                results.push(pair);
+            }
+        }
+        results.sort_by_key(|(i, _)| *i);
+        let repos: Vec<RepoStatus> = results.into_iter().filter_map(|(_, r)| r).collect();
         return Ok((repos, header, Vec::new()));
     }
 
@@ -1149,6 +1121,64 @@ async fn load_repos(
         assemble_view(&dataset, cutoff, header, args, config, repo_dir, true, None).await?;
 
     Ok((repos, full_header, dataset))
+}
+
+/// One repo's full local status for `-d` mode. Returns None for a repo with
+/// nothing uncommitted and nothing unpushed: dirty mode only lists work in
+/// progress.
+async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStatus> {
+    let dirty = git::dirty_count(path).await;
+    let branches = git::branch_statuses(path).await;
+    let total_ahead: u32 = branches.iter().map(|b| b.ahead).sum();
+
+    if dirty == 0 && total_ahead == 0 {
+        return None;
+    }
+
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let display = tilde_display(path);
+
+    // Always fetch the diffstat for recent commits so every commit
+    // (not just those in a dirty repo) shows its +/- and file list.
+    let commits = git::commits(path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await;
+    let reflog = git::reflog(path, REFLOG_COUNT).await;
+    let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
+    let graph = git::graph(path, &branch_names, GRAPH_COMMIT_COUNT).await;
+    let stash_entries = git::stash_list(path).await;
+    let stash_count = stash_entries.len() as u32;
+    let worktrees = git::worktree_list(path).await;
+    let remote_url = git::remote_url(path).await;
+    let remote = git::remote_branches(path).await;
+    let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
+
+    Some(RepoStatus {
+        name,
+        path: Some(display),
+        location: RepoLocation::LocalOnly,
+        branches,
+        commits,
+        behind: 0,
+        ahead: total_ahead,
+        dirty,
+        pr_count: 0,
+        prs: Vec::new(),
+        ci_status: model::CiStatus::Unknown,
+        ci_workflow: None,
+        ci_duration: None,
+        groups: vec![],
+        stash_count,
+        stash_entries,
+        worktrees,
+        reflog,
+        graph,
+        repo_kind: model::RepoKind::Unknown,
+        remote_url,
+        remote_only_branches,
+    })
 }
 
 /// The GitHub GraphQL fetch (with disk cache), unfiltered: the top
@@ -1255,79 +1285,75 @@ async fn assemble_view(
     let home = dirs::home_dir().unwrap_or_default();
     let elsewhere_found = discovery::find_elsewhere(&home, repo_dir, &active_names, &found_set);
 
-    // Determinate total: the GitHub-matched repos are the expensive stat
-    // loop. The pass-3 local tail is counted only as it is walked, so it is
-    // reported as the Finishing phase rather than folded into the fraction.
-    let stat_total = primary_found.len() + elsewhere_found.len();
+    // Dedupe up front: a repo found in both passes is one stat target, so the
+    // gauge total is the real amount of work rather than a count that has to
+    // be padded as duplicates are skipped. Primary wins the location.
+    let mut targets: Vec<(discovery::FoundRepo, RepoLocation)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for f in &primary_found {
+        if seen.insert(f.name.to_lowercase()) {
+            targets.push((f.clone(), RepoLocation::Primary));
+        }
+    }
+    for f in &elsewhere_found {
+        if seen.insert(f.name.to_lowercase()) {
+            targets.push((f.clone(), RepoLocation::Elsewhere));
+        }
+    }
+
     if let Some(tx) = progress {
         let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Discovering));
         let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Statting {
             done: 0,
-            total: stat_total,
+            total: targets.len(),
         }));
     }
 
-    // Parallel fetch for all found repos
-    let all_found: Vec<_> = primary_found.iter().chain(elsewhere_found.iter()).collect();
-
     if git_fetch {
-        let fetch_handles: Vec<_> = all_found
-            .iter()
-            .map(|f| {
-                let path = f.path.clone();
-                tokio::spawn(async move { git::fetch(&path).await })
-            })
-            .collect();
-
-        for handle in fetch_handles {
-            let _ = handle.await;
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(FETCH_CONCURRENCY));
+        let mut set = tokio::task::JoinSet::new();
+        for (found, _) in &targets {
+            let path = found.path.clone();
+            let sem = sem.clone();
+            set.spawn(async move {
+                let _permit = sem.acquire().await;
+                git::fetch(&path).await
+            });
         }
+        while set.join_next().await.is_some() {}
     }
 
-    // Build repo statuses
-    let mut repos = Vec::new();
-    let mut checked_names: HashSet<String> = HashSet::new();
+    // Stat every target in parallel behind a semaphore, keyed by index so the
+    // output order matches the discovery order regardless of finish order.
+    let active_shared = std::sync::Arc::new(active.clone());
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
+    let mut set = tokio::task::JoinSet::new();
+    for (i, (found, location)) in targets.iter().cloned().enumerate() {
+        let sem = sem.clone();
+        let active = active_shared.clone();
+        let args = args.clone();
+        set.spawn(async move {
+            let _permit = sem.acquire().await;
+            (i, build_repo_status(&found, &active, &args, location).await)
+        });
+    }
 
-    // Process primary repos
+    let mut slots: Vec<Option<RepoStatus>> = vec![None; targets.len()];
     let mut stat_done = 0usize;
-    for found in &primary_found {
-        let repo = build_repo_status(found, &active, args, RepoLocation::Primary).await;
-        checked_names.insert(found.name.to_lowercase());
-        repos.push(repo);
-        stat_done += 1;
-        if let Some(tx) = progress {
-            let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Statting {
-                done: stat_done,
-                total: stat_total,
-            }));
-        }
-    }
-
-    // Process elsewhere repos
-    for found in &elsewhere_found {
-        if checked_names.contains(&found.name.to_lowercase()) {
-            // Already stat'd in the primary pass, but it was counted in
-            // stat_total, so account for it or the gauge stops short.
+    while let Some(joined) = set.join_next().await {
+        if let Ok((i, repo)) = joined {
+            slots[i] = Some(repo);
             stat_done += 1;
             if let Some(tx) = progress {
                 let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Statting {
                     done: stat_done,
-                    total: stat_total,
+                    total: targets.len(),
                 }));
             }
-            continue;
-        }
-        let repo = build_repo_status(found, &active, args, RepoLocation::Elsewhere).await;
-        checked_names.insert(found.name.to_lowercase());
-        repos.push(repo);
-        stat_done += 1;
-        if let Some(tx) = progress {
-            let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Statting {
-                done: stat_done,
-                total: stat_total,
-            }));
         }
     }
+    let mut repos: Vec<RepoStatus> = slots.into_iter().flatten().collect();
+    let mut checked_names: HashSet<String> = seen;
 
     if let Some(tx) = progress {
         let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Finishing));
@@ -1339,7 +1365,9 @@ async fn assemble_view(
     // the repo as LocalOnly rather than being mislabeled "not cloned" when
     // it lives at a hidden path passes 1/2 don't reach.
     let all_local = discovery::find_all_local(&scan_roots);
-    for path in all_local {
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
+    let mut set = tokio::task::JoinSet::new();
+    for (i, path) in all_local.into_iter().enumerate() {
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -1348,55 +1376,35 @@ async fn assemble_view(
         if checked_names.contains(&name.to_lowercase()) {
             continue;
         }
-
-        let dirty = git::dirty_count(&path).await;
-        let branches = git::branch_statuses(&path).await;
-        let mut total_ahead = 0u32;
-        for b in &branches {
-            total_ahead += b.ahead;
-        }
-
-        if dirty == 0 && total_ahead == 0 {
-            continue;
-        }
-
-        let display = tilde_display(&path);
-        let remote_url = git::remote_url(&path).await;
-        let remote = git::remote_branches(&path).await;
-        let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
-        let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
         // Glyph metadata by name from the full GitHub fetch, so a local-only
         // repo (e.g. dotfiles) still shows its org/private/public glyph.
         let repo_kind = kind_by_name
             .get(&name.to_lowercase())
             .copied()
             .unwrap_or(model::RepoKind::Unknown);
-
-        checked_names.insert(name.to_lowercase());
-        repos.push(RepoStatus {
-            name,
-            path: Some(display),
-            location: RepoLocation::LocalOnly,
-            branches,
-            commits: Vec::new(),
-            behind: 0,
-            ahead: total_ahead,
-            dirty,
-            pr_count: 0,
-            prs: Vec::new(),
-            ci_status: model::CiStatus::Unknown,
-            ci_workflow: None,
-            ci_duration: None,
-            groups: vec![],
-            stash_count: 0,
-            stash_entries: vec![],
-            worktrees: vec![],
-            reflog: vec![],
-            graph: vec![],
-            repo_kind,
-            remote_url,
-            remote_only_branches,
+        let sem = sem.clone();
+        set.spawn(async move {
+            let _permit = sem.acquire().await;
+            (i, local_only_status(&path, name, repo_kind).await)
         });
+    }
+
+    // Back into discovery order, then claim names: a clean repo never claims
+    // one, so an active GitHub repo hidden from passes 1-2 still falls
+    // through to the not-cloned list below, exactly as it did serially.
+    let mut local_results: Vec<(usize, Option<RepoStatus>)> = Vec::new();
+    while let Some(joined) = set.join_next().await {
+        if let Ok(pair) = joined {
+            local_results.push(pair);
+        }
+    }
+    local_results.sort_by_key(|(i, _)| *i);
+    for (_, status) in local_results {
+        let Some(repo) = status else { continue };
+        if !checked_names.insert(repo.name.to_lowercase()) {
+            continue;
+        }
+        repos.push(repo);
     }
 
     // Not-cloned repos: active on GitHub but found nowhere locally (passes
@@ -1451,6 +1459,54 @@ async fn assemble_view(
     }
 
     Ok((repos, full_header))
+}
+
+/// Probe a local repo that no GitHub match claimed. Returns None when it has
+/// neither uncommitted nor unpushed work, which is the signal that it is not
+/// worth a row: a clean local clone is not news.
+async fn local_only_status(
+    path: &Path,
+    name: String,
+    repo_kind: model::RepoKind,
+) -> Option<RepoStatus> {
+    let dirty = git::dirty_count(path).await;
+    let branches = git::branch_statuses(path).await;
+    let total_ahead: u32 = branches.iter().map(|b| b.ahead).sum();
+
+    if dirty == 0 && total_ahead == 0 {
+        return None;
+    }
+
+    let display = tilde_display(path);
+    let remote_url = git::remote_url(path).await;
+    let remote = git::remote_branches(path).await;
+    let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
+    let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
+
+    Some(RepoStatus {
+        name,
+        path: Some(display),
+        location: RepoLocation::LocalOnly,
+        branches,
+        commits: Vec::new(),
+        behind: 0,
+        ahead: total_ahead,
+        dirty,
+        pr_count: 0,
+        prs: Vec::new(),
+        ci_status: model::CiStatus::Unknown,
+        ci_workflow: None,
+        ci_duration: None,
+        groups: vec![],
+        stash_count: 0,
+        stash_entries: vec![],
+        worktrees: vec![],
+        reflog: vec![],
+        graph: vec![],
+        repo_kind,
+        remote_url,
+        remote_only_branches,
+    })
 }
 
 /// Build a full RepoStatus from a discovered local repo.
