@@ -487,6 +487,17 @@ there is no spinner to animate.
 **What still moves is deliberate.** The pending-CI blink and the watch pulse
 (`◉`/`●`). Both mean something; neither exists to keep itself accurate.
 
+**Key hints have a placement rule now:** a key sits next to the thing it
+changes, and everything else lives in the footer. So `[t]` annotates the window
+label it edits (and is dropped with that label, since a bare `[t]` next to
+nothing explains nothing), while `[v]` and `[?]` moved down to join the other
+global actions. `[v]` had been rendering in *both* places.
+
+The alternative, every hint in the footer, was measured and rejected: the full
+hint row is 97 columns and would reach 119, which with the summary on the left
+needs about 154 columns before it stops degrading to bare keys. Consistency
+there would have cost the descriptions on everything.
+
 Fixing the pulse exposed a latent bug worth recording: `SLOW_REPAINT_TICKS` was
 10 against a `BLINK_TICKS` of 5, so between any two repaints the blink flipped
 exactly twice and was always drawn in the same phase. The pending-CI blink had

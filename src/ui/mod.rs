@@ -556,14 +556,22 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(colors::OVERLAY),
         )
     });
+    // The one key hint in the header, and only because it sits on the thing it
+    // edits: `t` opens the picker for exactly the window named to its left.
+    // Every other key is a global action and lives in the footer with the rest.
+    // Dropped with the header text it annotates, since a bare `[t]` next to
+    // nothing explains nothing.
+    let window_key_span = (!app.header.is_empty()).then(|| {
+        Span::styled(
+            " [t]",
+            Style::default()
+                .fg(colors::TEXT)
+                .add_modifier(Modifier::BOLD),
+        )
+    });
     let group_span = app
         .active_group_label()
         .map(|group| Span::styled(format!("  [{group}]"), Style::default().fg(colors::MAUVE)));
-
-    let view_hint = match app.view {
-        View::Detail => "[v] compact",
-        View::Compact => "[v] detail",
-    };
     // Shown while the initial load or an R reload is in flight. Never dropped
     // by the fit loop below: it is small, and while it lasts it is the most
     // important thing on the line.
@@ -607,12 +615,8 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(colors::GREEN),
         )
     });
-    let view_span = Span::styled(view_hint, Style::default().fg(colors::SUBTEXT));
-    let help_span = Span::styled("[?] help ", Style::default().fg(colors::SUBTEXT));
-
     let mut include_version = true;
     let mut include_ts = true;
-    let mut include_view = true;
     let mut include_group = true;
     let mut include_header = true;
 
@@ -623,6 +627,9 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         }
         if include_header && let Some(ref h) = header_span {
             left.push(h.clone());
+            if let Some(ref k) = window_key_span {
+                left.push(k.clone());
+            }
         }
         if include_group && let Some(ref g) = group_span {
             left.push(g.clone());
@@ -635,23 +642,13 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         if let Some(ref w) = watch_span {
             right.push(w.clone());
         }
-        if include_ts {
-            if let Some(ref t) = ts_span {
-                right.extend(t.iter().cloned());
-            } else {
-                right.push(Span::raw(" "));
-            }
+        if include_ts && let Some(ref t) = ts_span {
+            right.extend(t.iter().cloned());
         }
-        if include_view {
-            right.push(view_span.clone());
-            right.push(Span::raw("  "));
-        }
-        right.push(help_span.clone());
 
         let left_w: usize = left.iter().map(|s| s.content.len()).sum();
         let right_w: usize = right.iter().map(|s| s.content.len()).sum();
-        let exhausted =
-            !include_version && !include_ts && !include_view && !include_group && !include_header;
+        let exhausted = !include_version && !include_ts && !include_group && !include_header;
 
         if left_w + right_w < width || exhausted {
             let block = Block::default()
@@ -667,8 +664,6 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             include_version = false;
         } else if include_ts {
             include_ts = false;
-        } else if include_view {
-            include_view = false;
         } else if include_group {
             include_group = false;
         } else {
@@ -699,6 +694,51 @@ mod tests {
             .with_ymd_and_hms(y, m, d, h, min, 0)
             .single()
             .expect("unambiguous local time")
+    }
+
+    /// The rendered header line, border and all.
+    fn header_row(header: &str, width: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = crate::app::App::new(Vec::new(), header.to_string(), false, width, 40);
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+        terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn the_window_key_sits_on_the_window_it_edits() {
+        // The only key hint in the header, and it earns its place by being
+        // attached to the state it changes.
+        let row = header_row("since 5 days", 100);
+        assert!(row.contains("since 5 days [t]"), "got {row:?}");
+    }
+
+    #[test]
+    fn global_action_keys_are_not_in_the_header() {
+        // They live in the footer with the rest. `[v]` used to appear in both,
+        // which is the duplication this guards against coming back.
+        let row = header_row("since 5 days", 100);
+        assert!(
+            !row.contains("[v]"),
+            "view hint belongs to the footer: {row:?}"
+        );
+        assert!(
+            !row.contains("[?]"),
+            "help hint belongs to the footer: {row:?}"
+        );
+    }
+
+    #[test]
+    fn the_window_key_goes_with_the_label_it_annotates() {
+        // A bare `[t]` next to nothing explains nothing, so it is dropped
+        // whenever the header text it points at is absent.
+        let row = header_row("", 100);
+        assert!(!row.contains("[t]"), "got {row:?}");
     }
 
     #[test]

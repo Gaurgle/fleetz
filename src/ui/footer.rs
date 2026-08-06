@@ -188,6 +188,15 @@ fn keybind_hints(view: View, with_desc: bool) -> Vec<Span<'static>> {
         hints.push(Span::styled(format!(" {view_hint}"), desc_style));
     }
     hints.push(gap.clone());
+    // Help sits second-to-last rather than first: it is the least urgent hint
+    // in normal use, but it is also the one that must never be dropped, since
+    // it is how every other binding is discovered. The keys-only fallback
+    // keeps `[?]` visible even when the descriptions go.
+    hints.push(Span::styled("[?]", key_style));
+    if with_desc {
+        hints.push(Span::styled(" help", desc_style));
+    }
+    hints.push(gap.clone());
     hints.push(Span::styled("[q]", key_style));
     if with_desc {
         hints.push(Span::styled(" quit", desc_style));
@@ -203,4 +212,42 @@ fn line_width(spans: &[Span]) -> usize {
 /// column of breathing room between them.
 fn fits(width: usize, spans: &[Span], hints: &[Span]) -> bool {
     line_width(spans) + line_width(hints) < width
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn help_is_hinted_in_the_footer_with_the_other_global_actions() {
+        // It used to live in the header while every other action key was down
+        // here, which is the inconsistency this guards.
+        assert!(text(&keybind_hints(View::Detail, true)).contains("[?] help"));
+    }
+
+    #[test]
+    fn help_survives_the_keys_only_fallback() {
+        // Help is how every other binding is discovered, so it is the one hint
+        // that must stay visible when the descriptions are dropped for width.
+        let compact = text(&keybind_hints(View::Detail, false));
+        assert!(compact.contains("[?]"), "got {compact:?}");
+        assert!(!compact.contains("help"), "descriptions should be gone");
+    }
+
+    #[test]
+    fn the_view_hint_names_the_view_it_switches_to() {
+        assert!(text(&keybind_hints(View::Detail, true)).contains("[v] compact"));
+        assert!(text(&keybind_hints(View::Compact, true)).contains("[v] detail"));
+    }
+
+    #[test]
+    fn quit_stays_last() {
+        // Muscle memory: the rightmost hint should not move as hints are added.
+        assert!(text(&keybind_hints(View::Detail, true)).ends_with(" quit"));
+        assert!(text(&keybind_hints(View::Detail, false)).ends_with("[q]"));
+    }
 }
