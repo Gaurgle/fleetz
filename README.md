@@ -135,10 +135,10 @@ repo_limit = 50
 repo_dir = "~/repos"
 
 # Extra scan roots, searched alongside repo_dir (repoz's EXTRA_DIRS).
-# Required for a clone under a hidden path: the $HOME sweep skips dotted
-# directories, so ~/.dotfiles is only found when named here. A clone whose
-# folder is dot-prefixed matches its undotted GitHub repo (~/.dotfiles is
-# reported as "dotfiles").
+# A clone whose folder is dot-prefixed matches its undotted GitHub repo, so
+# ~/.dotfiles is reported as "dotfiles". Hidden directories inside a configured
+# root are scanned normally; only the wider $HOME sweep skips them, so a clone
+# living outside repo_dir under a hidden path needs naming here.
 extra_dirs = ["~/.dotfiles"]
 
 # Auto-refresh interval in seconds (used with --watch, default 60)
@@ -181,14 +181,28 @@ The three time slots are derived from `work_start` and `work_end`:
 |---|---|---|
 | Form | Bash one-shot | Rust TUI |
 | Output | Static text dump | Interactive dashboard |
-| Fetch | No (read-only) | Yes (`f` / `F`, no merge) |
+| Fetch | Yes, every repo on every run | On demand (`f` / `F`) and in watch mode |
+| GitHub calls | Uncached, one GraphQL call per run | Disk cache with a TTL, `R` bypasses it |
 | Branch cleanup | No | Yes (`b`) |
 | CI status | No | Yes (◉ green passed, red failed, blinking orange running) |
 | Worktrees / stashes | No | Yes (badges) |
-| Caching | None | GitHub API disk cache |
 | Watch mode | No | `--watch` for tmux |
+| Single repo | `repoz /owner/repo` | No |
+| Release status | `-r` (tag, commits since) | No |
 
-Same flag set, same time-slot logic. `repoz` is the script you pipe; `fleetz` is the dashboard you live in.
+Same discovery rules and the same time-slot logic; the flag sets overlap but
+are not identical (`-r`, `-s`, `--no-glyphs`, `--update` and `/owner/repo` are
+repoz-only, `--watch` and `--interval` are fleetz-only).
+
+`repoz` is the script you pipe, cron, or point at one repo. `fleetz` is the
+dashboard you act from: it caches, so it opens instantly and stays cheap to
+leave running, whereas repoz pays full fetch cost on every invocation.
+
+The two implement discovery separately, in two languages, and have drifted
+apart before (a clone at `~/.dotfiles` was visible to repoz and invisible to
+fleetz for months). `cargo test repoz_parity` now builds a fixture tree, runs
+`repoz -d` against it, and diffs the discovered paths against fleetz's own. It
+skips with a notice when repoz is not on `PATH`.
 
 ## Stack
 
