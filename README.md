@@ -17,7 +17,7 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 - Repos with recent GitHub activity (commits behind, ahead, divergence)
 - Repos with local uncommitted, untracked, or unpushed changes
 - Open pull requests per repo
-- CI status (green check, red cross, blinking orange circle while running) from GitHub's `statusCheckRollup`, kept live in watch mode
+- CI status as a `◉` status lamp: green passed, red failed, blinking orange while running. From GitHub's `statusCheckRollup`, kept live in watch mode
 - Active worktrees (`w` badge) and stashes (`s` badge)
 - Repo groups defined in your config (cycle with `g`)
 - Repo ownership in the detail pane: `owner/name` flush right on the status
@@ -91,7 +91,7 @@ fleetz --watch                        # live dashboard, auto-refreshes
 |-----|--------|
 | `1` / `2` / `3` | Focus repo list / detail / inspector |
 | `Tab` | Cycle panel focus |
-| mouse | Click a panel to focus; scroll wheel scrolls whichever panel the cursor is over |
+| mouse | Click a panel to focus; drag a pane border to resize it; scroll wheel scrolls whichever panel the cursor is over |
 | `j` / `k`, `↑` / `↓` | Repo list: move selection · Detail: pick commit · Inspector: scroll |
 | `J` / `K` | Scroll the detail pane (works from the repo list too) |
 | `PgUp` / `PgDn` | Scroll focused pane by a page |
@@ -106,8 +106,12 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `t` | Time window: pick how far back to show activity (slot / hours / days / weeks / months / years) |
 | `g` | Cycle group filter |
 | `G` | Show all (clear group) |
-| `/` | Search repos, or type `#dirty` `#behind` `#ahead` `#ci` `#prs` `#stash` to filter |
+| `/` | Fuzzy-search repos by name (best match first, `flz` finds `fleetz`), or type `#dirty` `#behind` `#ahead` `#ci` `#prs` `#stash` to filter |
 | `0` | Clear `#tag` filters (keeps free-text search) |
+| `,` | Settings overlay: refresh interval, startup view, work hours, pane persistence. `Enter` saves to `config.toml` |
+| `<` / `>` | Narrow / widen the repo list |
+| `+` / `-` | Shrink / grow the inspector pane |
+| `=` | Reset both panes to their default sizes |
 | `r` | Refresh: rebuild the listed repos only (offline, no fetch, no new repos) |
 | `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear |
 | `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub |
@@ -130,11 +134,25 @@ repo_limit = 50
 # Where to look for local clones (~ expanded)
 repo_dir = "~/repos"
 
+# Extra scan roots, searched alongside repo_dir (repoz's EXTRA_DIRS).
+# Required for a clone under a hidden path: the $HOME sweep skips dotted
+# directories, so ~/.dotfiles is only found when named here. A clone whose
+# folder is dot-prefixed matches its undotted GitHub repo (~/.dotfiles is
+# reported as "dotfiles").
+extra_dirs = ["~/.dotfiles"]
+
 # Auto-refresh interval in seconds (used with --watch, default 60)
 refresh_interval = 60
 
 # GitHub API cache TTL in seconds
 cache_ttl = 120
+
+# Write pane sizes back on exit and restore them next launch. Off by
+# default: every launch starts from the built-in split, so a layout nudged
+# for one repo doesn't silently become permanent. Toggle it in the `,` menu.
+persist_pane_sizes = false
+repo_list_pct = 35
+inspector_pct = 40
 
 # Startup view: "detail", "compact", or "auto" (default). Auto drops to
 # compact only when the terminal is too small for three panels; pin it here
@@ -165,7 +183,7 @@ The three time slots are derived from `work_start` and `work_end`:
 | Output | Static text dump | Interactive dashboard |
 | Fetch | No (read-only) | Yes (`f` / `F`, no merge) |
 | Branch cleanup | No | Yes (`b`) |
-| CI status | No | Yes (✓/✗/○) |
+| CI status | No | Yes (◉ green passed, red failed, blinking orange running) |
 | Worktrees / stashes | No | Yes (badges) |
 | Caching | None | GitHub API disk cache |
 | Watch mode | No | `--watch` for tmux |

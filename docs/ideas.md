@@ -88,6 +88,23 @@ actually bites.
 
 ## Settings menu
 
+**Status: phase 1 shipped.** `,` opens `Overlay::Settings` (`ui/settings.rs`)
+with five rows: refresh interval, startup view, work start, work end, and
+remember-pane-sizes. Enter applies the live fields and writes every field back
+to `config.toml` via `toml_edit`, preserving comments and untouched keys.
+
+Resolutions to the open questions below: **saving is explicit** (Enter), and
+apply and save are one action, since applying without saving would leave the
+session disagreeing with the file it loaded from with nothing on screen to say
+so. Each row shows a dim `restart` marker when its value only takes effect next
+launch, which is currently the two work-hour fields: they are read once, from
+the `Config` the main loop holds by reference, when the cutoff and header are
+computed. Making those live means threading a mutable config through
+`handle_key`, which is a bigger change than the field is worth.
+
+Phases 2 to 4 (reload-requiring fields, hidden repos, themes) are unbuilt. The
+notes below are kept for them.
+
 **Problem.** Every tunable lives in `~/.config/fleetz/config.toml` and is read
 exactly once at startup. Changing the watch interval, the repo limit, or the
 starting view means quitting, editing a file, and relaunching. For a tool you
@@ -190,15 +207,45 @@ but wide. It deserves its own change, with the picker wired up afterwards.
 
 ## The double check mark
 
-**Problem.** A clean repo with green CI renders two identical badges: `✓ ✓`.
+**Status: shipped, but not by the route below.** The fix went the other way
+from this section's recommendation: rather than changing the sync glyph, CI gave
+up the checkmark. CI is now a ringed disk `◉` in every state, colored green
+passed / red failed / orange pending (blinking under watch mode), and sync keeps
+`✓`. The detail pane's sync line also dropped it, so the ringed disk belongs to CI
+alone (`model.rs::CiStatus::symbol`, `ui/badges.rs::ci_display`).
+
+This resolves the collision at the source: the two are now different *shapes*,
+not just different tokens, so no combination of states can produce two identical
+badges.
+
+**The tradeoff this section warned about is now real.** Under "Rejected" below,
+"CI as filled/hollow circles" was turned down because it makes pass versus fail
+a color-only distinction, which is bad for colorblind users and low-color
+terminals. That is exactly what shipped. The mitigation is that the detail pane
+still spells the state out ("◉ CI passed" / "◉ CI failed") in both the panel
+title and the body line, so the information is recoverable one keypress away,
+just not in the list.
+
+Cheapest escape hatches if it bites: give failed its own shape (`◉`, `⬤`, or
+back to `✗`) while passed and pending stay disks, or add a config key choosing
+between a shape-distinct and a color-only CI set. Neither is built.
+
+**Original problem.** A clean repo with green CI rendered two identical badges:
+`✓ ✓`.
 They are two unrelated facts that happen to share a glyph *and* a color, so
 the row reads as a rendering bug rather than as information.
 
 - The first `✓` is **git sync**: `RepoStatus::short_status()`
-  (`src/model.rs:188`) builds `3↓ 2↑ 4!` from behind/ahead/dirty, and falls
+  (`src/model.rs:243`) builds `3↓ 2↑ 4!` from behind/ahead/dirty, and falls
   back to a bare `✓` only when all three are zero.
-- The second `✓` is **CI**: `CiStatus::Passed.symbol()` (`src/model.rs:51`),
+- The second `✓` is **CI**: `CiStatus::Passed.symbol()` (`src/model.rs:52`),
   alongside `✗` failed and `○` pending.
+
+**Partly narrowed since.** A not-cloned repo used to hit the same fallback (all
+three counters read zero for want of a working tree), so it rendered a green
+`✓` too, and with CI metadata a `✓ ✓` for a repo that was not on disk. That
+case now returns `not cloned` in `RED`. The collision this section is about --
+clean repo, CI passed -- is untouched.
 
 Both are `colors::GREEN`, so nothing separates them. Every other combination
 disambiguates itself (`3↓ ✓` is obviously sync-then-CI); only the all-clear
@@ -235,15 +282,163 @@ CI conventional. Candidates:
 
 ### Notes for whoever picks this up
 
-- One change point. `badge_spans` (`src/ui/badges.rs:91`) feeds both views, so
-  compact (`ui/compact.rs:79`) and detail (`ui/detail.rs:79`, `:98`, `:119`)
-  update together.
+- One change point. `badge_spans` (`src/ui/badges.rs:119`) feeds both views, so
+  compact (`ui/compact.rs:109`) and detail (via `repo_list_item`) update
+  together. Its color ladder is `badges::status_color` (`src/ui/badges.rs:94`),
+  now shared with the detail pane.
 - The expanded CI line in the detail pane spells the state out as "passed"
   (`src/ui/detail.rs:252`, `:547`), so it is already unambiguous and should
   not change.
 - Whatever is chosen, keep pass and fail distinguishable without color.
 - `short_status()` has direct test coverage (`src/model.rs:297`), so the new
   glyph should be asserted there.
+
+---
+
+## Filter and search strip
+
+**Status: shipped.** The dots are gone, search is fuzzy and ranked, and the
+sharp edges in tag parsing are fixed. Kept here for the reasoning and for the
+open questions at the end.
+
+**Problem.** The strip drew six colored dots (dirty, behind, ahead, ci, prs,
+stash) that looked like toggles but were pure output: no key and no click ever
+set one, only typing a `#tag` did. There was no legend, so reading them meant
+knowing the order by heart. Meanwhile the query text below already showed the
+same information, in the same colors, with words attached.
+
+Four smaller faults sat underneath:
+
+- **Two of the six dot colors were wrong.** The comment claimed each dot used
+  "the color that filter's data already uses elsewhere", but Ahead was
+  `SAPPHIRE` (the repo-name color) against a `PEACH` badge, and Stashes was
+  `HASH_CLR` (the commit-hash color) against an `OVERLAY` badge.
+- **A bare `#` activated every filter.** Filters AND together, so six at once
+  was almost always empty, and since `#` is the first keystroke of every tag,
+  the list blanked and repopulated on the way to typing any of them.
+- **Unknown tags failed silently.** `#drity` matched nothing, was still
+  consumed from the free text, and rendered in plain yellow. No signal at all
+  that the token did nothing.
+- **Search was plain substring.** `name.contains(query)`, so `flz` did not find
+  `fleetz`.
+
+### What shipped
+
+- **Dots deleted**, along with `FILTER_DEFS` and `QuickFilters::is_active`
+  which existed only to feed them. The typed query is the single indicator.
+- **Fuzzy search** in `src/fuzzy.rs`: a hand-rolled subsequence scorer
+  (`score`, `src/fuzzy.rs:43`) with named constants for match, consecutive-run,
+  word-start, gap, and trailing-remainder scoring. Hand-rolled rather than a
+  matcher crate because the candidate list is tens of short names, and because
+  every rule then stays stateable and directly unit-tested.
+- **Ranked results.** With free text typed, `visible_repos` sorts by score
+  descending and the repo list collapses its three section headers into one
+  `results` header, so the top row really is the best match. Clearing the query
+  restores section order. Both sides key off `App::has_text_query()`.
+- **Bare `#` is inert**, and unknown tags are collected into
+  `ParsedQuery::unknown_tags` and named in red in the strip.
+- **Tag colors** now come from one `filter_color` fn matching the badge
+  vocabulary, so ahead is PEACH and stash is OVERLAY like their badges.
+
+### Rejected
+
+- **Number keys for filters.** Reconsidered and rejected again: `1`/`2`/`3` are
+  panel focus and `0` clears tags. This was the original reason filters live in
+  the search text at all.
+- **Keeping the dots but making them clickable.** `PanelRects` already
+  hit-tests, so it was cheap, but it would have kept a control that needs a
+  legend to read at all. The query text needs none.
+- **Dropping `#tag` filters entirely.** "Show me only the dirty ones" has no
+  other expression in the UI.
+- **Length-normalized fuzzy scoring.** Penalizing total haystack length sinks
+  exactly the long hyphenated names initialisms are meant to find
+  (`wireless-test-platform`). Only the trailing remainder after the last match
+  is charged.
+
+### Open questions
+
+- Filters still only **AND**. "dirty or behind" is not expressible, and neither
+  is negation. A `!` prefix or a `|` separator would both work; neither is
+  obviously worth the parser.
+- **The group filter is still a separate system**: its own state
+  (`app.active_group`), its own keys (`g`/`G`), and rendered in the header in
+  MAUVE rather than in the strip. So the strip is still not a complete picture
+  of what is filtered, and there is no single clear-all. Folding it in as a
+  `@group` token in the same query is the obvious unification.
+- Fuzzy currently matches **repo name only**. Owner, path, and branch name are
+  all plausible haystacks. Multi-field matching needs a per-field weight, which
+  is a real design decision rather than a tweak.
+- The `results` header is the only cue that ranked mode is on. It may want the
+  match count, or the query echoed.
+
+---
+
+## Inspector and right-column layout
+
+**Status: partly shipped.** Proportional sizing and the deduplicated geometry
+landed; interactive resize did not.
+
+**Problem.** The inspector was a hardcoded `INSPECTOR_HEIGHT: u16 = 10` and
+docked only when the right column exceeded `INSPECTOR_HEIGHT + 6` rows. On a
+tall terminal it stayed at ten rows while the space above it grew without
+bound; below the threshold it vanished outright rather than shrinking. Nothing
+about it was adjustable at runtime.
+
+Worse, that geometry existed **twice**: once in `detail::render` and once in
+`ui::panel_rects`, which exists specifically so mouse clicks can be hit-tested
+against the same rectangles that were drawn. Its own doc comment said it "must
+mirror `render` exactly". Any drift between the two copies would land clicks on
+the wrong pane, silently.
+
+### What shipped
+
+`detail::split_right_column` (`src/ui/detail.rs:40`) is now the single source of
+that geometry, called by both `render` and `panel_rects`. The height is
+`INSPECTOR_PCT` (40%) of the right column, clamped to
+`[INSPECTOR_MIN_HEIGHT, INSPECTOR_MAX_HEIGHT]` = `[8, 24]`, and further capped
+so the detail pane always keeps `DETAIL_MIN_HEIGHT` = 8 rows. Below 16 rows
+total the inspector is dropped, as before, rather than shown as a sliver.
+
+Net effect: on a 40-row terminal the inspector grows from 10 rows to ~15, and
+on a 60-row one to its 24-row ceiling, instead of staying at 10 either way.
+
+**Interactive resize shipped too.** `<`/`>` move the vertical divider, `+`/`-`
+the horizontal one, `=` resets both. Both are percentages on `App`
+(`repo_list_pct`, `inspector_pct`) clamped to ranges that keep either pane from
+collapsing, and `split_main` joined `split_right_column` as shared geometry.
+
+Sizes reset to their defaults on every launch. Persisting them is opt-in via
+`persist_pane_sizes` in the `,` menu, which writes both percentages back on
+exit. Saving happens at teardown rather than per keypress, because resizing is a
+held-key gesture that would otherwise rewrite the config a dozen times per drag.
+
+**Mouse drag shipped too.** `PanelRects` gained the main area plus
+`divider_at` / `repo_list_pct_at` / `inspector_pct_at`, and `App::dragging`
+holds the grabbed divider between press and release. Two details worth keeping:
+a boundary is grabbable with one column of slop either side, because the gap
+itself is a single cell and a single-cell target cannot be hit reliably; and
+once a drag starts, any mouse event that is not a drag ends it, since a release
+outside the terminal can swallow the `Up` entirely and would otherwise wedge
+every later mouse event in the drag branch.
+
+### Not done
+
+- **A settings row for the sizes themselves.** The menu can toggle persistence
+  but not set the percentages numerically; the resize keys and the mouse are the
+  only ways in.
+- **A visible affordance on the borders.** Nothing marks a divider as draggable;
+  you have to know. A hover highlight would need mouse-move tracking, which
+  crossterm's current capture mode does not report without a button held.
+
+### Open questions
+
+- Should the inspector's file cap (`INSPECTOR_FILE_CAP` = 30,
+  `src/ui/detail.rs:54`) scale with the pane now that the pane scales? At 24
+  rows the cap is barely reachable; at 8 it is far past the fold either way.
+- Does a resizable inspector need a minimum that differs from its
+  drop-it-entirely threshold, or is one constant enough?
+- Percent-of-column or absolute rows as the persisted unit? Percent survives a
+  terminal resize better; rows are what a user dragging a divider is choosing.
 
 ---
 
