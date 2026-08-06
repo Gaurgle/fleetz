@@ -427,8 +427,27 @@ every later mouse event in the drag branch.
   but not set the percentages numerically; the resize keys and the mouse are the
   only ways in.
 - **A visible affordance on the borders.** Nothing marks a divider as draggable;
-  you have to know. A hover highlight would need mouse-move tracking, which
-  crossterm's current capture mode does not report without a button held.
+  you have to know.
+
+  An earlier version of this note claimed hover tracking was unavailable. That
+  was wrong, and worth correcting because it would send the next person down a
+  dead end. `EnableMouseCapture` already emits `?1003h` (any-event tracking)
+  alongside 1000 and 1002, and `MouseEventKind::Moved` is documented as "moved
+  the mouse cursor while not pressing a mouse button". Hover events reach
+  `handle_mouse_input` today and are dropped on its `_ => {}` arm.
+
+  So the blocker is not the terminal, it is two things in fleetz. Any-event
+  tracking emits an event per cell crossed, so anything hover-driven needs a
+  dwell timer and a "same cell, ignore" guard rather than reacting per event.
+  And the header has no geometry model: it builds spans and lets ratatui
+  right-align them, with a fit ladder that drops pieces, so nothing knows which
+  column `◉ watch` landed on. Hovering anything up there means giving the header
+  the `PanelRects` treatment, with the same duplicate-layout-math risk that
+  `split_right_column` exists to avoid.
+
+  Worth remembering that hover is mouse-only. In a tool with this many
+  keybindings, a fact reachable only by hovering is a fact keyboard users
+  cannot get.
 
 ### Open questions
 
@@ -439,6 +458,50 @@ every later mouse event in the drag branch.
   drop-it-entirely threshold, or is one constant enough?
 - Percent-of-column or absolute rows as the persisted unit? Percent survives a
   terminal resize better; rows are what a user dragging a divider is choosing.
+
+---
+
+## Header noise
+
+**Status: shipped.** The header used to move constantly whether or not
+anything was happening. Three changes, and one idea worth keeping.
+
+**The idea: a relative time display is an animation.** "swept 14s ago" can only
+stay true by repainting, so it is a moving part whose entire job is keeping
+itself honest. It churned away at an empty terminal through a lunch break to
+say what one timestamp says at a glance. The header now shows `swept 11:42`,
+written once per sweep and then still. The date is added when the sweep was not
+today, because fleetz sits in a tmux pane across midnight and a bare clock time
+reads as today.
+
+This applies wherever a relative age appears. It is *not* applied to commit ages
+in the lists, deliberately: for a commit you care about elapsed time rather than
+wall-clock, and nobody wants to subtract dates to see how old something is.
+
+**Automatic refreshes are silent.** `start_sweep` takes a `manual` flag; only a
+sweep the user asked for (`r`, `F`) announces itself with the spinner. A watch
+timer firing on an interval must not repaint a colored indicator over a
+dashboard being read. As a bonus a silent sweep buys no repaints either, since
+there is no spinner to animate.
+
+**What still moves is deliberate.** The pending-CI blink and the watch pulse
+(`◉`/`●`). Both mean something; neither exists to keep itself accurate.
+
+Fixing the pulse exposed a latent bug worth recording: `SLOW_REPAINT_TICKS` was
+10 against a `BLINK_TICKS` of 5, so between any two repaints the blink flipped
+exactly twice and was always drawn in the same phase. The pending-CI blink had
+therefore never once been visible. Any *even* multiple of the blink period has
+this property, so the two constants are now tied together rather than picked
+independently.
+
+### Open
+
+- Overdue colouring only triggers under watch mode, since without a promised
+  cadence there is nothing to be late against. A manually driven dashboard that
+  has not been refreshed all day says nothing about it.
+- A hover popup on the watch indicator could carry the whole watch picture
+  (last sweep, interval, last GitHub poll, next due). See the mouse notes in the
+  inspector section for why that is more work than it looks.
 
 ---
 

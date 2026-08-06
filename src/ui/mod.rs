@@ -46,6 +46,49 @@ pub fn format_age(created: chrono::DateTime<chrono::Utc>) -> String {
 /// the manifest and every surface that shows it follows.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// How the last sweep is labelled in the header: a wall-clock timestamp, not a
+/// relative age.
+///
+/// A relative age is an animation by construction. "swept 14s ago" can only
+/// stay true by repainting, so it is a moving part whose entire job is keeping
+/// itself honest -- it churned away at an empty terminal all through lunch to
+/// say what one timestamp says at a glance. This is written once per sweep and
+/// then sits still.
+///
+/// The date appears only when the sweep was not today. fleetz lives in a tmux
+/// pane and is regularly open across midnight, where a bare clock time reads
+/// as today and silently means yesterday.
+pub fn swept_label(
+    ts: chrono::DateTime<chrono::Local>,
+    now: chrono::DateTime<chrono::Local>,
+) -> String {
+    if ts.date_naive() == now.date_naive() {
+        ts.format("%H:%M").to_string()
+    } else {
+        ts.format("%b %-d %H:%M").to_string()
+    }
+}
+
+/// Refresh intervals that must elapse before the timestamp reads as overdue.
+/// Generous on purpose: a sweep landing a little late is ordinary, and a
+/// warning that cries wolf is one you learn to ignore.
+const OVERDUE_INTERVALS: i64 = 2;
+
+/// Whether the last sweep is old enough that watch mode is probably wedged.
+///
+/// Only meaningful under watch: with no promised cadence there is nothing to
+/// be late against, so a manually refreshed dashboard never nags. Colouring on
+/// this is a change that happens once, not an animation, so it buys the "watch
+/// is stuck" signal back without reintroducing motion.
+pub fn sweep_overdue(
+    watch_mode: bool,
+    refresh_interval: u64,
+    ts: chrono::DateTime<chrono::Local>,
+    now: chrono::DateTime<chrono::Local>,
+) -> bool {
+    watch_mode && (now - ts).num_seconds() > refresh_interval as i64 * OVERDUE_INTERVALS
+}
+
 /// Columns between the edge of a pane and the first cell of its content: one
 /// for the border, one for the block's horizontal padding.
 ///
@@ -527,30 +570,26 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let loading_span = app
         .loading
         .then(|| spinner_group(app.spinner_frame, "loading"));
-    // Age, not a wall-clock stamp: "swept 8s ago" answers the question the
-    // header is actually asked ("is this current?") without arithmetic. While
-    // a sweep runs it becomes a spinner instead.
     // Only a sweep the user asked for takes over this slot. A watch-timer
-    // sweep runs silently and leaves the "swept Xs ago" clock in place, so an
-    // interval refresh cannot repaint a moving colored indicator over a
-    // dashboard being read.
+    // sweep runs silently and leaves the timestamp in place, so an interval
+    // refresh cannot repaint a moving colored indicator over a dashboard
+    // being read.
     let ts_span = if app.sweep_started.is_some() && app.sweep_manual {
         Some(spinner_group(app.spinner_frame, "sweeping"))
     } else {
         app.last_refreshed.map(|ts| {
-            let secs = (chrono::Local::now() - ts).num_seconds().max(0);
-            let label = if secs < 5 {
-                "just now".to_string()
-            } else if secs < 90 {
-                format!("{secs}s ago")
+            let now = chrono::Local::now();
+            // Dimmer than the rest of the header on purpose: reassurance you
+            // glance at, not information you read. Unless it has gone stale,
+            // which is the one time it has something to say.
+            let color = if sweep_overdue(app.watch_mode, app.refresh_interval, ts, now) {
+                colors::PEACH
             } else {
-                format!("{}m ago", secs / 60)
+                colors::OVERLAY
             };
-            // A step dimmer than the rest of the header text on purpose: this
-            // is reassurance you glance at, not information you read.
             vec![Span::styled(
-                format!(" swept {label}  "),
-                Style::default().fg(colors::OVERLAY),
+                format!(" swept {}  ", swept_label(ts, now)),
+                Style::default().fg(color),
             )]
         })
     };
@@ -652,6 +691,63 @@ mod tests {
             detail: Some(Rect::new(36, 1, 64, 24)),
             inspector: Some(Rect::new(36, 25, 64, 16)),
         }
+    }
+
+    fn at(y: i32, m: u32, d: u32, h: u32, min: u32) -> chrono::DateTime<chrono::Local> {
+        use chrono::TimeZone;
+        chrono::Local
+            .with_ymd_and_hms(y, m, d, h, min, 0)
+            .single()
+            .expect("unambiguous local time")
+    }
+
+    #[test]
+    fn a_sweep_today_shows_only_the_clock_time() {
+        let ts = at(2026, 8, 6, 11, 42);
+        let now = at(2026, 8, 6, 14, 3);
+        assert_eq!(swept_label(ts, now), "11:42");
+    }
+
+    #[test]
+    fn a_sweep_before_today_shows_its_date() {
+        // The tmux-across-midnight case: a bare "23:11" reads as today and
+        // would silently mean yesterday.
+        let ts = at(2026, 8, 5, 23, 11);
+        let now = at(2026, 8, 6, 9, 0);
+        assert_eq!(swept_label(ts, now), "Aug 5 23:11");
+    }
+
+    #[test]
+    fn the_label_is_stable_as_time_passes() {
+        // The whole point of dropping the relative age: the same sweep renders
+        // identically an hour later, so nothing has to repaint to stay true.
+        let ts = at(2026, 8, 6, 11, 42);
+        assert_eq!(
+            swept_label(ts, at(2026, 8, 6, 11, 43)),
+            swept_label(ts, at(2026, 8, 6, 18, 30))
+        );
+    }
+
+    #[test]
+    fn overdue_needs_watch_mode_and_two_intervals() {
+        let ts = at(2026, 8, 6, 11, 0);
+        let interval = 60;
+
+        // Not watching: no promised cadence, so never late.
+        assert!(!sweep_overdue(false, interval, ts, at(2026, 8, 6, 12, 0)));
+        // Watching, but inside the grace window.
+        assert!(!sweep_overdue(true, interval, ts, at(2026, 8, 6, 11, 1)));
+        // Watching and past two intervals.
+        assert!(sweep_overdue(true, interval, ts, at(2026, 8, 6, 11, 5)));
+    }
+
+    #[test]
+    fn overdue_scales_with_the_configured_interval() {
+        // A five-minute interval must not be judged against a one-minute one.
+        let ts = at(2026, 8, 6, 11, 0);
+        let now = at(2026, 8, 6, 11, 8);
+        assert!(sweep_overdue(true, 60, ts, now), "60s interval is late");
+        assert!(!sweep_overdue(true, 600, ts, now), "600s interval is not");
     }
 
     #[test]
