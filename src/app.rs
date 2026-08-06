@@ -176,6 +176,8 @@ pub enum Applies {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingField {
     RefreshInterval,
+    GithubPollInterval,
+    Watch,
     View,
     WorkStart,
     WorkEnd,
@@ -183,8 +185,10 @@ pub enum SettingField {
 }
 
 /// The settings rows in display order.
-pub const SETTING_FIELDS: [SettingField; 5] = [
+pub const SETTING_FIELDS: [SettingField; 7] = [
     SettingField::RefreshInterval,
+    SettingField::GithubPollInterval,
+    SettingField::Watch,
     SettingField::View,
     SettingField::WorkStart,
     SettingField::WorkEnd,
@@ -194,7 +198,9 @@ pub const SETTING_FIELDS: [SettingField; 5] = [
 impl SettingField {
     pub fn label(self) -> &'static str {
         match self {
-            Self::RefreshInterval => "refresh interval",
+            Self::RefreshInterval => "sweep interval",
+            Self::GithubPollInterval => "github poll",
+            Self::Watch => "start watching",
             Self::View => "startup view",
             Self::WorkStart => "work starts",
             Self::WorkEnd => "work ends",
@@ -206,6 +212,8 @@ impl SettingField {
     pub fn config_key(self) -> &'static str {
         match self {
             Self::RefreshInterval => "refresh_interval",
+            Self::GithubPollInterval => "github_poll_interval",
+            Self::Watch => "watch",
             Self::View => "view",
             Self::WorkStart => "work_start",
             Self::WorkEnd => "work_end",
@@ -215,7 +223,11 @@ impl SettingField {
 
     pub fn applies(self) -> Applies {
         match self {
-            Self::RefreshInterval | Self::View | Self::PersistPanes => Applies::Live,
+            Self::RefreshInterval | Self::GithubPollInterval | Self::View | Self::PersistPanes => {
+                Applies::Live
+            }
+            // Only read when the app starts; `w` is how you change it now.
+            Self::Watch => Applies::Restart,
             // Both only feed `time::` when the cutoff and header are computed,
             // which happens once per load against the `Config` the main loop
             // owns by reference.
@@ -227,7 +239,7 @@ impl SettingField {
     fn numeric(self) -> bool {
         matches!(
             self,
-            Self::RefreshInterval | Self::WorkStart | Self::WorkEnd
+            Self::RefreshInterval | Self::GithubPollInterval | Self::WorkStart | Self::WorkEnd
         )
     }
 }
@@ -258,11 +270,21 @@ const INTERVAL_MIN: u64 = 5;
 const INTERVAL_MAX: u64 = 3600;
 const INTERVAL_STEP: u64 = 5;
 
+/// Floor for the GitHub poll, mirroring `main::GITHUB_POLL_MIN`. Lower than
+/// the sweep floor because a poll is one GraphQL call, not a fetch per repo.
+const POLL_MIN: u64 = 15;
+
+fn bool_label(v: bool) -> String {
+    if v { "yes" } else { "no" }.to_string()
+}
+
 /// Editable copy of the settings, live until Enter writes them back.
 #[derive(Debug, Clone)]
 pub struct SettingsOverlay {
     pub cursor: usize,
     pub refresh_interval: u64,
+    pub github_poll_interval: u64,
+    pub watch: bool,
     /// None means "auto": decide the view from the terminal size.
     pub view: Option<View>,
     pub work_start: u8,
@@ -275,8 +297,11 @@ pub struct SettingsOverlay {
 }
 
 impl SettingsOverlay {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         refresh_interval: u64,
+        github_poll_interval: u64,
+        watch: bool,
         view: Option<View>,
         work_start: u8,
         work_end: u8,
@@ -285,6 +310,8 @@ impl SettingsOverlay {
         Self {
             cursor: 0,
             refresh_interval: refresh_interval.clamp(INTERVAL_MIN, INTERVAL_MAX),
+            github_poll_interval: github_poll_interval.clamp(POLL_MIN, INTERVAL_MAX),
+            watch,
             view,
             work_start,
             work_end,
@@ -315,6 +342,11 @@ impl SettingsOverlay {
                 let next = self.refresh_interval as i64 + delta as i64 * INTERVAL_STEP as i64;
                 self.refresh_interval = next.clamp(INTERVAL_MIN as i64, INTERVAL_MAX as i64) as u64;
             }
+            SettingField::GithubPollInterval => {
+                let next = self.github_poll_interval as i64 + delta as i64 * INTERVAL_STEP as i64;
+                self.github_poll_interval = next.clamp(POLL_MIN as i64, INTERVAL_MAX as i64) as u64;
+            }
+            SettingField::Watch => self.watch = !self.watch,
             SettingField::View => {
                 // auto -> detail -> compact -> auto
                 self.view = match (self.view, delta > 0) {
@@ -361,6 +393,14 @@ impl SettingsOverlay {
                     self.refresh_interval = parsed;
                 }
             }
+            SettingField::GithubPollInterval => {
+                if parsed > INTERVAL_MAX {
+                    self.digits = ((b'0' + d) as char).to_string();
+                    self.github_poll_interval = d as u64;
+                } else {
+                    self.github_poll_interval = parsed;
+                }
+            }
             SettingField::WorkStart => {
                 let capped = (self.work_end as u64).saturating_sub(1);
                 if parsed > capped {
@@ -387,6 +427,7 @@ impl SettingsOverlay {
     /// intermediate state (typing "30" goes through "3").
     pub fn normalize(&mut self) {
         self.refresh_interval = self.refresh_interval.clamp(INTERVAL_MIN, INTERVAL_MAX);
+        self.github_poll_interval = self.github_poll_interval.clamp(POLL_MIN, INTERVAL_MAX);
         self.work_end = self.work_end.clamp(1, 23);
         self.work_start = self.work_start.min(self.work_end - 1);
     }
@@ -398,6 +439,14 @@ impl SettingsOverlay {
             (
                 SettingField::RefreshInterval.config_key(),
                 SettingValue::Int(self.refresh_interval as i64),
+            ),
+            (
+                SettingField::GithubPollInterval.config_key(),
+                SettingValue::Int(self.github_poll_interval as i64),
+            ),
+            (
+                SettingField::Watch.config_key(),
+                SettingValue::Bool(self.watch),
             ),
             (
                 SettingField::View.config_key(),
@@ -426,6 +475,8 @@ impl SettingsOverlay {
     pub fn value_label(&self, field: SettingField) -> String {
         match field {
             SettingField::RefreshInterval => format!("{}s", self.refresh_interval),
+            SettingField::GithubPollInterval => format!("{}s", self.github_poll_interval),
+            SettingField::Watch => bool_label(self.watch),
             SettingField::View => match self.view {
                 None => "auto".to_string(),
                 Some(View::Detail) => "detail".to_string(),
@@ -433,13 +484,7 @@ impl SettingsOverlay {
             },
             SettingField::WorkStart => format!("{:02}:00", self.work_start),
             SettingField::WorkEnd => format!("{:02}:00", self.work_end),
-            SettingField::PersistPanes => {
-                if self.persist_panes {
-                    "yes".to_string()
-                } else {
-                    "no".to_string()
-                }
-            }
+            SettingField::PersistPanes => bool_label(self.persist_panes),
         }
     }
 }
@@ -773,6 +818,16 @@ pub struct App {
     pub last_github_poll: Option<DateTime<Local>>,
     /// True while a GitHub re-poll is in flight, so ticks do not stack them.
     pub github_poll_inflight: bool,
+    /// When the in-flight GitHub poll started, so a request that never returns
+    /// can be given up on. Without this, one hung call leaves
+    /// `github_poll_inflight` true forever and CI status silently stops
+    /// updating for the rest of the session, with nothing on screen to say so.
+    pub github_poll_started: Option<std::time::Instant>,
+    /// Set when a sweep sees a repo's unpushed count fall to zero, which means
+    /// you just pushed. That is the one moment CI is about to change and
+    /// nothing is `Pending` yet to poll harder on, so it forces the next poll
+    /// rather than waiting out the interval.
+    pub push_detected: bool,
     /// The last unfiltered GitHub fetch (top repo_limit repos by push date).
     /// The time-window overlay re-filters this in memory, so applying a new
     /// window needs no network round trip.
@@ -847,6 +902,8 @@ impl App {
             sweep_manual: false,
             last_github_poll: None,
             github_poll_inflight: false,
+            github_poll_started: None,
+            push_detected: false,
             dataset: Vec::new(),
             window: None,
             dirty_mode: false,
@@ -1556,7 +1613,17 @@ mod tests {
     }
 
     fn settings() -> SettingsOverlay {
-        SettingsOverlay::new(60, None, 9, 18, false)
+        SettingsOverlay::new(60, 30, true, None, 9, 18, false)
+    }
+
+    /// Put the cursor on a field by name rather than by number, so inserting a
+    /// row does not silently retarget every test that follows it.
+    fn focus(s: &mut SettingsOverlay, field: SettingField) {
+        s.cursor = SETTING_FIELDS
+            .iter()
+            .position(|f| *f == field)
+            .expect("field is in SETTING_FIELDS");
+        assert_eq!(s.field(), field);
     }
 
     #[test]
@@ -1586,7 +1653,7 @@ mod tests {
     fn settings_view_cycles_through_auto() {
         let mut s = settings();
         assert_eq!(s.view, None);
-        s.move_cursor(1);
+        focus(&mut s, SettingField::View);
         s.step(1);
         assert_eq!(s.view, Some(View::Detail));
         s.step(1);
@@ -1602,14 +1669,14 @@ mod tests {
         // The pair must never invert or collapse: an empty work slot would
         // make the time-slot labels nonsense.
         let mut s = settings();
-        s.cursor = 2; // work_start
+        focus(&mut s, SettingField::WorkStart);
         for _ in 0..40 {
             s.step(1);
         }
         assert!(s.work_start < s.work_end);
         assert_eq!(s.work_start, 17, "stops one below work_end");
 
-        s.cursor = 3; // work_end
+        focus(&mut s, SettingField::WorkEnd);
         for _ in 0..40 {
             s.step(-1);
         }
@@ -1624,7 +1691,7 @@ mod tests {
         s.push_digit(0);
         assert_eq!(s.refresh_interval, 30, "'3' then '0' reads as 30");
 
-        s.cursor = 1; // view, not numeric
+        focus(&mut s, SettingField::View); // not numeric
         let before = s.view;
         s.push_digit(7);
         assert_eq!(
@@ -1645,6 +1712,33 @@ mod tests {
     }
 
     #[test]
+    fn settings_poll_interval_has_its_own_floor() {
+        // Lower than the sweep floor on purpose: a poll is one GraphQL call,
+        // a sweep is a fetch against every remote.
+        let mut s = settings();
+        focus(&mut s, SettingField::GithubPollInterval);
+        for _ in 0..100 {
+            s.step(-1);
+        }
+        assert_eq!(s.github_poll_interval, POLL_MIN);
+        // And the sweep floor is untouched by it: two separate limits, because
+        // the two operations cost very different things.
+        assert_eq!(s.refresh_interval, 60);
+    }
+
+    #[test]
+    fn settings_watch_is_a_restart_field() {
+        // `w` changes the live state; this row only sets what the next launch
+        // starts with, and the overlay says so rather than looking inert.
+        assert_eq!(SettingField::Watch.applies(), Applies::Restart);
+        let mut s = settings();
+        focus(&mut s, SettingField::Watch);
+        let before = s.watch;
+        s.step(1);
+        assert_ne!(s.watch, before, "toggles");
+    }
+
+    #[test]
     fn settings_write_every_field_back() {
         use crate::config::SettingValue;
         let mut s = settings();
@@ -1660,6 +1754,8 @@ mod tests {
                 .map(|(_, v)| v.clone())
         };
         assert_eq!(by_key("refresh_interval"), Some(SettingValue::Int(90)));
+        assert_eq!(by_key("github_poll_interval"), Some(SettingValue::Int(30)));
+        assert_eq!(by_key("watch"), Some(SettingValue::Bool(true)));
         assert_eq!(by_key("view"), Some(SettingValue::Str("compact")));
         assert_eq!(by_key("work_start"), Some(SettingValue::Int(9)));
         assert_eq!(by_key("persist_pane_sizes"), Some(SettingValue::Bool(true)));

@@ -24,6 +24,22 @@ pub struct Config {
     /// `v` still toggles it for the session.
     #[serde(default)]
     pub view: Option<String>,
+    /// Start in watch mode. On by default: a dashboard you leave open should
+    /// keep itself current without being asked. `--watch` and `--no-watch`
+    /// override it for one session, and `w` toggles it live.
+    ///
+    /// Note this multiplies with `refresh_interval`: watch sweeps *fetch* from
+    /// every remote on that cadence, so a low interval here means real network
+    /// traffic from launch.
+    #[serde(default = "default_watch")]
+    pub watch: bool,
+    /// Seconds between GitHub re-polls while watching, which is what keeps CI
+    /// status current. Separate from `refresh_interval` because the two have
+    /// different costs: a sweep is local git plus a fetch, a poll is one
+    /// GraphQL call. Floored by `GITHUB_POLL_MIN` so a typo cannot spend the
+    /// rate limit.
+    #[serde(default = "default_github_poll_interval")]
+    pub github_poll_interval: u64,
     /// Whether pane sizes changed with the resize keys are written back on
     /// exit and restored on the next launch. Off by default: a layout nudged
     /// for one repo shouldn't silently become permanent.
@@ -35,6 +51,14 @@ pub struct Config {
     pub repo_list_pct: u16,
     #[serde(default = "default_inspector_pct")]
     pub inspector_pct: u16,
+}
+
+fn default_watch() -> bool {
+    true
+}
+
+fn default_github_poll_interval() -> u64 {
+    30
 }
 
 fn default_repo_list_pct() -> u16 {
@@ -57,6 +81,8 @@ impl Default for Config {
             extra_dirs: Vec::new(),
             groups: HashMap::new(),
             view: None,
+            watch: default_watch(),
+            github_poll_interval: default_github_poll_interval(),
             persist_pane_sizes: false,
             repo_list_pct: default_repo_list_pct(),
             inspector_pct: default_inspector_pct(),

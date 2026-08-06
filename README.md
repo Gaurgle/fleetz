@@ -71,7 +71,8 @@ footer as repos are re-stat'd. The count field is capped per unit (hours up to
 |------|-------------|
 | `--author NAME` | Filter displayed commits by author (substring match) |
 | `-p, --prs` | Include open pull request counts |
-| `--watch` | Auto-refresh mode for a persistent tmux pane |
+| `--watch` | Force watch mode on for this session |
+| `--no-watch` | Force watch mode off for this session |
 | `--interval SECS` | Watch refresh interval, overriding `refresh_interval` |
 
 ### Examples
@@ -112,7 +113,7 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `<` / `>` | Narrow / widen the repo list |
 | `+` / `-` | Shrink / grow the inspector pane |
 | `=` | Reset both panes to their default sizes |
-| `r` | Refresh: rebuild the listed repos only (offline, no fetch, no new repos) |
+| `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates. No rediscovery |
 | `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear |
 | `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub |
 | `?` | Toggle help overlay |
@@ -141,8 +142,18 @@ repo_dir = "~/repos"
 # living outside repo_dir under a hidden path needs naming here.
 extra_dirs = ["~/.dotfiles"]
 
-# Auto-refresh interval in seconds (used with --watch, default 60)
+# Start in watch mode. On by default: a dashboard you leave open should keep
+# itself current. --watch / --no-watch override for one session, `w` toggles live.
+watch = true
+
+# Seconds between watch sweeps: local git status plus a fetch from every
+# remote. This one costs real network traffic, so keep it generous.
 refresh_interval = 60
+
+# Seconds between GitHub re-polls while watching, which is what keeps CI
+# status current. Automatically tightened to 15s while any CI run is in
+# flight, and forced immediately after a push is detected. Floored at 15s.
+github_poll_interval = 30
 
 # GitHub API cache TTL in seconds
 cache_ttl = 120

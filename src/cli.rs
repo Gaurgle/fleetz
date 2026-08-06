@@ -34,9 +34,13 @@ pub struct Args {
     #[arg(short = 'p', long)]
     pub prs: bool,
 
-    /// Auto-refresh mode for persistent tmux pane
+    /// Auto-refresh mode for persistent tmux pane (config `watch` sets the default)
     #[arg(long)]
     pub watch: bool,
+
+    /// Start with watch off, overriding the `watch` config key
+    #[arg(long, conflicts_with = "watch")]
+    pub no_watch: bool,
 
     /// Watch refresh interval in seconds (default: config refresh_interval)
     #[arg(long)]

@@ -217,7 +217,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // filesystem work, and the initial load fills it in from the background.
     let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
     let mut app = App::new(Vec::new(), String::new(), args.prs, term_width, term_height);
-    app.watch_mode = args.watch;
+    // Config sets the default; the flags are one-session overrides. `w` still
+    // toggles it live, and that choice is not persisted.
+    app.watch_mode = if args.watch {
+        true
+    } else if args.no_watch {
+        false
+    } else {
+        config.watch
+    };
     app.refresh_interval = args.interval.unwrap_or(config.refresh_interval);
     app.window = initial_window;
     app.dirty_mode = mode == Mode::Dirty;
@@ -492,16 +500,25 @@ async fn run_event_loop(
                         start_sweep(app, &tx, true, args.author.clone(), false);
                     }
                 }
+                // A poll that never reported back must not wedge CI updates
+                // for the rest of the session. `gh` has no timeout of its own,
+                // so a dead network can leave the in-flight flag set forever.
+                if let Some(started) = app.github_poll_started
+                    && started.elapsed() > GITHUB_POLL_STUCK_AFTER
+                {
+                    app.github_poll_inflight = false;
+                    app.github_poll_started = None;
+                }
                 if app.watch_mode && !app.dirty_mode && !app.loading && !app.github_poll_inflight {
-                    // Never faster than the cache TTL, and never faster than
-                    // two minutes: GitHub rate limit is the scarce resource.
-                    let poll_every = config.cache_ttl.max(120) as i64;
+                    let poll_every = github_poll_secs(app, config);
                     let due = app
                         .last_github_poll
                         .is_none_or(|t| (chrono::Local::now() - t).num_seconds() >= poll_every);
-                    if due {
-                        app.github_poll_inflight = true;
-                        spawn_github_poll(&tx, args, config);
+                    // A detected push jumps the queue: it is the one moment CI
+                    // is about to change with nothing `Pending` yet to notice.
+                    if due || app.push_detected {
+                        app.push_detected = false;
+                        start_github_poll(app, &tx, args, config);
                     }
                 }
             }
@@ -544,12 +561,21 @@ async fn run_event_loop(
                     .iter_mut()
                     .find(|r| r.path.as_deref() == Some(path.as_str()))
                 {
+                    // Unpushed commits going to zero means a push landed. A
+                    // terminal `git push` updates the remote-tracking ref
+                    // itself, so a local sweep sees this without fetching.
+                    // That is the earliest signal fleetz has that CI is about
+                    // to start, and it beats waiting out the poll interval.
+                    if repo.ahead > 0 && status.ahead == 0 {
+                        app.push_detected = true;
+                    }
                     *repo = *status;
                 }
                 app.needs_redraw = true;
             }
             AppEvent::Github(result) => {
                 app.github_poll_inflight = false;
+                app.github_poll_started = None;
                 app.last_github_poll = Some(chrono::Local::now());
                 match result {
                     Ok(dataset) => {
@@ -1114,6 +1140,8 @@ async fn handle_normal_input(
         KeyCode::Char(',') => {
             app.overlay = Overlay::Settings(app::SettingsOverlay::new(
                 app.refresh_interval,
+                config.github_poll_interval,
+                app.watch_mode,
                 app.view_overridden.then_some(app.view),
                 config.work_start,
                 config.work_end,
@@ -1139,9 +1167,16 @@ async fn handle_normal_input(
         // a new repo, but it reflects local work on the ones already shown.
         // Gets the unshifted key because it's the one you reach for
         // constantly; `R` is the full rediscover.
+        // Refresh: re-stat the listed repos *and* re-poll GitHub. The split
+        // against `R` is refresh vs refresh-plus-rediscover, not offline vs
+        // online: CI status has no local source, so an `r` that skipped
+        // GitHub updated two thirds of each row and left the CI lamp beside
+        // them frozen. The poll runs on a background task, so the local
+        // numbers land exactly as fast as they did before.
         KeyCode::Char('r') => {
             app.set_status("Refreshing…".to_string(), false);
             start_sweep(app, tx, false, args.author.clone(), true);
+            start_github_poll(app, tx, args, config);
         }
         // Full reload: re-fetch GitHub (cache-bypassed) and re-run discovery,
         // so a just-pushed or newly-cloned repo appears. Shifted because it
@@ -1242,6 +1277,51 @@ struct SweepTarget {
 
 /// A sweep that never reported back must not hold the watch lock forever.
 const SWEEP_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Same idea for the GitHub poll. `gh` carries no timeout of its own, so a
+/// black-holed request would otherwise leave `github_poll_inflight` set for
+/// the rest of the session and stop CI updating, silently.
+const GITHUB_POLL_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Floor on the GitHub poll interval, whatever the config says. Measured
+/// against a 5000 point/hour GraphQL budget, one poll of ~50 repos costs a
+/// few points, so this is comfortable; it exists to stop a typo turning the
+/// dashboard into a rate-limit incident.
+const GITHUB_POLL_MIN: u64 = 15;
+
+/// Seconds to wait before the next GitHub poll.
+///
+/// Drops to the floor while any repo is `Pending`, which is exactly when a
+/// human is watching the screen for a run to finish, and relaxes to the
+/// configured interval when nothing is in flight. Costs nothing at idle.
+fn github_poll_secs(app: &App, config: &config::Config) -> i64 {
+    let configured = config.github_poll_interval.max(GITHUB_POLL_MIN);
+    let any_pending = app
+        .repos
+        .iter()
+        .any(|r| r.ci_status == model::CiStatus::Pending);
+    if any_pending {
+        GITHUB_POLL_MIN as i64
+    } else {
+        configured as i64
+    }
+}
+
+/// Kick off a GitHub re-poll, taking the in-flight lock. No-op if one is
+/// already running, so mashing `r` cannot stack requests.
+fn start_github_poll(
+    app: &mut App,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    args: &Args,
+    config: &config::Config,
+) {
+    if app.github_poll_inflight || app.dirty_mode {
+        return;
+    }
+    app.github_poll_inflight = true;
+    app.github_poll_started = Some(std::time::Instant::now());
+    spawn_github_poll(tx, args, config);
+}
 
 /// Snapshot the repos that have a local path, as sweep targets.
 fn sweep_targets(app: &App, only: Option<usize>) -> Vec<SweepTarget> {
@@ -1945,6 +2025,73 @@ async fn build_repo_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app_with(ci: &[model::CiStatus]) -> App {
+        let mut app = App::new(Vec::new(), String::new(), false, 100, 40);
+        app.repos = ci
+            .iter()
+            .map(|status| RepoStatus {
+                name: "r".to_string(),
+                path: None,
+                location: model::RepoLocation::Primary,
+                branches: vec![],
+                commits: vec![],
+                behind: 0,
+                ahead: 0,
+                dirty: 0,
+                pr_count: 0,
+                prs: vec![],
+                ci_status: status.clone(),
+                ci_workflow: None,
+                ci_duration: None,
+                groups: vec![],
+                stash_count: 0,
+                stash_entries: vec![],
+                worktrees: vec![],
+                reflog: vec![],
+                graph: vec![],
+                repo_kind: model::RepoKind::Unknown,
+                owner: None,
+                remote_url: None,
+                remote_only_branches: vec![],
+                work_key: None,
+            })
+            .collect();
+        app
+    }
+
+    #[test]
+    fn poll_relaxes_when_nothing_is_pending() {
+        let config = config::Config {
+            github_poll_interval: 90,
+            ..config::Config::default()
+        };
+        let app = app_with(&[model::CiStatus::Passed, model::CiStatus::Unknown]);
+        assert_eq!(github_poll_secs(&app, &config), 90);
+    }
+
+    #[test]
+    fn poll_tightens_while_a_run_is_in_flight() {
+        // Exactly when someone is watching the screen for it to finish.
+        let config = config::Config {
+            github_poll_interval: 90,
+            ..config::Config::default()
+        };
+        let app = app_with(&[model::CiStatus::Passed, model::CiStatus::Pending]);
+        assert_eq!(github_poll_secs(&app, &config), GITHUB_POLL_MIN as i64);
+    }
+
+    #[test]
+    fn a_configured_interval_below_the_floor_is_raised() {
+        // The floor exists so a typo cannot turn the dashboard into a
+        // rate-limit incident.
+        let config = config::Config {
+            github_poll_interval: 1,
+            ..config::Config::default()
+        };
+        let app = app_with(&[model::CiStatus::Passed]);
+        assert_eq!(github_poll_secs(&app, &config), GITHUB_POLL_MIN as i64);
+    }
 
     #[test]
     fn resolve_cutoff_window_overrides_mode() {

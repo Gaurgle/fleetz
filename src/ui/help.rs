@@ -50,14 +50,17 @@ pub fn render(frame: &mut Frame, area: Rect) {
             "Fuzzy-search repos (best match first), or type #dirty #behind #ahead #ci #prs #stash to filter",
         ),
         ("0", "Clear #tag filters (keeps free-text search)"),
-        (",", "Settings: refresh interval, startup view, work hours"),
+        (
+            ",",
+            "Settings: intervals, watch on start, startup view, work hours",
+        ),
         (
             "< / >",
             "Narrow / widen the repo list · + / - resize inspector · = reset",
         ),
         (
             "r",
-            "Refresh: rebuild listed repos only (offline, no fetch)",
+            "Refresh: re-stat listed repos + re-poll GitHub (CI updates here)",
         ),
         (
             "R",
