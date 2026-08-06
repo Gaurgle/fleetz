@@ -26,7 +26,7 @@ pub fn find_in_primary(roots: &[PathBuf], names: &[String]) -> Vec<FoundRepo> {
     let mut seen: HashSet<String> = HashSet::new();
 
     for root in roots {
-        scan_for_git_repos(root, 3, &mut |path| {
+        scan_for_git_repos(root, 3, false, &mut |path| {
             let dir_name = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -69,7 +69,7 @@ pub fn find_elsewhere(
 
     let mut found = Vec::new();
 
-    scan_for_git_repos(home, 4, &mut |path| {
+    scan_for_git_repos(home, 4, true, &mut |path| {
         // Skip excluded directories
         if is_excluded(path, roots) {
             return;
@@ -131,7 +131,7 @@ pub fn find_all_local(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
     let mut repos = Vec::new();
     for root in roots {
-        scan_for_git_repos(root, 4, &mut |path| {
+        scan_for_git_repos(root, 4, false, &mut |path| {
             if seen.insert(path.to_path_buf()) {
                 repos.push(path.to_path_buf());
             }
@@ -140,13 +140,54 @@ pub fn find_all_local(roots: &[PathBuf]) -> Vec<PathBuf> {
     repos
 }
 
+/// Directory names never descended into, mirroring repoz's prune list in
+/// `scan_home_git_dirs`. Pruning by name stops descent into dependency and
+/// build trees entirely rather than walking them and filtering after.
+///
+/// Tradeoff, and repoz makes the same one: a repo literally named `target` or
+/// `build` is skipped.
+const PRUNE_DIRS: [&str; 14] = [
+    "Library",
+    ".Trash",
+    ".cache",
+    "node_modules",
+    "vendor",
+    "target",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    "Pods",
+    "DerivedData",
+    ".terraform",
+    ".gradle",
+];
+
 /// Walk directories up to `max_depth` looking for `.git` dirs.
 /// Calls `callback` with the parent of each `.git` found.
-fn scan_for_git_repos(root: &Path, max_depth: usize, callback: &mut dyn FnMut(&Path)) {
-    scan_recursive(root, 0, max_depth, callback);
+///
+/// `skip_hidden` blanket-skips dot-directories. That is right for the `$HOME`
+/// sweep, where descending into every `~/.local`, `~/.npm` and friend would
+/// cost far more than it finds. It is wrong for a root the user named
+/// explicitly: pointing `repo_dir` or an `extra_dir` at a directory should find
+/// the repos in it whether or not they happen to be hidden, which is what
+/// repoz does. `PRUNE_DIRS` is applied either way.
+fn scan_for_git_repos(
+    root: &Path,
+    max_depth: usize,
+    skip_hidden: bool,
+    callback: &mut dyn FnMut(&Path),
+) {
+    scan_recursive(root, 0, max_depth, skip_hidden, callback);
 }
 
-fn scan_recursive(dir: &Path, depth: usize, max_depth: usize, callback: &mut dyn FnMut(&Path)) {
+fn scan_recursive(
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    skip_hidden: bool,
+    callback: &mut dyn FnMut(&Path),
+) {
     if depth > max_depth {
         return;
     }
@@ -173,11 +214,13 @@ fn scan_recursive(dir: &Path, depth: usize, max_depth: usize, callback: &mut dyn
         if path.is_dir() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            // Skip hidden dirs (except the root) and common large dirs
-            if name_str.starts_with('.') || name_str == "node_modules" {
+            if PRUNE_DIRS.contains(&name_str.as_ref()) {
                 continue;
             }
-            scan_recursive(&path, depth + 1, max_depth, callback);
+            if skip_hidden && name_str.starts_with('.') {
+                continue;
+            }
+            scan_recursive(&path, depth + 1, max_depth, skip_hidden, callback);
         }
     }
 }
@@ -348,5 +391,169 @@ mod tests {
         assert!(found.is_empty());
 
         fs::remove_dir_all(dir).ok();
+    }
+}
+
+/// Parity checks against repoz, which implements the same discovery rules in
+/// bash and has had them right for longer.
+///
+/// The two tools are kept in agreement by hand today, and that is exactly how
+/// the `~/.dotfiles` bug survived for months: repoz matched `-iname ".$name"`
+/// from the start, fleetz never transcribed it. These tests mechanise the
+/// comparison so the next divergence fails a build instead of being noticed
+/// by eye.
+///
+/// Every fixture repo is made dirty on purpose: `repoz -d` lists dirty repos
+/// only and needs no GitHub access, so a fixture where everything is dirty
+/// yields the full discovered set from a pure-local run.
+///
+/// Skipped when repoz is not on PATH, which is visible in the test output
+/// rather than silently passing.
+#[cfg(test)]
+mod repoz_parity {
+    use super::*;
+    use std::process::Command;
+
+    fn repoz_bin() -> Option<PathBuf> {
+        // The clone next to this one first, so the test checks the repoz you
+        // are actually developing rather than whatever is installed.
+        let sibling = dirs::home_dir()?.join("repos/repoz/repoz");
+        if sibling.is_file() {
+            return Some(sibling);
+        }
+        let out = Command::new("sh")
+            .args(["-c", "command -v repoz"])
+            .output()
+            .ok()?;
+        let path = String::from_utf8(out.stdout).ok()?.trim().to_string();
+        (!path.is_empty()).then(|| PathBuf::from(path))
+    }
+
+    fn sh(dir: &Path, args: &[&str]) {
+        let status = Command::new(args[0])
+            .args(&args[1..])
+            .current_dir(dir)
+            .status()
+            .expect("spawn");
+        assert!(status.success(), "command failed: {args:?}");
+    }
+
+    /// A git repo at `base/rel` with one commit and one uncommitted change.
+    fn dirty_repo(base: &Path, rel: &str) -> PathBuf {
+        let dir = base.join(rel);
+        std::fs::create_dir_all(&dir).unwrap();
+        sh(&dir, &["git", "init", "-q", "-b", "main"]);
+        sh(&dir, &["git", "config", "user.email", "t@example.com"]);
+        sh(&dir, &["git", "config", "user.name", "t"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh(&dir, &["git", "commit", "-q", "-m", "init"]);
+        std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        dir
+    }
+
+    /// Absolute repo paths repoz reports in dirty mode. Rows are
+    /// `<name> <path> ··· <status>`, colored, so the escapes come off first
+    /// and the path is the field that starts with a slash.
+    fn repoz_paths(bin: &Path, root: &Path) -> Vec<PathBuf> {
+        let out = Command::new(bin)
+            .arg("-d")
+            .env("REPO_CHECK_DIR", root)
+            // A real config would add the user's own EXTRA_DIRS to the scan.
+            .env("XDG_CONFIG_HOME", root.join("no-config"))
+            .output()
+            .expect("run repoz");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for line in strip_ansi(&stdout).lines() {
+            for word in line.split_whitespace() {
+                if word.starts_with('/') && Path::new(word).join(".git").exists() {
+                    paths.push(PathBuf::from(word));
+                }
+            }
+        }
+        paths.sort();
+        paths
+    }
+
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c != '\u{1b}' {
+                out.push(c);
+                continue;
+            }
+            // Consume through the final byte of the CSI sequence.
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    fn fixture(tag: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("fleetz_parity_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    #[test]
+    fn discovers_the_same_repos_as_repoz() {
+        let Some(bin) = repoz_bin() else {
+            eprintln!("SKIP: repoz not found, parity unchecked");
+            return;
+        };
+        let base = fixture("same");
+
+        // The shapes that have actually diverged or plausibly could: a plain
+        // repo, a nested one, a dot-prefixed clone (the `~/.dotfiles` case),
+        // and a repo inside an otherwise ordinary hidden directory.
+        let mut expected = vec![
+            dirty_repo(&base, "alpha"),
+            dirty_repo(&base, "nested/beta"),
+            dirty_repo(&base, ".dotfiles"),
+            dirty_repo(&base, ".config/gamma"),
+        ];
+        // A pruned directory must be invisible to both.
+        dirty_repo(&base, "node_modules/should-not-appear");
+        expected.sort();
+
+        let theirs = repoz_paths(&bin, &base);
+        let mut ours = find_all_local(std::slice::from_ref(&base));
+        ours.sort();
+
+        assert_eq!(
+            ours, theirs,
+            "\nfleetz found: {ours:#?}\nrepoz found:  {theirs:#?}"
+        );
+        assert_eq!(ours, expected, "neither tool found the expected set");
+
+        std::fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn agrees_with_repoz_on_a_hidden_scan_root() {
+        // `repo_dir` or an `extra_dir` pointed straight at a hidden directory:
+        // the shape that made `~/.dotfiles` invisible in fleetz.
+        let Some(bin) = repoz_bin() else {
+            eprintln!("SKIP: repoz not found, parity unchecked");
+            return;
+        };
+        let base = fixture("hidden_root");
+        let root = base.join(".dotfiles");
+        let expected = vec![dirty_repo(&base, ".dotfiles")];
+
+        let theirs = repoz_paths(&bin, &root);
+        let ours = find_all_local(std::slice::from_ref(&root));
+
+        assert_eq!(ours, theirs, "\nfleetz: {ours:#?}\nrepoz:  {theirs:#?}");
+        assert_eq!(ours, expected);
+
+        std::fs::remove_dir_all(base).ok();
     }
 }

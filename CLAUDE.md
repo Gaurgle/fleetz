@@ -108,10 +108,18 @@ absent.
 the undotted name, because the GitHub match, the glyph lookup, and dedupe all
 key on the GitHub name (`discovery::matched_name`, `discovery::repo_name_for_path`).
 
-**Hidden directories are only reached as explicit scan roots.** The `$HOME`
-walker prunes anything starting with `.`, so a clone under a hidden path is
-found only if `extra_dirs` names it. Do not "fix" this by walking hidden dirs in
-the `$HOME` sweep: that descends into `~/.cache`, `~/.local`, and friends.
+**Hidden directories are traversed inside a configured scan root, but not in
+the `$HOME` sweep.** A root you named (`repo_dir`, `extra_dirs`) should yield
+its repos whether or not they are hidden, which is what repoz does. The `$HOME`
+sweep still blanket-skips dot-directories, because descending into every
+`~/.local` and `~/.npm` costs far more than it finds. `PRUNE_DIRS` applies to
+both and mirrors repoz's `PRUNE_EXPR` -- keep the two lists in step.
+
+**Discovery parity with repoz is enforced by test, not by memory.**
+`discovery::repoz_parity` builds a fixture tree, runs `repoz -d` against it,
+and diffs the discovered paths against fleetz's own. It skips (loudly) when
+repoz is not on PATH. Every fixture repo is deliberately dirty so a pure-local
+repoz run reports the full set without touching GitHub.
 
 **One color ladder per concept.** `badges::status_color` is the single source
 for what a sync state looks like; the detail pane calls it rather than keeping
