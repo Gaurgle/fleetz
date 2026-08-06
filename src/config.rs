@@ -24,6 +24,25 @@ pub struct Config {
     /// `v` still toggles it for the session.
     #[serde(default)]
     pub view: Option<String>,
+    /// Whether pane sizes changed with the resize keys are written back on
+    /// exit and restored on the next launch. Off by default: a layout nudged
+    /// for one repo shouldn't silently become permanent.
+    #[serde(default)]
+    pub persist_pane_sizes: bool,
+    /// Last saved pane sizes. Only read when `persist_pane_sizes` is set, so
+    /// leaving stale values in the file is harmless.
+    #[serde(default = "default_repo_list_pct")]
+    pub repo_list_pct: u16,
+    #[serde(default = "default_inspector_pct")]
+    pub inspector_pct: u16,
+}
+
+fn default_repo_list_pct() -> u16 {
+    crate::app::DEFAULT_REPO_LIST_PCT
+}
+
+fn default_inspector_pct() -> u16 {
+    crate::app::DEFAULT_INSPECTOR_PCT
 }
 
 impl Default for Config {
@@ -38,8 +57,58 @@ impl Default for Config {
             extra_dirs: Vec::new(),
             groups: HashMap::new(),
             view: None,
+            persist_pane_sizes: false,
+            repo_list_pct: default_repo_list_pct(),
+            inspector_pct: default_inspector_pct(),
         }
     }
+}
+
+/// A value the settings menu writes back into `config.toml`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingValue {
+    Int(i64),
+    Str(&'static str),
+    Bool(bool),
+}
+
+/// The file the settings menu writes to: whichever candidate already exists,
+/// else the preferred XDG path, created on first save.
+pub fn settings_path() -> PathBuf {
+    let candidates = config_candidates();
+    candidates
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .or_else(|| candidates.first().cloned())
+        .unwrap_or_else(|| PathBuf::from("fleetz.toml"))
+}
+
+/// Write `updates` into the TOML document at `path`, creating the file and its
+/// parent directory if absent.
+///
+/// Uses `toml_edit` rather than serializing the whole `Config`: the file is
+/// hand-written and commented, and a round trip through serde would flatten
+/// every comment and reorder every key. Only the named keys are touched;
+/// anything else in the file is preserved byte for byte.
+pub fn save_settings(path: &Path, updates: &[(&str, SettingValue)]) -> Result<(), String> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut doc: toml_edit::DocumentMut = existing
+        .parse()
+        .map_err(|e| format!("config is not valid TOML: {e}"))?;
+
+    for (key, value) in updates {
+        doc[*key] = match value {
+            SettingValue::Int(i) => toml_edit::value(*i),
+            SettingValue::Str(s) => toml_edit::value(*s),
+            SettingValue::Bool(b) => toml_edit::value(*b),
+        };
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {parent:?}: {e}"))?;
+    }
+    std::fs::write(path, doc.to_string()).map_err(|e| format!("cannot write config: {e}"))
 }
 
 impl Config {
@@ -245,6 +314,68 @@ mod tests {
     #[test]
     fn resolved_extra_dirs_defaults_empty() {
         assert!(Config::default().resolved_extra_dirs().is_empty());
+    }
+
+    #[test]
+    fn save_settings_preserves_comments_and_untouched_keys() {
+        // The whole reason for toml_edit over serializing Config: this file is
+        // hand-written, and a serde round trip would flatten every comment and
+        // drop keys the settings menu doesn't know about.
+        let dir = std::env::temp_dir().join("fleetz_test_save_settings");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "# my hand-written note\nrefresh_interval = 60\nrepo_limit = 99\n\n[groups]\nwork = [\"api\"]\n",
+        )
+        .unwrap();
+
+        save_settings(
+            &path,
+            &[
+                ("refresh_interval", SettingValue::Int(30)),
+                ("view", SettingValue::Str("detail")),
+            ],
+        )
+        .unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("# my hand-written note"), "comment kept");
+        assert!(written.contains("repo_limit = 99"), "unknown key kept");
+        assert!(written.contains("work = [\"api\"]"), "table kept");
+
+        // And it must still parse back into a Config with the new values.
+        let c = Config::load_from(&path).unwrap();
+        assert_eq!(c.refresh_interval, 30);
+        assert_eq!(c.repo_limit, 99);
+        assert_eq!(c.forced_view(), Some(crate::app::View::Detail));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn save_settings_creates_a_missing_file_and_its_directory() {
+        let dir = std::env::temp_dir().join("fleetz_test_save_fresh");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("config.toml");
+
+        save_settings(&path, &[("refresh_interval", SettingValue::Int(45))]).unwrap();
+
+        let c = Config::load_from(&path).unwrap();
+        assert_eq!(c.refresh_interval, 45);
+        assert_eq!(c.repo_limit, 50, "unset keys still take their defaults");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn pane_size_keys_default_when_absent() {
+        // A config written before pane persistence existed must still load.
+        let c: Config = toml::from_str("refresh_interval = 60").unwrap();
+        assert!(!c.persist_pane_sizes);
+        assert_eq!(c.repo_list_pct, crate::app::DEFAULT_REPO_LIST_PCT);
+        assert_eq!(c.inspector_pct, crate::app::DEFAULT_INSPECTOR_PCT);
     }
 
     #[test]

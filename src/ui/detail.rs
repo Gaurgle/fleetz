@@ -12,10 +12,53 @@ use crate::ui::badges;
 use crate::ui::colors;
 use crate::ui::format_age;
 
-/// Height (incl. border) of the inspector pane docked under the detail pane.
-/// Enough for the header line, a blank, a few message lines, and the stat;
-/// only shown when the right column is tall enough to spare it.
-pub const INSPECTOR_HEIGHT: u16 = 10;
+/// Smallest useful inspector (incl. border): header line, blank, a couple of
+/// message lines, and the stat. Below this it is dropped rather than shown as
+/// a sliver.
+const INSPECTOR_MIN_HEIGHT: u16 = 8;
+
+/// Ceiling on the inspector's share of the right column. A commit's details
+/// are bounded in a way the detail pane's history list is not, so past this
+/// the extra rows are better spent on the pane above.
+const INSPECTOR_MAX_HEIGHT: u16 = 24;
+
+/// Rows the detail pane keeps for itself before the inspector gets any.
+const DETAIL_MIN_HEIGHT: u16 = 8;
+
+/// Split the right column into the detail pane and, when there is room for a
+/// useful one, the inspector docked under it.
+///
+/// Single source of truth for that geometry: `render` draws from it and
+/// `ui::panel_rects` hit-tests mouse clicks against it. They used to carry
+/// separate copies of the same arithmetic, kept in sync by hand, where any
+/// drift would land clicks on the wrong pane.
+///
+/// `pct` is the inspector's requested share of the column, which the resize
+/// keys move. It is a request, not a promise: the min/max clamp and the detail
+/// pane's floor both outrank it, so a short terminal still yields a readable
+/// split (or drops the inspector entirely) whatever the user asked for.
+pub fn split_right_column(area: Rect, pct: u16) -> (Rect, Option<Rect>) {
+    if area.height < DETAIL_MIN_HEIGHT + INSPECTOR_MIN_HEIGHT {
+        return (area, None);
+    }
+    let height = (area.height * pct / 100)
+        .clamp(INSPECTOR_MIN_HEIGHT, INSPECTOR_MAX_HEIGHT)
+        .min(area.height - DETAIL_MIN_HEIGHT);
+    let v = Layout::vertical([Constraint::Min(1), Constraint::Length(height)]).split(area);
+    (v[0], Some(v[1]))
+}
+
+/// Split the main area into the repo list and the right column. Shared by
+/// `render` and `ui::panel_rects` for the same reason as the vertical split.
+pub fn split_main(area: Rect, repo_list_pct: u16) -> (Rect, Rect) {
+    let h = Layout::horizontal([
+        Constraint::Percentage(repo_list_pct),
+        Constraint::Percentage(100 - repo_list_pct),
+    ])
+    .spacing(1)
+    .split(area);
+    (h[0], h[1])
+}
 
 /// Most changed files listed in the inspector before the rest are collapsed
 /// into a "… and N more" line -- keeps a huge commit from turning the pane
@@ -25,21 +68,16 @@ const INSPECTOR_FILE_CAP: usize = 30;
 /// Render the detail view: repo list (left 35%) + a right column (65%) that
 /// stacks the detail pane over the inspector pane.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let chunks = Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .spacing(1)
-        .split(area);
+    let (list_area, right_area) = split_main(area, app.repo_list_pct);
 
-    render_repo_list(frame, chunks[0], app);
+    render_repo_list(frame, list_area, app);
 
     // Dock the inspector under the detail pane, but only when there's room --
     // on a short terminal the detail pane keeps the whole column.
-    if chunks[1].height > INSPECTOR_HEIGHT + 6 {
-        let right = Layout::vertical([Constraint::Min(1), Constraint::Length(INSPECTOR_HEIGHT)])
-            .split(chunks[1]);
-        render_detail_pane(frame, right[0], app);
-        render_inspector(frame, right[1], app);
-    } else {
-        render_detail_pane(frame, chunks[1], app);
+    let (detail_area, inspector_area) = split_right_column(right_area, app.inspector_pct);
+    render_detail_pane(frame, detail_area, app);
+    if let Some(inspector_area) = inspector_area {
+        render_inspector(frame, inspector_area, app);
     }
 }
 
@@ -49,45 +87,16 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     // and horizontal padding (2, from `Padding::horizontal(1)` on the block).
     let col_width = area.width.saturating_sub(4) as usize;
 
-    let primary = app.primary_repos();
-    let elsewhere = app.elsewhere_repos();
-    let local_only = app.local_only_repos();
     let selected_idx = app.selected_repo_index().unwrap_or(usize::MAX);
-
-    let total = primary.len() + elsewhere.len() + local_only.len();
+    let dim_pending = app.watch_mode && !app.blink_on;
 
     // Tracks where in the flattened `items` (repos interleaved with section
     // header rows) the selected repo lands, so ListState can be told to keep
     // that exact row in view -- rather than the repo's position among just
     // the repos, which would drift once header rows are counted in.
     let mut selected_display_idx = None;
-
-    // "github activity" section -- only labeled when another section follows,
-    // matching how a lone unlabeled list reads fine but three stacked groups
-    // need every one of them named to tell them apart.
-    if !primary.is_empty() && (!elsewhere.is_empty() || !local_only.is_empty()) {
-        items.push(section_header_item("github activity"));
-    }
-    for (idx, repo) in &primary {
-        if *idx == selected_idx {
-            selected_display_idx = Some(items.len());
-        }
-        items.push(repo_list_item(
-            repo,
-            *idx == selected_idx,
-            col_width,
-            app.watch_mode && !app.blink_on,
-        ));
-    }
-
-    // "also active" section, set off by the same blank row as the section
-    // below it so the three groups are spaced identically.
-    if !elsewhere.is_empty() {
-        if !items.is_empty() {
-            items.push(ListItem::new(Line::from("")));
-        }
-        items.push(section_header_item("also active"));
-        for (idx, repo) in &elsewhere {
+    let mut push_repos = |items: &mut Vec<ListItem<'static>>, repos: &[(usize, &RepoStatus)]| {
+        for (idx, repo) in repos {
             if *idx == selected_idx {
                 selected_display_idx = Some(items.len());
             }
@@ -95,29 +104,54 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
                 repo,
                 *idx == selected_idx,
                 col_width,
-                app.watch_mode && !app.blink_on,
+                dim_pending,
             ));
         }
-    }
+    };
 
-    // "local changes" section, set off by a blank row from the github-activity
-    // / also-active repos above it so it reads as its own block rather than
-    // butting up against the last entry above (only when something precedes it).
-    if !local_only.is_empty() {
-        if !items.is_empty() {
-            items.push(ListItem::new(Line::from("")));
+    let total;
+    if app.has_text_query() {
+        // While searching, the list is one set ranked best-match-first (see
+        // `App::visible_repos`). Sections would fight that ordering, since a
+        // repo's section says nothing about how well it matched.
+        let results = app.visible_repos();
+        total = results.len();
+        items.push(section_header_item("results"));
+        push_repos(&mut items, &results);
+    } else {
+        let primary = app.primary_repos();
+        let elsewhere = app.elsewhere_repos();
+        let local_only = app.local_only_repos();
+        total = primary.len() + elsewhere.len() + local_only.len();
+
+        // "github activity" section -- only labeled when another section
+        // follows, matching how a lone unlabeled list reads fine but three
+        // stacked groups need every one of them named to tell them apart.
+        if !primary.is_empty() && (!elsewhere.is_empty() || !local_only.is_empty()) {
+            items.push(section_header_item("github activity"));
         }
-        items.push(section_header_item("local changes"));
-        for (idx, repo) in &local_only {
-            if *idx == selected_idx {
-                selected_display_idx = Some(items.len());
+        push_repos(&mut items, &primary);
+
+        // "also active" section, set off by the same blank row as the section
+        // below it so the three groups are spaced identically.
+        if !elsewhere.is_empty() {
+            if !items.is_empty() {
+                items.push(ListItem::new(Line::from("")));
             }
-            items.push(repo_list_item(
-                repo,
-                *idx == selected_idx,
-                col_width,
-                app.watch_mode && !app.blink_on,
-            ));
+            items.push(section_header_item("also active"));
+            push_repos(&mut items, &elsewhere);
+        }
+
+        // "local changes" section, set off by a blank row from the
+        // github-activity / also-active repos above it so it reads as its own
+        // block rather than butting up against the last entry above (only when
+        // something precedes it).
+        if !local_only.is_empty() {
+            if !items.is_empty() {
+                items.push(ListItem::new(Line::from("")));
+            }
+            items.push(section_header_item("local changes"));
+            push_repos(&mut items, &local_only);
         }
     }
 
@@ -163,6 +197,52 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     let mut state = ListState::default();
     state.select(selected_display_idx);
     frame.render_stateful_widget(list, rows[2], &mut state);
+}
+
+/// Right-aligned readout of which commit the pane's cursor is on, pinned under
+/// the panel title: `[3/10 · a1b2c3d]` in grey.
+///
+/// Answers "which commit am I reading?" once the commit list itself has been
+/// scrolled off the top, which is the whole reason it exists. The ordinal is
+/// there for the same reason as the hash: with the list out of view, the hash
+/// alone says *which* commit but not *where* in the list it sits.
+///
+/// Renders blank (rather than collapsing) when the repo has no commits, so the
+/// body below never shifts up and down by a row as the selection changes.
+fn render_selected_commit_readout(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(repo) = app.selected_repo() else {
+        return;
+    };
+    if repo.commits.is_empty() {
+        return;
+    }
+    let index = app.detail_selected.min(repo.commits.len() - 1);
+    let Some(commit) = repo.commits.get(index) else {
+        return;
+    };
+
+    // No trailing space: the owner and repo-name rows below are padded flush
+    // to the pane's inner edge, so a space here would park this one cell short
+    // of the column they all share.
+    let text = format!("[{}/{} · {}]", index + 1, repo.commits.len(), commit.hash);
+    // Bright while the commit cursor is what the keys are actually driving:
+    // this is a readout you go looking for, so it has to win against the
+    // grey furniture around it. Steps down to OVERLAY (not all the way to
+    // SURFACE) when focus is elsewhere, so it stays readable rather than
+    // vanishing.
+    let color = if matches!(
+        app.focused_panel,
+        FocusedPanel::Detail | FocusedPanel::Inspector
+    ) {
+        colors::TEXT
+    } else {
+        colors::OVERLAY
+    };
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(text, Style::default().fg(color))).right_aligned()),
+        area,
+    );
 }
 
 /// A section divider row inside the repo list, matching repoz's
@@ -320,12 +400,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
 
     let mut right_title: Vec<Span> = Vec::new();
     if repo.ci_status != CiStatus::Unknown {
-        let (ci_sym, ci_color, ci_label) = match repo.ci_status {
-            CiStatus::Passed => ("✓", colors::GREEN, "passed"),
-            CiStatus::Failed => ("✗", colors::RED, "failed"),
-            CiStatus::Pending => ("○", colors::PEACH, "pending"),
-            CiStatus::Unknown => ("", colors::OVERLAY, ""),
-        };
+        let (ci_sym, ci_color, ci_label) = badges::ci_display(&repo.ci_status);
         // Named, not just a glyph: "✓ passed" in a pane frame reads as
         // ambiguous praise for whatever the pane holds, whereas "CI passed"
         // says what actually passed.
@@ -355,20 +430,24 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         .title_top(Line::from(right_title).right_aligned());
     let inner = panel.inner(area);
     frame.render_widget(panel, area);
-    let area = inner;
+
+    // One pinned row directly under the title, then the scrolling body. The
+    // readout has to sit outside the paragraph: the whole body scrolls as a
+    // unit, so a line inside it would scroll away exactly when it is needed,
+    // which is when the commit list has been scrolled past.
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
+    render_selected_commit_readout(frame, rows[0], app);
+    let area = rows[1];
     let width = area.width as usize;
 
     let mut lines: Vec<Line> = Vec::new();
 
     // Status + path
-    let status_color = if repo.is_synced() {
-        colors::GREEN
-    } else if repo.dirty > 0 {
-        colors::YELLOW
-    } else {
-        colors::PEACH
-    };
-    let status_icon = if repo.is_synced() { "●" } else { "○" };
+    let status_color = badges::status_color(repo);
+    // `✓` when synced, matching the list badge, and never `◉`: the ringed disk
+    // belongs to CI alone now, and this line sits a few cells from the pane's
+    // own CI badge.
+    let status_icon = if repo.is_synced() { "✓" } else { "○" };
     let path_str = repo.path.as_deref().unwrap_or("not cloned");
 
     let mut status_line = vec![
@@ -454,7 +533,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             for name in &repo.remote_only_branches {
                 lines.push(Line::from(vec![
                     Span::styled(format!("  {name}"), Style::default().fg(colors::OVERLAY)),
-                    Span::styled(" not fetched", Style::default().fg(colors::SURFACE)),
+                    Span::styled(" not fetched", Style::default().fg(colors::SUBTEXT)),
                 ]));
             }
         }
@@ -643,12 +722,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
 
     // CI status
     if repo.ci_status != CiStatus::Unknown {
-        let (ci_sym, ci_color, ci_label) = match repo.ci_status {
-            CiStatus::Passed => ("✓", colors::GREEN, "passed"),
-            CiStatus::Failed => ("✗", colors::RED, "failed"),
-            CiStatus::Pending => ("○", colors::PEACH, "pending"),
-            CiStatus::Unknown => ("", colors::OVERLAY, ""),
-        };
+        let (ci_sym, ci_color, ci_label) = badges::ci_display(&repo.ci_status);
         let mut ci_spans = vec![
             Span::styled(format!("CI {ci_sym} "), Style::default().fg(ci_color)),
             Span::styled(ci_label, Style::default().fg(ci_color)),
@@ -756,10 +830,16 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    // Clamp against actual content length here (rather than trusting
-    // app.detail_scroll's own generous cap) so scrolling past the end of a
-    // short repo's content doesn't leave a blank gap.
-    let max_scroll = (lines.len() as u16).saturating_sub(area.height);
+    // Measured from *wrapped* rows, not `lines.len()`: this paragraph wraps,
+    // so a long commit subject occupies several rows and counting source lines
+    // under-reports the height, leaving the last rows unreachable.
+    //
+    // Recorded back into the app so the scroll handlers clamp against the real
+    // content instead of a fixed cap. Clamping here alone only fixed the
+    // display: the offset itself kept climbing, so scrolling back stalled for
+    // as many keypresses as it had overshot.
+    let max_scroll = wrapped_row_count(&lines, area.width).saturating_sub(area.height);
+    app.detail_max_scroll.set(max_scroll);
     let scroll = app.detail_scroll.min(max_scroll);
 
     let paragraph = Paragraph::new(lines)
@@ -869,7 +949,10 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     // Clamp against the *wrapped* row count, not the raw line count -- long
     // prose wraps to several rows, so a raw count would stop scrolling short of
     // the real end.
+    // Recorded back so `App::scroll_inspector` clamps against it, rather than
+    // letting the offset run past the end and stall the way back.
     let max_scroll = wrapped_row_count(&lines, inner.width).saturating_sub(inner.height);
+    app.inspector_max_scroll.set(max_scroll);
     let scroll = app.inspector_scroll.min(max_scroll);
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
@@ -1080,9 +1163,11 @@ mod tests {
 
     /// Renders the real pane and reads rows back out, so placement is
     /// verified against actual output rather than the arithmetic behind it.
-    /// Row 2 is the status line, row 3 the remote-URL line (rows 0 and 1 are
-    /// the border and the block's top padding). The border and padding are
-    /// stripped so assertions are about content, not the frame around it.
+    /// Row 3 is the status line, row 4 the remote-URL line. Rows 0 and 1 are
+    /// the border and the block's top padding, and row 2 is the pinned
+    /// selected-commit readout, which sits outside the scrolling body. The
+    /// border and padding are stripped so assertions are about content, not
+    /// the frame around it.
     fn pane_rows(repo: RepoStatus, width: u16) -> (String, String) {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
@@ -1107,7 +1192,7 @@ mod tests {
                 .trim_end()
                 .to_string()
         };
-        (row(2), row(3))
+        (row(3), row(4))
     }
 
     fn cloned_repo() -> RepoStatus {
@@ -1115,6 +1200,104 @@ mod tests {
         r.path = Some("~/repos/fleetz".to_string());
         r.remote_url = Some("git@github.com:Gaurgle/fleetz.git".to_string());
         r
+    }
+
+    /// The pinned readout row (row 2), border stripped.
+    fn readout_row(repo: RepoStatus, selected: usize, width: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = crate::app::App::new(vec![repo], "test".to_string(), false, width, 40);
+        app.detail_selected = selected;
+        let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+        terminal
+            .draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..width)
+            .map(|x| buffer[(x, 2)].symbol())
+            .collect::<String>()
+            .trim_matches('│')
+            .trim_end()
+            .to_string()
+    }
+
+    fn repo_with_commits(n: usize) -> RepoStatus {
+        let mut r = cloned_repo();
+        r.commits = (0..n)
+            .map(|i| crate::model::Commit {
+                hash: format!("{i}abc123"),
+                message: format!("commit {i}"),
+                author: "Gaurgle".to_string(),
+                date: None,
+                body: String::new(),
+                insertions: 0,
+                deletions: 0,
+                files: vec![],
+            })
+            .collect();
+        r
+    }
+
+    #[test]
+    fn readout_names_the_selected_commit_and_its_position() {
+        // The point of the row: with the commit list scrolled off the top,
+        // the hash alone says which commit but not where in the list it sits.
+        let row = readout_row(repo_with_commits(10), 3, 60);
+        assert!(row.contains("4/10"), "ordinal missing: {row:?}");
+        assert!(row.contains("3abc123"), "hash missing: {row:?}");
+    }
+
+    #[test]
+    fn readout_ends_in_the_same_column_as_the_owner_and_name_rows() {
+        // The alignment that matters: the readout, the owner, and the repo
+        // name all sit flush against the pane's inner right edge, so they read
+        // as one right-hand column. A trailing space in any of them parks that
+        // row one cell short, which is exactly the bug this guards.
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let width = 60;
+        let mut app = crate::app::App::new(
+            vec![repo_with_commits(4)],
+            "test".to_string(),
+            false,
+            width,
+            40,
+        );
+        app.detail_selected = 1;
+        let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+        terminal
+            .draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        // Trim only the border, never trailing spaces: the whole point is
+        // where each row's last non-blank cell lands.
+        let end_col = |y: u16| {
+            (0..width)
+                .rfind(|x| buffer[(*x, y)].symbol().trim() != "" && buffer[(*x, y)].symbol() != "│")
+        };
+
+        let readout = end_col(2).expect("readout row is drawn");
+        let owner = end_col(3).expect("owner row is drawn");
+        let name = end_col(4).expect("name row is drawn");
+        assert_eq!(readout, owner, "readout does not align with the owner");
+        assert_eq!(owner, name, "owner does not align with the repo name");
+    }
+
+    #[test]
+    fn readout_is_blank_for_a_repo_with_no_commits() {
+        // Blank, not collapsed: the body below must not shift up a row.
+        let row = readout_row(cloned_repo(), 0, 60);
+        assert_eq!(row, "");
+    }
+
+    #[test]
+    fn readout_survives_a_selection_past_the_end() {
+        // detail_selected is reset when the repo changes, but a stale index
+        // must clamp rather than panic on the unwrap path.
+        let row = readout_row(repo_with_commits(2), 99, 60);
+        assert!(row.contains("2/2"), "should clamp to the last: {row:?}");
     }
 
     #[test]

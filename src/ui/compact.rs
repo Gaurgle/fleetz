@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
 use crate::app::App;
 use crate::model::RepoStatus;
@@ -17,6 +17,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(colors::SURFACE))
+        // Same horizontal padding as the detail view's repo list, so content
+        // starts at the same column in both views and the footer below lines
+        // up with either one.
+        .padding(Padding::horizontal(1))
         // Compact view is a single pane -- always the focused one -- so its
         // numbered title reads as active.
         .title_top(crate::ui::panel_title(1, "repos", true))

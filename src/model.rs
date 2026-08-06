@@ -49,11 +49,21 @@ pub enum CiStatus {
 }
 
 impl CiStatus {
+    /// CI renders as a ringed disk `◉` in every state, distinguished by color:
+    /// green passed, red failed, orange pending (which blinks under watch
+    /// mode). One shape, so it can never be confused with the sync status's
+    /// `✓` the way the old checkmark could.
+    ///
+    /// Same glyph as the header's watch indicator, deliberately: the ring
+    /// reads as a status lamp, which is what both of them are. It also carries
+    /// further at one cell than a plain `●`.
+    ///
+    /// The cost is that passed and failed differ by color alone. The detail
+    /// pane spells the state out in words next to the lamp, which is where
+    /// that information is recoverable without color.
     pub fn symbol(&self) -> &str {
         match self {
-            Self::Passed => "✓",
-            Self::Failed => "✗",
-            Self::Pending => "○",
+            Self::Passed | Self::Failed | Self::Pending => "◉",
             Self::Unknown => "",
         }
     }
@@ -207,9 +217,23 @@ pub fn owner_from_remote_url(url: &str) -> Option<String> {
     Some(owner.to_string())
 }
 
+/// What a not-cloned repo reports instead of a counter summary, in both the
+/// short and long status forms (repoz prints the same words).
+const NOT_CLONED: &str = "not cloned";
+
 impl RepoStatus {
+    /// Active on GitHub with no local clone, so its counters are all zero for
+    /// want of a working tree rather than because it's up to date.
+    pub fn is_not_cloned(&self) -> bool {
+        self.location == RepoLocation::NotCloned
+    }
+
+    /// True only for a repo that actually exists locally and is level with its
+    /// remote. A not-cloned repo is excluded deliberately: every counter reads
+    /// zero, which would otherwise render as a green "✓ synced" for a repo
+    /// that isn't on disk at all.
     pub fn is_synced(&self) -> bool {
-        self.behind == 0 && self.ahead == 0 && self.dirty == 0
+        !self.is_not_cloned() && self.behind == 0 && self.ahead == 0 && self.dirty == 0
     }
 
     /// The owner to show in the UI: the API login when a GitHub fetch matched
@@ -227,6 +251,9 @@ impl RepoStatus {
     /// that's mostly synced repos, the glyph reads as "all good" at a glance
     /// without a column of repeated "synced" text.
     pub fn short_status(&self) -> String {
+        if self.is_not_cloned() {
+            return NOT_CLONED.to_string();
+        }
         let mut parts = Vec::new();
         if self.behind > 0 {
             parts.push(format!("{}↓", self.behind));
@@ -246,6 +273,9 @@ impl RepoStatus {
 
     /// A longer status string like "3 behind, 2 ahead, 4 uncommitted".
     pub fn long_status(&self) -> String {
+        if self.is_not_cloned() {
+            return NOT_CLONED.to_string();
+        }
         let mut parts = Vec::new();
         if self.behind > 0 {
             parts.push(format!("{} behind", self.behind));
@@ -408,6 +438,43 @@ mod tests {
         let r = make_repo("messy", 2, 1, 4);
         assert_eq!(r.short_status(), "2↓ 1↑ 4!");
         assert_eq!(r.long_status(), "2 behind, 1 ahead, 4 uncommitted");
+    }
+
+    #[test]
+    fn ci_and_sync_never_share_a_glyph() {
+        // The original double-checkmark bug: a clean repo with green CI drew
+        // two identical green ✓. CI owns the ringed disk, sync owns the check.
+        let mut r = make_repo("clean", 0, 0, 0);
+        r.ci_status = CiStatus::Passed;
+        assert_eq!(r.short_status(), "✓");
+        assert_eq!(r.ci_status.symbol(), "◉");
+        assert_ne!(r.short_status(), r.ci_status.symbol());
+    }
+
+    #[test]
+    fn every_known_ci_state_is_the_same_shape() {
+        // Deliberate: the states differ by color, not shape, so the disk can
+        // never be mistaken for a sync status. Unknown stays empty so a repo
+        // with no CI reserves no column.
+        assert_eq!(CiStatus::Passed.symbol(), "◉");
+        assert_eq!(CiStatus::Failed.symbol(), "◉");
+        assert_eq!(CiStatus::Pending.symbol(), "◉");
+        assert_eq!(CiStatus::Unknown.symbol(), "");
+    }
+
+    #[test]
+    fn not_cloned_repo_never_reads_as_synced() {
+        // Regression: all three counters are zero for a repo with no working
+        // tree, which used to render as a green "✓ / synced" -- visually
+        // identical to a repo that really was up to date.
+        let mut r = make_repo("ghost", 0, 0, 0);
+        r.location = RepoLocation::NotCloned;
+        r.path = None;
+
+        assert!(r.is_not_cloned());
+        assert!(!r.is_synced());
+        assert_eq!(r.short_status(), "not cloned");
+        assert_eq!(r.long_status(), "not cloned");
     }
 
     #[test]

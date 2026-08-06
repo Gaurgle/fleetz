@@ -3,6 +3,7 @@ mod cache;
 mod cli;
 mod config;
 mod discovery;
+mod fuzzy;
 mod git;
 mod github;
 mod model;
@@ -59,7 +60,21 @@ const FETCH_CONCURRENCY: usize = 4;
 
 /// How often the event loop ticks: fast enough for a smooth spinner and a
 /// responsive status-message TTL, slow enough to stay invisible in top.
-const TICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+///
+/// The spinner advances one frame per tick, so this *is* the spin rate. Every
+/// other cadence derived from it (`BLINK_TICKS`, `SLOW_REPAINT_TICKS`) is
+/// expressed in ticks and rescaled alongside, so changing this speeds up the
+/// spinner without dragging the CI blink or the repaint budget along with it.
+const TICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Ticks between repaints for things that move on their own without a spinner
+/// driving every frame: the swept-ago clock, the CI blink, the watch pulse.
+///
+/// Tied to `BLINK_TICKS` rather than picked independently, and that matters:
+/// anything that repaints on an *even multiple* of the blink period draws the
+/// blink in the same phase every single time, so it never appears to blink at
+/// all. This was previously 10 against a blink of 5, which is exactly that bug.
+pub const SLOW_REPAINT_TICKS: usize = app::BLINK_TICKS;
 
 /// How long the input thread waits for a key before looping. Bounds how long
 /// a suspend (lazygit, $EDITOR) has to wait for the input gate.
@@ -207,6 +222,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.window = initial_window;
     app.dirty_mode = mode == Mode::Dirty;
     app.loading = true;
+    // Pane sizes start at their defaults every launch. Only an explicit
+    // persist_pane_sizes opt-in restores the ones saved on last exit.
+    app.persist_pane_sizes = config.persist_pane_sizes;
+    if config.persist_pane_sizes {
+        app.repo_list_pct = config
+            .repo_list_pct
+            .clamp(app::REPO_LIST_PCT_MIN, app::REPO_LIST_PCT_MAX);
+        app.inspector_pct = config
+            .inspector_pct
+            .clamp(app::INSPECTOR_PCT_MIN, app::INSPECTOR_PCT_MAX);
+    }
 
     // Set up groups from config
     if !config.groups.is_empty() {
@@ -244,6 +270,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
+
+    // Pane sizes are saved on the way out, not on every keypress: resizing is
+    // a held-key gesture, and writing the config on each step would rewrite
+    // the file a dozen times per drag. A failed write is reported but never
+    // masks the event loop's own result.
+    if app.persist_pane_sizes
+        && let Err(e) = config::save_settings(
+            &config::settings_path(),
+            &[
+                (
+                    "repo_list_pct",
+                    config::SettingValue::Int(app.repo_list_pct as i64),
+                ),
+                (
+                    "inspector_pct",
+                    config::SettingValue::Int(app.inspector_pct as i64),
+                ),
+            ],
+        )
+    {
+        eprintln!("fleetz: could not save pane sizes: {e}");
+    }
 
     result.map_err(|e| e.into())
 }
@@ -413,13 +461,17 @@ async fn run_event_loop(
                     app.needs_redraw = true;
                 }
                 // A visible spinner has to paint on every tick, otherwise the
-                // frame index advances four steps between repaints and the
-                // animation reads as a slow stutter rather than a spin.
-                let spinning = app.loading || app.sweep_started.is_some();
+                // frame index advances several steps between repaints and the
+                // animation reads as a slow stutter rather than a spin. A
+                // silent watch sweep draws no spinner, so it buys no repaints
+                // either: it just updates the rows when it lands.
+                let spinning = app.loading || (app.sweep_started.is_some() && app.sweep_manual);
                 // Everything else that moves on its own (the swept-ago clock,
                 // the CI blink) only needs about one repaint a second.
                 let slow_animated = app.watch_mode || app.apply_progress.is_some();
-                if spinning || (slow_animated && app.spinner_frame.is_multiple_of(4)) {
+                if spinning
+                    || (slow_animated && app.spinner_frame.is_multiple_of(SLOW_REPAINT_TICKS))
+                {
                     app.needs_redraw = true;
                 }
 
@@ -436,7 +488,8 @@ async fn run_event_loop(
                         (chrono::Local::now() - t).num_seconds() >= app.refresh_interval as i64
                     });
                     if due {
-                        start_sweep(app, &tx, true, args.author.clone());
+                        // Timer-driven, so silent: no header indicator.
+                        start_sweep(app, &tx, true, args.author.clone(), false);
                     }
                 }
                 if app.watch_mode && !app.dirty_mode && !app.loading && !app.github_poll_inflight {
@@ -575,6 +628,10 @@ async fn handle_key(
             }
             return Ok(());
         }
+        Overlay::Settings(_) => {
+            handle_settings_input(app, key);
+            return Ok(());
+        }
         Overlay::None => {}
     }
 
@@ -600,6 +657,33 @@ fn handle_mouse_input(
     let Ok(size) = terminal.size() else { return };
     let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
     let rects = ui::panel_rects(area, app);
+
+    // A drag in progress owns every mouse event until the button comes up,
+    // wherever the pointer has wandered to. Checked before the panel lookup,
+    // which would otherwise drop events once the cursor left the divider.
+    if let Some(divider) = app.dragging {
+        match m.kind {
+            MouseEventKind::Drag(MouseButton::Left) => match divider {
+                ui::Divider::Vertical => app.set_repo_list_pct(rects.repo_list_pct_at(m.column)),
+                ui::Divider::Horizontal => app.set_inspector_pct(rects.inspector_pct_at(m.row)),
+            },
+            // Anything that isn't a drag ends it. Releasing outside the
+            // terminal can swallow the Up event entirely, which would
+            // otherwise wedge every later mouse event in this branch.
+            _ => app.dragging = None,
+        }
+        return;
+    }
+
+    // Grabbing a boundary starts a resize instead of focusing a panel.
+    if m.kind == MouseEventKind::Down(MouseButton::Left)
+        && let Some(divider) = rects.divider_at(m.column, m.row)
+    {
+        app.clear_status();
+        app.dragging = Some(divider);
+        return;
+    }
+
     let Some(panel) = rects.at(m.column, m.row) else {
         return;
     };
@@ -753,6 +837,56 @@ fn handle_time_window_input(app: &mut App, key: KeyEvent) -> bool {
     false
 }
 
+/// Key handling for the settings overlay: j/k walk the rows, h/l adjust the
+/// focused one, digits type into numeric rows, Enter applies the live fields
+/// and writes every field back to `config.toml`, Esc discards.
+///
+/// Applying and saving are one action deliberately. A separate "apply without
+/// saving" would leave the running session disagreeing with the file it was
+/// loaded from, with nothing on screen to say so.
+fn handle_settings_input(app: &mut App, key: KeyEvent) {
+    let Overlay::Settings(ref mut so) = app.overlay else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc | KeyCode::Char(',') | KeyCode::Char('q') => {
+            app.overlay = Overlay::None;
+        }
+        KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => so.move_cursor(1),
+        KeyCode::Char('k') | KeyCode::Up => so.move_cursor(-1),
+        KeyCode::Char('l') | KeyCode::Right => so.step(1),
+        KeyCode::Char('h') | KeyCode::Left => so.step(-1),
+        KeyCode::Char(c) if c.is_ascii_digit() => so.push_digit(c as u8 - b'0'),
+        KeyCode::Enter => {
+            so.normalize();
+            let updates = so.config_updates();
+            let path = config::settings_path();
+            match config::save_settings(&path, &updates) {
+                Ok(()) => {
+                    let (interval, view, persist) =
+                        (so.refresh_interval, so.view, so.persist_panes);
+                    so.status = Some(format!("saved to {}", tilde_display(&path)));
+                    // Live fields take effect immediately; the overlay stays
+                    // open so the confirmation is actually readable.
+                    app.refresh_interval = interval;
+                    app.persist_pane_sizes = persist;
+                    if let Some(v) = view {
+                        app.view = v;
+                        // Same flag `v` sets, so a later resize can't undo an
+                        // explicit choice.
+                        app.view_overridden = true;
+                    } else {
+                        app.view_overridden = false;
+                    }
+                    app.needs_redraw = true;
+                }
+                Err(e) => so.status = Some(e),
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Build and show the branches overlay for the selected repo: every local
 /// branch, with merged ones flagged for cleanup and the current one marked.
 /// Enter switches to a branch; space+d deletes merged ones.
@@ -903,7 +1037,7 @@ async fn handle_normal_input(
         }
         KeyCode::Char('F') => {
             app.set_status("\u{27f3} Fetching all…".to_string(), false);
-            start_sweep(app, tx, true, args.author.clone());
+            start_sweep(app, tx, true, args.author.clone(), true);
         }
         KeyCode::Enter => {
             // Open lazygit in selected repo
@@ -965,6 +1099,27 @@ async fn handle_normal_input(
                 app.open_time_window();
             }
         }
+        // Pane resize. Angle brackets move the vertical divider (repo list
+        // narrower/wider); +/- move the horizontal one (inspector taller or
+        // shorter). `=` resets both, which is also what every launch does
+        // unless persist_pane_sizes is on.
+        KeyCode::Char('<') => app.resize_repo_list(-1),
+        KeyCode::Char('>') => app.resize_repo_list(1),
+        KeyCode::Char('+') => app.resize_inspector(1),
+        KeyCode::Char('-') => app.resize_inspector(-1),
+        KeyCode::Char('=') => app.reset_pane_sizes(),
+        // Settings overlay. Seeded from live app state where one exists
+        // (interval, view, pane persistence) and from the loaded config where
+        // it does not, so the values shown are the ones actually in force.
+        KeyCode::Char(',') => {
+            app.overlay = Overlay::Settings(app::SettingsOverlay::new(
+                app.refresh_interval,
+                app.view_overridden.then_some(app.view),
+                config.work_start,
+                config.work_end,
+                app.persist_pane_sizes,
+            ));
+        }
         KeyCode::Char('O') => {
             // Open first PR in browser (Shift+O)
             if let Some(repo) = app.selected_repo() {
@@ -986,7 +1141,7 @@ async fn handle_normal_input(
         // constantly; `R` is the full rediscover.
         KeyCode::Char('r') => {
             app.set_status("Refreshing…".to_string(), false);
-            start_sweep(app, tx, false, args.author.clone());
+            start_sweep(app, tx, false, args.author.clone(), true);
         }
         // Full reload: re-fetch GitHub (cache-bypassed) and re-run discovery,
         // so a just-pushed or newly-cloned repo appears. Shifted because it
@@ -1108,11 +1263,15 @@ fn sweep_targets(app: &App, only: Option<usize>) -> Vec<SweepTarget> {
 /// Kick off a background sweep of every repo with a local path. Each repo is
 /// fetched (optionally), rebuilt in full, and streamed back as RepoUpdated;
 /// SweepDone closes the books. No-op if a sweep is already running.
+/// `manual` marks a sweep the user asked for by keypress. Only those announce
+/// themselves in the header; a watch-timer sweep runs silently and simply
+/// updates the rows when it lands.
 fn start_sweep(
     app: &mut App,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     do_fetch: bool,
     author: Option<String>,
+    manual: bool,
 ) {
     if app.sweep_started.is_some() {
         return;
@@ -1122,6 +1281,7 @@ fn start_sweep(
         return;
     }
     app.sweep_started = Some(std::time::Instant::now());
+    app.sweep_manual = manual;
     spawn_sweep(tx.clone(), targets, do_fetch, author, true);
 }
 
@@ -1322,11 +1482,7 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
         return None;
     }
 
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let name = discovery::repo_name_for_path(path);
     let display = tilde_display(path);
 
     // Always fetch the diffstat for recent commits so every commit
@@ -1438,8 +1594,10 @@ async fn assemble_view(
         .collect();
 
     // Local scan roots: the primary repo_dir plus any configured extra dirs
-    // (e.g. ~/.dotfiles), so repos outside the main tree still surface under
-    // "local changes" -- the fleetz equivalent of repoz's EXTRA_DIRS.
+    // (e.g. ~/.dotfiles) -- the fleetz equivalent of repoz's EXTRA_DIRS. Used
+    // by all three passes, so a repo outside the main tree gets a full
+    // GitHub-matched row in pass 1 rather than only surfacing under "local
+    // changes" when it happens to be dirty.
     let mut scan_roots = vec![repo_dir.to_path_buf()];
     scan_roots.extend(config.resolved_extra_dirs());
 
@@ -1463,8 +1621,8 @@ async fn assemble_view(
 
     let active_names: Vec<String> = active.iter().map(|r| r.name.clone()).collect();
 
-    // Pass 1: find in primary repo_dir
-    let primary_found = discovery::find_in_primary(repo_dir, &active_names);
+    // Pass 1: find under every scan root (repo_dir + extra_dirs)
+    let primary_found = discovery::find_in_primary(&scan_roots, &active_names);
     let found_set: HashSet<String> = primary_found
         .iter()
         .map(|f| f.name.to_lowercase())
@@ -1472,7 +1630,7 @@ async fn assemble_view(
 
     // Pass 2: find elsewhere
     let home = dirs::home_dir().unwrap_or_default();
-    let elsewhere_found = discovery::find_elsewhere(&home, repo_dir, &active_names, &found_set);
+    let elsewhere_found = discovery::find_elsewhere(&home, &scan_roots, &active_names, &found_set);
 
     // Dedupe up front: a repo found in both passes is one stat target, so the
     // gauge total is the real amount of work rather than a count that has to
@@ -1557,11 +1715,9 @@ async fn assemble_view(
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
     let mut set = tokio::task::JoinSet::new();
     for (i, path) in all_local.into_iter().enumerate() {
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
+        // Undotted, so a hidden clone dedupes against the GitHub name passes
+        // 1-2 registered it under rather than showing a second `.foo` row.
+        let name = discovery::repo_name_for_path(&path);
         if checked_names.contains(&name.to_lowercase()) {
             continue;
         }

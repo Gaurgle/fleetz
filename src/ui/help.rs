@@ -20,7 +20,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ),
         (
             "mouse",
-            "Click a panel to focus · scroll wheel scrolls any panel",
+            "Click a panel to focus · drag a pane border to resize · wheel scrolls",
         ),
         (
             "j/k ↑/↓",
@@ -47,9 +47,14 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ("G", "Show all (clear group)"),
         (
             "/",
-            "Search repos, or type #dirty #behind #ahead #ci #prs #stash to filter",
+            "Fuzzy-search repos (best match first), or type #dirty #behind #ahead #ci #prs #stash to filter",
         ),
         ("0", "Clear #tag filters (keeps free-text search)"),
+        (",", "Settings: refresh interval, startup view, work hours"),
+        (
+            "< / >",
+            "Narrow / widen the repo list · + / - resize inspector · = reset",
+        ),
         (
             "r",
             "Refresh: rebuild listed repos only (offline, no fetch)",
@@ -85,7 +90,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Press ? or Esc to close",
-        Style::default().fg(colors::SURFACE),
+        Style::default().fg(colors::SUBTEXT),
     )));
 
     let block = Block::default()

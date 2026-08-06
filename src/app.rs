@@ -23,11 +23,6 @@ pub enum FocusedPanel {
     Inspector,
 }
 
-/// Detail-pane scroll offset is capped well above any realistic content
-/// length (recent commits/reflog/graph are all bounded to small constants in
-/// main.rs) so an over-eager scroll-down can't grow unbounded.
-const DETAIL_SCROLL_CAP: u16 = 300;
-
 /// One quick-filter a repo can be toggled against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterKind {
@@ -51,17 +46,6 @@ pub struct QuickFilters {
 }
 
 impl QuickFilters {
-    pub fn is_active(&self, kind: FilterKind) -> bool {
-        match kind {
-            FilterKind::Dirty => self.dirty,
-            FilterKind::Behind => self.behind,
-            FilterKind::Ahead => self.ahead,
-            FilterKind::CiFailed => self.ci_failed,
-            FilterKind::HasPrs => self.has_prs,
-            FilterKind::HasStashes => self.has_stashes,
-        }
-    }
-
     pub fn matches(&self, repo: &RepoStatus) -> bool {
         (!self.dirty || repo.dirty > 0)
             && (!self.behind || repo.behind > 0)
@@ -95,15 +79,35 @@ fn set_filter(filters: &mut QuickFilters, kind: FilterKind) {
     }
 }
 
-/// Split a search-bar query into its free-text portion and the quick filters
-/// it activates. A `#name` word is always consumed as filter syntax -- never
-/// falls back to literal text, even if the prefix matches nothing -- and is
-/// prefix-matched against `FILTER_TAGS` (a bare `#` activates every filter).
-/// Replaces binding quick filters directly to number keys: filters live in
-/// the same search text as the substring query, combine the same way, and
-/// never occupy a keybinding that a panel-focus jump could use instead.
-pub fn parse_query(query: &str) -> (String, QuickFilters) {
-    let mut filters = QuickFilters::default();
+/// A search-bar query split into its three parts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParsedQuery {
+    /// The free-text portion, fuzzy-matched against repo names.
+    pub text: String,
+    /// Quick filters activated by `#tag` words.
+    pub filters: QuickFilters,
+    /// `#tag` words that matched no known filter, kept so the strip can flag
+    /// them instead of letting a typo silently narrow nothing.
+    pub unknown_tags: Vec<String>,
+}
+
+/// Split a search-bar query into free text, quick filters, and unrecognized
+/// tags.
+///
+/// A `#name` word is always consumed as filter syntax and never falls back to
+/// literal text, so tags stay unambiguous; an unrecognized one is reported in
+/// `unknown_tags` rather than dropped on the floor. Prefix-matched against
+/// `FILTER_TAGS`, so `#d` alone resolves to Dirty.
+///
+/// A bare `#` is deliberately inert. It used to activate every filter, which
+/// AND'd to an almost always empty list, and since `#` is the first keystroke
+/// of every tag the list blanked and repopulated on each one.
+///
+/// Filters live in the same text as the search query rather than on number
+/// keys, so they combine the same way and never occupy a keybinding a
+/// panel-focus jump could use instead.
+pub fn parse_query(query: &str) -> ParsedQuery {
+    let mut parsed = ParsedQuery::default();
     let mut text_words = Vec::new();
 
     for word in query.split_whitespace() {
@@ -113,19 +117,38 @@ pub fn parse_query(query: &str) -> (String, QuickFilters) {
         };
         let name = name.to_lowercase();
         if name.is_empty() {
-            for &(kind, _) in &FILTER_TAGS {
-                set_filter(&mut filters, kind);
-            }
             continue;
         }
+        let mut matched = false;
         for &(kind, tag) in &FILTER_TAGS {
             if tag.starts_with(&name) {
-                set_filter(&mut filters, kind);
+                set_filter(&mut parsed.filters, kind);
+                matched = true;
             }
+        }
+        if !matched {
+            parsed.unknown_tags.push(name);
         }
     }
 
-    (text_words.join(" "), filters)
+    parsed.text = text_words.join(" ");
+    parsed
+}
+
+/// Step a percentage by `delta` resize steps, clamped to `[min, max]`.
+fn step_pct(current: u16, delta: i16, min: u16, max: u16) -> u16 {
+    let next = current as i32 + delta as i32 * RESIZE_STEP as i32;
+    next.clamp(min as i32, max as i32) as u16
+}
+
+/// Which section of the repo list a repo belongs to, as a sort key: github
+/// activity, then also active, then local changes.
+fn section_rank(repo: &RepoStatus) -> u8 {
+    match repo.location {
+        RepoLocation::Primary => 0,
+        RepoLocation::Elsewhere | RepoLocation::NotCloned => 1,
+        RepoLocation::LocalOnly => 2,
+    }
 }
 
 /// Overlay shown on top of the main view.
@@ -135,6 +158,290 @@ pub enum Overlay {
     Help,
     Branches(BranchOverlay),
     TimeWindow(TimeWindowOverlay),
+    Settings(SettingsOverlay),
+}
+
+/// When a setting takes effect once applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Applies {
+    /// Mutates app state directly; visible on the next frame or tick.
+    Live,
+    /// Only consumed while building the view at startup, so the saved value
+    /// waits for the next launch. Shown in the overlay so a field that looks
+    /// inert is understood rather than reported as a bug.
+    Restart,
+}
+
+/// One editable row in the settings overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingField {
+    RefreshInterval,
+    View,
+    WorkStart,
+    WorkEnd,
+    PersistPanes,
+}
+
+/// The settings rows in display order.
+pub const SETTING_FIELDS: [SettingField; 5] = [
+    SettingField::RefreshInterval,
+    SettingField::View,
+    SettingField::WorkStart,
+    SettingField::WorkEnd,
+    SettingField::PersistPanes,
+];
+
+impl SettingField {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::RefreshInterval => "refresh interval",
+            Self::View => "startup view",
+            Self::WorkStart => "work starts",
+            Self::WorkEnd => "work ends",
+            Self::PersistPanes => "remember pane sizes",
+        }
+    }
+
+    /// The `config.toml` key this row writes to.
+    pub fn config_key(self) -> &'static str {
+        match self {
+            Self::RefreshInterval => "refresh_interval",
+            Self::View => "view",
+            Self::WorkStart => "work_start",
+            Self::WorkEnd => "work_end",
+            Self::PersistPanes => "persist_pane_sizes",
+        }
+    }
+
+    pub fn applies(self) -> Applies {
+        match self {
+            Self::RefreshInterval | Self::View | Self::PersistPanes => Applies::Live,
+            // Both only feed `time::` when the cutoff and header are computed,
+            // which happens once per load against the `Config` the main loop
+            // owns by reference.
+            Self::WorkStart | Self::WorkEnd => Applies::Restart,
+        }
+    }
+
+    /// True for rows that accept typed digits.
+    fn numeric(self) -> bool {
+        matches!(
+            self,
+            Self::RefreshInterval | Self::WorkStart | Self::WorkEnd
+        )
+    }
+}
+
+/// Repo list width as a percentage of the main area, and the inspector's share
+/// of the right column. These are the sizes every launch starts from.
+pub const DEFAULT_REPO_LIST_PCT: u16 = 35;
+pub const DEFAULT_INSPECTOR_PCT: u16 = 40;
+
+/// Bounds the resize keys clamp to. Both panes stay wide/tall enough to be
+/// worth drawing, so a held key can never collapse one to nothing.
+pub const REPO_LIST_PCT_MIN: u16 = 20;
+pub const REPO_LIST_PCT_MAX: u16 = 60;
+pub const INSPECTOR_PCT_MIN: u16 = 15;
+pub const INSPECTOR_PCT_MAX: u16 = 70;
+
+/// Percentage points one resize keypress moves a pane edge.
+const RESIZE_STEP: u16 = 5;
+
+/// Ticks per pending-CI blink phase. Expressed in ticks rather than
+/// milliseconds so the blink stays at its own ~500ms half-period when the tick
+/// rate changes to speed up the spinner. Keep this at `500ms / TICK_INTERVAL`.
+pub const BLINK_TICKS: usize = 5;
+
+/// Bounds for `refresh_interval`, in seconds. The floor keeps a stray keypress
+/// from turning the dashboard into a fetch loop.
+const INTERVAL_MIN: u64 = 5;
+const INTERVAL_MAX: u64 = 3600;
+const INTERVAL_STEP: u64 = 5;
+
+/// Editable copy of the settings, live until Enter writes them back.
+#[derive(Debug, Clone)]
+pub struct SettingsOverlay {
+    pub cursor: usize,
+    pub refresh_interval: u64,
+    /// None means "auto": decide the view from the terminal size.
+    pub view: Option<View>,
+    pub work_start: u8,
+    pub work_end: u8,
+    pub persist_panes: bool,
+    /// Result of the last save attempt, shown as a footer line.
+    pub status: Option<String>,
+    /// Rolling buffer of typed digits, so "3" then "0" reads as 30.
+    digits: String,
+}
+
+impl SettingsOverlay {
+    pub fn new(
+        refresh_interval: u64,
+        view: Option<View>,
+        work_start: u8,
+        work_end: u8,
+        persist_panes: bool,
+    ) -> Self {
+        Self {
+            cursor: 0,
+            refresh_interval: refresh_interval.clamp(INTERVAL_MIN, INTERVAL_MAX),
+            view,
+            work_start,
+            work_end,
+            persist_panes,
+            status: None,
+            digits: String::new(),
+        }
+    }
+
+    pub fn field(&self) -> SettingField {
+        SETTING_FIELDS[self.cursor.min(SETTING_FIELDS.len() - 1)]
+    }
+
+    pub fn move_cursor(&mut self, delta: i32) {
+        self.digits.clear();
+        self.status = None;
+        let len = SETTING_FIELDS.len() as i32;
+        let next = (self.cursor as i32 + delta).rem_euclid(len);
+        self.cursor = next as usize;
+    }
+
+    /// Nudge the focused field. `delta` is -1 or 1; enum-valued fields cycle.
+    pub fn step(&mut self, delta: i32) {
+        self.digits.clear();
+        self.status = None;
+        match self.field() {
+            SettingField::RefreshInterval => {
+                let next = self.refresh_interval as i64 + delta as i64 * INTERVAL_STEP as i64;
+                self.refresh_interval = next.clamp(INTERVAL_MIN as i64, INTERVAL_MAX as i64) as u64;
+            }
+            SettingField::View => {
+                // auto -> detail -> compact -> auto
+                self.view = match (self.view, delta > 0) {
+                    (None, true) => Some(View::Detail),
+                    (Some(View::Detail), true) => Some(View::Compact),
+                    (Some(View::Compact), true) => None,
+                    (None, false) => Some(View::Compact),
+                    (Some(View::Compact), false) => Some(View::Detail),
+                    (Some(View::Detail), false) => None,
+                };
+            }
+            // Kept strictly ordered as they are edited, so the pair can never
+            // reach a state where the work slot is empty or inverted.
+            SettingField::WorkStart => {
+                let next = self.work_start as i32 + delta;
+                self.work_start = next.clamp(0, self.work_end as i32 - 1) as u8;
+            }
+            SettingField::WorkEnd => {
+                let next = self.work_end as i32 + delta;
+                self.work_end = next.clamp(self.work_start as i32 + 1, 23) as u8;
+            }
+            SettingField::PersistPanes => self.persist_panes = !self.persist_panes,
+        }
+    }
+
+    /// Type a digit into the focused numeric field. Non-numeric fields ignore
+    /// it rather than swallowing the key.
+    pub fn push_digit(&mut self, d: u8) {
+        let field = self.field();
+        if !field.numeric() {
+            return;
+        }
+        self.status = None;
+        self.digits.push((b'0' + d) as char);
+        // Keep only what fits the field's range, so typing past it restarts
+        // rather than saturating at the maximum.
+        let parsed: u64 = self.digits.parse().unwrap_or(0);
+        match field {
+            SettingField::RefreshInterval => {
+                if parsed > INTERVAL_MAX {
+                    self.digits = ((b'0' + d) as char).to_string();
+                    self.refresh_interval = d as u64;
+                } else {
+                    self.refresh_interval = parsed;
+                }
+            }
+            SettingField::WorkStart => {
+                let capped = (self.work_end as u64).saturating_sub(1);
+                if parsed > capped {
+                    self.digits = ((b'0' + d) as char).to_string();
+                    self.work_start = (d as u64).min(capped) as u8;
+                } else {
+                    self.work_start = parsed as u8;
+                }
+            }
+            SettingField::WorkEnd => {
+                if parsed > 23 || parsed <= self.work_start as u64 {
+                    self.digits = ((b'0' + d) as char).to_string();
+                    self.work_end = (d as u64).clamp(self.work_start as u64 + 1, 23) as u8;
+                } else {
+                    self.work_end = parsed as u8;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Clamp anything a digit entry could have left below its floor. Called
+    /// before applying, since `push_digit` lets a value pass through an
+    /// intermediate state (typing "30" goes through "3").
+    pub fn normalize(&mut self) {
+        self.refresh_interval = self.refresh_interval.clamp(INTERVAL_MIN, INTERVAL_MAX);
+        self.work_end = self.work_end.clamp(1, 23);
+        self.work_start = self.work_start.min(self.work_end - 1);
+    }
+
+    /// The value each row writes to `config.toml`, in field order.
+    pub fn config_updates(&self) -> Vec<(&'static str, crate::config::SettingValue)> {
+        use crate::config::SettingValue;
+        vec![
+            (
+                SettingField::RefreshInterval.config_key(),
+                SettingValue::Int(self.refresh_interval as i64),
+            ),
+            (
+                SettingField::View.config_key(),
+                SettingValue::Str(match self.view {
+                    None => "auto",
+                    Some(View::Detail) => "detail",
+                    Some(View::Compact) => "compact",
+                }),
+            ),
+            (
+                SettingField::WorkStart.config_key(),
+                SettingValue::Int(self.work_start as i64),
+            ),
+            (
+                SettingField::WorkEnd.config_key(),
+                SettingValue::Int(self.work_end as i64),
+            ),
+            (
+                SettingField::PersistPanes.config_key(),
+                SettingValue::Bool(self.persist_panes),
+            ),
+        ]
+    }
+
+    /// How the focused field's value renders in the overlay.
+    pub fn value_label(&self, field: SettingField) -> String {
+        match field {
+            SettingField::RefreshInterval => format!("{}s", self.refresh_interval),
+            SettingField::View => match self.view {
+                None => "auto".to_string(),
+                Some(View::Detail) => "detail".to_string(),
+                Some(View::Compact) => "compact".to_string(),
+            },
+            SettingField::WorkStart => format!("{:02}:00", self.work_start),
+            SettingField::WorkEnd => format!("{:02}:00", self.work_end),
+            SettingField::PersistPanes => {
+                if self.persist_panes {
+                    "yes".to_string()
+                } else {
+                    "no".to_string()
+                }
+            }
+        }
+    }
 }
 
 /// Progress of an in-flight time-window apply, shown as a footer gauge.
@@ -418,6 +725,16 @@ pub struct App {
     pub detail_selected: usize,
     /// Scroll offset for the inspector pane (long commit bodies).
     pub inspector_scroll: u16,
+    /// Largest useful scroll offset for each pane, measured by the renderer,
+    /// which is the only place content length and pane height are both known.
+    /// The scroll handlers clamp against these instead of a fixed cap.
+    ///
+    /// `Cell` because rendering takes `&App`: this is the render pass reporting
+    /// a measurement back, not state the input layer owns. Both start at 0 and
+    /// are written on the first frame, which is always drawn before any input
+    /// is processed.
+    pub detail_max_scroll: std::cell::Cell<u16>,
+    pub inspector_max_scroll: std::cell::Cell<u16>,
     /// Repaint on the next loop pass. Set by every state change; ticks also
     /// force a paint every 4th frame so the clock and spinner stay live.
     pub needs_redraw: bool,
@@ -427,11 +744,31 @@ pub struct App {
     pub blink_on: bool,
     /// True once the user pressed v; stops resize from auto-switching views.
     pub view_overridden: bool,
+    /// Width of the repo list as a percentage of the main area, and the
+    /// inspector's share of the right column. Nudged with the resize keys.
+    /// Defaults are restored on every launch unless `persist_pane_sizes` is
+    /// set, so a layout tweaked for one repo doesn't silently become the norm.
+    pub repo_list_pct: u16,
+    pub inspector_pct: u16,
+    /// Mirror of the `persist_pane_sizes` config key: write the two above back
+    /// on exit and restore them next launch.
+    pub persist_pane_sizes: bool,
+    /// The divider currently held by the mouse, if any. Set on a press that
+    /// lands on a boundary and cleared on release, so drag events in between
+    /// resize instead of doing whatever the panel under the cursor does.
+    pub dragging: Option<crate::ui::Divider>,
     /// True while the initial load or an R reload is in flight.
     pub loading: bool,
     /// When the in-flight watch sweep started, or None when idle. Doubles as
     /// the "one sweep at a time" lock and as the stuck-sweep timer.
     pub sweep_started: Option<std::time::Instant>,
+    /// Whether the in-flight sweep was asked for by a keypress rather than by
+    /// the watch timer. Only a manual one announces itself in the header: a
+    /// background refresh firing on an interval should not repaint a big
+    /// colored indicator over a dashboard you are reading.
+    ///
+    /// Only meaningful while `sweep_started` is `Some`.
+    pub sweep_manual: bool,
     /// When GitHub was last re-polled in watch mode.
     pub last_github_poll: Option<DateTime<Local>>,
     /// True while a GitHub re-poll is in flight, so ticks do not stack them.
@@ -495,12 +832,19 @@ impl App {
             detail_scroll: 0,
             detail_selected: 0,
             inspector_scroll: 0,
+            detail_max_scroll: std::cell::Cell::new(0),
+            inspector_max_scroll: std::cell::Cell::new(0),
             needs_redraw: true,
             spinner_frame: 0,
             blink_on: true,
             view_overridden: false,
+            repo_list_pct: DEFAULT_REPO_LIST_PCT,
+            inspector_pct: DEFAULT_INSPECTOR_PCT,
+            persist_pane_sizes: false,
+            dragging: None,
             loading: false,
             sweep_started: None,
+            sweep_manual: false,
             last_github_poll: None,
             github_poll_inflight: false,
             dataset: Vec::new(),
@@ -510,11 +854,12 @@ impl App {
         }
     }
 
-    /// Called on every 250ms tick from the event loop. The spinner advances
-    /// each tick; the blink flips every other tick, so it pulses at 1Hz.
+    /// Called on every tick from the event loop. The spinner advances one
+    /// frame per tick, so the tick interval is the spin rate; the blink flips
+    /// every `BLINK_TICKS` so it keeps pulsing at 1Hz whatever that rate is.
     pub fn on_tick(&mut self) {
         self.spinner_frame = self.spinner_frame.wrapping_add(1);
-        if self.spinner_frame.is_multiple_of(2) {
+        if self.spinner_frame.is_multiple_of(BLINK_TICKS) {
             self.blink_on = !self.blink_on;
         }
     }
@@ -538,58 +883,110 @@ impl App {
     /// "what's typed" rather than a separate toggled-by-keypress field.
     pub fn visible_repos(&self) -> Vec<(usize, &RepoStatus)> {
         let active_group = self.active_group.and_then(|i| self.group_names.get(i));
-        let (text_query, filters) = parse_query(&self.search_query);
+        let parsed = parse_query(&self.search_query);
 
-        let mut visible: Vec<(usize, &RepoStatus)> = self
+        let mut visible: Vec<(usize, &RepoStatus, i32)> = self
             .repos
             .iter()
             .enumerate()
-            .filter(|(_, r)| {
+            .filter_map(|(i, r)| {
                 // Group filter
                 if let Some(group) = active_group
                     && !r.groups.contains(group)
                 {
-                    return false;
-                }
-                // Search filter
-                if !text_query.is_empty() {
-                    let q = text_query.to_lowercase();
-                    if !r.name.to_lowercase().contains(&q) {
-                        return false;
-                    }
+                    return None;
                 }
                 // Quick filters (dirty/behind/ahead/CI/PRs/stashes)
-                if !filters.matches(r) {
-                    return false;
+                if !parsed.filters.matches(r) {
+                    return None;
                 }
-                true
+                // Fuzzy search: None means the name isn't a match at all.
+                let score = crate::fuzzy::score(&parsed.text, &r.name)?;
+                Some((i, r, score))
             })
             .collect();
 
-        // Navigation order must match what the repo list draws, which groups
-        // by location (github activity, then also active, then local changes).
-        // Without this the cursor walks assembly order and appears to jump
-        // between sections. sort_by_key is stable, so order within a section
-        // is untouched.
-        visible.sort_by_key(|(_, r)| match r.location {
-            RepoLocation::Primary => 0,
-            RepoLocation::Elsewhere | RepoLocation::NotCloned => 1,
-            RepoLocation::LocalOnly => 2,
-        });
-        visible
+        if parsed.text.is_empty() {
+            // Navigation order must match what the repo list draws, which
+            // groups by location (github activity, then also active, then
+            // local changes). Without this the cursor walks assembly order and
+            // appears to jump between sections. sort_by_key is stable, so
+            // order within a section is untouched.
+            visible.sort_by_key(|(_, r, _)| section_rank(r));
+        } else {
+            // While searching the list is one ranked result set, best match
+            // first, so the top row is what Enter should act on. The repo list
+            // drops its section headers to match (see `render_repo_list`);
+            // both sides key off the same "is there text to rank by" test.
+            visible.sort_by_key(|(_, _, score)| std::cmp::Reverse(*score));
+        }
+
+        visible.into_iter().map(|(i, r, _)| (i, r)).collect()
     }
 
-    /// The quick filters currently active per the search query's `#tag`
-    /// words -- for the filter-strip dots to light up against.
-    pub fn active_filters(&self) -> QuickFilters {
-        parse_query(&self.search_query).1
+    /// True when the query has a free-text portion to rank by, as opposed to
+    /// being empty or nothing but `#tag` words. Decides both the sort order
+    /// above and whether the repo list draws sections.
+    pub fn has_text_query(&self) -> bool {
+        !parse_query(&self.search_query).text.is_empty()
+    }
+
+    /// Move the vertical divider between the repo list and the right column.
+    /// Positive widens the repo list.
+    pub fn resize_repo_list(&mut self, delta: i16) {
+        self.repo_list_pct = step_pct(
+            self.repo_list_pct,
+            delta,
+            REPO_LIST_PCT_MIN,
+            REPO_LIST_PCT_MAX,
+        );
+        self.needs_redraw = true;
+    }
+
+    /// Move the horizontal divider between the detail pane and the inspector.
+    /// Positive grows the inspector.
+    pub fn resize_inspector(&mut self, delta: i16) {
+        self.inspector_pct = step_pct(
+            self.inspector_pct,
+            delta,
+            INSPECTOR_PCT_MIN,
+            INSPECTOR_PCT_MAX,
+        );
+        self.needs_redraw = true;
+    }
+
+    /// Set the repo list width directly, as a percentage. For mouse drags,
+    /// where the pointer names an absolute position rather than a step. The
+    /// clamp is the same one the keys use, so a drag past the edge parks the
+    /// divider at the limit instead of collapsing the pane.
+    pub fn set_repo_list_pct(&mut self, pct: u16) {
+        let clamped = pct.clamp(REPO_LIST_PCT_MIN, REPO_LIST_PCT_MAX);
+        if clamped != self.repo_list_pct {
+            self.repo_list_pct = clamped;
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Set the inspector height directly, as a percentage of the right column.
+    pub fn set_inspector_pct(&mut self, pct: u16) {
+        let clamped = pct.clamp(INSPECTOR_PCT_MIN, INSPECTOR_PCT_MAX);
+        if clamped != self.inspector_pct {
+            self.inspector_pct = clamped;
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Restore both panes to their launch defaults.
+    pub fn reset_pane_sizes(&mut self) {
+        self.repo_list_pct = DEFAULT_REPO_LIST_PCT;
+        self.inspector_pct = DEFAULT_INSPECTOR_PCT;
+        self.needs_redraw = true;
     }
 
     /// Strip any `#tag` filter words from the search query, keeping free
     /// text intact.
     pub fn clear_filters(&mut self) {
-        let (text, _) = parse_query(&self.search_query);
-        self.search_query = text;
+        self.search_query = parse_query(&self.search_query).text;
         self.selected = 0;
     }
 
@@ -704,9 +1101,12 @@ impl App {
             .and_then(|r| r.commits.get(self.detail_selected))
     }
 
+    /// Scroll the inspector by `delta` lines, clamped to the content the last
+    /// frame actually measured.
     pub fn scroll_inspector(&mut self, delta: i32) {
+        let max = self.inspector_max_scroll.get() as i32;
         let current = self.inspector_scroll as i32;
-        self.inspector_scroll = (current + delta).clamp(0, DETAIL_SCROLL_CAP as i32) as u16;
+        self.inspector_scroll = (current + delta).clamp(0, max) as u16;
     }
 
     /// Scroll the focused pane's content by `delta` lines (Shift+scroll)
@@ -757,15 +1157,18 @@ impl App {
         self.focused_panel = panel;
     }
 
-    /// Scroll the detail pane by `delta` lines (negative scrolls up),
-    /// clamped to `[0, DETAIL_SCROLL_CAP]`. The renderer clamps further
-    /// against actual content length, so overshoot here just means a couple
-    /// of extra keypresses before movement is visible again -- not a stuck
-    /// scroll, since detail content is always small (bounded by the commit/
-    /// reflog/graph limits in main.rs).
+    /// Scroll the detail pane by `delta` lines (negative scrolls up), clamped
+    /// to the content the last frame actually measured.
+    ///
+    /// This used to clamp to a fixed `DETAIL_SCROLL_CAP` of 300 and let the
+    /// renderer clamp again for display. The offset therefore kept climbing
+    /// long after the view stopped moving, and scrolling back needed one
+    /// no-op keypress for every step of overshoot before anything moved --
+    /// which read as the pane being stuck.
     pub fn scroll_detail(&mut self, delta: i32) {
+        let max = self.detail_max_scroll.get() as i32;
         let current = self.detail_scroll as i32;
-        self.detail_scroll = (current + delta).clamp(0, DETAIL_SCROLL_CAP as i32) as u16;
+        self.detail_scroll = (current + delta).clamp(0, max) as u16;
     }
 
     pub fn toggle_help(&mut self) {
@@ -1072,31 +1475,307 @@ mod tests {
 
     #[test]
     fn parse_query_extracts_tag_and_text() {
-        let (text, filters) = parse_query("repo #dirty");
-        assert_eq!(text, "repo");
-        assert!(filters.dirty);
-        assert!(!filters.behind);
+        let parsed = parse_query("repo #dirty");
+        assert_eq!(parsed.text, "repo");
+        assert!(parsed.filters.dirty);
+        assert!(!parsed.filters.behind);
+        assert!(parsed.unknown_tags.is_empty());
     }
 
     #[test]
-    fn parse_query_bare_hash_activates_all() {
-        let (text, filters) = parse_query("#");
-        assert_eq!(text, "");
-        assert!(
-            filters.dirty
-                && filters.behind
-                && filters.ahead
-                && filters.ci_failed
-                && filters.has_prs
-                && filters.has_stashes
+    fn parse_query_bare_hash_is_inert() {
+        // It used to activate all six filters, which AND'd to an empty list --
+        // and since "#" is the first keystroke of every tag, the list blanked
+        // on the way to typing any of them.
+        let parsed = parse_query("#");
+        assert_eq!(parsed.text, "");
+        assert_eq!(parsed.filters, QuickFilters::default());
+        assert!(parsed.unknown_tags.is_empty(), "incomplete, not wrong");
+    }
+
+    #[test]
+    fn parse_query_reports_an_unknown_tag_instead_of_swallowing_it() {
+        let parsed = parse_query("#nonsense hello");
+        assert_eq!(parsed.text, "hello", "still not treated as literal text");
+        assert_eq!(parsed.filters, QuickFilters::default());
+        assert_eq!(parsed.unknown_tags, vec!["nonsense".to_string()]);
+    }
+
+    #[test]
+    fn fuzzy_search_matches_a_non_substring_query() {
+        let mut app = make_app(2);
+        app.repos[0].name = "fleetz".to_string();
+        app.repos[1].name = "notez2".to_string();
+        app.search_query = "flz".to_string();
+
+        let visible = app.visible_repos();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].1.name, "fleetz");
+    }
+
+    #[test]
+    fn search_results_are_ranked_best_match_first() {
+        // The weaker match sits earlier in `repos` and in an earlier section,
+        // so only scoring can put the exact hit on top.
+        let mut app = make_app(2);
+        app.repos[0].name = "pinz-board-archive".to_string();
+        app.repos[1].name = "pinz".to_string();
+        app.repos[1].location = RepoLocation::LocalOnly;
+        app.search_query = "pinz".to_string();
+
+        let visible = app.visible_repos();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].1.name, "pinz", "exact match ranks first");
+    }
+
+    #[test]
+    fn section_order_returns_once_the_query_is_cleared() {
+        let mut app = make_app(2);
+        app.repos[0].location = RepoLocation::LocalOnly;
+        app.repos[1].location = RepoLocation::Primary;
+
+        assert!(!app.has_text_query());
+        let visible = app.visible_repos();
+        assert_eq!(
+            visible[0].1.location,
+            RepoLocation::Primary,
+            "github activity leads when nothing is typed"
         );
     }
 
     #[test]
-    fn parse_query_unmatched_tag_is_dropped_not_kept_as_text() {
-        let (text, filters) = parse_query("#nonsense hello");
-        assert_eq!(text, "hello");
-        assert_eq!(filters, QuickFilters::default());
+    fn tag_only_query_keeps_section_order() {
+        // "#dirty" has no free text to rank by, so the list must not switch
+        // into ranked mode (which would also drop the section headers).
+        let mut app = make_app(2);
+        app.repos[0].dirty = 1;
+        app.repos[1].dirty = 1;
+        app.search_query = "#dirty".to_string();
+        assert!(!app.has_text_query());
+        assert_eq!(app.visible_repos().len(), 2);
+    }
+
+    fn settings() -> SettingsOverlay {
+        SettingsOverlay::new(60, None, 9, 18, false)
+    }
+
+    #[test]
+    fn settings_cursor_wraps_both_ways() {
+        let mut s = settings();
+        assert_eq!(s.field(), SettingField::RefreshInterval);
+        s.move_cursor(-1);
+        assert_eq!(s.field(), SettingField::PersistPanes, "wraps to the end");
+        s.move_cursor(1);
+        assert_eq!(s.field(), SettingField::RefreshInterval);
+    }
+
+    #[test]
+    fn settings_interval_clamps_to_its_range() {
+        let mut s = settings();
+        for _ in 0..100 {
+            s.step(-1);
+        }
+        assert_eq!(s.refresh_interval, 5, "never reaches zero");
+        for _ in 0..2000 {
+            s.step(1);
+        }
+        assert_eq!(s.refresh_interval, 3600);
+    }
+
+    #[test]
+    fn settings_view_cycles_through_auto() {
+        let mut s = settings();
+        assert_eq!(s.view, None);
+        s.move_cursor(1);
+        s.step(1);
+        assert_eq!(s.view, Some(View::Detail));
+        s.step(1);
+        assert_eq!(s.view, Some(View::Compact));
+        s.step(1);
+        assert_eq!(s.view, None, "wraps back to auto");
+        s.step(-1);
+        assert_eq!(s.view, Some(View::Compact), "and cycles backwards");
+    }
+
+    #[test]
+    fn settings_work_hours_stay_ordered() {
+        // The pair must never invert or collapse: an empty work slot would
+        // make the time-slot labels nonsense.
+        let mut s = settings();
+        s.cursor = 2; // work_start
+        for _ in 0..40 {
+            s.step(1);
+        }
+        assert!(s.work_start < s.work_end);
+        assert_eq!(s.work_start, 17, "stops one below work_end");
+
+        s.cursor = 3; // work_end
+        for _ in 0..40 {
+            s.step(-1);
+        }
+        assert!(s.work_start < s.work_end);
+        assert_eq!(s.work_end, 18, "stops one above work_start");
+    }
+
+    #[test]
+    fn settings_digits_type_into_numeric_fields_only() {
+        let mut s = settings();
+        s.push_digit(3);
+        s.push_digit(0);
+        assert_eq!(s.refresh_interval, 30, "'3' then '0' reads as 30");
+
+        s.cursor = 1; // view, not numeric
+        let before = s.view;
+        s.push_digit(7);
+        assert_eq!(
+            s.view, before,
+            "digits are ignored, not swallowed as a step"
+        );
+    }
+
+    #[test]
+    fn settings_normalize_lifts_a_half_typed_value_to_its_floor() {
+        // Typing "30" passes through "3", which is below INTERVAL_MIN. The
+        // intermediate state is allowed; applying it is not.
+        let mut s = settings();
+        s.push_digit(3);
+        assert_eq!(s.refresh_interval, 3);
+        s.normalize();
+        assert_eq!(s.refresh_interval, 5);
+    }
+
+    #[test]
+    fn settings_write_every_field_back() {
+        use crate::config::SettingValue;
+        let mut s = settings();
+        s.refresh_interval = 90;
+        s.view = Some(View::Compact);
+        s.persist_panes = true;
+
+        let updates = s.config_updates();
+        let by_key = |k: &str| {
+            updates
+                .iter()
+                .find(|(key, _)| *key == k)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(by_key("refresh_interval"), Some(SettingValue::Int(90)));
+        assert_eq!(by_key("view"), Some(SettingValue::Str("compact")));
+        assert_eq!(by_key("work_start"), Some(SettingValue::Int(9)));
+        assert_eq!(by_key("persist_pane_sizes"), Some(SettingValue::Bool(true)));
+    }
+
+    #[test]
+    fn the_blink_actually_flips_between_frames() {
+        // Guards a parity bug rather than the flip itself: repaints for
+        // watch-mode animation happen every SLOW_REPAINT_TICKS, and if that is
+        // an even multiple of BLINK_TICKS the blink is drawn in the same phase
+        // every time and never appears to blink. Anything odd-multiple, or
+        // equal, is fine.
+        let repaint_every = crate::SLOW_REPAINT_TICKS;
+        let flips_per_repaint = repaint_every / BLINK_TICKS;
+        assert_eq!(
+            repaint_every % BLINK_TICKS,
+            0,
+            "repaints should land on a blink boundary"
+        );
+        assert!(
+            flips_per_repaint % 2 == 1,
+            "an even number of flips between repaints draws the same phase forever \
+             (repaint every {repaint_every} ticks, blink every {BLINK_TICKS})"
+        );
+    }
+
+    #[test]
+    fn on_tick_flips_the_blink_on_its_period() {
+        let mut app = make_app(1);
+        let start = app.blink_on;
+        for _ in 0..BLINK_TICKS {
+            app.on_tick();
+        }
+        assert_ne!(app.blink_on, start, "flips after one period");
+        for _ in 0..BLINK_TICKS {
+            app.on_tick();
+        }
+        assert_eq!(app.blink_on, start, "and back after two");
+    }
+
+    #[test]
+    fn scrolling_stops_at_the_measured_end_of_content() {
+        // The overshoot bug: the offset used to climb to a fixed cap of 300
+        // regardless of content, so scrolling back needed one dead keypress
+        // per step of overshoot before the view moved at all.
+        let mut app = make_app(1);
+        app.detail_max_scroll.set(12);
+
+        for _ in 0..100 {
+            app.scroll_detail(1);
+        }
+        assert_eq!(app.detail_scroll, 12, "never runs past the content");
+
+        // The very next scroll back must move the view, not burn off phantom
+        // offset.
+        app.scroll_detail(-1);
+        assert_eq!(app.detail_scroll, 11);
+    }
+
+    #[test]
+    fn scrolling_up_stops_at_the_top() {
+        let mut app = make_app(1);
+        app.inspector_max_scroll.set(5);
+        app.scroll_inspector(3);
+        assert_eq!(app.inspector_scroll, 3);
+
+        for _ in 0..50 {
+            app.scroll_inspector(-1);
+        }
+        assert_eq!(app.inspector_scroll, 0);
+        app.scroll_inspector(1);
+        assert_eq!(app.inspector_scroll, 1, "moves again immediately");
+    }
+
+    #[test]
+    fn a_pane_with_no_overflow_does_not_scroll() {
+        // Content shorter than the pane: max is 0, so every scroll is a no-op
+        // rather than silently accumulating offset.
+        let mut app = make_app(1);
+        app.detail_max_scroll.set(0);
+        app.scroll_detail(10);
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn page_scrolling_clamps_the_same_way() {
+        let mut app = make_app(1);
+        app.detail_max_scroll.set(4);
+        app.scroll_detail(10); // one PageDown
+        assert_eq!(app.detail_scroll, 4);
+        app.scroll_detail(-10); // one PageUp
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn pane_resize_clamps_and_resets() {
+        let mut app = make_app(1);
+        assert_eq!(app.repo_list_pct, DEFAULT_REPO_LIST_PCT);
+
+        for _ in 0..50 {
+            app.resize_repo_list(-1);
+        }
+        assert_eq!(app.repo_list_pct, REPO_LIST_PCT_MIN, "never collapses");
+        for _ in 0..50 {
+            app.resize_repo_list(1);
+        }
+        assert_eq!(app.repo_list_pct, REPO_LIST_PCT_MAX);
+
+        for _ in 0..50 {
+            app.resize_inspector(1);
+        }
+        assert_eq!(app.inspector_pct, INSPECTOR_PCT_MAX);
+
+        app.reset_pane_sizes();
+        assert_eq!(app.repo_list_pct, DEFAULT_REPO_LIST_PCT);
+        assert_eq!(app.inspector_pct, DEFAULT_INSPECTOR_PCT);
     }
 
     #[test]

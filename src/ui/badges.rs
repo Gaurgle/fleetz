@@ -54,18 +54,30 @@ pub fn kind_color(kind: RepoKind) -> Color {
     }
 }
 
+/// The glyph, color, and spelled-out name for a CI state, for the detail
+/// pane's named badges ("◉ CI passed"). Single source, so the panel title and
+/// the body line can never disagree about what "failed" looks like.
+pub fn ci_display(status: &CiStatus) -> (&'static str, Color, &'static str) {
+    match status {
+        CiStatus::Passed => ("◉", colors::GREEN, "passed"),
+        CiStatus::Failed => ("◉", colors::RED, "failed"),
+        CiStatus::Pending => ("◉", colors::PEACH, "pending"),
+        CiStatus::Unknown => ("", colors::OVERLAY, ""),
+    }
+}
+
 fn ci_text(repo: &RepoStatus) -> String {
     let sym = repo.ci_status.symbol();
     if sym.is_empty() {
         String::new()
     } else {
-        format!(" {sym}")
+        format!("{sym} ")
     }
 }
 
 fn pr_text(repo: &RepoStatus) -> String {
     if repo.pr_count > 0 {
-        format!(" {}PR", repo.pr_count)
+        format!("{}PR ", repo.pr_count)
     } else {
         String::new()
     }
@@ -73,7 +85,7 @@ fn pr_text(repo: &RepoStatus) -> String {
 
 fn stash_text(repo: &RepoStatus) -> String {
     if repo.stash_count > 0 {
-        format!(" {}s", repo.stash_count)
+        format!("{}s ", repo.stash_count)
     } else {
         String::new()
     }
@@ -81,14 +93,20 @@ fn stash_text(repo: &RepoStatus) -> String {
 
 fn worktree_text(repo: &RepoStatus) -> String {
     if !repo.worktrees.is_empty() {
-        format!(" {}w", repo.worktrees.len())
+        format!("{}w ", repo.worktrees.len())
     } else {
         String::new()
     }
 }
 
-fn status_color(repo: &RepoStatus) -> Color {
-    if repo.behind > 0 {
+/// The color a repo's status token renders in. Shared by the list badge and
+/// the detail pane so the two can never disagree about what a state looks
+/// like. Not-cloned is checked first and gets the alert color: its counters
+/// are all zero, so it would otherwise fall through to the synced green.
+pub fn status_color(repo: &RepoStatus) -> Color {
+    if repo.is_not_cloned() {
+        colors::RED
+    } else if repo.behind > 0 {
         colors::PEACH
     } else if repo.dirty > 0 {
         colors::YELLOW
@@ -104,8 +122,17 @@ fn status_color(repo: &RepoStatus) -> Color {
 /// flush to the pane's inner edge with a dot-fill before it -- so, repoz
 /// style, every row's badges end at the same right edge and the dots run all
 /// the way out to them (rather than stopping at a fixed column and leaving a
-/// gap). Order is status, CI, PRs, stashes, worktrees; each optional field
-/// carries its own leading space, so the group is self-separating.
+/// gap).
+///
+/// **Sync status goes last, so it is the one token flush against the right
+/// edge on every row.** Every other badge (CI, PRs, stashes, worktrees) is
+/// optional, and with any of them trailing the status token, a repo that had
+/// one pushed its status left while a repo without kept it flush right: the
+/// column that appears on *every* row was the one that failed to line up. CI
+/// made this most visible, being both common and only one cell wide.
+///
+/// Each optional field carries its own *trailing* space, so the group stays
+/// self-separating with nothing dangling on the right.
 ///
 /// `dim_pending` is the off phase of the pending-CI blink: callers pass
 /// `app.watch_mode && !app.blink_on`, so a running job pulses only while the
@@ -113,13 +140,6 @@ fn status_color(repo: &RepoStatus) -> Color {
 pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>, usize) {
     let mut spans = Vec::new();
     let mut width = 0usize;
-
-    let status = repo.short_status();
-    width += status.chars().count();
-    spans.push(Span::styled(
-        status,
-        Style::default().fg(status_color(repo)),
-    ));
 
     let ci = ci_text(repo);
     if !ci.is_empty() {
@@ -160,5 +180,95 @@ pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>,
         spans.push(Span::styled(worktree, Style::default().fg(colors::OVERLAY)));
     }
 
+    // Last, and never optional: this is the token every row aligns on.
+    let status = repo.short_status();
+    width += status.chars().count();
+    spans.push(Span::styled(
+        status,
+        Style::default().fg(status_color(repo)),
+    ));
+
     (spans, width)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{RepoKind, RepoLocation};
+
+    fn repo(name: &str) -> RepoStatus {
+        RepoStatus {
+            name: name.to_string(),
+            path: Some("~/repos/x".to_string()),
+            location: RepoLocation::Primary,
+            branches: vec![],
+            commits: vec![],
+            behind: 0,
+            ahead: 0,
+            dirty: 0,
+            pr_count: 0,
+            prs: vec![],
+            ci_status: CiStatus::Unknown,
+            ci_workflow: None,
+            ci_duration: None,
+            groups: vec![],
+            stash_count: 0,
+            stash_entries: vec![],
+            worktrees: vec![],
+            reflog: vec![],
+            graph: vec![],
+            repo_kind: RepoKind::Unknown,
+            owner: None,
+            remote_url: None,
+            remote_only_branches: vec![],
+            work_key: None,
+        }
+    }
+
+    fn rendered(repo: &RepoStatus) -> (String, usize) {
+        let (spans, width) = badge_spans(repo, false);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        (text, width)
+    }
+
+    #[test]
+    fn status_is_last_so_it_aligns_across_rows() {
+        // The reported bug: CI is only on some repos, so with CI trailing the
+        // status token the ✓ column zig-zagged between rows that had CI and
+        // rows that didn't. The group is right-aligned, so whatever is last is
+        // what lines up, and status is the only badge present on every row.
+        let plain = repo("plain");
+        let mut with_ci = repo("with-ci");
+        with_ci.ci_status = CiStatus::Passed;
+
+        let (plain_text, _) = rendered(&plain);
+        let (ci_text, _) = rendered(&with_ci);
+
+        assert!(plain_text.ends_with('✓'));
+        assert!(ci_text.ends_with('✓'), "CI must not trail the status");
+        assert_eq!(ci_text, "◉ ✓");
+    }
+
+    #[test]
+    fn every_optional_badge_sits_left_of_the_status() {
+        let mut busy = repo("busy");
+        busy.ci_status = CiStatus::Failed;
+        busy.pr_count = 2;
+        busy.stash_count = 1;
+        busy.dirty = 3;
+
+        let (text, width) = rendered(&busy);
+        assert!(text.ends_with("3!"), "got {text:?}");
+        assert!(text.starts_with('◉'), "CI leads the group: {text:?}");
+        assert_eq!(width, text.chars().count(), "width matches what is drawn");
+    }
+
+    #[test]
+    fn a_bare_repo_renders_only_its_status() {
+        // No leading or trailing padding when nothing optional is present, so
+        // the token sits flush against the dot fill.
+        let (text, width) = rendered(&repo("bare"));
+        assert_eq!(text, "✓");
+        assert_eq!(width, 1);
+    }
 }

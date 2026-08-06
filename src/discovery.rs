@@ -8,33 +8,52 @@ pub struct FoundRepo {
     pub path: PathBuf,
 }
 
-/// Pass 1: Find repos under the configured repo_dir (maxdepth 3).
-pub fn find_in_primary(repo_dir: &Path, names: &[String]) -> Vec<FoundRepo> {
+/// Pass 1: Find repos under the configured scan roots (the primary repo_dir
+/// plus any `extra_dirs`, maxdepth 3).
+///
+/// Extra roots are searched *here*, not just in `find_all_local`, so a repo
+/// living outside the main tree still gets a full GitHub-matched status row.
+/// This is what reaches a clone under a hidden path (`~/.dotfiles`), which
+/// the `$HOME` walker of pass 2 prunes: a root handed in directly is never
+/// subject to the hidden-dir skip. Mirrors repoz's pass 1, which falls back
+/// to `EXTRA_DIRS` when `REPO_DIR` has no match.
+///
+/// De-duplicated by name, first root winning, so overlapping roots can't
+/// produce two rows for one repo.
+pub fn find_in_primary(roots: &[PathBuf], names: &[String]) -> Vec<FoundRepo> {
     let names_lower: HashSet<String> = names.iter().map(|n| n.to_lowercase()).collect();
     let mut found = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
 
-    scan_for_git_repos(repo_dir, 3, &mut |path| {
-        let dir_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
+    for root in roots {
+        scan_for_git_repos(root, 3, &mut |path| {
+            let dir_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
 
-        if names_lower.contains(&dir_name.to_lowercase()) {
-            found.push(FoundRepo {
-                name: dir_name.to_string(),
-                path: path.to_path_buf(),
-            });
-        }
-    });
+            let Some(name) = matched_name(dir_name, &names_lower) else {
+                return;
+            };
+            if seen.insert(name.to_lowercase()) {
+                found.push(FoundRepo {
+                    name,
+                    path: path.to_path_buf(),
+                });
+            }
+        });
+    }
 
     found
 }
 
 /// Pass 2: Find repos elsewhere under $HOME (maxdepth 4), excluding
-/// Library, .cache, node_modules, .Trash, and the primary repo_dir itself.
+/// Library, .cache, node_modules, .Trash, and every pass 1 scan root (which
+/// has already been searched, and searched deeper than a `$HOME` sweep would
+/// reach it).
 pub fn find_elsewhere(
     home: &Path,
-    repo_dir: &Path,
+    roots: &[PathBuf],
     names: &[String],
     already_found: &HashSet<String>,
 ) -> Vec<FoundRepo> {
@@ -52,7 +71,7 @@ pub fn find_elsewhere(
 
     scan_for_git_repos(home, 4, &mut |path| {
         // Skip excluded directories
-        if is_excluded(path, repo_dir) {
+        if is_excluded(path, roots) {
             return;
         }
 
@@ -61,15 +80,44 @@ pub fn find_elsewhere(
             .and_then(|n| n.to_str())
             .unwrap_or_default();
 
-        if remaining.contains(&dir_name.to_lowercase()) {
+        if let Some(name) = matched_name(dir_name, &remaining) {
             found.push(FoundRepo {
-                name: dir_name.to_string(),
+                name,
                 path: path.to_path_buf(),
             });
         }
     });
 
     found
+}
+
+/// The GitHub repo name a local directory stands for, or None when it matches
+/// none of `names_lower` (which must already be lowercased).
+///
+/// A clone can carry a leading dot its GitHub repo doesn't -- the repo
+/// `dotfiles` conventionally lives at `~/.dotfiles` -- so the dotted spelling
+/// is tried too, mirroring repoz's `-iname "$name" -o -iname ".$name"`. The
+/// dot is stripped from the returned name because everything downstream (GitHub
+/// match, glyph lookup, dedupe) keys on the GitHub name, not the folder name.
+fn matched_name(dir_name: &str, names_lower: &HashSet<String>) -> Option<String> {
+    if names_lower.contains(&dir_name.to_lowercase()) {
+        return Some(dir_name.to_string());
+    }
+    let undotted = dir_name.strip_prefix('.')?;
+    names_lower
+        .contains(&undotted.to_lowercase())
+        .then(|| undotted.to_string())
+}
+
+/// The name a local-only repo reports as: its directory basename with a
+/// leading dot stripped, so `~/.dotfiles` lines up with the GitHub repo
+/// `dotfiles` for both glyph lookup and dedupe against passes 1 and 2.
+pub fn repo_name_for_path(path: &Path) -> String {
+    let base = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    base.strip_prefix('.').unwrap_or(base).to_string()
 }
 
 /// Pass 3: Find all local git repos under each of `roots` (maxdepth 4),
@@ -134,9 +182,9 @@ fn scan_recursive(dir: &Path, depth: usize, max_depth: usize, callback: &mut dyn
     }
 }
 
-fn is_excluded(path: &Path, repo_dir: &Path) -> bool {
+fn is_excluded(path: &Path, roots: &[PathBuf]) -> bool {
     let s = path.to_string_lossy();
-    path.starts_with(repo_dir)
+    roots.iter().any(|root| path.starts_with(root))
         || s.contains("/Library/")
         || s.contains("/.Trash/")
         || s.contains("/.cache/")
@@ -164,7 +212,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let names = setup_test_repos(&dir);
 
-        let found = find_in_primary(&dir, &names);
+        let found = find_in_primary(std::slice::from_ref(&dir), &names);
         let found_names: HashSet<_> = found.iter().map(|f| f.name.clone()).collect();
         assert!(found_names.contains("alpha"));
         assert!(found_names.contains("beta"));
@@ -179,7 +227,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("MyRepo").join(".git")).unwrap();
 
-        let found = find_in_primary(&dir, &["myrepo".to_string()]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &["myrepo".to_string()]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].name, "MyRepo");
 
@@ -192,10 +240,73 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("other").join(".git")).unwrap();
 
-        let found = find_in_primary(&dir, &["nothere".to_string()]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &["nothere".to_string()]);
         assert!(found.is_empty());
 
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn find_in_primary_searches_every_root() {
+        // The regression this guards: a repo in an extra root (repoz's
+        // EXTRA_DIRS) must get a real status row, not fall through to
+        // "not cloned".
+        let base = std::env::temp_dir().join("fleetz_test_roots");
+        let _ = fs::remove_dir_all(&base);
+        let primary = base.join("repos");
+        let extra = base.join("elsewhere");
+        fs::create_dir_all(primary.join("alpha").join(".git")).unwrap();
+        fs::create_dir_all(extra.join("beta").join(".git")).unwrap();
+
+        let found = find_in_primary(
+            &[primary, extra],
+            &["alpha".to_string(), "beta".to_string()],
+        );
+        let names: HashSet<_> = found.iter().map(|f| f.name.clone()).collect();
+        assert!(names.contains("alpha"));
+        assert!(names.contains("beta"));
+
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn find_in_primary_matches_a_dot_prefixed_clone() {
+        // The GitHub repo `dotfiles` lives at `~/.dotfiles`; handing the
+        // hidden dir in as a root must match it and report the *undotted*
+        // name, since the GitHub match downstream keys on that.
+        let base = std::env::temp_dir().join("fleetz_test_dotname");
+        let _ = fs::remove_dir_all(&base);
+        let hidden = base.join(".dotfiles");
+        fs::create_dir_all(hidden.join(".git")).unwrap();
+
+        let found = find_in_primary(std::slice::from_ref(&hidden), &["dotfiles".to_string()]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "dotfiles", "leading dot stripped");
+        assert_eq!(found[0].path, hidden);
+
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn find_in_primary_dedupes_across_overlapping_roots() {
+        let base = std::env::temp_dir().join("fleetz_test_overlap");
+        let _ = fs::remove_dir_all(&base);
+        let nested = base.join("nested");
+        fs::create_dir_all(nested.join("alpha").join(".git")).unwrap();
+
+        let found = find_in_primary(&[base.clone(), nested], &["alpha".to_string()]);
+        assert_eq!(found.len(), 1, "one repo, one row");
+
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn repo_name_for_path_strips_a_leading_dot() {
+        assert_eq!(
+            repo_name_for_path(Path::new("/home/me/.dotfiles")),
+            "dotfiles"
+        );
+        assert_eq!(repo_name_for_path(Path::new("/home/me/repos/pinz")), "pinz");
     }
 
     #[test]
@@ -233,7 +344,7 @@ mod tests {
         let deep = dir.join("a").join("b").join("c").join("d").join("deep");
         fs::create_dir_all(deep.join(".git")).unwrap();
 
-        let found = find_in_primary(&dir, &["deep".to_string()]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &["deep".to_string()]);
         assert!(found.is_empty());
 
         fs::remove_dir_all(dir).ok();

@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
+use ratatui::widgets::{Block, Borders, Gauge, Padding, Paragraph};
 
 use crate::app::{App, View};
 use crate::model::Summary;
@@ -21,7 +21,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             .block(
                 Block::default()
                     .borders(Borders::TOP)
-                    .border_style(Style::default().fg(colors::SURFACE)),
+                    .border_style(Style::default().fg(colors::SURFACE))
+                    // Inset to match the summary it replaces, so the footer
+                    // does not jump two columns wider mid-apply.
+                    .padding(Padding::horizontal(crate::ui::PANE_CONTENT_INSET)),
             )
             .gauge_style(Style::default().fg(colors::GREEN))
             .ratio(progress.ratio())
@@ -31,7 +34,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let summary = app.summary();
-    let width = area.width as usize;
+    // The fit and spacer math below is about the *padded* width, not the
+    // footer's full rect: the block insets the content on both sides so the
+    // summary lines up with the pane content above it rather than starting two
+    // columns further left, hard against the terminal edge.
+    let width = area.width.saturating_sub(2 * crate::ui::PANE_CONTENT_INSET) as usize;
 
     // A transient status message (fetch/switch/refresh result) takes over the
     // left side while present, so single-shot actions actually report back --
@@ -67,7 +74,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let paragraph = Paragraph::new(line).block(
         Block::default()
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(colors::SURFACE)),
+            .border_style(Style::default().fg(colors::SURFACE))
+            .padding(Padding::horizontal(crate::ui::PANE_CONTENT_INSET)),
     );
     frame.render_widget(paragraph, area);
 }

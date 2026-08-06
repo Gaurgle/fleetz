@@ -11,7 +11,17 @@ pub const HASH_CLR: Color = Color::Rgb(140, 155, 180); // commit hashes
 pub const DIFF_ADD: Color = Color::Rgb(134, 194, 134); // +N lines
 pub const DIFF_DEL: Color = Color::Rgb(210, 140, 140); // -N lines
 pub const OVERLAY: Color = Color::Rgb(127, 132, 156); // paths, subtle text
-pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers
+
+/// Catppuccin `subtext0`. For text that should recede without becoming work to
+/// read: hints, key legends, the swept-ago clock.
+///
+/// `SURFACE` used to do this job as well as its own, but it is tuned for
+/// *structure* (dots, dividers, borders), where near-invisible is the point. At
+/// that brightness actual words are a strain, so the two uses are separate
+/// constants now. Rule of thumb: if it spells something, it is not SURFACE.
+pub const SUBTEXT: Color = Color::Rgb(166, 173, 200);
+
+pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers, borders
 pub const TEXT: Color = Color::Rgb(205, 214, 244); // default text
 pub const RED: Color = Color::Rgb(243, 139, 168); // CI failed
 

@@ -59,11 +59,11 @@ pub fn render(frame: &mut Frame, area: Rect, overlay: &TimeWindowOverlay) {
         Line::from(""),
         Line::from(Span::styled(
             "   h/l switch field · j/k adjust · 0-9 type",
-            Style::default().fg(colors::SURFACE),
+            Style::default().fg(colors::SUBTEXT),
         )),
         Line::from(Span::styled(
             "   Enter apply · Esc cancel",
-            Style::default().fg(colors::SURFACE),
+            Style::default().fg(colors::SUBTEXT),
         )),
     ];
 
