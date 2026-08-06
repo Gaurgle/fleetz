@@ -583,6 +583,12 @@ async fn run_event_loop(
                                 repo.repo_kind = gh.repo_kind;
                             }
                         }
+                        // One API call just told us which remotes moved, so
+                        // fetch only those instead of waiting for the next
+                        // blanket sweep to fetch all of them.
+                        for idx in remotes_that_moved(&app.dataset, &dataset, &app.repos) {
+                            start_single_sweep(app, &tx, idx, true, args.author.clone());
+                        }
                         app.dataset = dataset;
                     }
                     Err(e) => app.set_status(format!("GitHub refresh failed: {e}"), true),
@@ -1300,6 +1306,44 @@ fn repo_moved(before: &RepoStatus, after: &RepoStatus) -> bool {
     };
     let pushed = before.ahead > 0 && after.ahead == 0;
     head_moved || pushed
+}
+
+/// Indices into `repos` whose remote moved between two GitHub polls.
+///
+/// This inverts the cost of noticing someone else's push. Discovering it by
+/// fetching means a network round trip per remote, every sweep, almost always
+/// to learn that nothing changed. One GraphQL call returns `pushed_at` for
+/// every repo at once, so the poll can say *which* remotes moved and only
+/// those need fetching.
+///
+/// Note this is the opposite conclusion to per-repo CI queries, for a
+/// consistent reason: GraphQL batches cheaply, so ask about everything at
+/// once; git fetch is priced per remote, so only fetch where you know there
+/// is news.
+///
+/// A repo missing from the previous dataset yields nothing: on the first poll
+/// of a session there is no baseline, and treating "unknown" as "moved" would
+/// fetch the entire fleet at once. Repos with no local clone are skipped too,
+/// since there is nothing to fetch.
+fn remotes_that_moved(
+    previous: &[github::GithubRepo],
+    current: &[github::GithubRepo],
+    repos: &[RepoStatus],
+) -> Vec<usize> {
+    current
+        .iter()
+        .filter(|now| {
+            previous
+                .iter()
+                .find(|was| was.name.eq_ignore_ascii_case(&now.name))
+                .is_some_and(|was| now.pushed_at > was.pushed_at)
+        })
+        .filter_map(|moved| {
+            repos
+                .iter()
+                .position(|r| r.path.is_some() && r.name.eq_ignore_ascii_case(&moved.name))
+        })
+        .collect()
 }
 
 /// Resolve watch mode at startup: an explicit flag wins, otherwise the config
@@ -2138,6 +2182,81 @@ mod tests {
         after.work_key = Some(key("bbb"));
         assert!(!repo_moved(&before, &after));
         assert!(!repo_moved(&after, &test_repo()));
+    }
+
+    fn gh(name: &str, pushed: &str) -> github::GithubRepo {
+        github::GithubRepo {
+            name: name.to_string(),
+            pushed_at: chrono::DateTime::parse_from_rfc3339(pushed)
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            pr_count: 0,
+            prs: vec![],
+            ci_status: model::CiStatus::Unknown,
+            ci_workflow: None,
+            ci_duration: None,
+            repo_kind: model::RepoKind::Unknown,
+            owner: None,
+        }
+    }
+
+    fn cloned(name: &str) -> RepoStatus {
+        RepoStatus {
+            name: name.to_string(),
+            path: Some(format!("~/repos/{name}")),
+            ..test_repo()
+        }
+    }
+
+    #[test]
+    fn a_remote_that_moved_is_the_only_one_fetched() {
+        // The whole point: one API call says which remotes have news, so the
+        // fetch goes only there instead of to all of them.
+        let previous = vec![
+            gh("alpha", "2026-08-06T10:00:00Z"),
+            gh("beta", "2026-08-06T10:00:00Z"),
+        ];
+        let current = vec![
+            gh("alpha", "2026-08-06T11:00:00Z"),
+            gh("beta", "2026-08-06T10:00:00Z"),
+        ];
+        let repos = vec![cloned("alpha"), cloned("beta")];
+
+        assert_eq!(remotes_that_moved(&previous, &current, &repos), vec![0]);
+    }
+
+    #[test]
+    fn an_unchanged_fleet_fetches_nothing() {
+        let dataset = vec![gh("alpha", "2026-08-06T10:00:00Z")];
+        let repos = vec![cloned("alpha")];
+        assert!(remotes_that_moved(&dataset, &dataset, &repos).is_empty());
+    }
+
+    #[test]
+    fn the_first_poll_of_a_session_fetches_nothing() {
+        // No baseline to compare against. Treating unknown as moved would
+        // fetch every remote at once, which is exactly what this avoids.
+        let current = vec![gh("alpha", "2026-08-06T11:00:00Z")];
+        let repos = vec![cloned("alpha")];
+        assert!(remotes_that_moved(&[], &current, &repos).is_empty());
+    }
+
+    #[test]
+    fn a_repo_with_no_local_clone_is_skipped() {
+        // Nothing to fetch into.
+        let previous = vec![gh("alpha", "2026-08-06T10:00:00Z")];
+        let current = vec![gh("alpha", "2026-08-06T11:00:00Z")];
+        let repos = vec![test_repo()]; // name "r", and no path anyway
+        assert!(remotes_that_moved(&previous, &current, &repos).is_empty());
+    }
+
+    #[test]
+    fn a_remote_going_backwards_is_not_treated_as_news() {
+        // Clock skew or a rewritten history should not trigger a fetch storm.
+        let previous = vec![gh("alpha", "2026-08-06T11:00:00Z")];
+        let current = vec![gh("alpha", "2026-08-06T10:00:00Z")];
+        let repos = vec![cloned("alpha")];
+        assert!(remotes_that_moved(&previous, &current, &repos).is_empty());
     }
 
     #[test]

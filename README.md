@@ -14,7 +14,9 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 
 ## What it shows
 
-- Repos with recent GitHub activity (commits behind, ahead, divergence)
+- Repos with recent GitHub activity (commits behind, ahead, divergence). A push
+  from another machine shows up as `behind` without waiting for a full sweep:
+  the GitHub poll notices the remote moved and fetches that one repo
 - Repos with local uncommitted, untracked, or unpushed changes
 - Open pull requests per repo
 - CI status as a `◉` status lamp: green passed, red failed, blinking orange while running. From GitHub's `statusCheckRollup`, kept live in watch mode
@@ -147,12 +149,18 @@ extra_dirs = ["~/.dotfiles"]
 watch = true
 
 # Seconds between watch sweeps: local git status plus a fetch from every
-# remote. This one costs real network traffic, so keep it generous.
+# remote. This one costs real network traffic, so keep it generous -- the
+# GitHub poll below already notices when a remote moves and fetches just that
+# repo, so the blanket sweep is a backstop rather than the main path.
 refresh_interval = 60
 
-# Seconds between GitHub re-polls while watching, which is what keeps CI
-# status current. Automatically tightened to 15s while any CI run is in
-# flight, and forced immediately after a push is detected. Floored at 15s.
+# Seconds between GitHub re-polls while watching. One GraphQL call covers
+# every repo, so this is the cheap way to learn what changed: it keeps CI
+# status current, and any repo whose remote moved (you pushed from another
+# machine, someone else pushed) gets a targeted fetch straight away rather
+# than waiting for the next blanket sweep. Automatically tightened to 15s
+# while a CI run is in flight, forced immediately after a local push is
+# detected, and floored at 15s.
 github_poll_interval = 30
 
 # GitHub API cache TTL in seconds

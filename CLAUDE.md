@@ -131,6 +131,14 @@ categorical states are words (`not cloned`). A repo that is not cloned has all
 counters at zero and must never render as synced: `RepoStatus::is_synced()`
 excludes it deliberately.
 
+**Batch on GraphQL, target on git.** The two have opposite cost shapes and the
+code leans on both. One GraphQL call returns every repo's state, so never split
+it into per-repo queries: the rate limit is priced per node with a floor of one
+point per call, making fifty small queries cost more than one big one and tell
+you less. `git fetch` is priced per remote, so the reverse holds: use the poll's
+`pushed_at` diff to find which remotes moved (`remotes_that_moved`) and fetch
+only those.
+
 **Never widen the GitHub fetch without checking the cache.** Results are cached
 on disk with a TTL (`cache.rs`, `cache_ttl` config key); `r` rebuilds from cache
 and `R` bypasses it. Adding a field to the GraphQL query is free, adding a
