@@ -219,13 +219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new(Vec::new(), String::new(), args.prs, term_width, term_height);
     // Config sets the default; the flags are one-session overrides. `w` still
     // toggles it live, and that choice is not persisted.
-    app.watch_mode = if args.watch {
-        true
-    } else if args.no_watch {
-        false
-    } else {
-        config.watch
-    };
+    app.watch_mode = resolve_watch(args.watch, args.no_watch, config.watch);
     app.refresh_interval = args.interval.unwrap_or(config.refresh_interval);
     app.window = initial_window;
     app.dirty_mode = mode == Mode::Dirty;
@@ -561,12 +555,7 @@ async fn run_event_loop(
                     .iter_mut()
                     .find(|r| r.path.as_deref() == Some(path.as_str()))
                 {
-                    // Unpushed commits going to zero means a push landed. A
-                    // terminal `git push` updates the remote-tracking ref
-                    // itself, so a local sweep sees this without fetching.
-                    // That is the earliest signal fleetz has that CI is about
-                    // to start, and it beats waiting out the poll interval.
-                    if repo.ahead > 0 && status.ahead == 0 {
+                    if repo_moved(repo, &status) {
                         app.push_detected = true;
                     }
                     *repo = *status;
@@ -1288,6 +1277,43 @@ const GITHUB_POLL_STUCK_AFTER: std::time::Duration = std::time::Duration::from_s
 /// few points, so this is comfortable; it exists to stop a typo turning the
 /// dashboard into a rate-limit incident.
 const GITHUB_POLL_MIN: u64 = 15;
+
+/// Whether a sweep result means the repo moved in a way CI might care about,
+/// and the next GitHub poll should not wait out its interval.
+///
+/// Two signals, because neither alone is enough:
+///
+/// - **HEAD moved.** Catches the commit. Note a `git push` does *not* move
+///   HEAD, so this misses a push of commits made before fleetz was watching.
+/// - **Unpushed count fell to zero.** Catches that push. But it only fires if
+///   an earlier sweep actually observed the "committed, not yet pushed" state,
+///   which it will not when you commit and push inside one sweep interval --
+///   the common case, and the reason the first version of this missed.
+///
+/// Together they cover commit-then-push at any speed. HEAD is compared only
+/// when both sweeps produced a key, so an unknown fingerprint reads as "no
+/// information" rather than as a change, which would poll on every sweep.
+fn repo_moved(before: &RepoStatus, after: &RepoStatus) -> bool {
+    let head_moved = match (&before.work_key, &after.work_key) {
+        (Some(a), Some(b)) => a.head_sha != b.head_sha,
+        _ => false,
+    };
+    let pushed = before.ahead > 0 && after.ahead == 0;
+    head_moved || pushed
+}
+
+/// Resolve watch mode at startup: an explicit flag wins, otherwise the config
+/// decides. Extracted so the precedence is testable -- a default that silently
+/// fails to apply is invisible until someone wonders why nothing refreshes.
+fn resolve_watch(flag_watch: bool, flag_no_watch: bool, config_watch: bool) -> bool {
+    if flag_watch {
+        true
+    } else if flag_no_watch {
+        false
+    } else {
+        config_watch
+    }
+}
 
 /// Seconds to wait before the next GitHub poll.
 ///
@@ -2026,35 +2052,111 @@ async fn build_repo_status(
 mod tests {
     use super::*;
 
+    fn test_repo() -> RepoStatus {
+        RepoStatus {
+            name: "r".to_string(),
+            path: None,
+            location: model::RepoLocation::Primary,
+            branches: vec![],
+            commits: vec![],
+            behind: 0,
+            ahead: 0,
+            dirty: 0,
+            pr_count: 0,
+            prs: vec![],
+            ci_status: model::CiStatus::Unknown,
+            ci_workflow: None,
+            ci_duration: None,
+            groups: vec![],
+            stash_count: 0,
+            stash_entries: vec![],
+            worktrees: vec![],
+            reflog: vec![],
+            graph: vec![],
+            repo_kind: model::RepoKind::Unknown,
+            owner: None,
+            remote_url: None,
+            remote_only_branches: vec![],
+            work_key: None,
+        }
+    }
+
+    fn key(head: &str) -> git::WorkKey {
+        git::WorkKey {
+            head_sha: head.to_string(),
+            index_mtime: None,
+            index_size: 0,
+            stash_size: 0,
+        }
+    }
+
+    #[test]
+    fn a_commit_and_push_inside_one_sweep_is_still_detected() {
+        // The regression: `git push` does not move HEAD, so watching only for
+        // the unpushed count hitting zero misses the common case where you
+        // commit and push between two sweeps. HEAD moving is what catches it.
+        let mut before = test_repo();
+        before.work_key = Some(key("aaa"));
+        before.ahead = 0;
+
+        let mut after = test_repo();
+        after.work_key = Some(key("bbb"));
+        after.ahead = 0;
+
+        assert!(repo_moved(&before, &after));
+    }
+
+    #[test]
+    fn pushing_previously_committed_work_is_detected() {
+        // HEAD is unchanged here, so only the unpushed count can catch it.
+        let mut before = test_repo();
+        before.work_key = Some(key("aaa"));
+        before.ahead = 3;
+
+        let mut after = test_repo();
+        after.work_key = Some(key("aaa"));
+        after.ahead = 0;
+
+        assert!(repo_moved(&before, &after));
+    }
+
+    #[test]
+    fn an_unchanged_repo_does_not_trigger_a_poll() {
+        let mut before = test_repo();
+        before.work_key = Some(key("aaa"));
+        let mut after = test_repo();
+        after.work_key = Some(key("aaa"));
+        assert!(!repo_moved(&before, &after));
+    }
+
+    #[test]
+    fn an_unknown_fingerprint_reads_as_no_information() {
+        // Treating a missing key as "changed" would poll on every single
+        // sweep for any repo whose fingerprint could not be taken.
+        let before = test_repo();
+        let mut after = test_repo();
+        after.work_key = Some(key("bbb"));
+        assert!(!repo_moved(&before, &after));
+        assert!(!repo_moved(&after, &test_repo()));
+    }
+
+    #[test]
+    fn watch_flags_beat_the_config_both_ways() {
+        // A default that silently fails to apply is invisible until someone
+        // wonders why nothing ever refreshes.
+        assert!(resolve_watch(false, false, true), "config on, no flags");
+        assert!(!resolve_watch(false, false, false), "config off, no flags");
+        assert!(resolve_watch(true, false, false), "--watch overrides");
+        assert!(!resolve_watch(false, true, true), "--no-watch overrides");
+    }
+
     fn app_with(ci: &[model::CiStatus]) -> App {
         let mut app = App::new(Vec::new(), String::new(), false, 100, 40);
         app.repos = ci
             .iter()
             .map(|status| RepoStatus {
-                name: "r".to_string(),
-                path: None,
-                location: model::RepoLocation::Primary,
-                branches: vec![],
-                commits: vec![],
-                behind: 0,
-                ahead: 0,
-                dirty: 0,
-                pr_count: 0,
-                prs: vec![],
                 ci_status: status.clone(),
-                ci_workflow: None,
-                ci_duration: None,
-                groups: vec![],
-                stash_count: 0,
-                stash_entries: vec![],
-                worktrees: vec![],
-                reflog: vec![],
-                graph: vec![],
-                repo_kind: model::RepoKind::Unknown,
-                owner: None,
-                remote_url: None,
-                remote_only_branches: vec![],
-                work_key: None,
+                ..test_repo()
             })
             .collect();
         app
