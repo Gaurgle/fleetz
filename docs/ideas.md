@@ -606,3 +606,332 @@ costs one call to a function that already exists.
   then truncate the path (`crate::ui::truncate` already exists).
 - Whether a repo with no GitHub match and no remote should render a dim
   placeholder or nothing at all.
+
+---
+
+## Custom command keybindings
+
+The next five sections came out of a comparison with
+[gh-dash](https://github.com/dlvhdr/gh-dash) (2026-08), a GitHub PR/issue
+dashboard TUI. The two tools have opposite centers of gravity (gh-dash is
+GitHub-search-side and knows nothing about local clones; fleetz is fleet-side
+and keeps GitHub deliberately thin), but a handful of their mechanisms map
+cleanly onto fleetz. Each section notes where the idea came from and what was
+changed in translation.
+
+**Problem.** fleetz hardcodes exactly three ways to act on the selected repo:
+`Enter` (lazygit), `e` (`$EDITOR`), `o` (a shell). Anything else you do to a
+repo daily (a build, `gh pr create`, a tmux window, a deploy script) means
+leaving fleetz and typing the path yourself. Every new hardcoded key is a code
+change, a help-overlay line, and a fight over the shrinking pool of free keys,
+and it bakes one person's toolchain into the binary.
+
+gh-dash's answer is user-defined keybindings in config: a key, a shell command
+with template placeholders, and an optional display name for the help menu.
+That shape fits fleetz's config.toml directly:
+
+```toml
+[[commands]]
+key = "B"
+name = "build"
+run = "cargo build --release"
+
+[[commands]]
+key = "T"
+name = "tmux window"
+run = "tmux new-window -c {path}"
+```
+
+### What already exists
+
+The hard part is done. `suspend_and_run` / `suspend_and_run_in_dir`
+(`src/main.rs:1219`, `:1240`) leave the alternate screen, release the input
+gate, run a child that owns the terminal, and restore. The three hardcoded
+keys all go through them; a custom command is one more caller with the command
+line built from config instead of a literal. Run in the repo directory via
+`suspend_and_run_in_dir` and most commands need no placeholder at all.
+
+Placeholders should start minimal: `{path}` (expanded working directory),
+`{name}` (repo name), `{owner}` (may be empty for local-only repos). gh-dash
+exposes PR fields too (`{{.PrNumber}}` etc.); fleetz has no selected-PR
+concept, only a selected repo, so PR placeholders wait on the enrich-on-select
+work below giving the inspector a cursor of its own.
+
+### Collisions and the help overlay
+
+A config key that shadows a builtin (`f`, `r`, `q`...) must be a startup
+error naming both meanings, not a silent override. gh-dash lets rebinding
+shadow builtins; fleetz should not, because the README documents the builtin
+set as stable vocabulary and a config file that flips `q` to "deploy" is a
+support incident. Unknown placeholder in the template: also an error at load,
+not at keypress (gh-dash gets this right with `missingkey=error`).
+
+The help overlay (`ui/help.rs`) gets a `custom` section listing `key name`
+pairs, name falling back to the command truncated. The footer should not grow:
+custom keys are the user's own and need no reminder there.
+
+### Rejected
+
+- **Rebinding builtin keys.** All of gh-dash's keybinding machinery hangs off
+  this, and it is the wrong half to copy. The builtins are documentation-stable
+  and mnemonic; the demand is "add my command", not "move fetch".
+- **A command palette / leader key.** Solves key scarcity, but it is a second
+  interaction grammar for a tool whose whole model is one-keypress actions.
+  Revisit only if users genuinely run out of capital letters.
+- **Per-context command sets** (repo-list commands vs branch-overlay commands).
+  gh-dash needs this because its views have different row types. fleetz's
+  actions all take a repo; one flat list is enough until the inspector grows
+  its own selection.
+
+### Open questions
+
+- `[[commands]]` array-of-tables vs a `[commands]` map keyed by key. The array
+  keeps order for the help overlay; the map makes duplicate keys a TOML-level
+  error for free.
+- Should a command be able to opt out of the suspend (fire-and-forget, like a
+  `tmux new-window` that never takes the terminal)? A `background = true`
+  flag is cheap, but silent failures of background commands need somewhere to
+  land (the footer error slot?).
+- Does the settings overlay eventually list these, or is config-file-only fine?
+  (They are the definition of a hand-edited power feature; leaning file-only.)
+
+---
+
+## Enrich-on-select: real PR detail in the inspector
+
+**Problem.** The batch GraphQL query fetches five PRs per repo with the fields
+a list line needs (`src/github.rs:150`): number, title, author, age, review
+decision. That is the right cost shape for fifty repos, and the invariant says
+never widen it per-repo. But it leaves the inspector unable to answer the
+questions you actually open a PR for: which checks failed, what the review
+threads say, how big the diff is, whether it conflicts. Today the answer is
+`O` (browser), a full context switch.
+
+gh-dash resolves the same tension with two tiers: a cheap batched list query,
+plus a lazy per-row `resource(url: $url) { ... on PullRequest }` fetch that
+runs only when a row is selected, cached per URL, cleared on refresh. That is
+fleetz's own "batch on GraphQL, target on git" invariant, extended to GitHub
+itself: batch for the fleet, target for the thing under the cursor.
+
+### Shape
+
+- A second, narrow query in `github.rs`: one PR by URL, fetching check runs
+  with names and conclusions, review threads, files changed with +/- counts,
+  `mergeable`. One node, so about the same rate-limit floor as any call; it
+  runs at human selection speed, not at poll speed.
+- Trigger on selection dwell (say 300ms after the cursor lands, reusing the
+  tick), not on every `j` keystroke through the list.
+- Cache in memory keyed by PR URL plus `updatedAt`, so a PR that has not moved
+  is never fetched twice in a session. `r` keeps the cache (it is keyed on
+  updatedAt, so staleness self-corrects), `R` drops it with everything else.
+- Needs a PR cursor: today the detail pane lists PRs but nothing selects one.
+  That cursor is also what custom commands and an `O`-on-selected-PR need, so
+  it pays for itself three times.
+
+### Rejected
+
+- **Widening the batch query.** Fifty repos times checks-and-threads is paid
+  on every poll for data nobody is looking at, and it bloats the disk cache.
+  The invariant exists precisely to forbid this.
+- **Prefetching detail for all visible PRs on load.** Same problem with a
+  delay; selection is the only honest signal of interest.
+- **Shelling to `gh pr view --json` per selection.** Works, but the GraphQL
+  client, auth, and error path already exist in `github.rs`; a second
+  transport for the same API is a drift farm.
+
+### Open questions
+
+- Where does detail render: the inspector pane (natural, but it is currently
+  commit-oriented) or a new overlay like branches? The pane keeps the
+  three-panel model; an overlay fits "one PR, temporarily, in depth" better.
+- Does the enrichment belong in the disk cache too, so reopening fleetz shows
+  the last-known detail instantly? Leaning no: it is per-selection data, and
+  the memory cache plus the fast query covers the real case.
+- How much of gh-dash's tab carousel (overview / activity / commits / checks /
+  files) is worth having? Checks and files earn their place for a dashboard;
+  full comment threads may be the browser's job after all.
+
+---
+
+## Richer PR rows: the free fields
+
+**Problem.** A PR line renders number, title, author, age, and review status
+(`src/ui/detail.rs:753`). Missing, and cheap: whether it is a draft, whether
+it conflicts with its base, and how big it is. A draft currently looks
+identical to a ready PR, which misreads exactly the way the double check mark
+used to.
+
+The invariant already prices this: adding fields to the existing GraphQL query
+is free, adding a request is not. gh-dash's list rows carry `isDraft`,
+`mergeable`, `mergeStateStatus`, `isInMergeQueue`, `additions`, `deletions`,
+and comment counts on the same search call; the equivalent fields slot into
+the `pullRequests(...)` selection at `src/github.rs:150` at zero extra
+rate-limit cost.
+
+### Worth taking, in order
+
+1. **`isDraft`.** Render the whole line dim (gh-dash's choice, and the right
+   one: a draft is a de-emphasized state, not another badge). Possibly a
+   `draft` word where review status would go, since review decisions on drafts
+   are moot anyway.
+2. **`additions` / `deletions`.** A `+120 -34` tail, abbreviated past 1k
+   (`+31.4k`), in the GREEN/RED the diff vocabulary already owns. Answers "is
+   this a five-minute review" from the list.
+3. **`mergeable` / `mergeStateStatus`.** A conflict marker on the line. This is
+   fleet-relevant signal: a PR that went stale into conflict is the thing a
+   dashboard should surface without being asked.
+4. **`comments.totalCount`**: probably not. It is activity, not state, and the
+   line is a fixed budget (`title_budget` is already doing truncation math).
+
+### The cache wrinkle
+
+The disk cache stores the raw response JSON and its path varies by query shape
+(`cache.rs::cache_path_varies_by_query_shape`). New fields must deserialize
+as `Option`/default so a pre-upgrade cache file read within its TTL does not
+error; they render as absent for at most `cache_ttl` seconds and then are
+simply there. No migration, but the serde defaults are load-bearing and need
+the test that proves an old-shape JSON still parses.
+
+### Rejected
+
+- **A separate PR-detail query for these.** They are list-line fields; paying
+  a request for them inverts the cost model. The detail query (previous
+  section) is for data too heavy to batch, and these are not.
+- **New columns in the repo list itself.** The repo line's badge group is
+  repo-state vocabulary; per-PR facts belong on PR lines in the detail pane.
+
+### Open questions
+
+- Does the `prs` count badge on the repo line keep counting drafts? Arguments
+  both ways; gh-dash sidesteps by being query-driven. A dim `2+1d` reads well
+  but is a new counter format against the "counters are numeric" rule.
+- Is `mergeStateStatus` (which folds in CI and review) better than bare
+  `mergeable` (conflicts only), or does it double-render state the CI lamp
+  already shows?
+
+---
+
+## CI completion notification
+
+**Problem.** Watch mode already tightens the GitHub poll to 15 seconds while a
+CI run is in flight and immediately after a push, so fleetz knows within
+seconds when a run finishes. All of that awareness currently ends at a color
+change in a pane you have to be looking at. The one moment a dashboard should
+tap you on the shoulder (the run you just pushed finished, and it failed) is
+the moment you have switched away to work.
+
+gh-dash binds `w` to `gh pr checks --watch` plus a desktop notification when
+it completes. The mechanism is worth taking; the architecture is not: fleetz
+already runs the poll that detects the transition, so spawning a watcher
+process per PR would duplicate it.
+
+### Shape
+
+The poll diff already computes state transitions per repo. A notification
+fires when a repo's `CiStatus` goes `Pending -> Passed` or `Pending -> Failed`
+during watch mode. That is the entire trigger; no new polling, no child
+processes.
+
+Delivery, in escalating order of dependency weight:
+
+1. **Terminal bell (`\x07`).** Zero dependencies, tmux users get their pane
+   flagged, and it works over SSH. Nearly free to ship first.
+2. **OSC 9 escape sequence.** Real notification text on terminals that support
+   it (iTerm2, kitty, wezterm), still no dependency, silently inert elsewhere.
+3. **A desktop-notification crate** (`notify-rust` or similar). What gh-dash's
+   `beeep` does. Real notifications everywhere, but it is a new dependency
+   (house rules: ask first) and behaves differently over SSH.
+
+Config: `notify = "off" | "bell" | "desktop"`, default off. A dashboard that
+starts making noise on upgrade is rude; this is opt-in.
+
+### Rejected
+
+- **Per-PR watcher processes** (`gh pr checks --watch` per PR). Duplicates the
+  poll fleetz already runs, one process per PR, and the results arrive on a
+  channel nobody owns.
+- **Notifying on every transition for every repo.** Fifty repos of org
+  activity would make the feature its own DoS. Scope below.
+- **Polling faster instead.** Latency is not the problem; attention is. The
+  15s adaptive floor is already tight enough.
+
+### Open questions
+
+- Scope: all watched repos, or only repos whose last push came from this
+  machine (the poll already detects local pushes to force an immediate
+  re-poll, so "recently pushed locally" is computable)? Leaning the latter as
+  the default; a run you triggered is a promise made to you, a colleague's
+  run is not.
+- Failures only, or completions too? Failure-only is the calmer default;
+  pass notifications earn their keep exactly when you are waiting to merge.
+- Does the bell tier fire on the same conditions as desktop, or is bell cheap
+  enough to fire on more?
+
+---
+
+## Snooze, not hide
+
+**Problem.** The settings-menu section plans hidden repos as phase 3 and
+immediately names the trap: a `hidden = [...]` list makes a hidden repo
+unrecoverable from inside the TUI without also building an unhide screen. The
+deeper problem is that "hide forever" is rarely what the itch is. The real
+case is "this repo is noise right now": an archived experiment that sits in
+the list, a fork you touched once. Permanent hiding of a repo that later gets
+a push is exactly how a dashboard starts lying.
+
+gh-dash has a pattern worth stealing from its notifications view: "done" is
+stored locally as `id -> updated_at`, and an item marked done automatically
+resurfaces the moment it has newer activity, with entries pruned after 90
+days. Hiding is temporary by construction, so no unhide UI is needed for the
+common case.
+
+### Translation to repos
+
+A snoozed repo stores its `pushed_at` at snooze time. It is filtered from
+`App::visible_repos` while its current `pushed_at` still equals the stored
+one, and reappears (with a one-time marker, say a NEW-style badge for one
+sweep) the moment the remote moves. Local activity should also wake it:
+if the working tree goes dirty, you are in that repo, and a dashboard hiding
+a repo you are actively editing fails its one job.
+
+Storage follows the `window_state.rs` precedent: a machine-local state file
+(`~/.cache/fleetz/`), not config.toml. Snooze is session-state-shaped, like
+the remembered time window; putting it in config would make the config file
+lie about being the input you wrote.
+
+Keys: `h` (hide/snooze) is free. Unsnooze-all can live on the settings
+overlay or as `H`; because snooze self-expires, the unhide screen stops being
+a blocker and becomes a nicety (a dim `3 snoozed` count in the footer or
+header keeps the state from being invisible).
+
+### What remains of permanent hiding
+
+Probably a config-file-only `hidden = [...]` for the true never-show cases
+(archived repos you keep cloned). No in-TUI key sets it, so nothing needs an
+in-TUI undo: you edit the file both ways. The interactive surface is snooze
+alone, which cannot strand anything.
+
+### Rejected
+
+- **Hidden list alone (the original phase 3).** The trap the settings section
+  already documents: needs an unhide screen just to be safe to ship, and it
+  goes stale silently as hidden repos accumulate activity.
+- **Time-based snooze ("hide for a week").** Simpler to explain than
+  activity-based, but wrong on both edges: the repo comes back unchanged (why
+  is it back?) or stays hidden through a push (the lie again). Activity is the
+  honest clock. Could be added later as `h` with a count prefix if wanted.
+- **Snoozing sections or groups.** The group filter (`g`) already covers
+  wholesale scoping; snooze is per-repo noise control.
+
+### Open questions
+
+- Does local dirtiness wake a snoozed repo, or only remote `pushed_at`
+  movement? (Argued yes above, but it means snooze state consults local
+  status, which couples the filter to sweep timing.)
+- Should a snoozed-but-woken repo carry a marker until acknowledged, or is
+  reappearing enough? A marker needs an acknowledge interaction, which is new
+  vocabulary.
+- Prune horizon for stale snooze entries (gh-dash uses 90 days), and whether
+  pruning matters at all at fleet sizes of tens rather than thousands.
+- Does `#snoozed` become a tag so the strip can show them on demand, instead
+  of a dedicated unhide list anywhere?
