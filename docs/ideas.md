@@ -935,3 +935,78 @@ alone, which cannot strand anything.
   pruning matters at all at fleet sizes of tens rather than thousands.
 - Does `#snoozed` become a tag so the strip can show them on demand, instead
   of a dedicated unhide list anywhere?
+
+---
+
+## Hidden repos in the `$HOME` sweep
+
+**Problem.** A clone at `~/.dotfiles` is invisible to the `$HOME` sweep, so it
+reports as `not cloned` even though the GitHub row is right there. The only
+cure today is naming it in `extra_dirs`, which requires knowing the key exists
+and repeating it on every machine.
+
+The skip is deliberate (`discovery::scan_recursive`, `skip_hidden`) and the
+CLAUDE.md invariant documents it as a cost decision: descending into every
+`~/.local` and `~/.npm` "costs far more than it finds". Both halves of that
+were measured on 2026-08-08 and neither held up.
+
+**Cost.** `find $HOME -maxdepth 4` with the `PRUNE_DIRS` list applied:
+
+| | dirs walked | cold | warm |
+|---|---|---|---|
+| skip hidden (today) | 1,238 | 0.25s | 0.02s |
+| include hidden | 3,165 | 0.23s | 0.05-0.07s |
+
+2.5x the directories for ~30ms warm, and nothing cold, where I/O dominates.
+The sweep is already async and off the UI thread.
+
+**Noise.** 15 git repos live under hidden paths in that `$HOME`. Thirteen are
+vendored plugin clones (nine under `~/.tmux/plugins/`, plus `~/.oh-my-zsh`, a
+`~/.claude/plugins/marketplaces/` checkout, `~/.codex/.tmp/plugins`). None of
+them would surface: pass 2 keeps only directories whose basename matches a
+GitHub repo name, and none of those names is one. The name filter is already
+doing the work the hidden skip was added to do.
+
+**repoz has never had the skip.** `scan_home_git_dirs` prunes by name only.
+Same architecture on both sides (name-matched sweep for GitHub rows, configured
+roots only for local changes), so repoz has been running the proposed behavior
+for its whole life without noise. fleetz's skip is the divergence, and the
+`~/.dotfiles` bug is its only observable effect.
+
+### Options
+
+1. **Depth-1 hidden check (recommended).** Test dot-directories that sit
+   directly in `$HOME` for being a repo, but still never descend into them.
+   `~/.dotfiles` costs one stat among ~60 dot-dirs. Every vendored clone above
+   is at depth 2+ inside a hidden dir, so they stay invisible by construction,
+   not by luck. Catches the convention people actually use without inheriting
+   the plugin-tree exposure.
+2. **Full repoz parity.** Drop `skip_hidden` from the `$HOME` sweep entirely.
+   Simplest rule to state, removes the divergence, and `repoz_parity` gets a
+   real hidden-nesting fixture instead of only the hidden-root one. Slightly
+   more exposure: a vendored clone whose basename collides with a repo you own,
+   where you have no real clone, would win the row.
+3. **Config only.** Leave the code, document `extra_dirs = ["~/.dotfiles"]` in
+   the README as the answer. Zero risk, but the tool stays wrong by default for
+   the single most common hidden-clone convention there is.
+
+### Rejected
+
+- **Special-casing the literal name `.dotfiles`.** Fixes one spelling and
+  teaches nothing. `matched_name` already handles the dotted-clone spelling
+  generically; the gap is the walker, not the matcher.
+- **Raising `PRUNE_DIRS` to cover plugin dirs (`.tmux`, `.oh-my-zsh`, ...).**
+  An open-ended blocklist that has to grow forever, and `PRUNE_DIRS` is kept
+  in step with repoz's `PRUNE_EXPR` by hand, so every addition is two edits and
+  a parity risk.
+
+### Open questions
+
+- Does option 1 want depth 1 specifically, or "hidden dirs are checked but
+  never descended into" at any depth? The latter is one condition instead of
+  two, and on the measured tree it yields the same result.
+- Should a match found under a hidden path be visually marked, so a row
+  pointing at a vendored clone is at least legible as odd?
+- Pass 2 has no dedupe (pass 1 does, first root winning). If two hidden
+  candidates ever match one name, which wins is currently walk order. Worth
+  settling before widening what pass 2 can see.
