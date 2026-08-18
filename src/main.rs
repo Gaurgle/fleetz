@@ -741,12 +741,7 @@ fn handle_mouse_input(
             // A click inside the strip both focuses it and picks the day under
             // the cursor, so the readout answers what you actually pointed at.
             if let Some(strip) = rects.contributions
-                && let Some(slot) = ui::contributions::slot_at(
-                    strip,
-                    ui::contributions::tier(strip.width),
-                    m.column,
-                    m.row,
-                )
+                && let Some(slot) = ui::contributions::slot_at(strip, m.column, m.row)
             {
                 app.contrib_slot = slot;
                 app.needs_redraw = true;
