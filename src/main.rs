@@ -930,13 +930,24 @@ fn handle_settings_input(app: &mut App, key: KeyEvent) {
             let path = config::settings_path();
             match config::save_settings(&path, &updates) {
                 Ok(()) => {
-                    let (interval, view, persist) =
-                        (so.refresh_interval, so.view, so.persist_panes);
+                    let (interval, view, persist, contributions) = (
+                        so.refresh_interval,
+                        so.view,
+                        so.persist_panes,
+                        so.contributions,
+                    );
                     so.status = Some(format!("saved to {}", tilde_display(&path)));
                     // Live fields take effect immediately; the overlay stays
                     // open so the confirmation is actually readable.
                     app.refresh_interval = interval;
                     app.persist_pane_sizes = persist;
+                    // Focus cannot be left on a strip the save just closed.
+                    app.contributions = contributions;
+                    if !app.contributions.is_open()
+                        && app.focused_panel == FocusedPanel::Contributions
+                    {
+                        app.focused_panel = FocusedPanel::RepoList;
+                    }
                     if let Some(v) = view {
                         app.view = v;
                         // Same flag `v` sets, so a later resize can't undo an
@@ -1228,6 +1239,7 @@ async fn handle_normal_input(
                 config.work_start,
                 config.work_end,
                 app.persist_pane_sizes,
+                app.contributions,
             ));
         }
         KeyCode::Char('O') => {

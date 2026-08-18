@@ -224,10 +224,11 @@ pub enum SettingField {
     WorkStart,
     WorkEnd,
     PersistPanes,
+    Contributions,
 }
 
 /// The settings rows in display order.
-pub const SETTING_FIELDS: [SettingField; 7] = [
+pub const SETTING_FIELDS: [SettingField; 8] = [
     SettingField::RefreshInterval,
     SettingField::GithubPollInterval,
     SettingField::Watch,
@@ -235,6 +236,7 @@ pub const SETTING_FIELDS: [SettingField; 7] = [
     SettingField::WorkStart,
     SettingField::WorkEnd,
     SettingField::PersistPanes,
+    SettingField::Contributions,
 ];
 
 impl SettingField {
@@ -247,6 +249,7 @@ impl SettingField {
             Self::WorkStart => "work starts",
             Self::WorkEnd => "work ends",
             Self::PersistPanes => "remember pane sizes",
+            Self::Contributions => "contributions",
         }
     }
 
@@ -260,14 +263,17 @@ impl SettingField {
             Self::WorkStart => "work_start",
             Self::WorkEnd => "work_end",
             Self::PersistPanes => "persist_pane_sizes",
+            Self::Contributions => "contributions",
         }
     }
 
     pub fn applies(self) -> Applies {
         match self {
-            Self::RefreshInterval | Self::GithubPollInterval | Self::View | Self::PersistPanes => {
-                Applies::Live
-            }
+            Self::RefreshInterval
+            | Self::GithubPollInterval
+            | Self::View
+            | Self::PersistPanes
+            | Self::Contributions => Applies::Live,
             // Only read when the app starts; `w` is how you change it now.
             Self::Watch => Applies::Restart,
             // Both only feed `time::` when the cutoff and header are computed,
@@ -332,6 +338,7 @@ pub struct SettingsOverlay {
     pub work_start: u8,
     pub work_end: u8,
     pub persist_panes: bool,
+    pub contributions: ContributionsMode,
     /// Result of the last save attempt, shown as a footer line.
     pub status: Option<String>,
     /// Rolling buffer of typed digits, so "3" then "0" reads as 30.
@@ -348,6 +355,7 @@ impl SettingsOverlay {
         work_start: u8,
         work_end: u8,
         persist_panes: bool,
+        contributions: ContributionsMode,
     ) -> Self {
         Self {
             cursor: 0,
@@ -358,6 +366,7 @@ impl SettingsOverlay {
             work_start,
             work_end,
             persist_panes,
+            contributions,
             status: None,
             digits: String::new(),
         }
@@ -411,6 +420,17 @@ impl SettingsOverlay {
                 self.work_end = next.clamp(self.work_start as i32 + 1, 23) as u8;
             }
             SettingField::PersistPanes => self.persist_panes = !self.persist_panes,
+            // off -> github -> local -> off
+            SettingField::Contributions => {
+                self.contributions = match (self.contributions, delta > 0) {
+                    (ContributionsMode::Off, true) => ContributionsMode::Github,
+                    (ContributionsMode::Github, true) => ContributionsMode::Local,
+                    (ContributionsMode::Local, true) => ContributionsMode::Off,
+                    (ContributionsMode::Off, false) => ContributionsMode::Local,
+                    (ContributionsMode::Github, false) => ContributionsMode::Off,
+                    (ContributionsMode::Local, false) => ContributionsMode::Github,
+                };
+            }
         }
     }
 
@@ -499,6 +519,10 @@ impl SettingsOverlay {
                 }),
             ),
             (
+                SettingField::Contributions.config_key(),
+                SettingValue::Str(self.contributions.config_value()),
+            ),
+            (
                 SettingField::WorkStart.config_key(),
                 SettingValue::Int(self.work_start as i64),
             ),
@@ -527,6 +551,7 @@ impl SettingsOverlay {
             SettingField::WorkStart => format!("{:02}:00", self.work_start),
             SettingField::WorkEnd => format!("{:02}:00", self.work_end),
             SettingField::PersistPanes => bool_label(self.persist_panes),
+            SettingField::Contributions => self.contributions.label().to_string(),
         }
     }
 }
@@ -1775,7 +1800,7 @@ mod tests {
     }
 
     fn settings() -> SettingsOverlay {
-        SettingsOverlay::new(60, 30, true, None, 9, 18, false)
+        SettingsOverlay::new(60, 30, true, None, 9, 18, false, ContributionsMode::Off)
     }
 
     /// Put the cursor on a field by name rather than by number, so inserting a
@@ -1790,10 +1815,13 @@ mod tests {
 
     #[test]
     fn settings_cursor_wraps_both_ways() {
+        // The last row is derived rather than named: this test is about the
+        // wrap, and adding a settings row should not break it.
+        let last = *SETTING_FIELDS.last().expect("at least one setting");
         let mut s = settings();
         assert_eq!(s.field(), SettingField::RefreshInterval);
         s.move_cursor(-1);
-        assert_eq!(s.field(), SettingField::PersistPanes, "wraps to the end");
+        assert_eq!(s.field(), last, "wraps to the end");
         s.move_cursor(1);
         assert_eq!(s.field(), SettingField::RefreshInterval);
     }
@@ -2429,5 +2457,43 @@ mod tests {
             app.local_calendar(today()).source(),
             crate::contributions::Source::Local
         );
+    }
+
+    #[test]
+    fn the_settings_row_cycles_the_three_modes() {
+        let mut overlay =
+            SettingsOverlay::new(60, 60, true, None, 9, 18, false, ContributionsMode::Off);
+        overlay.cursor = SETTING_FIELDS
+            .iter()
+            .position(|f| *f == SettingField::Contributions)
+            .unwrap();
+        assert_eq!(overlay.value_label(SettingField::Contributions), "off");
+        overlay.step(1);
+        assert_eq!(overlay.value_label(SettingField::Contributions), "github");
+        overlay.step(1);
+        assert_eq!(overlay.value_label(SettingField::Contributions), "local");
+        overlay.step(1);
+        assert_eq!(
+            overlay.value_label(SettingField::Contributions),
+            "off",
+            "wraps"
+        );
+        overlay.step(-1);
+        assert_eq!(
+            overlay.value_label(SettingField::Contributions),
+            "local",
+            "wraps back"
+        );
+    }
+
+    #[test]
+    fn the_settings_row_writes_the_contributions_key() {
+        assert_eq!(SettingField::Contributions.config_key(), "contributions");
+        assert_eq!(SettingField::Contributions.applies(), Applies::Live);
+        let overlay =
+            SettingsOverlay::new(60, 60, true, None, 9, 18, false, ContributionsMode::Local);
+        let updates = overlay.config_updates();
+        assert!(updates.iter().any(|(k, v)| *k == "contributions"
+            && matches!(v, crate::config::SettingValue::Str("local"))));
     }
 }

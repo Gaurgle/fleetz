@@ -114,7 +114,7 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `G` | Show all (clear group) |
 | `/` | Fuzzy-search repos by name (best match first, `flz` finds `fleetz`), or type `#dirty` `#behind` `#ahead` `#ci` `#prs` `#stash` to filter |
 | `0` | Clear `#tag` filters (keeps free-text search) |
-| `,` | Settings overlay: refresh interval, startup view, work hours, pane persistence. `Enter` saves to `config.toml` |
+| `,` | Settings overlay: refresh interval, startup view, work hours, pane persistence, contributions strip. `Enter` saves to `config.toml` |
 | `<` / `>` | Narrow / widen the repo list |
 | `+` / `-` | Shrink / grow the inspector pane |
 | `=` | Reset both panes to their default sizes |
@@ -146,6 +146,15 @@ repo_dir = "~/repos"
 # root are scanned normally; only the wider $HOME sweep skips them, so a clone
 # living outside repo_dir under a hidden path needs naming here.
 extra_dirs = ["~/.dotfiles"]
+
+# Contribution strip: "off" (default), "github" (your GitHub calendar), or
+# "local" (your commits in the repos currently listed). `c` toggles it and
+# `C` switches source; this is what a fresh launch starts from.
+contributions = "off"
+
+# Git author regex the "local" source filters by, overriding each repo's own
+# user.email. --author takes a regex, so several identities can be joined.
+contributions_author = "me@work.com\\|me@home.com"
 
 # Start in watch mode. On by default: a dashboard you leave open should keep
 # itself current. --watch / --no-watch override for one session, `w` toggles live.

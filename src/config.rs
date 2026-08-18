@@ -426,4 +426,39 @@ mod tests {
         assert!(result.is_err());
         std::fs::remove_dir_all(dir).ok();
     }
+
+    #[test]
+    fn contributions_defaults_to_off_and_round_trips() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert_eq!(cfg.contributions, None);
+        assert_eq!(
+            crate::app::ContributionsMode::from_config(
+                cfg.contributions.as_deref().unwrap_or("off")
+            ),
+            crate::app::ContributionsMode::Off
+        );
+
+        let cfg: Config = toml::from_str(r#"contributions = "local""#).unwrap();
+        assert_eq!(
+            crate::app::ContributionsMode::from_config(cfg.contributions.as_deref().unwrap()),
+            crate::app::ContributionsMode::Local
+        );
+    }
+
+    /// A typo must not be a crash, and must not silently mean "github".
+    #[test]
+    fn an_unknown_contributions_value_falls_back_to_off() {
+        assert_eq!(
+            crate::app::ContributionsMode::from_config("gitub"),
+            crate::app::ContributionsMode::Off
+        );
+    }
+
+    #[test]
+    fn contributions_author_is_optional() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert_eq!(cfg.contributions_author, None);
+        let cfg: Config = toml::from_str(r#"contributions_author = "a@b\\|c@d""#).unwrap();
+        assert_eq!(cfg.contributions_author.as_deref(), Some(r"a@b\|c@d"));
+    }
 }
