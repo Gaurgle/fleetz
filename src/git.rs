@@ -125,18 +125,41 @@ pub async fn branch_statuses(repo_path: &Path) -> Vec<BranchStatus> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut statuses = parse_branch_output(&stdout);
 
-    // `upstream:track` only measures divergence from a branch's own upstream. A
-    // branch whose upstream is stale (e.g. a leftover worktree branch already
-    // merged into main via a different ref) still reports "ahead" there even
-    // though the commits are safely on the remote. Recheck against ALL remotes
-    // before reporting a branch as genuinely unpushed.
+    // `upstream:track` only measures divergence from a branch's own upstream,
+    // which is wrong in both directions:
+    //
+    // - It over-reports when the upstream is stale (a leftover worktree branch
+    //   already merged into main via a different ref still reads "ahead" even
+    //   though its commits are safely on the remote).
+    // - It says nothing at all when a branch has no upstream, which is the
+    //   most common shape of work in progress: a feature branch created
+    //   locally and not pushed yet. That hid whole repos, because a repo whose
+    //   only news is unpushed branch commits reports dirty=0 ahead=0 and so
+    //   never reaches the "local changes" section.
+    //
+    // Counting commits unreachable from ALL remotes answers both. It is only
+    // meaningful when the repo has a remote at all: without one every commit
+    // is unreachable, and a purely local repo would show its whole history as
+    // unpushed forever. Resolved lazily so the all-tracked case pays nothing.
+    let has_remote = if statuses.iter().any(|s| s.upstream.is_none()) {
+        has_remotes(repo_path).await
+    } else {
+        false
+    };
     for status in &mut statuses {
-        if status.ahead > 0 {
+        if status.ahead > 0 || (status.upstream.is_none() && has_remote) {
             status.ahead = count_unreachable_from_remotes(repo_path, &status.name).await;
         }
     }
 
     statuses
+}
+
+/// Whether the repo has at least one remote configured.
+async fn has_remotes(repo_path: &Path) -> bool {
+    run_git(repo_path, &["remote"]).await.is_some_and(|o| {
+        o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty()
+    })
 }
 
 /// Count commits on `branch` not reachable from any remote-tracking ref.
@@ -1044,6 +1067,70 @@ mod real_repo_tests {
         assert!(
             from_current.iter().any(|b| b == "feature"),
             "sanity: elsewhere descends from the merge too"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression: a feature branch created locally and never pushed has an
+    /// empty `upstream:track`, so fleetz reported ahead=0 and the repo
+    /// vanished from "local changes" the moment the work was committed. The
+    /// unpushed commits are the whole point of that section.
+    #[tokio::test]
+    async fn unpushed_branch_without_upstream_is_ahead() {
+        let dir = temp_repo("noupstream");
+        let bare = std::env::temp_dir().join(format!(
+            "fleetz_it_noupstream_remote_{}.git",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&bare);
+        std::fs::create_dir_all(&bare).unwrap();
+        sh(&bare, &["git", "init", "-q", "--bare"]);
+        sh(
+            &dir,
+            &["git", "remote", "add", "origin", &bare.to_string_lossy()],
+        );
+        sh(&dir, &["git", "push", "-q", "-u", "origin", "main"]);
+
+        sh(&dir, &["git", "switch", "-q", "-c", "feat/x"]);
+        std::fs::write(dir.join("b.txt"), "two\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh(&dir, &["git", "commit", "-q", "-m", "work"]);
+
+        let branches = branch_statuses(&dir).await;
+        let feat = branches
+            .iter()
+            .find(|b| b.name == "feat/x")
+            .expect("feat/x");
+        assert_eq!(feat.upstream, None, "branch was never pushed");
+        assert_eq!(feat.ahead, 1, "the unpushed commit must be counted");
+
+        let main = branches.iter().find(|b| b.name == "main").expect("main");
+        assert_eq!(main.ahead, 0, "main is level with its upstream");
+
+        // Pushing it settles the count back to zero.
+        sh(&dir, &["git", "push", "-q", "-u", "origin", "feat/x"]);
+        let after = branch_statuses(&dir).await;
+        let feat = after.iter().find(|b| b.name == "feat/x").expect("feat/x");
+        assert_eq!(feat.ahead, 0, "pushed branch is not ahead");
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&bare).ok();
+    }
+
+    /// A repo with no remote at all has nowhere to push, so every commit is
+    /// technically "unreachable from remotes". Reporting that would make every
+    /// scratch repo shout an ahead count forever.
+    #[tokio::test]
+    async fn local_repo_without_remotes_is_never_ahead() {
+        let dir = temp_repo("noremote");
+
+        let branches = branch_statuses(&dir).await;
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].upstream, None);
+        assert_eq!(
+            branches[0].ahead, 0,
+            "no remote means nothing to be ahead of"
         );
 
         std::fs::remove_dir_all(&dir).ok();
