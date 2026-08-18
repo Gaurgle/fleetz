@@ -1324,6 +1324,7 @@ mod tests {
     fn make_app(n: usize) -> App {
         let repos: Vec<RepoStatus> = (0..n)
             .map(|i| RepoStatus {
+                daily: None,
                 name: format!("repo-{i}"),
                 path: Some(format!("~/repos/repo-{i}")),
                 location: RepoLocation::Primary,

@@ -36,6 +36,67 @@ pub(crate) async fn run_git(repo_path: &Path, args: &[&str]) -> Option<std::proc
     }
 }
 
+/// Per-day commit counts for one author over the contribution grid.
+///
+/// `--all` rather than the default branch: work on a feature branch is still
+/// work, and git de-duplicates a commit reachable from several refs. `%ad`
+/// with `--date=short` is the author date in local time, which is the day you
+/// would say you did the work on.
+pub async fn daily_commits(
+    repo_path: &Path,
+    start: chrono::NaiveDate,
+    author: &str,
+) -> Option<crate::contributions::DailyCounts> {
+    let since = format!("--since={}", start.format("%Y-%m-%d"));
+    let author_arg = format!("--author={author}");
+    let output = run_git(
+        repo_path,
+        &[
+            "log",
+            "--all",
+            "--date=short",
+            "--pretty=%ad",
+            &since,
+            &author_arg,
+        ],
+    )
+    .await?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(parse_daily(&String::from_utf8_lossy(&output.stdout), start))
+}
+
+/// Bucket `git log --date=short --pretty=%ad` output into grid slots. Lines
+/// that are not a date are skipped rather than treated as errors: a warning
+/// on stdout must not cost a year of history.
+pub fn parse_daily(stdout: &str, start: chrono::NaiveDate) -> crate::contributions::DailyCounts {
+    let mut counts = crate::contributions::DailyCounts::default();
+    for line in stdout.lines() {
+        let Ok(date) = chrono::NaiveDate::parse_from_str(line.trim(), "%Y-%m-%d") else {
+            continue;
+        };
+        let offset = (date - start).num_days();
+        if offset >= 0 && (offset as usize) < crate::contributions::SLOTS {
+            let slot = offset as usize;
+            counts.0[slot] = counts.0[slot].saturating_add(1);
+        }
+    }
+    counts
+}
+
+/// The identity git would stamp on a commit made here, honouring a
+/// repo-local override. A clone configured with a work address must count
+/// against that address, not against the global one.
+pub async fn user_email(repo_path: &Path) -> Option<String> {
+    let output = run_git(repo_path, &["config", "user.email"]).await?;
+    if !output.status.success() {
+        return None;
+    }
+    let email = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!email.is_empty()).then_some(email)
+}
+
 /// A cheap fingerprint of everything the expensive probes depend on. Equal
 /// keys across two sweeps mean log, reflog, graph, stash, and worktree output
 /// cannot have changed, so those subprocesses can be skipped entirely.
@@ -989,6 +1050,42 @@ mod tests {
         assert_eq!(lines[2].prefix, "| * ");
         assert_eq!(lines[2].hash, "d4e5f6g");
         assert_eq!(lines[2].author, "Bob");
+    }
+
+    fn start_day() -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str("2025-08-17", "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn parse_daily_accumulates_repeated_days() {
+        let out = "2025-08-17\n2025-08-17\n2025-08-18\n";
+        let counts = parse_daily(out, start_day());
+        assert_eq!(counts.0[0], 2);
+        assert_eq!(counts.0[1], 1);
+        assert_eq!(counts.0[2], 0, "a day with no commits stays zero");
+    }
+
+    #[test]
+    fn parse_daily_ignores_days_outside_the_grid() {
+        let out = "2020-01-01\n2025-08-16\n2025-08-17\n";
+        let counts = parse_daily(out, start_day());
+        assert_eq!(counts.0.iter().map(|n| *n as u32).sum::<u32>(), 1);
+    }
+
+    #[test]
+    fn parse_daily_survives_junk_lines() {
+        // A git that printed a warning to stdout must not poison the year.
+        let out = "warning: something\n\n2025-08-17\n";
+        let counts = parse_daily(out, start_day());
+        assert_eq!(counts.0[0], 1);
+    }
+
+    #[test]
+    fn parse_daily_fills_the_last_slot() {
+        let last = start_day() + chrono::Duration::days((crate::contributions::SLOTS - 1) as i64);
+        let out = format!("{}\n", last.format("%Y-%m-%d"));
+        let counts = parse_daily(&out, start_day());
+        assert_eq!(counts.0[crate::contributions::SLOTS - 1], 1);
     }
 }
 

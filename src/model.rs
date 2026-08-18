@@ -146,6 +146,10 @@ pub struct RepoStatus {
     /// branch of the same name -- never fetched/checked out locally, or
     /// checked out once and deleted locally after merging.
     pub remote_only_branches: Vec<String>,
+    /// Per-day commit counts for this repo over the contribution grid, or
+    /// None when the local calendar has never been asked for. Boxed so a
+    /// repo that will never need it costs one pointer rather than 742 bytes.
+    pub daily: Option<Box<crate::contributions::DailyCounts>>,
     /// Fingerprint of the repo state the expensive probes were taken from.
     /// A sweep that finds the same key reuses commits/reflog/graph/stash/
     /// worktrees instead of re-running those subprocesses. None means
@@ -390,6 +394,7 @@ mod tests {
 
     fn make_repo(name: &str, behind: u32, ahead: u32, dirty: u32) -> RepoStatus {
         RepoStatus {
+            daily: None,
             name: name.to_string(),
             path: Some(format!("~/repos/{name}")),
             location: RepoLocation::Primary,
