@@ -737,11 +737,19 @@ fn handle_mouse_input(
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
             FocusedPanel::Inspector => app.scroll_inspector(1),
+            // A wheel over the strip walks the day cursor a week at a time,
+            // which is the only axis a year-wide grid can scroll along.
+            FocusedPanel::Contributions => {
+                app.move_contrib_cursor(7, chrono::Local::now().date_naive())
+            }
         },
         MouseEventKind::ScrollUp => match panel {
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.detail_nav_up(),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
+            FocusedPanel::Contributions => {
+                app.move_contrib_cursor(-7, chrono::Local::now().date_naive())
+            }
         },
         _ => {}
     }
@@ -1044,11 +1052,17 @@ async fn handle_normal_input(
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
             FocusedPanel::Inspector => app.scroll_inspector(1),
+            FocusedPanel::Contributions => {
+                app.move_contrib_cursor(7, chrono::Local::now().date_naive())
+            }
         },
         KeyCode::Char('k') | KeyCode::Up => match app.focused_panel {
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.detail_nav_up(),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
+            FocusedPanel::Contributions => {
+                app.move_contrib_cursor(-7, chrono::Local::now().date_naive())
+            }
         },
         KeyCode::PageDown => match app.focused_panel {
             FocusedPanel::Inspector => app.scroll_inspector(10),

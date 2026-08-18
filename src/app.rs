@@ -21,6 +21,56 @@ pub enum FocusedPanel {
     /// The inspector pane (full detail of the selected commit). j/k here
     /// scrolls its content.
     Inspector,
+    /// The contribution strip. Unlike the other three it exists in Compact
+    /// view too, and only while the pane is open, so both `focus_panel` and
+    /// `toggle_panel_focus` special-case it.
+    Contributions,
+}
+
+/// Whether the contribution strip is showing, and from which source.
+/// Persisted to `config.toml` as one key, so the source survives a restart
+/// along with the open state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContributionsMode {
+    #[default]
+    Off,
+    Github,
+    Local,
+}
+
+impl ContributionsMode {
+    pub fn from_config(value: &str) -> Self {
+        match value {
+            "github" => Self::Github,
+            "local" => Self::Local,
+            _ => Self::Off,
+        }
+    }
+
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Github => "github",
+            Self::Local => "local",
+        }
+    }
+
+    /// Label for the settings row and the pane title.
+    pub fn label(self) -> &'static str {
+        self.config_value()
+    }
+
+    pub fn is_open(self) -> bool {
+        self != Self::Off
+    }
+
+    pub fn source(self) -> Option<crate::contributions::Source> {
+        match self {
+            Self::Off => None,
+            Self::Github => Some(crate::contributions::Source::Github),
+            Self::Local => Some(crate::contributions::Source::Local),
+        }
+    }
 }
 
 /// One quick-filter a repo can be toggled against.
@@ -795,6 +845,18 @@ pub struct App {
     /// set, so a layout tweaked for one repo doesn't silently become the norm.
     pub repo_list_pct: u16,
     pub inspector_pct: u16,
+    /// Whether the contribution strip is open, and from which source.
+    pub contributions: ContributionsMode,
+    /// The last source the strip was on, so closing and reopening returns to
+    /// it instead of always snapping back to github.
+    last_contributions_source: ContributionsMode,
+    /// The account-wide calendar from the last GitHub poll. None until the
+    /// first poll lands, or when the payload predates the field.
+    pub github_calendar: Option<Box<crate::contributions::Calendar>>,
+    /// Grid slot the day cursor sits on. Meaningful only while the strip has
+    /// focus; clamped against today on every move, since "today" advances
+    /// under a long-running session.
+    pub contrib_slot: usize,
     /// Mirror of the `persist_pane_sizes` config key: write the two above back
     /// on exit and restore them next launch.
     pub persist_pane_sizes: bool,
@@ -895,6 +957,17 @@ impl App {
             view_overridden: false,
             repo_list_pct: DEFAULT_REPO_LIST_PCT,
             inspector_pct: DEFAULT_INSPECTOR_PCT,
+            contributions: ContributionsMode::Off,
+            last_contributions_source: ContributionsMode::Github,
+            github_calendar: None,
+            // Seeded on today rather than on slot 0, which would be the
+            // oldest day of the year: the cursor should open where the eye
+            // already is.
+            contrib_slot: crate::contributions::Calendar::new(
+                Local::now().date_naive(),
+                crate::contributions::Source::Local,
+            )
+            .today_slot(),
             persist_pane_sizes: false,
             dragging: None,
             loading: false,
@@ -1174,6 +1247,9 @@ impl App {
         match self.focused_panel {
             FocusedPanel::RepoList | FocusedPanel::Detail => self.scroll_detail(delta),
             FocusedPanel::Inspector => self.scroll_inspector(delta),
+            // The strip is a fixed-height picture with nothing below the
+            // fold, so there is nothing to scroll.
+            FocusedPanel::Contributions => {}
         }
     }
 
@@ -1195,23 +1271,109 @@ impl App {
     /// Cycle keyboard focus: repo list -> detail -> inspector -> repo list.
     /// Only meaningful in `Detail` view.
     pub fn toggle_panel_focus(&mut self) {
+        let strip = self.contributions.is_open();
         if self.view != View::Detail {
+            // Compact has one flat grid, but the strip is still a real target.
+            if strip {
+                self.focused_panel = match self.focused_panel {
+                    FocusedPanel::Contributions => FocusedPanel::RepoList,
+                    _ => FocusedPanel::Contributions,
+                };
+            }
             return;
         }
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             FocusedPanel::Detail => FocusedPanel::Inspector,
-            FocusedPanel::Inspector => FocusedPanel::RepoList,
+            FocusedPanel::Inspector if strip => FocusedPanel::Contributions,
+            FocusedPanel::Inspector | FocusedPanel::Contributions => FocusedPanel::RepoList,
         };
     }
 
     /// Jump keyboard focus directly to `panel` (the `1`/`2` bindings).
     /// Only meaningful in `Detail` view.
     pub fn focus_panel(&mut self, panel: FocusedPanel) {
+        // The strip is the one panel that exists in both views, and it is
+        // only a target while it is open.
+        if panel == FocusedPanel::Contributions {
+            if self.contributions.is_open() {
+                self.focused_panel = panel;
+            }
+            return;
+        }
         if self.view != View::Detail {
             return;
         }
         self.focused_panel = panel;
+    }
+
+    /// `c`: open or close the strip. Reopening returns to whichever source it
+    /// was last on.
+    pub fn toggle_contributions(&mut self) {
+        if self.contributions.is_open() {
+            self.last_contributions_source = self.contributions;
+            self.contributions = ContributionsMode::Off;
+            // Focus cannot be left pointing at a panel that is no longer on
+            // screen: every key routed to it would silently do nothing.
+            if self.focused_panel == FocusedPanel::Contributions {
+                self.focused_panel = FocusedPanel::RepoList;
+            }
+        } else {
+            self.open_contributions(self.last_contributions_source);
+        }
+        self.needs_redraw = true;
+    }
+
+    /// `C`: switch which source fills the strip, opening it if it was closed.
+    /// Opening from `Off` lands on the remembered source rather than always
+    /// snapping to github, so `c` and `C` agree about where "open" means.
+    pub fn cycle_contributions_source(&mut self) {
+        let next = match self.contributions {
+            ContributionsMode::Off => self.last_contributions_source,
+            ContributionsMode::Github => ContributionsMode::Local,
+            ContributionsMode::Local => ContributionsMode::Github,
+        };
+        self.open_contributions(next);
+        self.needs_redraw = true;
+    }
+
+    /// Open the strip on `mode` and put the day cursor back on today. Shared
+    /// by `c` and `C` so both entry points land in the same state.
+    fn open_contributions(&mut self, mode: ContributionsMode) {
+        self.contributions = mode;
+        self.last_contributions_source = mode;
+        self.contrib_slot = self.contrib_cursor_ends(Local::now().date_naive()).1;
+    }
+
+    /// First and last selectable grid slots for `today`.
+    pub fn contrib_cursor_ends(&self, today: chrono::NaiveDate) -> (usize, usize) {
+        let calendar =
+            crate::contributions::Calendar::new(today, crate::contributions::Source::Local);
+        (0, calendar.today_slot())
+    }
+
+    /// Move the day cursor by `delta` days (7 for a week), clamped to the
+    /// grid. Takes `today` rather than reading the clock so the clamp is
+    /// testable and so a session left open past midnight follows the date.
+    pub fn move_contrib_cursor(&mut self, delta: i32, today: chrono::NaiveDate) {
+        let (first, last) = self.contrib_cursor_ends(today);
+        let current = self.contrib_slot.clamp(first, last) as i32;
+        self.contrib_slot = (current + delta).clamp(first as i32, last as i32) as usize;
+        self.needs_redraw = true;
+    }
+
+    /// The local calendar: every visible repo's histogram summed. Pure
+    /// arithmetic over data the sweep already gathered, so this is safe to
+    /// call on every frame and every keystroke.
+    pub fn local_calendar(&self, today: chrono::NaiveDate) -> crate::contributions::Calendar {
+        let mut calendar =
+            crate::contributions::Calendar::new(today, crate::contributions::Source::Local);
+        for (_, repo) in self.visible_repos() {
+            if let Some(daily) = &repo.daily {
+                calendar.add_daily(daily);
+            }
+        }
+        calendar
     }
 
     /// Scroll the detail pane by `delta` lines (negative scrolls up), clamped
@@ -2089,5 +2251,184 @@ mod tests {
         assert_eq!(z.ratio(), 0.0);
         assert_eq!(ApplyProgress::Finishing.ratio(), 1.0);
         assert_eq!(ApplyProgress::Finishing.label(), "finishing…");
+    }
+
+    fn today() -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str("2026-08-18", "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn c_toggles_the_pane_and_remembers_the_source() {
+        let mut app = make_app(1);
+        assert_eq!(app.contributions, ContributionsMode::Off);
+        app.toggle_contributions();
+        assert_eq!(
+            app.contributions,
+            ContributionsMode::Github,
+            "defaults to github"
+        );
+        app.cycle_contributions_source();
+        assert_eq!(app.contributions, ContributionsMode::Local);
+        app.toggle_contributions();
+        assert_eq!(app.contributions, ContributionsMode::Off);
+        app.toggle_contributions();
+        assert_eq!(
+            app.contributions,
+            ContributionsMode::Local,
+            "reopens where it closed"
+        );
+    }
+
+    #[test]
+    fn cycling_the_source_on_a_closed_pane_opens_it() {
+        let mut app = make_app(1);
+        app.cycle_contributions_source();
+        assert!(app.contributions.is_open());
+    }
+
+    #[test]
+    fn closing_the_pane_moves_focus_off_it() {
+        let mut app = make_app(1);
+        app.toggle_contributions();
+        app.focus_panel(FocusedPanel::Contributions);
+        assert_eq!(app.focused_panel, FocusedPanel::Contributions);
+        app.toggle_contributions();
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::RepoList,
+            "focus cannot strand"
+        );
+    }
+
+    #[test]
+    fn the_pane_is_only_focusable_while_open() {
+        let mut app = make_app(1);
+        app.focus_panel(FocusedPanel::Contributions);
+        assert_eq!(app.focused_panel, FocusedPanel::RepoList, "closed: refused");
+        app.toggle_contributions();
+        app.focus_panel(FocusedPanel::Contributions);
+        assert_eq!(app.focused_panel, FocusedPanel::Contributions);
+    }
+
+    /// Unlike the other three panels, this one exists in Compact view, so the
+    /// Detail-only guard on `focus_panel` must not apply to it.
+    #[test]
+    fn the_pane_is_focusable_in_compact_view() {
+        let mut app = make_app(1);
+        app.view = View::Compact;
+        app.toggle_contributions();
+        app.focus_panel(FocusedPanel::Contributions);
+        assert_eq!(app.focused_panel, FocusedPanel::Contributions);
+        app.focus_panel(FocusedPanel::Detail);
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::Contributions,
+            "detail is still unreachable in compact"
+        );
+    }
+
+    #[test]
+    fn tab_includes_the_pane_only_while_open() {
+        let mut app = make_app(1);
+        app.view = View::Detail;
+        app.toggle_panel_focus();
+        app.toggle_panel_focus();
+        app.toggle_panel_focus();
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::RepoList,
+            "closed: three panels"
+        );
+
+        app.toggle_contributions();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.toggle_panel_focus();
+        assert_eq!(app.focused_panel, FocusedPanel::Contributions);
+        app.toggle_panel_focus();
+        assert_eq!(app.focused_panel, FocusedPanel::RepoList);
+    }
+
+    #[test]
+    fn tab_in_compact_toggles_between_the_list_and_the_pane() {
+        let mut app = make_app(1);
+        app.view = View::Compact;
+        app.toggle_panel_focus();
+        assert_eq!(app.focused_panel, FocusedPanel::RepoList, "closed: no-op");
+        app.toggle_contributions();
+        app.toggle_panel_focus();
+        assert_eq!(app.focused_panel, FocusedPanel::Contributions);
+        app.toggle_panel_focus();
+        assert_eq!(app.focused_panel, FocusedPanel::RepoList);
+    }
+
+    #[test]
+    fn the_cursor_starts_on_today_and_clamps_at_both_ends() {
+        let mut app = make_app(1);
+        let (first, last) = app.contrib_cursor_ends(today());
+        assert_eq!(first, 0);
+        app.contrib_slot = last;
+
+        app.move_contrib_cursor(5, today());
+        assert_eq!(app.contrib_slot, last, "cannot walk into the future");
+
+        app.move_contrib_cursor(-(crate::contributions::SLOTS as i32), today());
+        assert_eq!(app.contrib_slot, 0, "cannot walk before the grid opens");
+
+        app.move_contrib_cursor(-1, today());
+        assert_eq!(app.contrib_slot, 0);
+    }
+
+    /// Opening the pane puts the cursor on today, not on the oldest day of
+    /// the year, which is what an unseeded slot of 0 would mean.
+    #[test]
+    fn opening_the_pane_seeds_the_cursor_on_today() {
+        let mut app = make_app(1);
+        app.contrib_slot = 0;
+        app.toggle_contributions();
+        let (_, last) = app.contrib_cursor_ends(chrono::Local::now().date_naive());
+        assert_eq!(app.contrib_slot, last);
+    }
+
+    #[test]
+    fn the_cursor_moves_by_a_week_at_a_time() {
+        let mut app = make_app(1);
+        let (_, last) = app.contrib_cursor_ends(today());
+        app.contrib_slot = last;
+        app.move_contrib_cursor(-7, today());
+        assert_eq!(app.contrib_slot, last - 7);
+    }
+
+    #[test]
+    fn the_local_calendar_sums_only_the_visible_repos() {
+        let mut app = make_app(0);
+        let mut a = crate::contributions::DailyCounts::default();
+        a.0[0] = 3;
+        let mut b = crate::contributions::DailyCounts::default();
+        b.0[0] = 4;
+        let mut alpha = make_app(1).repos.remove(0);
+        alpha.name = "alpha".into();
+        alpha.daily = Some(Box::new(a));
+        let mut beta = make_app(1).repos.remove(0);
+        beta.name = "beta".into();
+        beta.daily = Some(Box::new(b));
+        app.repos = vec![alpha, beta];
+        assert_eq!(app.local_calendar(today()).total(), 7, "both visible");
+
+        app.search_query = "alpha".to_string();
+        assert_eq!(
+            app.local_calendar(today()).total(),
+            3,
+            "a search narrows the heatmap the same way it narrows the list"
+        );
+    }
+
+    #[test]
+    fn a_repo_with_no_histogram_contributes_nothing() {
+        let app = make_app(1);
+        assert_eq!(app.local_calendar(today()).total(), 0);
+        assert_eq!(
+            app.local_calendar(today()).source(),
+            crate::contributions::Source::Local
+        );
     }
 }
