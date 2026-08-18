@@ -1,4 +1,9 @@
 //! The contribution strip: a year of activity docked under the main panes.
+//!
+//! The grid draws at a fixed square size and scrolls, rather than shrinking
+//! to fit. A year at this size is wider than any terminal, so the newest
+//! weeks are pinned to the right edge and older ones hide off to the left,
+//! which is the direction time already runs in.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -10,15 +15,49 @@ use crate::app::{App, ContributionsMode, FocusedPanel};
 use crate::contributions::{Calendar, WEEKS};
 use crate::ui::colors;
 
-/// Rows the strip occupies: two border rows, the month labels, seven day
-/// rows, and the legend. Fixed, because the content height is fixed: a
-/// resize handle here could only ever add empty space.
-pub const CONTRIB_HEIGHT: u16 = 11;
+/// A day cell, two columns wide. A terminal cell is about twice as tall as
+/// it is wide, so two of them side by side read as a square; one reads as a
+/// thin dot.
+const CELL: &str = "\u{2588}\u{2588}";
+const CELL_COLS: u16 = 2;
+
+/// Blank columns between two day cells, and blank rows between two day rows.
+/// Two columns and one row are the same distance on screen, given the cell
+/// aspect ratio, so the padding around every square looks equal on all four
+/// sides. Changing one without the other breaks that.
+const GAP_COLS: u16 = 2;
+const GAP_ROWS: u16 = 1;
+
+/// Columns one week column occupies, cell plus gap.
+const WEEK_COLS: u16 = CELL_COLS + GAP_COLS;
+/// Rows one weekday row occupies, cell plus gap.
+const DAY_ROWS: u16 = 1 + GAP_ROWS;
+
+/// Columns reserved for the Mon/Wed/Fri gutter.
+const GUTTER: u16 = 4;
+
+/// Columns the frame eats on each side: the border plus the block's own
+/// one-column padding.
+const FRAME_COLS: u16 = 2;
+
+/// First of the day rows, counted from the strip's outer top edge: row 0 is
+/// the border, row 1 the month labels, row 2 the blank that pads the top of
+/// the grid. The count and the source ride in the border title, as every
+/// other pane's header does.
+const FIRST_DAY_ROW: u16 = 2 + GAP_ROWS;
+
+/// Rows the strip occupies: two border rows, the month labels, a blank, the
+/// seven day rows with a blank between each, a blank, and the legend.
+///
+/// The blanks above the first row and below the last are what make the
+/// padding uniform: without them the top and bottom squares sit flush against
+/// the label and the legend while every square between them is padded.
+pub const CONTRIB_HEIGHT: u16 = 2 + 1 + GAP_ROWS + (7 * DAY_ROWS - GAP_ROWS) + GAP_ROWS + 1;
 
 /// Rows the panes above must keep for the strip to be worth docking. Below
 /// this the strip is dropped: a dashboard squeezed into slivers is worse
 /// than no heatmap.
-const MAIN_MIN_HEIGHT: u16 = 12;
+const MAIN_MIN_HEIGHT: u16 = 10;
 
 /// Carve the strip off the bottom of the main area.
 ///
@@ -36,68 +75,29 @@ pub fn split_main_area(main: Rect, open: bool) -> (Rect, Option<Rect>) {
     (v[0], Some(v[1]))
 }
 
-/// Columns reserved for the Mon/Wed/Fri gutter.
-const GUTTER: u16 = 4;
-
-/// First of the seven day rows, counted from the strip's outer top edge:
-/// row 0 is the border and row 1 the month labels. The count and the source
-/// ride in the border title, as every other pane's header does.
-const FIRST_DAY_ROW: u16 = 2;
-
-/// Columns the frame eats on each side: the border plus the block's own
-/// one-column padding.
-const FRAME_COLS: u16 = 2;
-
-/// The tier a strip of this outer size draws at. Both the renderer and the
-/// click hit-test go through here, so they cannot pick different tiers and
-/// disagree about which day a cell is -- the same failure `panel_rects`
-/// exists to prevent one level up.
-pub fn tier_for(area: Rect) -> Tier {
-    tier(area.width.saturating_sub(FRAME_COLS * 2))
+/// How many week columns fit inside a strip of this outer width.
+///
+/// Both the renderer and the click hit-test go through here, so they cannot
+/// disagree about which day a cell is: the same failure `panel_rects` exists
+/// to prevent, one level down.
+pub fn visible_weeks(area: Rect) -> usize {
+    let grid = area
+        .width
+        .saturating_sub(FRAME_COLS * 2)
+        .saturating_sub(GUTTER);
+    // The final column needs no trailing gap, so it fits in CELL_COLS.
+    if grid < CELL_COLS {
+        return 0;
+    }
+    ((grid - CELL_COLS) / WEEK_COLS + 1).min(WEEKS as u16) as usize
 }
 
-/// The cell glyph. Not a Nerd Font codepoint: this is the one part of the UI
-/// that reads correctly without one.
-const CELL: &str = "\u{25a0}";
-
-/// How much room each week column gets, chosen from the strip's own width.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tier {
-    /// Cell plus a gap, the closest to GitHub's separated squares.
-    Wide,
-    /// One cell per week: a solid ribbon, but the whole year fits.
-    Dense,
-    /// Dense, and only the newest N weeks fit at all.
-    Trimmed(usize),
-}
-
-impl Tier {
-    pub fn cell_width(self) -> u16 {
-        match self {
-            Self::Wide => 2,
-            Self::Dense | Self::Trimmed(_) => 1,
-        }
-    }
-
-    pub fn weeks_shown(self) -> usize {
-        match self {
-            Self::Wide | Self::Dense => WEEKS,
-            Self::Trimmed(n) => n,
-        }
-    }
-}
-
-/// Pick a tier for a strip of this width. The wide tier drops the gap after
-/// the final column, so it needs 109 rather than 110.
-pub fn tier(width: u16) -> Tier {
-    let year = WEEKS as u16;
-    if width >= GUTTER + year * 2 - 1 {
-        Tier::Wide
-    } else if width >= GUTTER + year {
-        Tier::Dense
-    } else {
-        Tier::Trimmed(width.saturating_sub(GUTTER) as usize)
-    }
+/// The leftmost week to draw: whatever the app asked for, clamped so the
+/// grid can never scroll past its own ends. An out-of-range request pins the
+/// newest week to the right edge, which is where the grid opens.
+fn first_week(app: &App, visible: usize) -> usize {
+    let max = WEEKS.saturating_sub(visible);
+    app.contrib_scroll.get().min(max)
 }
 
 /// Group a count with commas, the way the GitHub header does.
@@ -113,15 +113,14 @@ pub fn thousands(n: u32) -> String {
     out
 }
 
-/// The strip's first line. Focused, it reads out the selected day; otherwise
-/// it reports the span actually drawn and which source filled it, because the
-/// two sources legitimately disagree.
+/// The strip's title. With a day marked it reads that day out; otherwise it
+/// reports the year's total and which source filled it, because the two
+/// sources legitimately disagree.
 ///
 /// Shortens to fit `width` rather than letting the renderer clip it. The
-/// source label is the last thing dropped, and only once the line has nothing
-/// else left to give: a strip that does not say where its numbers came from
-/// is the one failure mode this whole line exists to prevent.
-pub fn title(calendar: &Calendar, tier: Tier, cursor: Option<usize>, width: u16) -> String {
+/// source label is the last thing dropped: a strip that does not say where
+/// its numbers came from is the one failure this line exists to prevent.
+pub fn title(calendar: &Calendar, cursor: Option<usize>, width: u16) -> String {
     let width = width as usize;
     let source = calendar.source().label();
     // "1 contributions" is the kind of thing that makes a dashboard look
@@ -150,13 +149,12 @@ pub fn title(calendar: &Calendar, tier: Tier, cursor: Option<usize>, width: u16)
     }
 
     let total = thousands(calendar.total());
-    let span = match tier {
-        Tier::Wide | Tier::Dense => "the last year".to_string(),
-        Tier::Trimmed(n) => format!("the last {n} weeks"),
-    };
     for candidate in [
-        format!("{total} {} in {span} ({source})", noun(calendar.total())),
-        format!("{total} in {span} ({source})"),
+        format!(
+            "{total} {} in the last year ({source})",
+            noun(calendar.total())
+        ),
+        format!("{total} in the last year ({source})"),
         format!("{total} ({source})"),
     ] {
         if candidate.chars().count() <= width {
@@ -167,34 +165,33 @@ pub fn title(calendar: &Calendar, tier: Tier, cursor: Option<usize>, width: u16)
 }
 
 /// The grid slot under a screen cell, or None for the gutter, the gaps, the
-/// label rows, and anything past the last drawn week.
-pub fn slot_at(area: Rect, col: u16, row: u16) -> Option<usize> {
-    let tier = tier_for(area);
-    let weekday = row.checked_sub(area.y + FIRST_DAY_ROW)?;
+/// label rows, and anything outside the drawn window.
+pub fn slot_at(area: Rect, scroll: usize, col: u16, row: u16) -> Option<usize> {
+    let visible = visible_weeks(area);
+    let down = row.checked_sub(area.y + FIRST_DAY_ROW)?;
+    // Odd rows are the blank gap between two day rows.
+    if !down.is_multiple_of(DAY_ROWS) {
+        return None;
+    }
+    let weekday = (down / DAY_ROWS) as usize;
     if weekday >= 7 {
         return None;
     }
-    let offset = col.checked_sub(area.x + FRAME_COLS + GUTTER)?;
-    let cell = tier.cell_width();
-    if cell == 2 && !offset.is_multiple_of(2) {
-        return None; // the gap between two columns is not a day
-    }
-    let drawn = (offset / cell) as usize;
-    let shown = tier.weeks_shown();
-    if drawn >= shown {
+    let across = col.checked_sub(area.x + FRAME_COLS + GUTTER)?;
+    // The trailing columns of each step are the gap, not the cell.
+    if across % WEEK_COLS >= CELL_COLS {
         return None;
     }
-    // A trimmed grid shows the NEWEST weeks, so column 0 is not week 0.
-    Some((WEEKS - shown + drawn) * 7 + weekday as usize)
-}
-
-/// The first drawn week, given that a trimmed grid shows the newest ones.
-fn first_week(tier: Tier) -> usize {
-    WEEKS - tier.weeks_shown()
+    let column = (across / WEEK_COLS) as usize;
+    if column >= visible {
+        return None;
+    }
+    let week = scroll.min(WEEKS.saturating_sub(visible)) + column;
+    Some(week * 7 + weekday)
 }
 
 /// Draw the strip: a bordered pane whose title carries the count and the
-/// source, over the month labels, seven day rows, and the legend.
+/// source, over the month labels, the seven day rows, and the legend.
 ///
 /// Framed like the other three panes rather than drawn bare, because it is
 /// focusable the same way they are: without a border there is nothing on
@@ -215,7 +212,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let Some(calendar) = calendar_for(app, today) else {
         // No poll has landed yet. The frame still draws, so the pane does not
-        // blink in and out as the first fetch completes.
+        // blink into existence when the first fetch completes.
         frame.render_widget(
             block.title_top(crate::ui::panel_title(4, "contributions", focused)),
             area,
@@ -223,18 +220,30 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    let inner = block.inner(area);
-    let tier = tier_for(area);
-    let cursor = focused.then(|| app.contrib_slot.min(calendar.today_slot()));
+    // Report the measured window back, so the scroll keys and the cursor
+    // have something real to clamp against. This is the render pass telling
+    // the input layer how wide the view turned out, not state it owns.
+    let visible = visible_weeks(area);
+    app.contrib_visible_weeks.set(visible.max(1));
+    let first = first_week(app, visible);
+    app.contrib_scroll.set(first);
 
-    let mut lines = Vec::with_capacity(9);
-    lines.push(month_line(&calendar, tier));
+    let cursor = app.contrib_cursor.map(|c| c.min(calendar.today_slot()));
+    let inner_width = area.width.saturating_sub(FRAME_COLS * 2);
+
+    let mut lines = Vec::with_capacity(CONTRIB_HEIGHT as usize);
+    lines.push(month_line(&calendar, first, visible));
+    lines.push(Line::from(""));
     for weekday in 0..7 {
-        lines.push(day_line(&calendar, tier, weekday, cursor));
+        lines.push(day_line(&calendar, first, visible, weekday, cursor));
+        if weekday < 6 {
+            lines.push(Line::from(""));
+        }
     }
+    lines.push(Line::from(""));
     lines.push(legend_line());
 
-    let heading = title(&calendar, tier, cursor, inner.width);
+    let heading = title(&calendar, cursor, inner_width);
     frame.render_widget(
         Paragraph::new(lines).block(
             block
@@ -267,22 +276,22 @@ fn calendar_for(app: &App, today: chrono::NaiveDate) -> Option<std::borrow::Cow<
     }
 }
 
-fn month_line(calendar: &Calendar, tier: Tier) -> Line<'static> {
-    let cell = tier.cell_width() as usize;
-    let start = first_week(tier);
-    let width = GUTTER as usize + tier.weeks_shown() * cell;
+/// Month labels, one per month that opens inside the visible window, each
+/// sitting over the column its month starts in. A label that would collide
+/// with the one before it is dropped rather than drawn on top of it.
+fn month_line(calendar: &Calendar, first: usize, visible: usize) -> Line<'static> {
     let mut row = " ".repeat(GUTTER as usize);
     for (week, name) in calendar.month_labels() {
-        if week < start {
+        if week < first || week >= first + visible {
             continue;
         }
-        let at = GUTTER as usize + (week - start) * cell;
-        // Skip a label that would overwrite the previous one or run off the
-        // end: a half-drawn month name is noise, not information.
-        if at < row.chars().count() || at + name.len() > width {
+        let at = GUTTER as usize + (week - first) * WEEK_COLS as usize;
+        let used = row.chars().count();
+        // One blank column of clearance, so two labels never touch.
+        if at <= used || at + name.len() > GUTTER as usize + visible * WEEK_COLS as usize {
             continue;
         }
-        row.push_str(&" ".repeat(at - row.chars().count()));
+        row.push_str(&" ".repeat(at - used));
         row.push_str(name);
     }
     Line::from(Span::styled(row, Style::default().fg(colors::OVERLAY)))
@@ -290,7 +299,8 @@ fn month_line(calendar: &Calendar, tier: Tier) -> Line<'static> {
 
 fn day_line(
     calendar: &Calendar,
-    tier: Tier,
+    first: usize,
+    visible: usize,
     weekday: usize,
     cursor: Option<usize>,
 ) -> Line<'static> {
@@ -306,12 +316,15 @@ fn day_line(
         label.to_string(),
         Style::default().fg(colors::OVERLAY),
     )];
-    let start = first_week(tier);
-    for week in start..start + tier.weeks_shown() {
+    for column in 0..visible {
+        let week = first + column;
         let slot = week * 7 + weekday;
+        if column > 0 {
+            spans.push(Span::raw(" ".repeat(GAP_COLS as usize)));
+        }
         let Some((_, count)) = calendar.day_at(week, weekday) else {
             // Past today: hold the column open so the grid keeps its shape.
-            spans.push(Span::raw(" ".repeat(tier.cell_width() as usize)));
+            spans.push(Span::raw(" ".repeat(CELL_COLS as usize)));
             continue;
         };
         let mut style =
@@ -320,9 +333,6 @@ fn day_line(
             style = style.add_modifier(Modifier::REVERSED);
         }
         spans.push(Span::styled(CELL, style));
-        if tier.cell_width() == 2 {
-            spans.push(Span::raw(" "));
-        }
     }
     Line::from(spans)
 }
@@ -332,8 +342,11 @@ fn legend_line() -> Line<'static> {
         "    Less ".to_string(),
         Style::default().fg(colors::OVERLAY),
     )];
-    for shade in colors::CONTRIB_LADDER {
-        spans.push(Span::styled(CELL, Style::default().fg(shade)));
+    for (i, shade) in colors::CONTRIB_LADDER.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(CELL, Style::default().fg(*shade)));
     }
     spans.push(Span::styled(
         " More".to_string(),
@@ -345,9 +358,14 @@ fn legend_line() -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contributions::{Calendar, Source, WEEKS};
 
     fn area(height: u16) -> Rect {
         Rect::new(0, 1, 120, height)
+    }
+
+    fn day(s: &str) -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
     }
 
     #[test]
@@ -368,7 +386,6 @@ mod tests {
             "docked to the bottom edge"
         );
         assert_eq!(main.y, area(40).y, "the panes above keep the top edge");
-        assert!(main.height < 40, "the strip costs the panes rows");
         assert_eq!(
             main.y + main.height + 1,
             strip.y,
@@ -380,43 +397,41 @@ mod tests {
     /// dropped rather than squeezing the panes into slivers.
     #[test]
     fn a_short_area_suppresses_the_strip_entirely() {
-        assert!(split_main_area(area(23), true).1.is_none());
-        assert!(split_main_area(area(24), true).1.is_some());
+        let floor = MAIN_MIN_HEIGHT + CONTRIB_HEIGHT + 1;
+        assert!(split_main_area(area(floor - 1), true).1.is_none());
+        assert!(split_main_area(area(floor), true).1.is_some());
     }
 
-    use crate::contributions::{Calendar, Source, WEEKS};
-
-    fn day(s: &str) -> chrono::NaiveDate {
-        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
-    }
-
-    /// A year is 53 columns. Wide spends two cells on each and drops the gap
-    /// after the last one; dense spends one. Both sit behind a 4-column day
-    /// gutter. Getting these off by one silently crops the oldest week.
+    /// The squares are padded equally on all four sides. A terminal cell is
+    /// about twice as tall as wide, so two blank columns and one blank row
+    /// are the same distance on screen.
     #[test]
-    fn tiers_switch_at_the_widths_they_actually_need() {
-        assert!(matches!(tier(109), Tier::Wide));
-        assert!(matches!(tier(108), Tier::Dense), "one column short of wide");
-        assert!(matches!(tier(57), Tier::Dense));
-        assert!(matches!(tier(56), Tier::Trimmed(52)), "one short of dense");
-        assert!(matches!(tier(30), Tier::Trimmed(26)));
-        assert!(matches!(tier(4), Tier::Trimmed(0)));
-        assert!(matches!(tier(0), Tier::Trimmed(0)), "never underflows");
+    fn the_grid_pads_every_square_equally() {
+        assert_eq!(CELL.chars().count(), CELL_COLS as usize);
+        assert_eq!(GAP_COLS, GAP_ROWS * 2, "equal padding, given a 2:1 cell");
+        assert_eq!(WEEK_COLS, 4);
+        assert_eq!(DAY_ROWS, 2);
+        // border + months + blank + 13 grid rows + blank + legend + border
+        assert_eq!(CONTRIB_HEIGHT, 2 + 1 + 1 + 13 + 1 + 1);
     }
 
+    /// The grid never shrinks to fit. A narrower pane shows fewer weeks at
+    /// the same square size, which is what makes scrolling the answer.
     #[test]
-    fn tier_cell_widths_and_week_counts_agree() {
-        assert_eq!(tier(120).cell_width(), 2);
-        assert_eq!(tier(120).weeks_shown(), WEEKS);
-        assert_eq!(tier(60).cell_width(), 1);
-        assert_eq!(tier(60).weeks_shown(), WEEKS);
-        assert_eq!(tier(30).weeks_shown(), 26);
+    fn a_narrower_strip_shows_fewer_weeks_at_the_same_size() {
+        // 120 wide: 120 - 4 frame - 4 gutter = 112 grid columns.
+        // 112 = 2 + 27 * 4 + 2 leftover, so 28 columns fit.
+        assert_eq!(visible_weeks(Rect::new(0, 0, 120, CONTRIB_HEIGHT)), 28);
+        assert_eq!(visible_weeks(Rect::new(0, 0, 60, CONTRIB_HEIGHT)), 13);
+        assert_eq!(visible_weeks(Rect::new(0, 0, 12, CONTRIB_HEIGHT)), 1);
+        assert_eq!(visible_weeks(Rect::new(0, 0, 8, CONTRIB_HEIGHT)), 0);
+        // A year never needs more than 53 columns even on a huge terminal.
+        assert_eq!(visible_weeks(Rect::new(0, 0, 500, CONTRIB_HEIGHT)), WEEKS);
     }
 
     #[test]
     fn thousands_groups_the_total_the_way_github_does() {
         assert_eq!(thousands(0), "0");
-        assert_eq!(thousands(7), "7");
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(1_000), "1,000");
         assert_eq!(thousands(2_516), "2,516");
@@ -428,19 +443,8 @@ mod tests {
         let mut cal = Calendar::new(day("2026-08-18"), Source::Github);
         cal.add(day("2026-08-18"), 3);
         assert_eq!(
-            title(&cal, tier(120), None, 120),
+            title(&cal, None, 120),
             "3 contributions in the last year (github)"
-        );
-    }
-
-    /// A trimmed grid must not be presented as a full year: the title says
-    /// how much is actually on screen.
-    #[test]
-    fn a_trimmed_title_names_the_weeks_it_can_draw() {
-        let cal = Calendar::new(day("2026-08-18"), Source::Local);
-        assert_eq!(
-            title(&cal, tier(30), None, 120),
-            "0 contributions in the last 26 weeks (local)"
         );
     }
 
@@ -449,60 +453,66 @@ mod tests {
     fn a_count_of_one_is_singular() {
         let mut cal = Calendar::new(day("2026-08-18"), Source::Local);
         cal.add(day("2025-08-19"), 1);
+        assert_eq!(title(&cal, Some(2), 120), "1 contribution on Tue 19 Aug");
         assert_eq!(
-            title(&cal, tier(120), Some(2), 120),
-            "1 contribution on Tue 19 Aug"
-        );
-        assert_eq!(
-            title(&cal, tier(120), None, 120),
+            title(&cal, None, 120),
             "1 contribution in the last year (local)"
         );
     }
 
     #[test]
-    fn a_focused_title_reads_out_the_selected_day() {
+    fn a_marked_day_reads_itself_out() {
         let mut cal = Calendar::new(day("2026-08-18"), Source::Local);
         cal.add(day("2025-08-19"), 7);
-        assert_eq!(
-            title(&cal, tier(120), Some(2), 120),
-            "7 contributions on Tue 19 Aug"
-        );
+        assert_eq!(title(&cal, Some(2), 120), "7 contributions on Tue 19 Aug");
     }
 
     #[test]
-    fn a_focused_title_says_none_rather_than_zero_contributions() {
+    fn a_marked_empty_day_says_none_rather_than_zero() {
         let cal = Calendar::new(day("2026-08-18"), Source::Local);
-        assert_eq!(
-            title(&cal, tier(120), Some(2), 120),
-            "no contributions on Tue 19 Aug"
-        );
+        assert_eq!(title(&cal, Some(2), 120), "no contributions on Tue 19 Aug");
+    }
+
+    /// A narrow strip clipped the source label off the end, which is the one
+    /// word that says whether you are looking at GitHub's count or your own.
+    #[test]
+    fn a_narrow_title_sheds_words_before_it_sheds_the_source() {
+        let cal = Calendar::new(day("2026-08-18"), Source::Github);
+        let narrow = title(&cal, None, 34);
+        assert!(narrow.chars().count() <= 34, "still long: {narrow}");
+        assert!(narrow.contains("(github)"), "source survived: {narrow}");
+        assert_eq!(title(&cal, None, 8), "0");
     }
 
     #[test]
     fn a_click_maps_back_to_the_slot_under_it() {
-        // Outer rect: row 0 is the border, row 1 the month labels, rows 2..9
-        // the days. Columns 0..1 are the border and its padding, 2..5 the day
-        // gutter, so the first week starts at column 6 and is two cells wide.
+        // Outer rect: row 0 is the border, row 1 the month labels, then day
+        // rows at 2, 4, 6 ... with a blank between each. Columns 0..1 are the
+        // border and padding, 2..5 the gutter, so week 0 starts at column 6
+        // and each week step is 4 columns.
         let area = Rect::new(0, 5, 120, CONTRIB_HEIGHT);
-        assert_eq!(slot_at(area, 6, 7), Some(0), "first Sunday");
-        assert_eq!(slot_at(area, 6, 8), Some(1), "the Monday under it");
-        assert_eq!(slot_at(area, 8, 7), Some(7), "next week's Sunday");
-        assert_eq!(slot_at(area, 7, 7), None, "the gap between columns");
-        assert_eq!(slot_at(area, 3, 7), None, "the day gutter");
-        assert_eq!(slot_at(area, 6, 5), None, "the top border");
-        assert_eq!(slot_at(area, 6, 6), None, "the month label row");
-        assert_eq!(slot_at(area, 119, 7), None, "past the last week");
+        assert_eq!(slot_at(area, 0, 6, 8), Some(0), "first Sunday");
+        assert_eq!(slot_at(area, 0, 7, 8), Some(0), "cell is two columns wide");
+        assert_eq!(slot_at(area, 0, 8, 8), None, "the gap after it");
+        assert_eq!(slot_at(area, 0, 10, 8), Some(7), "next week's Sunday");
+        assert_eq!(slot_at(area, 0, 6, 10), Some(1), "the Monday row");
+        assert_eq!(slot_at(area, 0, 6, 9), None, "the blank row between");
+        assert_eq!(slot_at(area, 0, 3, 8), None, "the day gutter");
+        assert_eq!(slot_at(area, 0, 6, 5), None, "the top border");
+        assert_eq!(slot_at(area, 0, 6, 6), None, "the month label row");
+        assert_eq!(slot_at(area, 0, 6, 7), None, "the blank padding the top");
+        assert_eq!(slot_at(area, 0, 119, 8), None, "past the last drawn week");
     }
 
-    /// A trimmed grid draws the NEWEST weeks, so its leftmost column is not
-    /// week 0. Clicking it must not report a day from last August.
+    /// A scrolled grid's leftmost column is not week 0. Clicking it must not
+    /// report a day from last August.
     #[test]
-    fn a_click_on_a_trimmed_grid_accounts_for_the_dropped_weeks() {
-        let area = Rect::new(0, 5, 30, CONTRIB_HEIGHT);
-        // The frame eats four columns, so the grid gets 26, not 30.
-        let shown = tier_for(area).weeks_shown();
-        assert_eq!(shown, 22);
-        assert_eq!(slot_at(area, 6, 7), Some((WEEKS - shown) * 7));
+    fn a_click_on_a_scrolled_grid_accounts_for_the_offset() {
+        let area = Rect::new(0, 5, 120, CONTRIB_HEIGHT);
+        assert_eq!(slot_at(area, 10, 6, 8), Some(10 * 7));
+        // Scroll past the end: clamped, never a slot outside the year.
+        let visible = visible_weeks(area);
+        assert_eq!(slot_at(area, 999, 6, 8), Some((WEEKS - visible) * 7));
     }
 
     /// Render the strip into a buffer and read it back as text lines.
@@ -524,43 +534,69 @@ mod tests {
             .collect()
     }
 
-    fn app_with_local_history() -> App {
+    fn app_with_calendar(total_per_day: u32) -> App {
         let mut app = App::new(Vec::new(), "test".to_string(), false, 120, 44);
-        app.contributions = ContributionsMode::Local;
+        app.contributions = ContributionsMode::Github;
+        let today = chrono::Local::now().date_naive();
+        let mut cal = Calendar::new(today, Source::Github);
+        let start = crate::contributions::grid_start(today);
+        for slot in 0..crate::contributions::SLOTS {
+            cal.add(start + chrono::Duration::days(slot as i64), total_per_day);
+        }
+        app.github_calendar = Some(Box::new(cal));
         app
     }
 
     #[test]
-    fn the_strip_draws_a_framed_pane_with_seven_day_rows_and_a_legend() {
-        let lines = drawn(120, &app_with_local_history());
+    fn the_strip_draws_a_framed_pane_with_spaced_rows_and_a_legend() {
+        let lines = drawn(120, &app_with_calendar(1));
         assert_eq!(lines.len(), CONTRIB_HEIGHT as usize);
-        // Row 0 is the border, carrying the pane number and the count.
         assert!(
             lines[0].contains("[4] contributions"),
             "title: {}",
             lines[0]
         );
+        assert!(lines[1].contains("Aug") || lines[1].contains("Jul"));
         assert!(
-            lines[0].contains("0 contributions in the last year (local)"),
-            "count and source ride in the border: {}",
-            lines[0]
+            !lines[2].contains(CELL),
+            "blank padding above the first row"
         );
-        assert!(lines[1].contains("Aug"), "month labels: {}", lines[1]);
+        assert!(lines[3].contains(CELL), "Sunday row");
+        assert!(!lines[4].contains(CELL), "blank row between day rows");
+        assert!(lines[5].contains("Mon "), "Monday row: {}", lines[5]);
+        assert!(lines[9].contains("Wed "));
+        assert!(lines[13].contains("Fri "));
         assert!(
-            lines[2].starts_with("\u{2502}    "),
-            "Sunday row is unlabelled"
+            !lines[16].contains("Less"),
+            "blank padding below the last row"
         );
-        assert!(lines[3].contains("Mon "));
-        assert!(lines[5].contains("Wed "));
-        assert!(lines[7].contains("Fri "));
-        assert!(lines[9].contains("Less") && lines[9].contains("More"));
+        assert!(lines[17].contains("Less") && lines[17].contains("More"));
     }
 
-    /// The grid must never spill past the strip's right edge, at any width.
+    /// The grid opens with the newest weeks against the right edge: today is
+    /// what you came to look at, and time runs left to right.
     #[test]
-    fn no_row_overflows_the_strip_at_any_tier() {
-        for width in [40u16, 57, 80, 108, 109, 120, 200] {
-            for line in drawn(width, &app_with_local_history()) {
+    fn the_grid_opens_anchored_on_the_newest_weeks() {
+        // `contrib_scroll` is a Cell, so the app need not be mut here.
+        let app = app_with_calendar(1);
+        // Whatever the app asked for, the first frame pins today to the right.
+        app.contrib_scroll.set(crate::contributions::WEEKS);
+        let strip = Rect::new(0, 0, 120, CONTRIB_HEIGHT);
+        let _ = drawn(120, &app);
+        let visible = visible_weeks(strip);
+        assert_eq!(
+            app.contrib_scroll.get(),
+            WEEKS - visible,
+            "oldest weeks hide off to the left"
+        );
+        assert_eq!(app.contrib_visible_weeks.get(), visible);
+    }
+
+    /// No row may spill past the strip's right edge, at any width.
+    #[test]
+    fn no_row_overflows_the_strip_at_any_width() {
+        for width in [20u16, 40, 57, 80, 120, 200, 260] {
+            for line in drawn(width, &app_with_calendar(2)) {
                 assert!(
                     line.chars().count() <= width as usize,
                     "width {width} produced a {}-char line: {line}",
@@ -570,8 +606,27 @@ mod tests {
         }
     }
 
-    /// The GitHub source with no poll yet has nothing to draw. It must leave
-    /// the strip blank rather than render a misleading empty year.
+    /// Month labels sat two characters apart when the grid was dense. With
+    /// four columns per week they are ~17 apart, and any that would still
+    /// collide is dropped rather than drawn over its neighbour.
+    #[test]
+    fn month_labels_never_collide() {
+        for width in [40u16, 80, 120, 200, 260] {
+            let app = app_with_calendar(1);
+            let lines = drawn(width, &app);
+            let months = &lines[1];
+            let mut last_end = 0usize;
+            for (i, ch) in months.char_indices() {
+                if ch.is_ascii_alphabetic()
+                    && (i == 0 || !months.as_bytes()[i - 1].is_ascii_alphabetic())
+                {
+                    assert!(i > last_end, "labels touch at width {width}: {months}");
+                    last_end = i + 3;
+                }
+            }
+        }
+    }
+
     /// Before the first poll there is no calendar. The frame still draws, so
     /// the pane does not blink into existence when the fetch lands, but no
     /// grid is painted: an empty year would read as "you did nothing".
@@ -582,24 +637,36 @@ mod tests {
         assert!(app.github_calendar.is_none());
         let lines = drawn(120, &app);
         assert!(lines[0].contains("[4] contributions"), "frame drawn");
-        assert!(!lines[3].contains(CELL), "no cells painted: {}", lines[3]);
+        assert!(!lines[5].contains(CELL), "no cells painted: {}", lines[5]);
     }
 
-    /// A narrow strip clipped the source label off the end, which is the one
-    /// word that says whether you are looking at GitHub's count or your own.
-    /// The title now sheds words instead, keeping the source to the last.
+    /// Nothing is highlighted until the user travels the grid.
     #[test]
-    fn a_narrow_title_sheds_words_before_it_sheds_the_source() {
-        let cal = Calendar::new(day("2026-08-18"), Source::Github);
-        let narrow = title(&cal, tier(40), None, 40);
-        assert!(
-            narrow.chars().count() <= 40,
-            "still {} chars: {narrow}",
-            narrow.chars().count()
-        );
-        assert!(narrow.contains("(github)"), "source survived: {narrow}");
+    fn no_cell_is_reversed_until_a_cursor_exists() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
-        // Absurdly narrow: the count alone is all that fits.
-        assert_eq!(title(&cal, tier(12), None, 8), "0");
+        let mut app = app_with_calendar(1);
+        app.focused_panel = FocusedPanel::Contributions;
+        assert_eq!(app.contrib_cursor, None);
+
+        let reversed = |app: &App| {
+            let mut t = Terminal::new(TestBackend::new(120, CONTRIB_HEIGHT)).unwrap();
+            t.draw(|f| render(f, f.area(), app)).unwrap();
+            let buf = t.backend().buffer().clone();
+            (0..120)
+                .flat_map(|x| (0..CONTRIB_HEIGHT).map(move |y| (x, y)))
+                .filter(|(x, y)| {
+                    buf[(*x, *y)]
+                        .style()
+                        .add_modifier
+                        .contains(ratatui::style::Modifier::REVERSED)
+                })
+                .count()
+        };
+
+        assert_eq!(reversed(&app), 0, "nothing marked before travelling");
+        app.contrib_cursor = Some(app.contrib_last_slot(chrono::Local::now().date_naive()));
+        assert!(reversed(&app) > 0, "the marked day is highlighted");
     }
 }

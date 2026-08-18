@@ -95,13 +95,15 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `1` / `2` / `3` / `4` | Focus repo list / detail / inspector / contributions |
 | `Tab` | Cycle panel focus |
 | mouse | Click a panel to focus; drag a pane border to resize it; scroll wheel scrolls whichever panel the cursor is over |
-| `j` / `k`, `↑` / `↓` | Repo list: move selection · Detail: pick commit · Inspector: scroll · Contributions: move the day cursor a week (`h` / `l` move it a day, Home/End jump to the ends) |
+| `j` / `k`, `↑` / `↓` | Repo list: move selection · Detail: pick commit · Inspector: scroll · Contributions: move the day cursor up/down a weekday |
 | `J` / `K` | Scroll the detail pane (works from the repo list too) |
 | `PgUp` / `PgDn` | Scroll focused pane by a page |
 | `v` | Toggle detail vs compact view |
-| `c` | Toggle the contributions strip (a year of activity, GitHub-style) |
+| `c` | Toggle the contributions strip: a year of activity, GitHub-style. Squares are a fixed size, so the grid scrolls rather than shrinking; no day is marked until you move the cursor |
 | `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
 | `4` | Focus the contributions strip (only while it is open) |
+| `h` / `l`, `←` / `→` | Contributions: move the day cursor back/forward a week. The grid scrolls with it, oldest weeks hiding off to the left |
+| `Home` / `End` | Contributions: jump to the oldest / newest week |
 | `Enter` | Open repo in lazygit (pull / merge live here) |
 | `e` | Open repo in `$EDITOR` |
 | `o` | Open shell in repo dir |

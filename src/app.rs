@@ -876,10 +876,19 @@ pub struct App {
     /// `Config` at each use, because the sweep is started from call sites
     /// that hold an `App` but not a `Config`.
     pub contrib_author: Option<String>,
-    /// Grid slot the day cursor sits on. Meaningful only while the strip has
-    /// focus; clamped against today on every move, since "today" advances
-    /// under a long-running session.
-    pub contrib_slot: usize,
+    /// Grid slot the day cursor sits on, or None while the user has not
+    /// travelled the grid yet. None is the resting state on purpose: a cell
+    /// highlighted before anyone asked for it reads as a selection you did
+    /// not make, and the title shows the year's total instead.
+    pub contrib_cursor: Option<usize>,
+    /// Leftmost visible week. The grid is wider than any terminal at the
+    /// square size we draw, so it scrolls instead of shrinking. Written by
+    /// the renderer (which is the only place the visible width is known) as
+    /// well as by input, hence the `Cell`.
+    pub contrib_scroll: std::cell::Cell<usize>,
+    /// Weeks the last frame could actually fit, measured by the renderer so
+    /// the scroll keys and the cursor have something real to clamp against.
+    pub contrib_visible_weeks: std::cell::Cell<usize>,
     /// Mirror of the `persist_pane_sizes` config key: write the two above back
     /// on exit and restore them next launch.
     pub persist_pane_sizes: bool,
@@ -984,14 +993,11 @@ impl App {
             last_contributions_source: ContributionsMode::Github,
             github_calendar: None,
             contrib_author: None,
-            // Seeded on today rather than on slot 0, which would be the
-            // oldest day of the year: the cursor should open where the eye
-            // already is.
-            contrib_slot: crate::contributions::Calendar::new(
-                Local::now().date_naive(),
-                crate::contributions::Source::Local,
-            )
-            .today_slot(),
+            contrib_cursor: None,
+            // Out of range on purpose: the renderer clamps it down to
+            // "newest week at the right edge", which is where the grid opens.
+            contrib_scroll: std::cell::Cell::new(crate::contributions::WEEKS),
+            contrib_visible_weeks: std::cell::Cell::new(crate::contributions::WEEKS),
             persist_pane_sizes: false,
             dragging: None,
             loading: false,
@@ -1361,28 +1367,83 @@ impl App {
         self.needs_redraw = true;
     }
 
-    /// Open the strip on `mode` and put the day cursor back on today. Shared
-    /// by `c` and `C` so both entry points land in the same state.
+    /// Open the strip on `mode`, with no day marked and the grid scrolled to
+    /// the newest weeks. Shared by `c` and `C` so both land in the same state.
     fn open_contributions(&mut self, mode: ContributionsMode) {
         self.contributions = mode;
         self.last_contributions_source = mode;
-        self.contrib_slot = self.contrib_cursor_ends(Local::now().date_naive()).1;
+        self.contrib_cursor = None;
+        // Out of range on purpose, exactly as at startup: the renderer is the
+        // only place the visible width is known, and it clamps this down to
+        // "newest week at the right edge". Computing it here from the last
+        // measured width would anchor on the oldest weeks the first time,
+        // before any frame has been drawn.
+        self.contrib_scroll.set(crate::contributions::WEEKS);
     }
 
-    /// First and last selectable grid slots for `today`.
-    pub fn contrib_cursor_ends(&self, today: chrono::NaiveDate) -> (usize, usize) {
-        let calendar =
-            crate::contributions::Calendar::new(today, crate::contributions::Source::Local);
-        (0, calendar.today_slot())
+    /// The last selectable grid slot for `today`: the grid stops at today,
+    /// not at the end of today's week.
+    pub fn contrib_last_slot(&self, today: chrono::NaiveDate) -> usize {
+        crate::contributions::Calendar::new(today, crate::contributions::Source::Local).today_slot()
     }
 
-    /// Move the day cursor by `delta` days (7 for a week), clamped to the
-    /// grid. Takes `today` rather than reading the clock so the clamp is
-    /// testable and so a session left open past midnight follows the date.
-    pub fn move_contrib_cursor(&mut self, delta: i32, today: chrono::NaiveDate) {
-        let (first, last) = self.contrib_cursor_ends(today);
-        let current = self.contrib_slot.clamp(first, last) as i32;
-        self.contrib_slot = (current + delta).clamp(first as i32, last as i32) as usize;
+    /// Move the day cursor `dweeks` columns and `ddays` rows, which is how
+    /// the grid actually reads: a week is a column, a weekday is a row.
+    ///
+    /// The first move seeds the cursor on today rather than jumping from
+    /// nowhere, so pressing any direction key starts from where the eye is.
+    /// Both axes clamp independently, so walking up a column never spills
+    /// into the neighbouring week, and the final column stops at today.
+    pub fn move_contrib_cursor(&mut self, dweeks: i32, ddays: i32, today: chrono::NaiveDate) {
+        let last = self.contrib_last_slot(today);
+        let (last_week, last_weekday) = (last / 7, last % 7);
+
+        let Some(current) = self.contrib_cursor else {
+            // First keypress only marks today; it does not also move.
+            self.contrib_cursor = Some(last);
+            self.scroll_cursor_into_view(last_week);
+            self.needs_redraw = true;
+            return;
+        };
+
+        let week = ((current / 7) as i32 + dweeks).clamp(0, last_week as i32) as usize;
+        // The newest column is short: it ends on today's weekday.
+        let max_weekday = if week == last_week { last_weekday } else { 6 };
+        let weekday = ((current % 7) as i32 + ddays).clamp(0, max_weekday as i32) as usize;
+
+        self.contrib_cursor = Some(week * 7 + weekday);
+        self.scroll_cursor_into_view(week);
+        self.needs_redraw = true;
+    }
+
+    /// Jump the cursor to the oldest or newest column, keeping its weekday.
+    pub fn jump_contrib_cursor(&mut self, to_end: bool, today: chrono::NaiveDate) {
+        let last = self.contrib_last_slot(today);
+        let weekday = self.contrib_cursor.map_or(last % 7, |c| c % 7);
+        let week = if to_end { last / 7 } else { 0 };
+        let max_weekday = if week == last / 7 { last % 7 } else { 6 };
+        self.contrib_cursor = Some(week * 7 + weekday.min(max_weekday));
+        self.scroll_cursor_into_view(week);
+        self.needs_redraw = true;
+    }
+
+    /// Scroll the grid the minimum amount that brings `week` back on screen.
+    fn scroll_cursor_into_view(&self, week: usize) {
+        let visible = self.contrib_visible_weeks.get().max(1);
+        let first = self.contrib_scroll.get();
+        if week < first {
+            self.contrib_scroll.set(week);
+        } else if week >= first + visible {
+            self.contrib_scroll.set(week + 1 - visible);
+        }
+    }
+
+    /// Scroll the grid by whole weeks without moving the cursor.
+    pub fn scroll_contributions(&mut self, delta: i32) {
+        let visible = self.contrib_visible_weeks.get().max(1);
+        let max = crate::contributions::WEEKS.saturating_sub(visible);
+        let next = (self.contrib_scroll.get() as i32 + delta).clamp(0, max as i32) as usize;
+        self.contrib_scroll.set(next);
         self.needs_redraw = true;
     }
 
@@ -2388,41 +2449,157 @@ mod tests {
         assert_eq!(app.focused_panel, FocusedPanel::RepoList);
     }
 
+    /// The grid reads as columns of weeks and rows of weekdays, so the keys
+    /// must move that way: left/right change the week, up/down change the
+    /// weekday. They were wired the other way round at first, which moved the
+    /// cursor at right angles to what the eye expected.
     #[test]
-    fn the_cursor_starts_on_today_and_clamps_at_both_ends() {
+    fn left_right_walks_weeks_and_up_down_walks_weekdays() {
         let mut app = make_app(1);
-        let (first, last) = app.contrib_cursor_ends(today());
-        assert_eq!(first, 0);
-        app.contrib_slot = last;
+        let last = app.contrib_last_slot(today());
+        app.contrib_cursor = Some(last);
 
-        app.move_contrib_cursor(5, today());
-        assert_eq!(app.contrib_slot, last, "cannot walk into the future");
+        app.move_contrib_cursor(-1, 0, today());
+        assert_eq!(
+            app.contrib_cursor,
+            Some(last - 7),
+            "left is one column back, same weekday"
+        );
 
-        app.move_contrib_cursor(-(crate::contributions::SLOTS as i32), today());
-        assert_eq!(app.contrib_slot, 0, "cannot walk before the grid opens");
+        app.move_contrib_cursor(0, -1, today());
+        assert_eq!(
+            app.contrib_cursor,
+            Some(last - 8),
+            "up is one row, same column"
+        );
 
-        app.move_contrib_cursor(-1, today());
-        assert_eq!(app.contrib_slot, 0);
+        app.move_contrib_cursor(1, 0, today());
+        assert_eq!(app.contrib_cursor, Some(last - 1), "right returns");
     }
 
-    /// Opening the pane puts the cursor on today, not on the oldest day of
-    /// the year, which is what an unseeded slot of 0 would mean.
+    /// Nothing is marked until the user actually travels the grid: a
+    /// highlighted cell nobody asked for reads as a selection you did not
+    /// make.
     #[test]
-    fn opening_the_pane_seeds_the_cursor_on_today() {
+    fn no_day_is_marked_until_the_user_moves() {
         let mut app = make_app(1);
-        app.contrib_slot = 0;
         app.toggle_contributions();
-        let (_, last) = app.contrib_cursor_ends(chrono::Local::now().date_naive());
-        assert_eq!(app.contrib_slot, last);
+        assert_eq!(app.contrib_cursor, None, "opening marks nothing");
+        app.focus_panel(FocusedPanel::Contributions);
+        assert_eq!(app.contrib_cursor, None, "focusing marks nothing");
+
+        // The first keypress lands on today rather than jumping from nowhere.
+        app.move_contrib_cursor(-1, 0, today());
+        assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(today())));
+
+        // And it goes back to unmarked when the pane is reopened.
+        app.toggle_contributions();
+        app.toggle_contributions();
+        assert_eq!(app.contrib_cursor, None);
+    }
+
+    /// Walking up a column must not spill into the neighbouring week, and
+    /// walking right must not walk into the future.
+    #[test]
+    fn each_axis_clamps_without_spilling_into_the_other() {
+        let mut app = make_app(1);
+        let last = app.contrib_last_slot(today());
+        let (last_week, last_weekday) = (last / 7, last % 7);
+
+        // Top of a column: further up is a no-op, not a jump to last week.
+        app.contrib_cursor = Some(last_week * 7);
+        app.move_contrib_cursor(0, -1, today());
+        assert_eq!(app.contrib_cursor, Some(last_week * 7));
+
+        // 2026-08-18 is a Tuesday, so the newest column ends there.
+        app.contrib_cursor = Some(last);
+        app.move_contrib_cursor(0, 1, today());
+        assert_eq!(
+            app.contrib_cursor,
+            Some(last),
+            "cannot walk into the future"
+        );
+
+        app.move_contrib_cursor(1, 0, today());
+        assert_eq!(app.contrib_cursor, Some(last), "no column after this one");
+
+        // Entering the short final column from a later weekday slides up to
+        // today rather than landing on a cell that does not exist.
+        app.contrib_cursor = Some((last_week - 1) * 7 + 6);
+        app.move_contrib_cursor(1, 0, today());
+        assert_eq!(app.contrib_cursor, Some(last_week * 7 + last_weekday));
+
+        // The oldest column is a hard left edge.
+        app.contrib_cursor = Some(3);
+        app.move_contrib_cursor(-1, 0, today());
+        assert_eq!(app.contrib_cursor, Some(3));
     }
 
     #[test]
-    fn the_cursor_moves_by_a_week_at_a_time() {
+    fn home_and_end_jump_to_the_ends_keeping_the_weekday() {
         let mut app = make_app(1);
-        let (_, last) = app.contrib_cursor_ends(today());
-        app.contrib_slot = last;
-        app.move_contrib_cursor(-7, today());
-        assert_eq!(app.contrib_slot, last - 7);
+        let last = app.contrib_last_slot(today());
+        app.contrib_cursor = Some(20 * 7 + 4); // a Thursday mid-year
+
+        app.jump_contrib_cursor(false, today());
+        assert_eq!(app.contrib_cursor, Some(4), "oldest column, same weekday");
+
+        app.jump_contrib_cursor(true, today());
+        assert_eq!(
+            app.contrib_cursor,
+            Some(last),
+            "newest column clamps to today"
+        );
+    }
+
+    /// The grid is wider than the terminal, so moving off the visible window
+    /// must bring it back rather than losing the cursor off-screen.
+    #[test]
+    fn moving_off_the_window_scrolls_the_grid() {
+        let mut app = make_app(1);
+        app.contrib_visible_weeks.set(10);
+        app.contrib_scroll.set(40);
+        app.contrib_cursor = Some(40 * 7);
+
+        app.move_contrib_cursor(-1, 0, today());
+        assert_eq!(app.contrib_scroll.get(), 39, "scrolled one column left");
+
+        app.contrib_scroll.set(0);
+        app.contrib_cursor = Some(9 * 7);
+        app.move_contrib_cursor(1, 0, today());
+        assert_eq!(app.contrib_scroll.get(), 1, "scrolled one column right");
+    }
+
+    #[test]
+    fn scrolling_clamps_to_the_ends_of_the_year() {
+        let mut app = make_app(1);
+        app.contrib_visible_weeks.set(10);
+        app.contrib_scroll.set(0);
+
+        app.scroll_contributions(-5);
+        assert_eq!(app.contrib_scroll.get(), 0, "cannot scroll before the year");
+
+        app.scroll_contributions(1000);
+        assert_eq!(
+            app.contrib_scroll.get(),
+            crate::contributions::WEEKS - 10,
+            "cannot scroll past the newest week"
+        );
+    }
+
+    /// Opening the strip pins the newest weeks to the right edge: the grid
+    /// should open on now, not on last August. The request is deliberately
+    /// past the end, because only the renderer knows how many weeks fit; it
+    /// clamps this down on the next frame.
+    #[test]
+    fn opening_the_strip_asks_for_the_newest_weeks() {
+        let mut app = make_app(1);
+        app.contrib_scroll.set(0);
+        app.toggle_contributions();
+        assert!(
+            app.contrib_scroll.get() >= crate::contributions::WEEKS,
+            "an out-of-range request is what anchors the grid right"
+        );
     }
 
     #[test]

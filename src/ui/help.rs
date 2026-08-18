@@ -34,6 +34,10 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ("v", "Toggle detail ↔ compact view"),
         ("c", "Toggle the contributions strip (a year of activity)"),
         (
+            "h/l \u{2190}/\u{2192}",
+            "Contributions: move the day cursor a week (grid scrolls with it)",
+        ),
+        (
             "C",
             "Switch its source: github calendar \u{2194} your commits here",
         ),
