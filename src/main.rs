@@ -2,6 +2,7 @@ mod app;
 mod cache;
 mod cli;
 mod config;
+mod contributions;
 mod discovery;
 mod fuzzy;
 mod git;
@@ -94,7 +95,7 @@ pub enum AppEvent {
         path: String,
         status: Box<RepoStatus>,
     },
-    Github(Result<Vec<github::GithubRepo>, String>),
+    Github(Result<Box<github::GithubFetch>, String>),
     Progress(ApplyProgress),
     SweepDone {
         at: chrono::DateTime<chrono::Local>,
@@ -117,6 +118,10 @@ pub struct LoadResult {
     pub header: String,
     /// None for WindowApply (dataset unchanged by a pure re-filter).
     pub dataset: Option<Vec<github::GithubRepo>>,
+    /// The contribution calendar the same fetch returned. None both for a
+    /// WindowApply and for a cached payload predating the field, so the
+    /// consumer must not treat None as "the year is empty".
+    pub github_calendar: Option<Box<contributions::Calendar>>,
 }
 
 /// True while a child program (lazygit, $EDITOR, a shell) owns the terminal.
@@ -337,12 +342,13 @@ fn spawn_load(
         let mode = args.mode();
         let result = load_repos(&args, &config, &repo_dir, &mode, window, bypass_cache)
             .await
-            .map(|(repos, header, dataset)| {
+            .map(|(repos, header, dataset, calendar)| {
                 Box::new(LoadResult {
                     kind,
                     repos,
                     header,
                     dataset: Some(dataset),
+                    github_calendar: calendar,
                 })
             });
         let _ = tx.send(AppEvent::Loaded(result));
@@ -385,6 +391,7 @@ fn spawn_window_apply(
                 repos,
                 header,
                 dataset: None,
+                github_calendar: None,
             })
         });
         let _ = tx.send(AppEvent::Loaded(result));
@@ -567,7 +574,18 @@ async fn run_event_loop(
                 app.github_poll_started = None;
                 app.last_github_poll = Some(chrono::Local::now());
                 match result {
-                    Ok(dataset) => {
+                    Ok(fetch) => {
+                        let github::GithubFetch {
+                            repos: dataset,
+                            calendar,
+                        } = *fetch;
+                        // The calendar rides the same payload as the repos, so
+                        // a poll that updated CI also refreshed the year at no
+                        // extra cost. A payload predating the field leaves the
+                        // last good calendar in place rather than blanking it.
+                        // App state for it lands with the pane itself; until
+                        // then it is parsed and dropped rather than ignored.
+                        let _ = calendar;
                         // Overwrite only the GitHub-owned fields: the local
                         // git state is the sweep's business, not this poll's.
                         for repo in &mut app.repos {
@@ -1560,7 +1578,7 @@ fn spawn_github_poll(
     let cache = cache::ApiCache::new(config.cache_ttl, repo_limit, include_prs);
     tokio::spawn(async move {
         let result = github::fetch_repos(repo_limit, include_prs, &cache, true).await;
-        let _ = tx.send(AppEvent::Github(result));
+        let _ = tx.send(AppEvent::Github(result.map(Box::new)));
     });
 }
 
@@ -1574,7 +1592,15 @@ async fn load_repos(
     mode: &Mode,
     window: Option<time::TimeWindow>,
     bypass_cache: bool,
-) -> Result<(Vec<RepoStatus>, String, Vec<github::GithubRepo>), String> {
+) -> Result<
+    (
+        Vec<RepoStatus>,
+        String,
+        Vec<github::GithubRepo>,
+        Option<Box<contributions::Calendar>>,
+    ),
+    String,
+> {
     // Local scan roots: the primary repo_dir plus any configured extra dirs
     // (e.g. ~/.dotfiles), so repos outside the main tree still surface under
     // "local changes" -- the fleetz equivalent of repoz's EXTRA_DIRS.
@@ -1606,18 +1632,19 @@ async fn load_repos(
         }
         results.sort_by_key(|(i, _)| *i);
         let repos: Vec<RepoStatus> = results.into_iter().filter_map(|(_, r)| r).collect();
-        return Ok((repos, header, Vec::new()));
+        return Ok((repos, header, Vec::new(), None));
     }
 
     // Fetch from GitHub (with caching)
     let api_cache = cache::ApiCache::new(config.cache_ttl, config.repo_limit, args.prs);
-    let dataset = fetch_dataset(config, args, &api_cache, bypass_cache).await?;
+    let fetch = fetch_dataset(config, args, &api_cache, bypass_cache).await?;
+    let (dataset, calendar) = (fetch.repos, fetch.calendar);
 
     let (cutoff, header) = resolve_cutoff(window, mode, config)?;
     let (repos, full_header) =
         assemble_view(&dataset, cutoff, header, args, config, repo_dir, true, None).await?;
 
-    Ok((repos, full_header, dataset))
+    Ok((repos, full_header, dataset, calendar))
 }
 
 /// One repo's full local status for `-d` mode. Returns None for a repo with
@@ -1649,6 +1676,8 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
     let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
 
     Some(RepoStatus {
+        // No local calendar until the strip asks for one.
+        daily: None,
         name,
         path: Some(display),
         location: RepoLocation::LocalOnly,
@@ -1683,7 +1712,7 @@ async fn fetch_dataset(
     args: &Args,
     cache: &cache::ApiCache,
     bypass_cache: bool,
-) -> Result<Vec<github::GithubRepo>, String> {
+) -> Result<github::GithubFetch, String> {
     github::fetch_repos(config.repo_limit, args.prs, cache, bypass_cache).await
 }
 
@@ -1909,6 +1938,8 @@ async fn assemble_view(
             continue;
         }
         repos.push(RepoStatus {
+            // No local calendar until the strip asks for one.
+            daily: None,
             name: gh_repo.name.clone(),
             path: None,
             location: RepoLocation::NotCloned,
@@ -1981,6 +2012,8 @@ async fn local_only_status(
     let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
 
     Some(RepoStatus {
+        // No local calendar until the strip asks for one.
+        daily: None,
         name,
         path: Some(display),
         location: RepoLocation::LocalOnly,
@@ -2063,6 +2096,8 @@ async fn build_repo_status(
     let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
 
     RepoStatus {
+        // No local calendar until the strip asks for one.
+        daily: None,
         name: found.name.clone(),
         path: Some(display),
         location,
@@ -2098,6 +2133,7 @@ mod tests {
 
     fn test_repo() -> RepoStatus {
         RepoStatus {
+            daily: None,
             name: "r".to_string(),
             path: None,
             location: model::RepoLocation::Primary,
