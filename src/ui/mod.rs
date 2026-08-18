@@ -2,6 +2,7 @@ pub mod badges;
 pub mod branches;
 pub mod colors;
 pub mod compact;
+pub mod contributions;
 pub mod detail;
 pub mod footer;
 pub mod help;
@@ -186,6 +187,8 @@ pub struct PanelRects {
     pub repo_list: Rect,
     pub detail: Option<Rect>,
     pub inspector: Option<Rect>,
+    /// The contribution strip, when it is open and the area had room for it.
+    pub contributions: Option<Rect>,
 }
 
 /// A pane boundary the mouse can grab.
@@ -214,6 +217,9 @@ impl PanelRects {
         }
         if self.inspector.is_some_and(|r| r.contains(p)) {
             return Some(FocusedPanel::Inspector);
+        }
+        if self.contributions.is_some_and(|r| r.contains(p)) {
+            return Some(FocusedPanel::Contributions);
         }
         None
     }
@@ -272,7 +278,11 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
         Constraint::Length(2),
     ])
     .split(area);
-    let main = chunks[1];
+    // The strip comes off the bottom before anything else is laid out, so
+    // both views shrink by the same amount and neither carries its own copy
+    // of the arithmetic.
+    let (main, contributions) =
+        contributions::split_main_area(chunks[1], app.contributions.is_open());
 
     match app.view {
         View::Compact => PanelRects {
@@ -280,6 +290,7 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
             repo_list: main,
             detail: None,
             inspector: None,
+            contributions,
         },
         View::Detail => {
             let (repo_list, right) = detail::split_main(main, app.repo_list_pct);
@@ -289,6 +300,7 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
                 repo_list,
                 detail: Some(detail),
                 inspector,
+                contributions,
             }
         }
     }
@@ -511,10 +523,15 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Header
     render_header(frame, chunks[0], app);
 
-    // Main content area
+    // Main content area. Same split as `panel_rects`, from the same helper,
+    // so a click is hit-tested against exactly what was drawn.
+    let (main, strip) = contributions::split_main_area(chunks[1], app.contributions.is_open());
     match app.view {
-        View::Detail => detail::render(frame, chunks[1], app),
-        View::Compact => compact::render(frame, chunks[1], app),
+        View::Detail => detail::render(frame, main, app),
+        View::Compact => compact::render(frame, main, app),
+    }
+    if let Some(strip) = strip {
+        contributions::render(frame, strip, app);
     }
 
     // Footer
@@ -685,6 +702,7 @@ mod tests {
             repo_list: Rect::new(0, 1, 35, 40),
             detail: Some(Rect::new(36, 1, 64, 24)),
             inspector: Some(Rect::new(36, 25, 64, 16)),
+            contributions: None,
         }
     }
 
@@ -941,6 +959,7 @@ mod tests {
             repo_list: Rect::new(0, 0, 0, 0),
             detail: None,
             inspector: None,
+            contributions: None,
         };
         assert_eq!(empty.repo_list_pct_at(10), 0);
         assert_eq!(empty.inspector_pct_at(10), 0);
@@ -978,5 +997,58 @@ mod tests {
     fn empty_name_falls_back() {
         assert_eq!(author_code(""), "?");
         assert_eq!(author_code("   "), "?");
+    }
+
+    fn layout_app() -> crate::app::App {
+        crate::app::App::new(Vec::new(), "test".to_string(), false, 120, 44)
+    }
+
+    /// `panel_rects` and `render` must agree about the strip, or clicks land
+    /// on a pane that is not where the eye sees it.
+    #[test]
+    fn panel_rects_reports_the_strip_only_when_it_is_drawn() {
+        let area = Rect::new(0, 0, 120, 44);
+        let mut app = layout_app();
+        app.view = crate::app::View::Detail;
+
+        let closed = panel_rects(area, &app);
+        assert!(closed.contributions.is_none());
+
+        app.contributions = crate::app::ContributionsMode::Github;
+        let open = panel_rects(area, &app);
+        let strip = open.contributions.expect("strip present");
+        assert_eq!(strip.height, contributions::CONTRIB_HEIGHT);
+        assert!(
+            open.repo_list.height < closed.repo_list.height,
+            "the panes above give up the rows the strip takes"
+        );
+        assert_eq!(
+            open.at(strip.x + 2, strip.y + 2),
+            Some(FocusedPanel::Contributions),
+            "a click in the strip lands on the strip"
+        );
+    }
+
+    /// Compact has no detail or inspector, but it does have the strip.
+    #[test]
+    fn the_strip_is_laid_out_in_compact_view_too() {
+        let area = Rect::new(0, 0, 120, 44);
+        let mut app = layout_app();
+        app.view = crate::app::View::Compact;
+        app.contributions = crate::app::ContributionsMode::Local;
+        let rects = panel_rects(area, &app);
+        assert!(rects.contributions.is_some());
+        assert!(rects.detail.is_none());
+        assert!(rects.repo_list.height < area.height - contributions::CONTRIB_HEIGHT);
+    }
+
+    /// A terminal too short for both loses the strip, not the dashboard.
+    #[test]
+    fn a_short_terminal_drops_the_strip_rather_than_the_panes() {
+        let mut app = layout_app();
+        app.contributions = crate::app::ContributionsMode::Github;
+        let rects = panel_rects(Rect::new(0, 0, 120, 18), &app);
+        assert!(rects.contributions.is_none());
+        assert!(rects.repo_list.height > 0, "the panes survive");
     }
 }

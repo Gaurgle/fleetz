@@ -22,6 +22,22 @@ pub const OVERLAY: Color = Color::Rgb(127, 132, 156); // paths, subtle text
 pub const SUBTEXT: Color = Color::Rgb(166, 173, 200);
 
 pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers, borders
+
+/// Contribution intensity, empty through busiest. Step 0 is `SURFACE`, the
+/// same near-invisible tone the dividers use, so an empty day reads as
+/// structure rather than as data. Step 4 is `GREEN`, the palette's existing
+/// "ahead / synced" green, so the busiest day matches the brightest green
+/// already on screen. The three between are interpolated in RGB.
+///
+/// One ladder per concept: the cells and the Less/More legend both read this,
+/// so they cannot drift apart.
+pub const CONTRIB_LADDER: [Color; 5] = [
+    Color::Rgb(69, 71, 90),
+    Color::Rgb(93, 110, 108),
+    Color::Rgb(117, 149, 125),
+    Color::Rgb(141, 188, 143),
+    Color::Rgb(166, 227, 161),
+];
 pub const TEXT: Color = Color::Rgb(205, 214, 244); // default text
 pub const RED: Color = Color::Rgb(243, 139, 168); // CI failed
 

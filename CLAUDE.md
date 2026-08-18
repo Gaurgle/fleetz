@@ -89,7 +89,10 @@ and authenticated, since the GitHub fetch shells out to it.
 **`ui::panel_rects` must produce the same rectangles `render` draws.** It exists
 so mouse clicks can be hit-tested against what is on screen. Shared geometry
 lives in one function called by both (`detail::split_right_column`); never
-reintroduce a second copy of that arithmetic. Drift here misroutes clicks
+reintroduce a second copy of that arithmetic. The contribution strip is
+carved off the bottom by `ui::contributions::split_main_area`, called by both
+for the same reason; it lives in its own module rather than beside the other
+two because it applies to Compact view as well. Drift here misroutes clicks
 silently, with nothing failing.
 
 **`App::visible_repos` order must match the order the repo list draws.** The
