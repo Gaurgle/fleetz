@@ -24,28 +24,32 @@ pub const SUBTEXT: Color = Color::Rgb(166, 173, 200);
 pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers, borders
 
 /// Contribution intensity for the GitHub source, empty through busiest.
+///
 /// Step 0 is `SURFACE`, the same near-invisible tone the dividers use, so an
-/// empty day reads as structure rather than as data. Step 4 is `GREEN`, the
-/// palette's existing "ahead / synced" green, which is also the green anyone
-/// who has seen github.com is expecting. The three between are interpolated.
+/// empty day reads as structure rather than as data. Steps 1 to 4 are
+/// github.com's own dark-theme greens, which cover a far wider range than an
+/// interpolation between two palette colours does: a busy day should not be
+/// a slightly brighter version of a quiet one, it should be obviously
+/// different from across the room.
 const CONTRIB_LADDER_GITHUB: [Color; 5] = [
     Color::Rgb(69, 71, 90),
-    Color::Rgb(93, 110, 108),
-    Color::Rgb(117, 149, 125),
-    Color::Rgb(141, 188, 143),
-    Color::Rgb(166, 227, 161),
+    Color::Rgb(14, 68, 41),
+    Color::Rgb(0, 109, 50),
+    Color::Rgb(38, 166, 65),
+    Color::Rgb(57, 211, 83),
 ];
 
-/// The same ladder for the local source, in blue. The two sources count
-/// different things and will never agree, so they should not look identical:
-/// the colour says which one you are reading before the title does. Blue
-/// rather than red because red already means "CI failed" everywhere else.
+/// The same ladder for the local source, in blue, over the same span of
+/// darkness to brightness. The two sources count different things and will
+/// never agree, so they should not look identical: the colour says which one
+/// you are reading before the title does. Blue rather than red because red
+/// already means "CI failed" everywhere else.
 const CONTRIB_LADDER_LOCAL: [Color; 5] = [
     Color::Rgb(69, 71, 90),
-    Color::Rgb(86, 98, 130),
-    Color::Rgb(103, 126, 170),
-    Color::Rgb(120, 153, 210),
-    Color::Rgb(137, 180, 250),
+    Color::Rgb(16, 52, 92),
+    Color::Rgb(13, 88, 163),
+    Color::Rgb(48, 140, 220),
+    Color::Rgb(96, 190, 255),
 ];
 
 /// The intensity ladder for a source. One function, so the cells and the

@@ -776,4 +776,44 @@ mod tests {
             "no github green survives a switch to local"
         );
     }
+
+    /// Relative luminance, the standard weighting. Used to check that the
+    /// ladder actually spans a range rather than five shades of the same.
+    fn luminance(c: ratatui::style::Color) -> f64 {
+        let ratatui::style::Color::Rgb(r, g, b) = c else {
+            panic!("ladder colours are literal RGB")
+        };
+        0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b)
+    }
+
+    /// A busy day must be obviously different from a quiet one, not a
+    /// slightly brighter version of it. Interpolating between two palette
+    /// colours gave barely a 2x spread across the whole ladder; these span
+    /// more than 3x, which is roughly what github.com itself uses.
+    #[test]
+    fn the_intensity_ladders_span_a_wide_range() {
+        for source in [Source::Github, Source::Local] {
+            let ladder = colors::contrib_ladder(source);
+            let steps: Vec<f64> = ladder.iter().map(|c| luminance(*c)).collect();
+
+            for step in 1..4 {
+                assert!(
+                    steps[step + 1] > steps[step],
+                    "{source:?} step {step} must be darker than {}",
+                    step + 1
+                );
+            }
+            assert!(
+                steps[4] / steps[1] >= 3.0,
+                "{source:?} spans only {:.1}x from quietest to busiest",
+                steps[4] / steps[1]
+            );
+            // The empty step is structure, not data: it must not read as a
+            // quiet day, so it sits below the whole active range.
+            assert!(
+                steps[0] < steps[2],
+                "{source:?} empty step is brighter than a mid day"
+            );
+        }
+    }
 }

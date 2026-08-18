@@ -133,7 +133,10 @@ Contribution intensity is the one place with two ladders, green for the GitHub
 source and blue for the local one, because the two count different things and
 should not be mistaken for each other. They are still reached through a single
 `colors::contrib_ladder(source)`, which the cells and the Less/More legend both
-call, so a source can never leave half the strip on the other palette.
+call, so a source can never leave half the strip on the other palette. Both
+span more than 3x in luminance from quietest to busiest, enforced by test:
+interpolating between two palette colours looks tidy and reads as one flat
+tone, which defeats the point of a heatmap.
 
 **Status vocabulary is split by kind.** Counters are numeric (`3↓ 2↑ 4!`),
 categorical states are words (`not cloned`). A repo that is not cloned has all
