@@ -149,10 +149,12 @@ repo_dir = "~/repos"
 # living outside repo_dir under a hidden path needs naming here.
 extra_dirs = ["~/.dotfiles"]
 
-# Contribution strip: "off" (default), "github" (your GitHub calendar), or
-# "local" (your commits in the repos currently listed). `c` toggles it and
-# `C` switches source; this is what a fresh launch starts from.
-contributions = "off"
+# Contribution strip: "github" (default, your GitHub calendar), "local"
+# (your commits in the repos currently listed), or "off". `c` toggles it and
+# `C` switches source; this is what a fresh launch starts from. The two
+# sources use different colour ladders (green for github, blue for local)
+# because they count different things and will never agree.
+contributions = "github"
 
 # Git author regex the "local" source filters by, overriding each repo's own
 # user.email. --author takes a regex, so several identities can be joined.

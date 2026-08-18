@@ -38,6 +38,10 @@ pub enum ContributionsMode {
     Local,
 }
 
+/// What the strip does when `config.toml` says nothing: show GitHub's own
+/// calendar. Explicit `contributions = "off"` still closes it.
+pub const DEFAULT_CONTRIBUTIONS: &str = "github";
+
 impl ContributionsMode {
     pub fn from_config(value: &str) -> Self {
         match value {

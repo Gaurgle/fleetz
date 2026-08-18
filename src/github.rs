@@ -316,8 +316,14 @@ pub async fn fetch_repos(
     // One "today" for the whole fetch, so every path builds the same grid.
     let today = chrono::Local::now().date_naive();
 
-    // Try cache first
-    if !bypass_cache && let Some(fetch) = parse_cached(cache.read(), today) {
+    // Try cache first. A payload written before the calendar field existed
+    // parses fine but carries no calendar, and serving it would show an empty
+    // year for as long as the TTL lasts. Treat that as a miss: the whole
+    // point of the poll is that the calendar rides along for free.
+    if !bypass_cache
+        && let Some(fetch) = parse_cached(cache.read(), today)
+        && fetch.calendar.is_some()
+    {
         return Ok(fetch);
     }
 
@@ -843,5 +849,27 @@ mod tests {
         assert!(!q.contains("contributionCalendar(first"));
         // Still one query, not two.
         assert_eq!(q.matches("viewer").count(), 1);
+    }
+
+    /// A payload cached before the calendar field existed parses fine and
+    /// carries no calendar. Serving it would show an empty year for as long
+    /// as the TTL lasts, which is exactly what a fresh upgrade hits.
+    #[test]
+    fn a_cached_payload_without_a_calendar_is_not_good_enough_to_serve() {
+        let old = r#"{"data":{"viewer":{"repositories":{"nodes":[]}}}}"#;
+        let fetch = parse_cached(Some(old.to_string()), day("2026-08-18")).unwrap();
+        assert!(
+            fetch.calendar.is_none(),
+            "this is the payload the guard has to reject"
+        );
+
+        let new = r#"{"data":{"viewer":{
+            "repositories":{"nodes":[]},
+            "contributionsCollection":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[{"date":"2026-08-18","contributionCount":1}]}
+            ]}}
+        }}}"#;
+        let fetch = parse_cached(Some(new.to_string()), day("2026-08-18")).unwrap();
+        assert!(fetch.calendar.is_some(), "a current payload is servable");
     }
 }

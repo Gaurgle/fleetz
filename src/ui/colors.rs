@@ -23,21 +23,40 @@ pub const SUBTEXT: Color = Color::Rgb(166, 173, 200);
 
 pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers, borders
 
-/// Contribution intensity, empty through busiest. Step 0 is `SURFACE`, the
-/// same near-invisible tone the dividers use, so an empty day reads as
-/// structure rather than as data. Step 4 is `GREEN`, the palette's existing
-/// "ahead / synced" green, so the busiest day matches the brightest green
-/// already on screen. The three between are interpolated in RGB.
-///
-/// One ladder per concept: the cells and the Less/More legend both read this,
-/// so they cannot drift apart.
-pub const CONTRIB_LADDER: [Color; 5] = [
+/// Contribution intensity for the GitHub source, empty through busiest.
+/// Step 0 is `SURFACE`, the same near-invisible tone the dividers use, so an
+/// empty day reads as structure rather than as data. Step 4 is `GREEN`, the
+/// palette's existing "ahead / synced" green, which is also the green anyone
+/// who has seen github.com is expecting. The three between are interpolated.
+const CONTRIB_LADDER_GITHUB: [Color; 5] = [
     Color::Rgb(69, 71, 90),
     Color::Rgb(93, 110, 108),
     Color::Rgb(117, 149, 125),
     Color::Rgb(141, 188, 143),
     Color::Rgb(166, 227, 161),
 ];
+
+/// The same ladder for the local source, in blue. The two sources count
+/// different things and will never agree, so they should not look identical:
+/// the colour says which one you are reading before the title does. Blue
+/// rather than red because red already means "CI failed" everywhere else.
+const CONTRIB_LADDER_LOCAL: [Color; 5] = [
+    Color::Rgb(69, 71, 90),
+    Color::Rgb(86, 98, 130),
+    Color::Rgb(103, 126, 170),
+    Color::Rgb(120, 153, 210),
+    Color::Rgb(137, 180, 250),
+];
+
+/// The intensity ladder for a source. One function, so the cells and the
+/// Less/More legend cannot drift apart, and so adding a source cannot leave
+/// half the strip on the old palette.
+pub fn contrib_ladder(source: crate::contributions::Source) -> [Color; 5] {
+    match source {
+        crate::contributions::Source::Github => CONTRIB_LADDER_GITHUB,
+        crate::contributions::Source::Local => CONTRIB_LADDER_LOCAL,
+    }
+}
 pub const TEXT: Color = Color::Rgb(205, 214, 244); // default text
 pub const RED: Color = Color::Rgb(243, 139, 168); // CI failed
 

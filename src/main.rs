@@ -231,8 +231,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.loading = true;
     // The strip's open state and source are persisted, so a dashboard set up
     // once comes back that way. `c` and `C` still change it for the session.
-    app.contributions =
-        app::ContributionsMode::from_config(config.contributions.as_deref().unwrap_or("off"));
+    // Open on github when the key is absent. A dashboard whose headline
+    // feature needs a keypress to appear reads as a feature that is broken.
+    app.contributions = app::ContributionsMode::from_config(
+        config
+            .contributions
+            .as_deref()
+            .unwrap_or(app::DEFAULT_CONTRIBUTIONS),
+    );
     app.contrib_author = config.contributions_author.clone();
     // Pane sizes start at their defaults every launch. Only an explicit
     // persist_pane_sizes opt-in restores the ones saved on last exit.

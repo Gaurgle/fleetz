@@ -427,13 +427,32 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    /// An absent key opens the strip on github. A dashboard whose headline
+    /// feature needs a keypress to appear reads as a broken feature.
     #[test]
-    fn contributions_defaults_to_off_and_round_trips() {
+    fn an_absent_contributions_key_opens_the_strip_on_github() {
         let cfg: Config = toml::from_str("").unwrap();
         assert_eq!(cfg.contributions, None);
         assert_eq!(
             crate::app::ContributionsMode::from_config(
-                cfg.contributions.as_deref().unwrap_or("off")
+                cfg.contributions
+                    .as_deref()
+                    .unwrap_or(crate::app::DEFAULT_CONTRIBUTIONS)
+            ),
+            crate::app::ContributionsMode::Github
+        );
+    }
+
+    /// An explicit "off" still closes it: the new default must not override
+    /// someone who turned it off on purpose.
+    #[test]
+    fn an_explicit_off_still_closes_the_strip() {
+        let cfg: Config = toml::from_str(r#"contributions = "off""#).unwrap();
+        assert_eq!(
+            crate::app::ContributionsMode::from_config(
+                cfg.contributions
+                    .as_deref()
+                    .unwrap_or(crate::app::DEFAULT_CONTRIBUTIONS)
             ),
             crate::app::ContributionsMode::Off
         );

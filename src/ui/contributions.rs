@@ -254,7 +254,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 // The legend rides in the bottom border rather than costing a
                 // row of its own, which is what the other panes do with their
                 // secondary information.
-                .title_bottom(legend_line().right_aligned()),
+                .title_bottom(legend_line(calendar.source()).right_aligned()),
         ),
         area,
     );
@@ -372,6 +372,7 @@ fn day_line(
         5 => "Fri ",
         _ => "    ",
     };
+    let ladder = colors::contrib_ladder(calendar.source());
     let mut gutter = label.to_string();
     // The marked cell's left frame edge lands in the gutter when it is the
     // first drawn column.
@@ -397,7 +398,7 @@ fn day_line(
         match calendar.day_at(week, weekday) {
             Some((_, count)) => spans.push(Span::styled(
                 CELL,
-                Style::default().fg(colors::CONTRIB_LADDER[calendar.intensity(count) as usize]),
+                Style::default().fg(ladder[calendar.intensity(count) as usize]),
             )),
             // Past today: hold the column open so the grid keeps its shape.
             None => spans.push(Span::raw(" ".repeat(CELL_COLS as usize))),
@@ -411,12 +412,12 @@ fn day_line(
     Line::from(spans)
 }
 
-fn legend_line() -> Line<'static> {
+fn legend_line(source: crate::contributions::Source) -> Line<'static> {
     let mut spans = vec![Span::styled(
         " Less ".to_string(),
         Style::default().fg(colors::OVERLAY),
     )];
-    for (i, shade) in colors::CONTRIB_LADDER.iter().enumerate() {
+    for (i, shade) in colors::contrib_ladder(source).iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw(" "));
         }
@@ -792,6 +793,57 @@ mod tests {
             lines[top + 1].contains('\u{2502}'),
             "side edges present: {}",
             lines[top + 1]
+        );
+    }
+
+    /// The two sources count different things and can never agree, so they
+    /// must not look identical: the colour says which one you are reading
+    /// before the title does.
+    #[test]
+    fn each_source_gets_its_own_intensity_ladder() {
+        let github = colors::contrib_ladder(Source::Github);
+        let local = colors::contrib_ladder(Source::Local);
+        assert_eq!(github[0], local[0], "an empty day is the same either way");
+        assert_ne!(github[4], local[4], "a busy day is not");
+        for step in 1..5 {
+            assert_ne!(github[step], local[step], "step {step} must differ");
+        }
+    }
+
+    /// Cells and the legend read the same ladder, so a source switch can
+    /// never leave half the strip on the other palette.
+    #[test]
+    fn the_legend_follows_the_source_the_cells_use() {
+        let mut app = app_with_calendar(4);
+        let github_cells = colors::contrib_ladder(Source::Github);
+
+        let styled = |app: &App| {
+            use ratatui::Terminal;
+            use ratatui::backend::TestBackend;
+            let mut t = Terminal::new(TestBackend::new(120, CONTRIB_HEIGHT)).unwrap();
+            t.draw(|f| render(f, f.area(), app)).unwrap();
+            let buf = t.backend().buffer().clone();
+            let mut seen = std::collections::HashSet::new();
+            for x in 0..120 {
+                for y in 0..CONTRIB_HEIGHT {
+                    if buf[(x, y)].symbol() == "\u{2588}\u{2588}"
+                        || buf[(x, y)].symbol() == "\u{2588}"
+                    {
+                        seen.insert(format!("{:?}", buf[(x, y)].style().fg));
+                    }
+                }
+            }
+            seen
+        };
+
+        let on_github = styled(&app);
+        assert!(on_github.contains(&format!("{:?}", Some(github_cells[4]))));
+
+        app.contributions = ContributionsMode::Local;
+        let on_local = styled(&app);
+        assert!(
+            !on_local.contains(&format!("{:?}", Some(github_cells[4]))),
+            "no github green survives a switch to local"
         );
     }
 }
