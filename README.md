@@ -95,11 +95,11 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `1` / `2` / `3` / `4` | Focus repo list / detail / inspector / contributions |
 | `Tab` | Cycle panel focus |
 | mouse | Click a panel to focus; drag a pane border to resize it; scroll wheel scrolls whichever panel the cursor is over |
-| `j` / `k`, `↑` / `↓` | Repo list: move selection · Detail: pick commit · Inspector: scroll · Contributions: move the day cursor up/down a weekday |
+| `j` / `k`, `↑` / `↓` | Repo list: move selection · Detail: pick commit · Inspector: scroll · Contributions: move the day cursor up/down a weekday (a caret above the grid marks the column) |
 | `J` / `K` | Scroll the detail pane (works from the repo list too) |
 | `PgUp` / `PgDn` | Scroll focused pane by a page |
 | `v` | Toggle detail vs compact view |
-| `c` | Toggle the contributions strip: a year of activity, GitHub-style. Squares are a fixed size, so the grid scrolls rather than shrinking; no day is marked until you move the cursor |
+| `c` | Toggle the contributions strip: a year of activity, GitHub-style. Two days are packed per terminal row with half-blocks, so the whole year fits in 8 rows; the grid scrolls rather than shrinking, and no day is marked until you move the cursor |
 | `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
 | `4` | Focus the contributions strip (only while it is open) |
 | `h` / `l`, `←` / `→` | Contributions: move the day cursor back/forward a week. The grid scrolls with it, oldest weeks hiding off to the left |

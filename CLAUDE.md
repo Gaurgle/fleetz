@@ -129,6 +129,12 @@ for what a sync state looks like; the detail pane calls it rather than keeping
 its own. `ui::filter_color` maps a quick filter to the same color its badge
 already uses. Two ladders always drift.
 
+Contribution intensity is the one place with two ladders, green for the GitHub
+source and blue for the local one, because the two count different things and
+should not be mistaken for each other. They are still reached through a single
+`colors::contrib_ladder(source)`, which the cells and the Less/More legend both
+call, so a source can never leave half the strip on the other palette.
+
 **Status vocabulary is split by kind.** Counters are numeric (`3↓ 2↑ 4!`),
 categorical states are words (`not cloned`). A repo that is not cloned has all
 counters at zero and must never render as synced: `RepoStatus::is_synced()`

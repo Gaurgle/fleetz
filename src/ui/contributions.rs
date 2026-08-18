@@ -1,9 +1,14 @@
 //! The contribution strip: a year of activity docked under the main panes.
 //!
-//! The grid draws at a fixed square size and scrolls, rather than shrinking
-//! to fit. A year at this size is wider than any terminal, so the newest
-//! weeks are pinned to the right edge and older ones hide off to the left,
-//! which is the direction time already runs in.
+//! Drawn with half-block characters. A `▀` carries two days at once, the
+//! upper half in the foreground colour and the lower half in the background,
+//! and since a terminal cell is about twice as tall as it is wide, each half
+//! is a genuinely square pixel. That halves the grid: seven weekday rows
+//! become four, and a day costs one column instead of two.
+//!
+//! The grid draws at a fixed size and scrolls, rather than shrinking to fit.
+//! The newest weeks are pinned to the right edge and older ones hide off to
+//! the left, which is the direction time already runs in.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -15,48 +20,39 @@ use crate::app::{App, ContributionsMode, FocusedPanel};
 use crate::contributions::{Calendar, WEEKS};
 use crate::ui::colors;
 
-/// A day cell, two columns wide. A terminal cell is about twice as tall as
-/// it is wide, so two of them side by side read as a square; one reads as a
-/// thin dot.
-const CELL: &str = "\u{2588}\u{2588}";
-const CELL_COLS: u16 = 2;
+/// Two days stacked in one character: upper half foreground, lower half
+/// background.
+const CELL: &str = "▀";
+/// Points at the column holding the marked day, since a single bright half
+/// cell is easy to lose in a year of them.
+const CARET: &str = "▾";
 
-/// Blank columns between two day cells, and blank rows between two day rows.
-///
-/// One row of vertical gap is not optional: the selection frame is drawn in
-/// the rows above and below the marked cell, so removing it would leave
-/// nowhere to put the frame. The horizontal gap is one column, which reads
-/// tighter than the row gap but keeps the grid compact enough to be worth
-/// looking at.
+/// A day is one column wide, with one blank column between weeks.
+const CELL_COLS: u16 = 1;
 const GAP_COLS: u16 = 1;
-const GAP_ROWS: u16 = 1;
-
-/// Columns one week column occupies, cell plus its trailing gap. The gap is
-/// always emitted, including after the last column, so the selection frame
-/// has somewhere to draw its right edge.
+/// Columns one week occupies, cell plus its trailing gap. The gap is always
+/// emitted, including after the last column, so the grid width is uniform.
 const WEEK_COLS: u16 = CELL_COLS + GAP_COLS;
-/// Rows one weekday row occupies, cell plus gap.
-const DAY_ROWS: u16 = 1 + GAP_ROWS;
 
-/// Columns reserved for the Mon/Wed/Fri gutter.
+/// Seven weekdays packed two to a row: Sun/Mon, Tue/Wed, Thu/Fri, and Sat
+/// alone in the last row.
+const PAIR_ROWS: u16 = 4;
+
+/// Columns reserved for the weekday gutter.
 const GUTTER: u16 = 4;
 
 /// Columns the frame eats on each side: the border plus the block's own
 /// one-column padding.
 const FRAME_COLS: u16 = 2;
 
-/// First of the day rows, counted from the strip's outer top edge: row 0 is
-/// the border, row 1 the month labels, row 2 the frame row above the first
-/// day. The count and the source ride in the border title, and the legend in
-/// the bottom border, as the other panes put their headers.
+/// First grid row, counted from the strip's outer top edge: row 0 is the
+/// border, row 1 the month labels, row 2 the caret row.
 const FIRST_DAY_ROW: u16 = 3;
 
-/// Grid rows: a frame row, then each weekday followed by another frame row.
-const GRID_ROWS: u16 = 7 * DAY_ROWS + 1;
-
-/// Rows the strip occupies: two border rows, the month labels, and the grid.
-/// The legend rides in the bottom border rather than costing a row of its own.
-pub const CONTRIB_HEIGHT: u16 = 2 + 1 + GRID_ROWS;
+/// Rows the strip occupies: border, months, caret row, the four packed day
+/// rows, border. The count, the source, and the legend all ride in the
+/// borders rather than costing rows of their own.
+pub const CONTRIB_HEIGHT: u16 = 1 + 1 + 1 + PAIR_ROWS + 1;
 
 /// Rows the panes above must keep for the strip to be worth docking. Below
 /// this the strip is dropped: a dashboard squeezed into slivers is worse
@@ -166,15 +162,14 @@ pub fn title(calendar: &Calendar, cursor: Option<usize>, width: u16) -> String {
 
 /// The grid slot under a screen cell, or None for the gutter, the gaps, the
 /// label rows, and anything outside the drawn window.
+///
+/// A character row holds two weekdays and the mouse cannot say which half it
+/// landed on, so a click selects the upper of the pair. The keyboard is the
+/// precise instrument here; the click is for getting close.
 pub fn slot_at(area: Rect, scroll: usize, col: u16, row: u16) -> Option<usize> {
     let visible = visible_weeks(area);
-    let down = row.checked_sub(area.y + FIRST_DAY_ROW)?;
-    // Odd rows are the blank gap between two day rows.
-    if !down.is_multiple_of(DAY_ROWS) {
-        return None;
-    }
-    let weekday = (down / DAY_ROWS) as usize;
-    if weekday >= 7 {
+    let pair = row.checked_sub(area.y + FIRST_DAY_ROW)?;
+    if pair >= PAIR_ROWS {
         return None;
     }
     let across = col.checked_sub(area.x + FRAME_COLS + GUTTER)?;
@@ -187,11 +182,11 @@ pub fn slot_at(area: Rect, scroll: usize, col: u16, row: u16) -> Option<usize> {
         return None;
     }
     let week = scroll.min(WEEKS.saturating_sub(visible)) + column;
-    Some(week * 7 + weekday)
+    Some(week * 7 + (pair * 2) as usize)
 }
 
 /// Draw the strip: a bordered pane whose title carries the count and the
-/// source, over the month labels, the seven day rows, and the legend.
+/// source, over the month labels, the caret row, and the packed day rows.
 ///
 /// Framed like the other three panes rather than drawn bare, because it is
 /// focusable the same way they are: without a border there is nothing on
@@ -229,11 +224,19 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     app.contrib_scroll.set(first);
 
     let cursor = app.contrib_cursor.map(|c| c.min(calendar.today_slot()));
+    // Where the cursor sits in the drawn window, if it is in it at all.
+    let marked = cursor.and_then(|slot| {
+        let (week, weekday) = (slot / 7, slot % 7);
+        (week >= first && week < first + visible).then_some((week - first, weekday))
+    });
     let inner_width = area.width.saturating_sub(FRAME_COLS * 2);
 
     let mut lines = Vec::with_capacity(CONTRIB_HEIGHT as usize);
     lines.push(month_line(&calendar, first, visible));
-    lines.extend(grid_rows(&calendar, first, visible, cursor));
+    lines.push(caret_line(marked));
+    for pair in 0..PAIR_ROWS as usize {
+        lines.push(pair_line(&calendar, first, visible, pair, marked));
+    }
 
     let heading = title(&calendar, cursor, inner_width);
     frame.render_widget(
@@ -293,135 +296,96 @@ fn month_line(calendar: &Calendar, first: usize, visible: usize) -> Line<'static
     Line::from(Span::styled(row, Style::default().fg(colors::OVERLAY)))
 }
 
-/// The whole grid: a frame row, then each weekday row followed by another
-/// frame row. Built together rather than per-line because the selection frame
-/// spans three rows, and the row above and below a marked cell have to know
-/// where it is.
-fn grid_rows(
-    calendar: &Calendar,
-    first: usize,
-    visible: usize,
-    cursor: Option<usize>,
-) -> Vec<Line<'static>> {
-    // Where the cursor sits in the drawn window, if it is in it at all.
-    let marked = cursor.and_then(|slot| {
-        let (week, weekday) = (slot / 7, slot % 7);
-        (week >= first && week < first + visible).then_some((week - first, weekday))
-    });
-
-    (0..GRID_ROWS)
-        .map(|row| {
-            if row.is_multiple_of(DAY_ROWS) {
-                // A gap row: blank, unless it is the top or bottom edge of the
-                // frame around the marked cell.
-                let boundary = (row / DAY_ROWS) as usize;
-                match marked {
-                    Some((column, weekday)) if weekday == boundary => {
-                        frame_row(column, visible, FrameEdge::Top)
-                    }
-                    Some((column, weekday)) if weekday + 1 == boundary => {
-                        frame_row(column, visible, FrameEdge::Bottom)
-                    }
-                    _ => Line::from(""),
-                }
-            } else {
-                let weekday = (row / DAY_ROWS) as usize;
-                day_line(calendar, first, visible, weekday, marked)
-            }
-        })
-        .collect()
-}
-
-enum FrameEdge {
-    Top,
-    Bottom,
-}
-
-/// The top or bottom edge of the selection frame, drawn in the gap row above
-/// or below the marked cell. Rounded corners, matching the pane borders.
-fn frame_row(column: usize, visible: usize, edge: FrameEdge) -> Line<'static> {
-    let (left, right) = match edge {
-        FrameEdge::Top => ('\u{256d}', '\u{256e}'),
-        FrameEdge::Bottom => ('\u{2570}', '\u{256f}'),
+/// A caret over the column holding the marked day. At this density a single
+/// bright half cell is easy to lose in a year of them, and the caret says
+/// which column to look in while the title says which date it is.
+fn caret_line(marked: Option<(usize, usize)>) -> Line<'static> {
+    let Some((column, _)) = marked else {
+        return Line::from("");
     };
-    // The frame sits one column outside the cell on each side. For the very
-    // first column that is the gutter's last space, which is always blank.
-    let cell_start = GUTTER as usize + column * WEEK_COLS as usize;
-    let mut row = String::with_capacity(GUTTER as usize + visible * WEEK_COLS as usize);
-    row.push_str(&" ".repeat(cell_start - 1));
-    row.push(left);
-    for _ in 0..CELL_COLS {
-        row.push('\u{2500}');
-    }
-    row.push(right);
-    Line::from(Span::styled(row, Style::default().fg(colors::LAVENDER)))
+    let at = GUTTER as usize + column * WEEK_COLS as usize;
+    Line::from(vec![
+        Span::raw(" ".repeat(at)),
+        Span::styled(CARET, Style::default().fg(colors::LAVENDER)),
+    ])
 }
 
-fn day_line(
+/// One row of the grid: two weekdays stacked per character.
+fn pair_line(
     calendar: &Calendar,
     first: usize,
     visible: usize,
-    weekday: usize,
+    pair: usize,
     marked: Option<(usize, usize)>,
 ) -> Line<'static> {
-    // Only three of the seven rows are labelled, as GitHub does: seven labels
-    // is a wall of text beside a picture.
-    let label = match weekday {
-        1 => "Mon ",
-        3 => "Wed ",
-        5 => "Fri ",
-        _ => "    ",
-    };
+    // Each row is labelled with both weekdays it carries, since one row is
+    // no longer one day. Saturday rides alone in the last row.
+    let label = ["S/M ", "T/W ", "T/F ", "S   "][pair];
     let ladder = colors::contrib_ladder(calendar.source());
-    let mut gutter = label.to_string();
-    // The marked cell's left frame edge lands in the gutter when it is the
-    // first drawn column.
-    if marked == Some((0, weekday)) {
-        gutter.pop();
-        gutter.push('\u{2502}');
-    }
-    let mut spans = vec![Span::styled(gutter, Style::default().fg(colors::OVERLAY))];
+    let (upper, lower) = (pair * 2, pair * 2 + 1);
 
-    let edge = |on: bool| {
-        if on {
-            Span::styled(
-                '\u{2502}'.to_string(),
-                Style::default().fg(colors::LAVENDER),
-            )
-        } else {
-            Span::raw(" ".repeat(GAP_COLS as usize))
-        }
-    };
+    let mut spans = vec![Span::styled(
+        label.to_string(),
+        Style::default().fg(colors::OVERLAY),
+    )];
 
     for column in 0..visible {
         let week = first + column;
-        match calendar.day_at(week, weekday) {
-            Some((_, count)) => spans.push(Span::styled(
-                CELL,
-                Style::default().fg(ladder[calendar.intensity(count) as usize]),
-            )),
-            // Past today: hold the column open so the grid keeps its shape.
-            None => spans.push(Span::raw(" ".repeat(CELL_COLS as usize))),
+        let shade = |weekday: usize| {
+            calendar
+                .day_at(week, weekday)
+                .map(|(_, count)| ladder[calendar.intensity(count) as usize])
+        };
+        // The marked day is painted in plain text white: it has to beat both
+        // ladders, and every status colour in the palette already means
+        // something else.
+        let mark = |weekday: usize| marked == Some((column, weekday));
+
+        let up = if mark(upper) {
+            Some(colors::TEXT)
+        } else {
+            shade(upper)
+        };
+        let down = if lower < 7 {
+            if mark(lower) {
+                Some(colors::TEXT)
+            } else {
+                shade(lower)
+            }
+        } else {
+            None
+        };
+
+        match (up, down) {
+            (None, None) => spans.push(Span::raw(" ")),
+            (Some(up), None) => spans.push(Span::styled(CELL, Style::default().fg(up))),
+            // An absent upper half with a present lower one cannot happen:
+            // within a column the later weekday is always the later date.
+            (None, Some(down)) => spans.push(Span::styled(CELL, Style::default().fg(down))),
+            (Some(up), Some(down)) => {
+                spans.push(Span::styled(CELL, Style::default().fg(up).bg(down)))
+            }
         }
-        // The gap after this cell doubles as the right edge of a frame around
-        // it, or the left edge of one around the next column.
-        let right_of_marked = marked == Some((column, weekday));
-        let left_of_marked = marked == Some((column + 1, weekday));
-        spans.push(edge(right_of_marked || left_of_marked));
+        spans.push(Span::raw(" ".repeat(GAP_COLS as usize)));
     }
     Line::from(spans)
 }
 
 fn legend_line(source: crate::contributions::Source) -> Line<'static> {
+    let ladder = colors::contrib_ladder(source);
     let mut spans = vec![Span::styled(
         " Less ".to_string(),
         Style::default().fg(colors::OVERLAY),
     )];
-    for (i, shade) in colors::contrib_ladder(source).iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw(" "));
-        }
-        spans.push(Span::styled(CELL, Style::default().fg(*shade)));
+    // Two shades per character, so the legend is as dense as the grid it
+    // explains: steps 0/1, 2/3, then 4 alone.
+    for pair in ladder.chunks(2) {
+        let style = match pair {
+            [up, down] => Style::default().fg(*up).bg(*down),
+            [up] => Style::default().fg(*up),
+            _ => unreachable!("chunks(2) yields one or two"),
+        };
+        spans.push(Span::styled(CELL, style));
     }
     spans.push(Span::styled(
         " More ".to_string(),
@@ -477,31 +441,32 @@ mod tests {
         assert!(split_main_area(area(floor), true).1.is_some());
     }
 
-    /// Every square is padded on all four sides, one column each way and one
-    /// row each way. The row gap is load-bearing beyond looks: the selection
-    /// frame is drawn in the rows above and below the marked cell, so a grid
-    /// with no row gap would have nowhere to put it.
+    /// Half-block packing is what makes the squares square: one character is
+    /// about twice as tall as it is wide, so half of one is a square, and the
+    /// grid costs four rows instead of seven.
     #[test]
-    fn every_square_is_padded_on_all_four_sides() {
+    fn half_block_packing_halves_the_grid() {
         assert_eq!(CELL.chars().count(), CELL_COLS as usize);
+        assert_eq!(CELL, "\u{2580}", "upper half block carries two days");
         assert_eq!(GAP_COLS, 1);
-        assert_eq!(GAP_ROWS, 1);
-        assert_eq!(WEEK_COLS, 3);
-        assert_eq!(DAY_ROWS, 2);
-        // A frame row, then each of seven days followed by another frame row.
-        assert_eq!(GRID_ROWS, 15);
-        // border + months + grid + border; the legend rides in the border.
-        assert_eq!(CONTRIB_HEIGHT, 2 + 1 + 15);
+        assert_eq!(WEEK_COLS, 2);
+        // Seven weekdays, two to a row, is four rows.
+        assert_eq!(PAIR_ROWS, 4);
+        // border + months + caret row + grid + border; the count, source and
+        // legend all ride in the borders.
+        assert_eq!(CONTRIB_HEIGHT, 1 + 1 + 1 + 4 + 1);
+        assert_eq!(CONTRIB_HEIGHT, 8);
     }
 
     /// The grid never shrinks to fit. A narrower pane shows fewer weeks at
     /// the same square size, which is what makes scrolling the answer.
     #[test]
     fn a_narrower_strip_shows_fewer_weeks_at_the_same_size() {
-        // 120 wide: 120 - 4 frame - 4 gutter = 112 grid columns, at 3 each.
-        assert_eq!(visible_weeks(Rect::new(0, 0, 120, CONTRIB_HEIGHT)), 37);
-        assert_eq!(visible_weeks(Rect::new(0, 0, 60, CONTRIB_HEIGHT)), 17);
-        assert_eq!(visible_weeks(Rect::new(0, 0, 12, CONTRIB_HEIGHT)), 1);
+        // 120 wide: 120 - 4 frame - 4 gutter = 112 grid columns, at 2 each,
+        // which is more than a year needs.
+        assert_eq!(visible_weeks(Rect::new(0, 0, 120, CONTRIB_HEIGHT)), WEEKS);
+        assert_eq!(visible_weeks(Rect::new(0, 0, 60, CONTRIB_HEIGHT)), 26);
+        assert_eq!(visible_weeks(Rect::new(0, 0, 10, CONTRIB_HEIGHT)), 1);
         assert_eq!(visible_weeks(Rect::new(0, 0, 8, CONTRIB_HEIGHT)), 0);
         // A year never needs more than 53 columns even on a huge terminal.
         assert_eq!(visible_weeks(Rect::new(0, 0, 500, CONTRIB_HEIGHT)), WEEKS);
@@ -562,31 +527,36 @@ mod tests {
         assert_eq!(title(&cal, None, 8), "0");
     }
 
+    /// A character row holds two weekdays, so a click resolves to the upper
+    /// of the pair: the mouse cannot say which half of a cell it hit.
     #[test]
     fn a_click_maps_back_to_the_slot_under_it() {
-        // Outer rect: row 0 is the border, row 1 the month labels, then day
-        // rows at 2, 4, 6 ... with a blank between each. Columns 0..1 are the
-        // border and padding, 2..5 the gutter, so week 0 starts at column 6
-        // and each week step is 4 columns.
+        // Outer rect: row 0 is the border, row 1 the months, row 2 the caret
+        // row, rows 3..6 the packed day rows. Columns 0..1 are the border and
+        // padding, 2..5 the gutter, so week 0 starts at column 6 and each
+        // week step is 2 columns.
         let area = Rect::new(0, 5, 120, CONTRIB_HEIGHT);
-        assert_eq!(slot_at(area, 0, 6, 8), Some(0), "first Sunday");
-        assert_eq!(slot_at(area, 0, 7, 8), Some(0), "cell is two columns wide");
-        assert_eq!(slot_at(area, 0, 8, 8), None, "the gap after it");
-        assert_eq!(slot_at(area, 0, 10, 8), Some(7), "next week's Sunday");
-        assert_eq!(slot_at(area, 0, 6, 10), Some(1), "the Monday row");
-        assert_eq!(slot_at(area, 0, 6, 9), None, "the blank row between");
+        assert_eq!(slot_at(area, 0, 6, 8), Some(0), "Sun/Mon row, upper half");
+        assert_eq!(slot_at(area, 0, 7, 8), None, "the gap after the cell");
+        assert_eq!(slot_at(area, 0, 8, 8), Some(7), "next week's Sunday");
+        assert_eq!(
+            slot_at(area, 0, 6, 9),
+            Some(2),
+            "Tue/Wed row resolves to Tue"
+        );
+        assert_eq!(slot_at(area, 0, 6, 11), Some(6), "the Saturday row");
         assert_eq!(slot_at(area, 0, 3, 8), None, "the day gutter");
         assert_eq!(slot_at(area, 0, 6, 5), None, "the top border");
         assert_eq!(slot_at(area, 0, 6, 6), None, "the month label row");
-        assert_eq!(slot_at(area, 0, 6, 7), None, "the blank padding the top");
-        assert_eq!(slot_at(area, 0, 119, 8), None, "past the last drawn week");
+        assert_eq!(slot_at(area, 0, 6, 7), None, "the caret row");
+        assert_eq!(slot_at(area, 0, 6, 12), None, "past the last day row");
     }
 
     /// A scrolled grid's leftmost column is not week 0. Clicking it must not
     /// report a day from last August.
     #[test]
     fn a_click_on_a_scrolled_grid_accounts_for_the_offset() {
-        let area = Rect::new(0, 5, 120, CONTRIB_HEIGHT);
+        let area = Rect::new(0, 5, 40, CONTRIB_HEIGHT);
         assert_eq!(slot_at(area, 10, 6, 8), Some(10 * 7));
         // Scroll past the end: clamped, never a slot outside the year.
         let visible = visible_weeks(area);
@@ -612,19 +582,6 @@ mod tests {
             .collect()
     }
 
-    /// The strip's interior, with the pane's own border stripped off. The
-    /// block uses rounded corners too, so a search for the selection frame
-    /// has to exclude them or it matches the pane itself.
-    fn interior(lines: &[String]) -> Vec<String> {
-        lines[1..lines.len() - 1]
-            .iter()
-            .map(|l| {
-                let chars: Vec<char> = l.chars().collect();
-                chars.iter().skip(1).collect::<String>()
-            })
-            .collect()
-    }
-
     fn app_with_calendar(total_per_day: u32) -> App {
         let mut app = App::new(Vec::new(), "test".to_string(), false, 120, 44);
         app.contributions = ContributionsMode::Github;
@@ -639,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn the_strip_draws_a_framed_pane_with_spaced_rows_and_a_legend() {
+    fn the_strip_draws_a_framed_pane_with_paired_day_rows() {
         let lines = drawn(120, &app_with_calendar(1));
         assert_eq!(lines.len(), CONTRIB_HEIGHT as usize);
         assert!(
@@ -650,18 +607,16 @@ mod tests {
         assert!(lines[1].contains("Aug") || lines[1].contains("Jul"));
         assert!(
             !lines[2].contains(CELL),
-            "blank padding above the first row"
+            "caret row is blank with no cursor"
         );
-        assert!(lines[3].contains(CELL), "Sunday row");
-        assert!(!lines[4].contains(CELL), "blank row between day rows");
-        assert!(lines[5].contains("Mon "), "Monday row: {}", lines[5]);
-        assert!(lines[9].contains("Wed "));
-        assert!(lines[13].contains("Fri "));
-        assert!(
-            !lines[16].contains("Less"),
-            "blank padding below the last row"
-        );
-        assert!(lines[17].contains("Less") && lines[17].contains("More"));
+        assert!(lines[3].contains("S/M "), "row 0: {}", lines[3]);
+        assert!(lines[4].contains("T/W "));
+        assert!(lines[5].contains("T/F "));
+        assert!(lines[6].contains("S   "), "Saturday rides alone");
+        for (row, line) in lines.iter().enumerate().take(7).skip(3) {
+            assert!(line.contains(CELL), "row {row} has cells");
+        }
+        assert!(lines[7].contains("Less") && lines[7].contains("More"));
     }
 
     /// The grid opens with the newest weeks against the right edge: today is
@@ -728,72 +683,73 @@ mod tests {
         assert!(app.github_calendar.is_none());
         let lines = drawn(120, &app);
         assert!(lines[0].contains("[4] contributions"), "frame drawn");
-        assert!(!lines[5].contains(CELL), "no cells painted: {}", lines[5]);
+        assert!(!lines[3].contains(CELL), "no cells painted: {}", lines[3]);
     }
 
-    /// Nothing is highlighted until the user travels the grid, and when a day
-    /// is marked it gets a rounded frame around it. It used to be drawn with
-    /// REVERSED, which on a solid block just swaps foreground and background
-    /// and turns the marked cell into an invisible hole.
+    /// Nothing is highlighted until the user travels the grid. At half-block
+    /// density a box cannot be drawn around a half-height cell, so the marked
+    /// day is painted in plain white with a caret over its column.
     #[test]
-    fn the_marked_day_gets_a_rounded_frame_and_nothing_is_marked_before_that() {
+    fn the_marked_day_is_flagged_by_a_caret_and_only_after_travelling() {
         let mut app = app_with_calendar(1);
         app.focused_panel = FocusedPanel::Contributions;
         app.contrib_scroll.set(WEEKS);
         assert_eq!(app.contrib_cursor, None);
 
-        let bare = interior(&drawn(120, &app)).join("\n");
-        for corner in ['\u{256d}', '\u{256e}', '\u{2570}', '\u{256f}'] {
-            assert!(
-                !bare.contains(corner),
-                "nothing framed before travelling: {corner}"
-            );
-        }
+        let bare = drawn(120, &app);
+        assert!(
+            !bare[2].contains(CARET),
+            "no caret before travelling: {}",
+            bare[2]
+        );
 
-        // Mark a day well inside the window so the whole frame is drawn.
         let last = app.contrib_last_slot(chrono::Local::now().date_naive());
         app.contrib_cursor = Some(last - 7 * 3 - 4);
-        let lines = interior(&drawn(120, &app));
-        let marked = lines.join("\n");
-        for corner in ['\u{256d}', '\u{256e}', '\u{2570}', '\u{256f}'] {
-            assert!(marked.contains(corner), "frame corner missing: {corner}");
-        }
-        assert!(marked.contains('\u{2502}'), "frame sides missing");
+        let lines = drawn(120, &app);
+        assert!(lines[2].contains(CARET), "caret drawn: {}", lines[2]);
 
-        // The frame brackets the cell: a top edge row, then the day row, then
-        // a bottom edge row, and the cell itself is still painted.
-        let top = lines.iter().position(|l| l.contains('\u{256d}')).unwrap();
-        let bottom = lines.iter().position(|l| l.contains('\u{2570}')).unwrap();
-        assert_eq!(bottom, top + 2, "one day row between the two edges");
+        // The caret sits directly over the marked day's column.
+        let caret_col = lines[2].find(CARET).unwrap();
+        let marked_row = 3 + ((last - 7 * 3 - 4) % 7) / 2;
         assert!(
-            lines[top + 1].contains(CELL),
-            "the marked cell is still lit"
+            lines[marked_row].chars().count() > caret_col,
+            "the marked row reaches the caret column"
         );
     }
 
-    /// The frame must not be clipped when the marked day is the first drawn
-    /// column: its left edge lands in the day gutter, which is blank there.
+    /// The marked day is painted in plain text white, which has to beat both
+    /// intensity ladders: every other bright colour in the palette already
+    /// means something (behind, failed, ahead).
     #[test]
-    fn a_frame_on_the_first_column_draws_inside_the_gutter() {
-        let mut app = app_with_calendar(1);
+    fn the_marked_day_is_painted_in_a_colour_no_ladder_uses() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app_with_calendar(4);
         app.focused_panel = FocusedPanel::Contributions;
         app.contrib_scroll.set(0);
-        app.contrib_cursor = Some(3); // week 0, a Wednesday
-        let lines = interior(&drawn(120, &app));
-        let top = lines
-            .iter()
-            .position(|l| l.contains('\u{256d}'))
-            .expect("top edge drawn");
-        assert!(
-            lines[top].contains("\u{256d}\u{2500}\u{2500}\u{256e}"),
-            "whole top edge present: {}",
-            lines[top]
-        );
-        assert!(
-            lines[top + 1].contains('\u{2502}'),
-            "side edges present: {}",
-            lines[top + 1]
-        );
+        app.contrib_cursor = Some(3 * 7); // week 3, a Sunday: an upper half
+
+        let mut t = Terminal::new(TestBackend::new(120, CONTRIB_HEIGHT)).unwrap();
+        t.draw(|f| render(f, f.area(), &app)).unwrap();
+        let buf = t.backend().buffer().clone();
+
+        // Only grid cells count: the pane title is drawn in TEXT too when
+        // the strip has focus.
+        let marked = (0..120)
+            .flat_map(|x| (0..CONTRIB_HEIGHT).map(move |y| (x, y)))
+            .filter(|(x, y)| {
+                buf[(*x, *y)].symbol() == CELL && buf[(*x, *y)].style().fg == Some(colors::TEXT)
+            })
+            .count();
+        assert_eq!(marked, 1, "exactly one half cell is painted as marked");
+
+        for shade in colors::contrib_ladder(Source::Github) {
+            assert_ne!(colors::TEXT, shade, "the mark cannot collide with a shade");
+        }
+        for shade in colors::contrib_ladder(Source::Local) {
+            assert_ne!(colors::TEXT, shade);
+        }
     }
 
     /// The two sources count different things and can never agree, so they
@@ -826,9 +782,7 @@ mod tests {
             let mut seen = std::collections::HashSet::new();
             for x in 0..120 {
                 for y in 0..CONTRIB_HEIGHT {
-                    if buf[(x, y)].symbol() == "\u{2588}\u{2588}"
-                        || buf[(x, y)].symbol() == "\u{2588}"
-                    {
+                    if buf[(x, y)].symbol() == CELL {
                         seen.insert(format!("{:?}", buf[(x, y)].style().fg));
                     }
                 }
