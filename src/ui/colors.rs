@@ -25,31 +25,36 @@ pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers, borders
 
 /// Contribution intensity for the GitHub source, empty through busiest.
 ///
-/// Step 0 is `SURFACE`, the same near-invisible tone the dividers use, so an
-/// empty day reads as structure rather than as data. Steps 1 to 4 are
-/// github.com's own dark-theme greens, which cover a far wider range than an
-/// interpolation between two palette colours does: a busy day should not be
-/// a slightly brighter version of a quiet one, it should be obviously
-/// different from across the room.
+/// Sampled straight off github.com's dark-dimmed contribution graph rather
+/// than picked by eye or interpolated between two palette colours. The muted
+/// sage greens are the ones anyone who has looked at their own profile is
+/// expecting; the saturated standard-dark set reads as a different product.
+/// Step 0 is GitHub's own empty-square slate, which is a lift above the page
+/// rather than a colour, so an empty day stays structure rather than data.
 const CONTRIB_LADDER_GITHUB: [Color; 5] = [
-    Color::Rgb(69, 71, 90),
-    Color::Rgb(14, 68, 41),
-    Color::Rgb(0, 109, 50),
-    Color::Rgb(38, 166, 65),
-    Color::Rgb(57, 211, 83),
+    Color::Rgb(43, 49, 59),
+    Color::Rgb(39, 70, 37),
+    Color::Rgb(60, 105, 55),
+    Color::Rgb(91, 147, 83),
+    Color::Rgb(129, 194, 118),
 ];
 
-/// The same ladder for the local source, in blue, over the same span of
-/// darkness to brightness. The two sources count different things and will
-/// never agree, so they should not look identical: the colour says which one
-/// you are reading before the title does. Blue rather than red because red
-/// already means "CI failed" everywhere else.
+/// The same ladder for the local source, translated to blue. The two sources
+/// count different things and will never agree, so they should not look
+/// identical: the colour says which one you are reading before the title
+/// does. Blue rather than red because red already means "CI failed".
+///
+/// Derived by holding each green step's saturation and solving its lightness
+/// for the same relative luminance, so the two ladders climb at identical
+/// rates. A plain hue rotation was tried first and put step 1 within 4% of
+/// the empty slate, which is itself blue-hued: a whole intensity level
+/// vanished. Keep the luminances in step if either ladder changes.
 const CONTRIB_LADDER_LOCAL: [Color; 5] = [
-    Color::Rgb(69, 71, 90),
-    Color::Rgb(16, 52, 92),
-    Color::Rgb(13, 88, 163),
-    Color::Rgb(48, 140, 220),
-    Color::Rgb(96, 190, 255),
+    Color::Rgb(43, 49, 59),
+    Color::Rgb(45, 64, 85),
+    Color::Rgb(67, 95, 128),
+    Color::Rgb(104, 134, 170),
+    Color::Rgb(151, 178, 209),
 ];
 
 /// The intensity ladder for a source. One function, so the cells and the

@@ -787,33 +787,94 @@ mod tests {
     }
 
     /// A busy day must be obviously different from a quiet one, not a
-    /// slightly brighter version of it. Interpolating between two palette
-    /// colours gave barely a 2x spread across the whole ladder; these span
-    /// more than 3x, which is roughly what github.com itself uses.
+    /// slightly brighter version of it. The ladders that shipped before this
+    /// interpolated between two palette colours and climbed by as little as
+    /// 1.19x per step, which read as one flat tone.
+    ///
+    /// The thresholds are calibrated against github.com's own dark-dimmed
+    /// ladder, which is what `CONTRIB_LADDER_GITHUB` is sampled from: it
+    /// climbs at least 1.26x per step and spans 2.86x overall. An earlier
+    /// version of this test demanded 3.0x, a number invented before that
+    /// reference existed, and the real reference failed it.
     #[test]
-    fn the_intensity_ladders_span_a_wide_range() {
+    fn the_intensity_ladders_climb_at_a_visible_rate() {
         for source in [Source::Github, Source::Local] {
             let ladder = colors::contrib_ladder(source);
             let steps: Vec<f64> = ladder.iter().map(|c| luminance(*c)).collect();
 
             for step in 1..4 {
+                let ratio = steps[step + 1] / steps[step];
                 assert!(
-                    steps[step + 1] > steps[step],
-                    "{source:?} step {step} must be darker than {}",
+                    ratio >= 1.25,
+                    "{source:?} step {step} to {} climbs only {ratio:.2}x",
                     step + 1
                 );
             }
             assert!(
-                steps[4] / steps[1] >= 3.0,
-                "{source:?} spans only {:.1}x from quietest to busiest",
+                steps[4] / steps[1] >= 2.5,
+                "{source:?} spans only {:.2}x from quietest to busiest",
                 steps[4] / steps[1]
             );
             // The empty step is structure, not data: it must not read as a
-            // quiet day, so it sits below the whole active range.
+            // quiet day, so the first real step clears it.
             assert!(
-                steps[0] < steps[2],
-                "{source:?} empty step is brighter than a mid day"
+                steps[1] / steps[0] >= 1.2,
+                "{source:?} step 1 is only {:.2}x the empty slate, so a whole \
+                 intensity level disappears into it",
+                steps[1] / steps[0]
             );
         }
+    }
+
+    /// The two ladders must climb at the same rate, or the same amount of
+    /// work looks busier on one source than the other. The blue is derived
+    /// from the green by holding saturation and solving lightness for equal
+    /// luminance, so this is the property that derivation exists to give.
+    #[test]
+    fn both_ladders_climb_at_the_same_rate() {
+        let github: Vec<f64> = colors::contrib_ladder(Source::Github)
+            .iter()
+            .map(|c| luminance(*c))
+            .collect();
+        let local: Vec<f64> = colors::contrib_ladder(Source::Local)
+            .iter()
+            .map(|c| luminance(*c))
+            .collect();
+        for step in 0..5 {
+            assert!(
+                (github[step] - local[step]).abs() <= 2.0,
+                "step {step}: github {:.0} vs local {:.0}",
+                github[step],
+                local[step]
+            );
+        }
+    }
+
+    /// The greens are sampled off github.com's dark-dimmed graph, not chosen.
+    /// Pinning them stops a later tidy-up from drifting away from the thing
+    /// they are supposed to match.
+    #[test]
+    fn the_github_ladder_matches_the_sampled_reference() {
+        use ratatui::style::Color;
+        assert_eq!(
+            colors::contrib_ladder(Source::Github),
+            [
+                Color::Rgb(43, 49, 59),
+                Color::Rgb(39, 70, 37),
+                Color::Rgb(60, 105, 55),
+                Color::Rgb(91, 147, 83),
+                Color::Rgb(129, 194, 118),
+            ]
+        );
+    }
+
+    /// An empty day looks the same whichever source is showing: "nothing
+    /// happened" is not a property of where you counted it.
+    #[test]
+    fn an_empty_day_is_source_independent() {
+        assert_eq!(
+            colors::contrib_ladder(Source::Github)[0],
+            colors::contrib_ladder(Source::Local)[0]
+        );
     }
 }
