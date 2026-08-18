@@ -15,8 +15,8 @@ pub fn render(frame: &mut Frame, area: Rect) {
 
     let keybinds = [
         (
-            "1 / 2 / 3",
-            "Focus repo list / detail / inspector (Tab cycles)",
+            "1 / 2 / 3 / 4",
+            "Focus repo list / detail / inspector / contributions (Tab cycles)",
         ),
         (
             "mouse",
@@ -32,6 +32,11 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ),
         ("PgUp/PgDn", "Scroll focused pane by a page"),
         ("v", "Toggle detail ↔ compact view"),
+        ("c", "Toggle the contributions strip (a year of activity)"),
+        (
+            "C",
+            "Switch its source: github calendar \u{2194} your commits here",
+        ),
         ("enter", "Open repo in lazygit (pull/merge live here)"),
         ("e", "Open repo in $EDITOR"),
         ("o", "Open shell in repo dir"),

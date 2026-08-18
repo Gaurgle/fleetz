@@ -17,6 +17,16 @@ pub struct Config {
     /// under "local changes".
     #[serde(default)]
     pub extra_dirs: Vec<String>,
+    /// Whether the contribution strip starts open, and from which source:
+    /// "off", "github", or "local". `c` and `C` toggle it live; this is what
+    /// a fresh launch starts from.
+    #[serde(default)]
+    pub contributions: Option<String>,
+    /// Git author regex the local contribution source filters by, overriding
+    /// each repo's own `user.email`. `--author` takes a regex, so several
+    /// identities can be joined: `me@work.com\|me@home.com`.
+    #[serde(default)]
+    pub contributions_author: Option<String>,
     #[serde(default)]
     pub groups: HashMap<String, Vec<String>>,
     /// Pin the startup view: "detail", "compact", or "auto" (the default,
@@ -72,6 +82,8 @@ fn default_inspector_pct() -> u16 {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            contributions: None,
+            contributions_author: None,
             work_start: 9,
             work_end: 18,
             repo_limit: 50,

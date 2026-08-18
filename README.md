@@ -92,13 +92,16 @@ fleetz --watch                        # live dashboard, auto-refreshes
 
 | Key | Action |
 |-----|--------|
-| `1` / `2` / `3` | Focus repo list / detail / inspector |
+| `1` / `2` / `3` / `4` | Focus repo list / detail / inspector / contributions |
 | `Tab` | Cycle panel focus |
 | mouse | Click a panel to focus; drag a pane border to resize it; scroll wheel scrolls whichever panel the cursor is over |
-| `j` / `k`, `↑` / `↓` | Repo list: move selection · Detail: pick commit · Inspector: scroll |
+| `j` / `k`, `↑` / `↓` | Repo list: move selection · Detail: pick commit · Inspector: scroll · Contributions: move the day cursor a week (`h` / `l` move it a day, Home/End jump to the ends) |
 | `J` / `K` | Scroll the detail pane (works from the repo list too) |
 | `PgUp` / `PgDn` | Scroll focused pane by a page |
 | `v` | Toggle detail vs compact view |
+| `c` | Toggle the contributions strip (a year of activity, GitHub-style) |
+| `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
+| `4` | Focus the contributions strip (only while it is open) |
 | `Enter` | Open repo in lazygit (pull / merge live here) |
 | `e` | Open repo in `$EDITOR` |
 | `o` | Open shell in repo dir |

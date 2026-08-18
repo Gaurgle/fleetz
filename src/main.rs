@@ -229,6 +229,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.window = initial_window;
     app.dirty_mode = mode == Mode::Dirty;
     app.loading = true;
+    // The strip's open state and source are persisted, so a dashboard set up
+    // once comes back that way. `c` and `C` still change it for the session.
+    app.contributions =
+        app::ContributionsMode::from_config(config.contributions.as_deref().unwrap_or("off"));
+    app.contrib_author = config.contributions_author.clone();
     // Pane sizes start at their defaults every launch. Only an explicit
     // persist_pane_sizes opt-in restores the ones saved on last exit.
     app.persist_pane_sizes = config.persist_pane_sizes;
@@ -583,9 +588,11 @@ async fn run_event_loop(
                         // a poll that updated CI also refreshed the year at no
                         // extra cost. A payload predating the field leaves the
                         // last good calendar in place rather than blanking it.
-                        // App state for it lands with the pane itself; until
-                        // then it is parsed and dropped rather than ignored.
-                        let _ = calendar;
+                        // A payload predating the field leaves the last good
+                        // calendar in place rather than blanking it.
+                        if calendar.is_some() {
+                            app.github_calendar = calendar;
+                        }
                         // Overwrite only the GitHub-owned fields: the local
                         // git state is the sweep's business, not this poll's.
                         for repo in &mut app.repos {
@@ -731,6 +738,19 @@ fn handle_mouse_input(
         MouseEventKind::Down(MouseButton::Left) => {
             app.clear_status();
             app.focus_panel(panel);
+            // A click inside the strip both focuses it and picks the day under
+            // the cursor, so the readout answers what you actually pointed at.
+            if let Some(strip) = rects.contributions
+                && let Some(slot) = ui::contributions::slot_at(
+                    strip,
+                    ui::contributions::tier(strip.width),
+                    m.column,
+                    m.row,
+                )
+            {
+                app.contrib_slot = slot;
+                app.needs_redraw = true;
+            }
         }
         // Scroll the panel under the cursor without changing focus.
         MouseEventKind::ScrollDown => match panel {
@@ -1048,6 +1068,41 @@ async fn handle_normal_input(
         KeyCode::Char('K') => app.scroll_focused(-1),
         KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_focused(1),
         KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_focused(-1),
+        // Must be matched before the plain `c` arm below, or ctrl-c toggles
+        // the contributions strip instead of quitting.
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.should_quit = true;
+        }
+        KeyCode::Char('c') => app.toggle_contributions(),
+        KeyCode::Char('C') => {
+            app.cycle_contributions_source();
+            // Switching to the local source is useless without a histogram,
+            // and the sweep is the only thing that fills one. Ask for one
+            // rather than showing an empty year that looks like a bug.
+            if app.contributions == app::ContributionsMode::Local
+                && app.repos.iter().all(|r| r.daily.is_none())
+            {
+                app.set_status("Sweeping for local history…".to_string(), false);
+                start_sweep(app, tx, false, args.author.clone(), true);
+            }
+        }
+        KeyCode::Char('4') => app.focus_panel(FocusedPanel::Contributions),
+        KeyCode::Char('h') | KeyCode::Left if app.focused_panel == FocusedPanel::Contributions => {
+            app.move_contrib_cursor(-1, chrono::Local::now().date_naive())
+        }
+        KeyCode::Char('l') | KeyCode::Right if app.focused_panel == FocusedPanel::Contributions => {
+            app.move_contrib_cursor(1, chrono::Local::now().date_naive())
+        }
+        KeyCode::Home if app.focused_panel == FocusedPanel::Contributions => app
+            .move_contrib_cursor(
+                -(contributions::SLOTS as i32),
+                chrono::Local::now().date_naive(),
+            ),
+        KeyCode::End if app.focused_panel == FocusedPanel::Contributions => app
+            .move_contrib_cursor(
+                contributions::SLOTS as i32,
+                chrono::Local::now().date_naive(),
+            ),
         KeyCode::Char('j') | KeyCode::Down => match app.focused_panel {
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
@@ -1237,9 +1292,6 @@ async fn handle_normal_input(
             } else {
                 app.set_status("Watch off".to_string(), false);
             }
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.should_quit = true;
         }
         _ => {}
     }
@@ -1448,6 +1500,26 @@ fn sweep_targets(app: &App, only: Option<usize>) -> Vec<SweepTarget> {
 /// `manual` marks a sweep the user asked for by keypress. Only those announce
 /// themselves in the header; a watch-timer sweep runs silently and simply
 /// updates the rows when it lands.
+/// What a sweep needs in order to fill the local contribution histogram.
+/// `None` means the strip is not showing local data, so the year-long `git
+/// log` per repo is skipped entirely: it is the most expensive probe in the
+/// sweep and nothing on screen would read it.
+#[derive(Clone)]
+struct ContribProbe {
+    /// Grid start, resolved once so every repo in one sweep shares a calendar.
+    start: chrono::NaiveDate,
+    /// Author regex from config, or None to resolve each repo's `user.email`.
+    author: Option<String>,
+}
+
+/// Whether this sweep should pay for the per-repo commit histogram.
+fn contrib_probe(app: &App) -> Option<ContribProbe> {
+    (app.contributions == app::ContributionsMode::Local).then(|| ContribProbe {
+        start: contributions::grid_start(chrono::Local::now().date_naive()),
+        author: app.contrib_author.clone(),
+    })
+}
+
 fn start_sweep(
     app: &mut App,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
@@ -1464,7 +1536,8 @@ fn start_sweep(
     }
     app.sweep_started = Some(std::time::Instant::now());
     app.sweep_manual = manual;
-    spawn_sweep(tx.clone(), targets, do_fetch, author, true);
+    let probe = contrib_probe(app);
+    spawn_sweep(tx.clone(), targets, do_fetch, author, true, probe);
 }
 
 /// Sweep a single repo (the `f` fetch and the post-branch-switch refresh).
@@ -1481,7 +1554,14 @@ fn start_single_sweep(
     if targets.is_empty() {
         return;
     }
-    spawn_sweep(tx.clone(), targets, do_fetch, author, false);
+    spawn_sweep(
+        tx.clone(),
+        targets,
+        do_fetch,
+        author,
+        false,
+        contrib_probe(app),
+    );
 }
 
 /// The shared sweep body: fetch (capped) then rebuild (capped), streaming
@@ -1492,6 +1572,7 @@ fn spawn_sweep(
     do_fetch: bool,
     author: Option<String>,
     report_done: bool,
+    probe: Option<ContribProbe>,
 ) {
     tokio::spawn(async move {
         let probe_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
@@ -1502,13 +1583,14 @@ fn spawn_sweep(
             let fetch_sem = fetch_sem.clone();
             let tx = tx.clone();
             let author = author.clone();
+            let probe = probe.clone();
             set.spawn(async move {
                 if do_fetch {
                     let _permit = fetch_sem.acquire().await;
                     git::fetch(&target.fs_path).await;
                 }
                 let _permit = probe_sem.acquire().await;
-                let status = rebuild_repo_status(&target, author.as_deref()).await;
+                let status = rebuild_repo_status(&target, author.as_deref(), probe.as_ref()).await;
                 let _ = tx.send(AppEvent::RepoUpdated {
                     path: target.display_path.clone(),
                     status: Box::new(status),
@@ -1527,7 +1609,11 @@ fn spawn_sweep(
 /// Full per-repo rebuild, preserving GitHub-only fields from the old status.
 /// Two-tier: the cheap probes always run, the expensive ones only when the
 /// repo's WorkKey says something actually moved.
-async fn rebuild_repo_status(target: &SweepTarget, author: Option<&str>) -> RepoStatus {
+async fn rebuild_repo_status(
+    target: &SweepTarget,
+    author: Option<&str>,
+    probe: Option<&ContribProbe>,
+) -> RepoStatus {
     let path = &target.fs_path;
     let old = &target.old;
 
@@ -1562,7 +1648,30 @@ async fn rebuild_repo_status(target: &SweepTarget, author: Option<&str>) -> Repo
         )
     };
 
+    // The local calendar is a year of log per repo, so it is gated twice:
+    // only when the strip is actually showing it, and only when the WorkKey
+    // says this repo moved. An idle fleet costs nothing.
+    let daily = match probe {
+        None => old.daily.clone(),
+        Some(_) if unchanged && old.daily.is_some() => old.daily.clone(),
+        Some(probe) => {
+            let author = match &probe.author {
+                Some(a) => Some(a.clone()),
+                None => git::user_email(path).await,
+            };
+            match author {
+                Some(author) => git::daily_commits(path, probe.start, &author)
+                    .await
+                    .map(Box::new),
+                // No identity configured: better to show nothing than to
+                // count everyone's commits as if they were yours.
+                None => None,
+            }
+        }
+    };
+
     RepoStatus {
+        daily,
         branches,
         dirty,
         behind: total_behind,
@@ -2388,5 +2497,57 @@ mod tests {
     fn resolve_cutoff_dirty_mode_is_error() {
         let config = config::Config::default();
         assert!(resolve_cutoff(None, &Mode::Dirty, &config).is_err());
+    }
+
+    /// `c` toggles the strip and ctrl-c quits. Match arms are ordered, so an
+    /// unguarded `c` arm placed above the modifier check silently turns the
+    /// quit key into a pane toggle. That regression happened once already.
+    #[test]
+    fn ctrl_c_is_matched_before_the_plain_c_arm() {
+        let source = include_str!("main.rs");
+        let ctrl_c = source
+            .find("KeyCode::Char('c') if key.modifiers")
+            .expect("ctrl-c arm present");
+        let plain_c = source
+            .find("KeyCode::Char('c') => app.toggle_contributions()")
+            .expect("toggle arm present");
+        assert!(
+            ctrl_c < plain_c,
+            "the ctrl-c arm must be matched before the plain c arm"
+        );
+    }
+
+    /// The local histogram is the most expensive probe in the sweep: a year
+    /// of log per repo. It must not run for a fleet whose strip is closed or
+    /// is showing GitHub's own numbers.
+    #[test]
+    fn the_daily_probe_is_skipped_unless_the_local_source_is_showing() {
+        let mut app = App::new(vec![test_repo()], "h".to_string(), false, 120, 44);
+        assert_eq!(app.contributions, app::ContributionsMode::Off);
+        assert!(
+            contrib_probe(&app).is_none(),
+            "closed strip: no year-long log"
+        );
+        app.contributions = app::ContributionsMode::Github;
+        assert!(
+            contrib_probe(&app).is_none(),
+            "github source needs no local log"
+        );
+        app.contributions = app::ContributionsMode::Local;
+        let probe = contrib_probe(&app).expect("local source probes");
+        assert_eq!(
+            probe.start,
+            contributions::grid_start(chrono::Local::now().date_naive()),
+            "every repo in one sweep shares a grid"
+        );
+    }
+
+    #[test]
+    fn the_probe_carries_the_configured_author_override() {
+        let mut app = App::new(vec![test_repo()], "h".to_string(), false, 120, 44);
+        app.contributions = app::ContributionsMode::Local;
+        app.contrib_author = Some(r"me@work.com\|me@home.com".to_string());
+        let probe = contrib_probe(&app).unwrap();
+        assert_eq!(probe.author.as_deref(), Some(r"me@work.com\|me@home.com"));
     }
 }

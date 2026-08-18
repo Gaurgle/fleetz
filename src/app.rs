@@ -63,14 +63,6 @@ impl ContributionsMode {
     pub fn is_open(self) -> bool {
         self != Self::Off
     }
-
-    pub fn source(self) -> Option<crate::contributions::Source> {
-        match self {
-            Self::Off => None,
-            Self::Github => Some(crate::contributions::Source::Github),
-            Self::Local => Some(crate::contributions::Source::Local),
-        }
-    }
 }
 
 /// One quick-filter a repo can be toggled against.
@@ -853,6 +845,12 @@ pub struct App {
     /// The account-wide calendar from the last GitHub poll. None until the
     /// first poll lands, or when the payload predates the field.
     pub github_calendar: Option<Box<crate::contributions::Calendar>>,
+    /// Git author regex the local contribution source filters by, from the
+    /// `contributions_author` config key. None resolves each repo's own
+    /// `user.email` instead. Lives on `App` rather than being read from
+    /// `Config` at each use, because the sweep is started from call sites
+    /// that hold an `App` but not a `Config`.
+    pub contrib_author: Option<String>,
     /// Grid slot the day cursor sits on. Meaningful only while the strip has
     /// focus; clamped against today on every move, since "today" advances
     /// under a long-running session.
@@ -960,6 +958,7 @@ impl App {
             contributions: ContributionsMode::Off,
             last_contributions_source: ContributionsMode::Github,
             github_calendar: None,
+            contrib_author: None,
             // Seeded on today rather than on slot 0, which would be the
             // oldest day of the year: the cursor should open where the eye
             // already is.
