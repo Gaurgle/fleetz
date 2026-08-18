@@ -423,6 +423,13 @@ fn apply_load_result(
                 // clock starts here rather than firing again immediately.
                 app.last_github_poll = Some(chrono::Local::now());
             }
+            // The calendar rides the same fetch as the dataset. Dropping it
+            // here left the strip blank until the first background poll
+            // landed, minutes later, which read as the feature being broken.
+            // A WindowApply carries None and must not blank a good calendar.
+            if lr.github_calendar.is_some() {
+                app.github_calendar = lr.github_calendar;
+            }
             app.clamp_after_reload();
             app.last_refreshed = Some(chrono::Local::now());
             match lr.kind {
@@ -741,9 +748,10 @@ fn handle_mouse_input(
             // A click inside the strip both focuses it and picks the day under
             // the cursor, so the readout answers what you actually pointed at.
             if let Some(strip) = rects.contributions
-                && let Some(slot) = ui::contributions::slot_at(strip, m.column, m.row)
+                && let Some(slot) =
+                    ui::contributions::slot_at(strip, app.contrib_scroll.get(), m.column, m.row)
             {
-                app.contrib_slot = slot;
+                app.contrib_cursor = Some(slot);
                 app.needs_redraw = true;
             }
         }
@@ -752,18 +760,16 @@ fn handle_mouse_input(
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
             FocusedPanel::Inspector => app.scroll_inspector(1),
-            // A wheel over the strip walks the day cursor a week at a time,
-            // which is the only axis a year-wide grid can scroll along.
-            FocusedPanel::Contributions => {
-                app.move_contrib_cursor(7, chrono::Local::now().date_naive())
-            }
+            // A wheel over the strip scrolls the grid without disturbing the
+            // cursor, which is what a wheel does everywhere else in the app.
+            FocusedPanel::Contributions => app.scroll_contributions(3),
         },
         MouseEventKind::ScrollUp => match panel {
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.detail_nav_up(),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
             FocusedPanel::Contributions => {
-                app.move_contrib_cursor(-7, chrono::Local::now().date_naive())
+                app.move_contrib_cursor(0, -1, chrono::Local::now().date_naive())
             }
         },
         _ => {}
@@ -1093,28 +1099,27 @@ async fn handle_normal_input(
             }
         }
         KeyCode::Char('4') => app.focus_panel(FocusedPanel::Contributions),
+        // Left/right walk columns (weeks), up/down walk rows (weekdays),
+        // which is how the grid reads on screen. They used to be swapped, so
+        // the arrow keys moved at right angles to what the eye expected.
         KeyCode::Char('h') | KeyCode::Left if app.focused_panel == FocusedPanel::Contributions => {
-            app.move_contrib_cursor(-1, chrono::Local::now().date_naive())
+            app.move_contrib_cursor(-1, 0, chrono::Local::now().date_naive())
         }
         KeyCode::Char('l') | KeyCode::Right if app.focused_panel == FocusedPanel::Contributions => {
-            app.move_contrib_cursor(1, chrono::Local::now().date_naive())
+            app.move_contrib_cursor(1, 0, chrono::Local::now().date_naive())
         }
-        KeyCode::Home if app.focused_panel == FocusedPanel::Contributions => app
-            .move_contrib_cursor(
-                -(contributions::SLOTS as i32),
-                chrono::Local::now().date_naive(),
-            ),
-        KeyCode::End if app.focused_panel == FocusedPanel::Contributions => app
-            .move_contrib_cursor(
-                contributions::SLOTS as i32,
-                chrono::Local::now().date_naive(),
-            ),
+        KeyCode::Home if app.focused_panel == FocusedPanel::Contributions => {
+            app.jump_contrib_cursor(false, chrono::Local::now().date_naive())
+        }
+        KeyCode::End if app.focused_panel == FocusedPanel::Contributions => {
+            app.jump_contrib_cursor(true, chrono::Local::now().date_naive())
+        }
         KeyCode::Char('j') | KeyCode::Down => match app.focused_panel {
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
             FocusedPanel::Inspector => app.scroll_inspector(1),
             FocusedPanel::Contributions => {
-                app.move_contrib_cursor(7, chrono::Local::now().date_naive())
+                app.move_contrib_cursor(0, 1, chrono::Local::now().date_naive())
             }
         },
         KeyCode::Char('k') | KeyCode::Up => match app.focused_panel {
@@ -1122,7 +1127,7 @@ async fn handle_normal_input(
             FocusedPanel::Detail => app.detail_nav_up(),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
             FocusedPanel::Contributions => {
-                app.move_contrib_cursor(-7, chrono::Local::now().date_naive())
+                app.move_contrib_cursor(0, -1, chrono::Local::now().date_naive())
             }
         },
         KeyCode::PageDown => match app.focused_panel {
@@ -2556,5 +2561,55 @@ mod tests {
         app.contrib_author = Some(r"me@work.com\|me@home.com".to_string());
         let probe = contrib_probe(&app).unwrap();
         assert_eq!(probe.author.as_deref(), Some(r"me@work.com\|me@home.com"));
+    }
+
+    /// The startup fetch carries the calendar; dropping it here left the
+    /// strip blank until the first background poll landed minutes later.
+    #[test]
+    fn a_load_result_stores_its_calendar_on_the_app() {
+        let mut app = App::new(Vec::new(), "h".to_string(), false, 120, 44);
+        assert!(app.github_calendar.is_none());
+        let today = chrono::Local::now().date_naive();
+        let mut cal = contributions::Calendar::new(today, contributions::Source::Github);
+        cal.add(today, 5);
+        apply_load_result(
+            &mut app,
+            &config::Config::default(),
+            Ok(Box::new(LoadResult {
+                kind: LoadKind::Initial,
+                repos: Vec::new(),
+                header: "h".to_string(),
+                dataset: Some(Vec::new()),
+                github_calendar: Some(Box::new(cal)),
+            })),
+        );
+        assert_eq!(
+            app.github_calendar.as_ref().map(|c| c.total()),
+            Some(5),
+            "the startup fetch must fill the strip"
+        );
+    }
+
+    /// A time-window apply re-filters what is already loaded and carries no
+    /// calendar. It must not blank the one already on screen.
+    #[test]
+    fn a_window_apply_does_not_blank_the_calendar() {
+        let mut app = App::new(Vec::new(), "h".to_string(), false, 120, 44);
+        let today = chrono::Local::now().date_naive();
+        let mut cal = contributions::Calendar::new(today, contributions::Source::Github);
+        cal.add(today, 9);
+        app.github_calendar = Some(Box::new(cal));
+        apply_load_result(
+            &mut app,
+            &config::Config::default(),
+            Ok(Box::new(LoadResult {
+                kind: LoadKind::Initial,
+                repos: Vec::new(),
+                header: "h".to_string(),
+                dataset: None,
+                github_calendar: None,
+            })),
+        );
+        assert_eq!(app.github_calendar.as_ref().map(|c| c.total()), Some(9));
     }
 }
