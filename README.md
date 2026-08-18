@@ -99,7 +99,7 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `J` / `K` | Scroll the detail pane (works from the repo list too) |
 | `PgUp` / `PgDn` | Scroll focused pane by a page |
 | `v` | Toggle detail vs compact view |
-| `c` | Toggle the contributions strip: a year of activity, GitHub-style. Two days are packed per terminal row with half-blocks, so the whole year fits in 8 rows; the grid scrolls rather than shrinking, and no day is marked until you move the cursor |
+| `c` | Toggle the contributions strip: a year of activity, GitHub-style. Each day is a half-block square with its own padding, so the whole year fits in 11 rows; the grid scrolls rather than shrinking, and no day is marked until you move the cursor |
 | `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
 | `4` | Focus the contributions strip (only while it is open) |
 | `h` / `l`, `←` / `→` | Contributions: move the day cursor back/forward a week. The grid scrolls with it, oldest weeks hiding off to the left |
