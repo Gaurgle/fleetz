@@ -240,6 +240,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(app::DEFAULT_CONTRIBUTIONS),
     );
     app.contrib_author = config.contributions_author.clone();
+    app.show_pr_detail = args.prs;
     // Pane sizes start at their defaults every launch. Only an explicit
     // persist_pane_sizes opt-in restores the ones saved on last exit.
     app.persist_pane_sizes = config.persist_pane_sizes;
@@ -537,7 +538,7 @@ async fn run_event_loop(
                     // is about to change with nothing `Pending` yet to notice.
                     if due || app.push_detected {
                         app.push_detected = false;
-                        start_github_poll(app, &tx, args, config);
+                        start_github_poll(app, &tx, config);
                     }
                 }
             }
@@ -1310,7 +1311,7 @@ async fn handle_normal_input(
         KeyCode::Char('r') => {
             app.set_status("Refreshing…".to_string(), false);
             start_sweep(app, tx, false, args.author.clone(), true);
-            start_github_poll(app, tx, args, config);
+            start_github_poll(app, tx, config);
         }
         // Full reload: re-fetch GitHub (cache-bypassed) and re-run discovery,
         // so a just-pushed or newly-cloned repo appears. Shifted because it
@@ -1518,7 +1519,6 @@ fn github_poll_secs(app: &App, config: &config::Config) -> i64 {
 fn start_github_poll(
     app: &mut App,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
-    args: &Args,
     config: &config::Config,
 ) {
     if app.github_poll_inflight || app.dirty_mode {
@@ -1526,7 +1526,7 @@ fn start_github_poll(
     }
     app.github_poll_inflight = true;
     app.github_poll_started = Some(std::time::Instant::now());
-    spawn_github_poll(tx, args, config);
+    spawn_github_poll(tx, config);
 }
 
 /// Snapshot the repos that have a local path, as sweep targets.
@@ -1742,17 +1742,13 @@ async fn rebuild_repo_status(
 
 /// Re-poll GitHub for PR and CI data in the background, so badges stop being
 /// frozen at whatever they were when fleetz launched.
-fn spawn_github_poll(
-    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
-    args: &Args,
-    config: &config::Config,
-) {
+fn spawn_github_poll(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, config: &config::Config) {
     let tx = tx.clone();
     let repo_limit = config.repo_limit;
-    let include_prs = args.prs;
-    let cache = cache::ApiCache::new(config.cache_ttl, repo_limit, include_prs);
+    // PR data is always fetched now, so the cache key no longer varies by it.
+    let cache = cache::ApiCache::new(config.cache_ttl, repo_limit, true);
     tokio::spawn(async move {
-        let result = github::fetch_repos(repo_limit, include_prs, &cache, true).await;
+        let result = github::fetch_repos(repo_limit, &cache, true).await;
         let _ = tx.send(AppEvent::Github(result.map(Box::new)));
     });
 }
@@ -1812,7 +1808,7 @@ async fn load_repos(
 
     // Fetch from GitHub (with caching)
     let api_cache = cache::ApiCache::new(config.cache_ttl, config.repo_limit, args.prs);
-    let fetch = fetch_dataset(config, args, &api_cache, bypass_cache).await?;
+    let fetch = fetch_dataset(config, &api_cache, bypass_cache).await?;
     let (dataset, calendar) = (fetch.repos, fetch.calendar);
 
     let (cutoff, header) = resolve_cutoff(window, mode, config)?;
@@ -1884,11 +1880,10 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
 /// repo_limit repos by push date.
 async fn fetch_dataset(
     config: &config::Config,
-    args: &Args,
     cache: &cache::ApiCache,
     bypass_cache: bool,
 ) -> Result<github::GithubFetch, String> {
-    github::fetch_repos(config.repo_limit, args.prs, cache, bypass_cache).await
+    github::fetch_repos(config.repo_limit, cache, bypass_cache).await
 }
 
 /// Cutoff + header for the current view. An active TimeWindow (set by the

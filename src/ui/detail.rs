@@ -60,6 +60,11 @@ pub fn split_main(area: Rect, repo_list_pct: u16) -> (Rect, Rect) {
     (h[0], h[1])
 }
 
+/// PR numbers shown inline on the header's remote row before the rest are
+/// summarised with a `+`. Two keeps the row short enough that CI still fits
+/// beside it on a normal pane.
+const PR_NUMBERS_SHOWN: usize = 2;
+
 /// Most changed files listed in the inspector before the rest are collapsed
 /// into a "… and N more" line -- keeps a huge commit from turning the pane
 /// into an endless scroll.
@@ -451,65 +456,145 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Status + path
+    // The pane's header block reads left-to-right as local-to-remote: what is
+    // on this disk sits on the left of each row, what is on GitHub sits flush
+    // right. The identity pair already worked that way; the rest of the block
+    // now says so out loud rather than mixing "how it is doing" with "where
+    // it lives" in one run of tokens.
+    //
+    //   ○ 3 behind, 1 ahead                               ● Gaurgle
+    //   ~/repos/fleetz              git@github.com:Gaurgle/fleetz.git
+    //   * main · 1 stash               2 open PRs #13 · CI ◉ passed
+    //
+    // Each row right-aligns its own remote half independently and drops it
+    // when it will not fit. Owner and name used to be placed together or not
+    // at all, because they were one fact stacked over two rows; row two now
+    // carries the remote URL instead, which spells the name out anyway.
     let status_color = badges::status_color(repo);
     // `✓` when synced, matching the list badge, and never `◉`: the ringed disk
-    // belongs to CI alone now, and this line sits a few cells from the pane's
-    // own CI badge.
+    // belongs to CI alone now.
     let status_icon = if repo.is_synced() { "✓" } else { "○" };
     let path_str = repo.path.as_deref().unwrap_or("not cloned");
 
-    let mut status_line = vec![Span::styled(
+    // Row 1 left: how it is doing relative to the remote.
+    let row1_left = vec![Span::styled(
         format!("{status_icon} {}", repo.long_status()),
         Style::default().fg(status_color),
     )];
-    // Open PRs sit with the sync state rather than only in their own section
-    // further down. This pane is the repo's main window, and "there is a PR
-    // waiting on this" is the same kind of fact as "you are three behind":
-    // something you want off the top line, not something you scroll for.
-    if repo.pr_count > 0 {
-        let label = if repo.pr_count == 1 { "PR" } else { "PRs" };
-        status_line.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
-        status_line.push(Span::styled(
-            format!("{} open {label}", repo.pr_count),
-            Style::default().fg(colors::PR_CLR),
+
+    // Row 2 left: where it lives on this machine.
+    let row2_left = vec![Span::styled(
+        format!("  {path_str}"),
+        Style::default().fg(colors::OVERLAY),
+    )];
+
+    // Row 3 left: facts that exist only on this disk.
+    let mut row3_left: Vec<Span> = Vec::new();
+    if let Some(head) = repo.branches.iter().find(|b| b.is_head) {
+        row3_left.push(Span::styled(
+            "  * ",
+            Style::default().fg(colors::ref_color(crate::model::RefKind::Head)),
+        ));
+        row3_left.push(Span::styled(
+            head.name.clone(),
+            Style::default().fg(colors::ref_color(crate::model::RefKind::Head)),
         ));
     }
-    status_line.push(Span::raw("   "));
-    status_line.push(Span::styled(
-        path_str.to_string(),
-        Style::default().fg(colors::OVERLAY),
-    ));
-    let mut url_line: Vec<Span> = Vec::new();
-    if let Some(ref url) = repo.remote_url {
-        url_line.push(Span::styled(
-            format!("  {url}"),
-            Style::default().fg(colors::OVERLAY),
+    let mut local_extra: Vec<String> = Vec::new();
+    if repo.stash_count > 0 {
+        let noun = if repo.stash_count == 1 {
+            "stash"
+        } else {
+            "stashes"
+        };
+        local_extra.push(format!("{} {noun}", repo.stash_count));
+    }
+    if !repo.worktrees.is_empty() {
+        let noun = if repo.worktrees.len() == 1 {
+            "worktree"
+        } else {
+            "worktrees"
+        };
+        local_extra.push(format!("{} {noun}", repo.worktrees.len()));
+    }
+    for extra in local_extra {
+        if row3_left.is_empty() {
+            row3_left.push(Span::raw("  "));
+        } else {
+            row3_left.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
+        }
+        row3_left.push(Span::styled(extra, Style::default().fg(colors::OVERLAY)));
+    }
+
+    // Row 3 right: facts that live on GitHub.
+    let mut row3_right: Vec<Span> = Vec::new();
+    if repo.pr_count > 0 {
+        let label = if repo.pr_count == 1 { "PR" } else { "PRs" };
+        let mut text = format!("{} open {label}", repo.pr_count);
+        // The numbers themselves, so the pane names the PR rather than only
+        // counting it. Capped so a busy repo cannot push CI off the row.
+        if !repo.prs.is_empty() {
+            let shown: Vec<String> = repo
+                .prs
+                .iter()
+                .take(PR_NUMBERS_SHOWN)
+                .map(|pr| format!("#{}", pr.number))
+                .collect();
+            text.push(' ');
+            text.push_str(&shown.join(" "));
+            if repo.prs.len() > PR_NUMBERS_SHOWN {
+                text.push('+');
+            }
+        }
+        row3_right.push(Span::styled(text, Style::default().fg(colors::PR_CLR)));
+    }
+    if repo.ci_status != CiStatus::Unknown {
+        let (ci_sym, ci_color, ci_label) = badges::ci_display(&repo.ci_status);
+        if !row3_right.is_empty() {
+            row3_right.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
+        }
+        row3_right.push(Span::styled(
+            format!("CI {ci_sym} {ci_label}"),
+            Style::default().fg(ci_color),
         ));
     }
 
-    // Identity, stacked flush to the pane's right edge: owner on the status
-    // row, repo name directly beneath it on the remote-URL row. Both rows are
-    // placed together or not at all, so the pair never renders half-aligned.
+    // Right halves. Owner on row 1, the remote locator on row 2, GitHub's own
+    // state on row 3.
     let (owner_group, owner_w) = owner_spans(repo);
-    let (name_group, name_w) = name_spans(repo);
-    if !owner_group.is_empty() {
-        let status_w = span_width(&status_line);
-        let url_w = span_width(&url_line);
-        if let (Some(owner_gap), Some(name_gap)) = (
-            identity_gap(width, status_w, owner_w),
-            identity_gap(width, url_w, name_w),
-        ) {
-            status_line.push(Span::raw(" ".repeat(owner_gap)));
-            status_line.extend(owner_group);
-            url_line.push(Span::raw(" ".repeat(name_gap)));
-            url_line.extend(name_group);
+    let (remote_loc, remote_loc_w) = match repo.remote_url.as_deref() {
+        Some(url) => (
+            vec![Span::styled(
+                url.to_string(),
+                Style::default().fg(colors::OVERLAY),
+            )],
+            url.chars().count(),
+        ),
+        None => name_spans(repo),
+    };
+    let row3_right_w = span_width(&row3_right);
+
+    let mut row1 = row1_left;
+    let mut row2 = row2_left;
+    let mut row3 = row3_left;
+    for (line, right, right_w) in [
+        (&mut row1, owner_group, owner_w),
+        (&mut row2, remote_loc, remote_loc_w),
+        (&mut row3, row3_right, row3_right_w),
+    ] {
+        if right.is_empty() {
+            continue;
+        }
+        if let Some(gap) = identity_gap(width, span_width(line), right_w) {
+            line.push(Span::raw(" ".repeat(gap)));
+            line.extend(right);
         }
     }
 
-    lines.push(Line::from(status_line));
-    if !url_line.is_empty() {
-        lines.push(Line::from(url_line));
+    lines.push(Line::from(row1));
+    lines.push(Line::from(row2));
+    if !row3.is_empty() {
+        lines.push(Line::from(row3));
     }
     lines.push(Line::from(""));
 
@@ -766,30 +851,30 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
     }
 
-    // CI status
-    if repo.ci_status != CiStatus::Unknown {
-        let (ci_sym, ci_color, ci_label) = badges::ci_display(&repo.ci_status);
-        let mut ci_spans = vec![
-            Span::styled(format!("CI {ci_sym} "), Style::default().fg(ci_color)),
-            Span::styled(ci_label, Style::default().fg(ci_color)),
-        ];
-        if let Some(ref wf) = repo.ci_workflow {
-            ci_spans.push(Span::styled(
-                format!(" · {wf}"),
-                Style::default().fg(colors::OVERLAY),
-            ));
-        }
-        if let Some(ref dur) = repo.ci_duration {
-            ci_spans.push(Span::styled(
-                format!(" · {dur}"),
-                Style::default().fg(colors::OVERLAY),
-            ));
-        }
+    // CI's headline moved up to the header's remote row, where it belongs
+    // with the other things GitHub knows. The workflow name and duration stay
+    // here: they are detail rather than state, and the header row has to
+    // leave room for the PR numbers beside them.
+    if repo.ci_status != CiStatus::Unknown
+        && (repo.ci_workflow.is_some() || repo.ci_duration.is_some())
+    {
+        let (_, ci_color, _) = badges::ci_display(&repo.ci_status);
+        let mut ci_spans = vec![Span::styled("CI ", Style::default().fg(ci_color))];
+        let detail: Vec<String> = [repo.ci_workflow.clone(), repo.ci_duration.clone()]
+            .into_iter()
+            .flatten()
+            .collect();
+        ci_spans.push(Span::styled(
+            detail.join(" · "),
+            Style::default().fg(colors::OVERLAY),
+        ));
         lines.push(Line::from(ci_spans));
     }
 
     // PRs
-    if !repo.prs.is_empty() {
+    // Gated on `-p`: the header row already names the open PRs by number, so
+    // this section is the opt-in detail rather than the news itself.
+    if app.show_pr_detail && !repo.prs.is_empty() {
         let pr_label = if repo.prs.len() == 1 { "PR" } else { "PRs" };
         lines.push(Line::from(section_label(&format!(
             "{} open {pr_label}",
@@ -1150,22 +1235,30 @@ mod tests {
     /// that a default run does not even render.
     #[test]
     fn the_status_line_says_when_a_repo_has_open_prs() {
-        let with_prs = |n: u32| {
+        let facts = |n: u32, numbers: Vec<u32>| {
             let mut r = cloned_repo();
             r.pr_count = n;
-            pane_rows(r, 120).0
+            r.prs = numbers.into_iter().map(pr_numbered).collect();
+            header_rows(r, 120).2
         };
 
-        let two = with_prs(2);
+        // Flush right, on the remote half of the fact row.
+        let two = facts(2, vec![13, 9]);
         assert!(two.contains("2 open PRs"), "got {two:?}");
-        // Still on the same row as the sync state and the path.
-        assert!(two.contains("synced") && two.contains("~/repos/fleetz"));
+        assert!(
+            two.contains("#13") && two.contains("#9"),
+            "numbers: {two:?}"
+        );
 
-        let one = with_prs(1);
-        assert!(one.contains("1 open PR"), "singular: {one:?}");
+        let one = facts(1, vec![13]);
+        assert!(one.contains("1 open PR #13"), "singular: {one:?}");
         assert!(!one.contains("1 open PRs"), "got {one:?}");
 
-        let none = with_prs(0);
+        // More than fit are summarised rather than pushing CI off the row.
+        let many = facts(5, vec![13, 9, 7, 4, 2]);
+        assert!(many.contains("5 open PRs #13 #9+"), "got {many:?}");
+
+        let none = facts(0, vec![]);
         assert!(!none.contains("open PR"), "silent when there are none");
     }
 
@@ -1392,6 +1485,40 @@ mod tests {
         (row(3), row(4))
     }
 
+    /// The header's three rows: state, location, and the local/remote fact
+    /// row beneath them.
+    fn header_rows(repo: RepoStatus, width: u16) -> (String, String, String) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = crate::app::App::new(vec![repo], "test".to_string(), width, 40);
+        let mut terminal = Terminal::new(TestBackend::new(width, 14)).unwrap();
+        terminal
+            .draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row = |y: u16| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_matches('│')
+                .trim_end()
+                .to_string()
+        };
+        (row(3), row(4), row(5))
+    }
+
+    fn pr_numbered(number: u32) -> crate::model::PullRequest {
+        crate::model::PullRequest {
+            number,
+            title: format!("pr {number}"),
+            author: "Gaurgle".to_string(),
+            created_at: chrono::Utc::now(),
+            url: format!("https://github.com/Gaurgle/fleetz/pull/{number}"),
+            review_status: crate::model::ReviewStatus::Unknown,
+        }
+    }
+
     fn cloned_repo() -> RepoStatus {
         let mut r = repo("fleetz", RepoKind::Public, Some("Gaurgle"));
         r.path = Some("~/repos/fleetz".to_string());
@@ -1493,23 +1620,27 @@ mod tests {
     }
 
     #[test]
+    /// Local on the left of every header row, remote flush right. The path
+    /// used to share row one with the sync status, which read as "how it is
+    /// doing" and "where it lives" run together.
     fn owner_and_name_stack_flush_to_the_right_edge() {
-        let (status, url) = pane_rows(cloned_repo(), 60);
+        let (state, location, _) = header_rows(cloned_repo(), 80);
 
+        // Row one is state only, with the owner flush right.
+        assert!(!state.contains("~/repos"), "path left row one: {state:?}");
         assert!(
-            status.contains("~/repos/fleetz"),
-            "path missing: {status:?}"
+            state.ends_with("Gaurgle"),
+            "owner not flush right: {state:?}"
         );
-        assert!(url.contains("git@github.com"), "url missing: {url:?}");
+
+        // Row two is location: local path left, remote URL right.
         assert!(
-            status.ends_with("Gaurgle"),
-            "owner not flush right: {status:?}"
+            location.trim_start().starts_with("~/repos/fleetz"),
+            "local path not on the left: {location:?}"
         );
-        assert!(url.ends_with("fleetz"), "name not flush right: {url:?}");
-        // The name sits directly under the owner, not merged onto one row.
         assert!(
-            !status.contains("Gaurgle/fleetz"),
-            "rows should not be joined: {status:?}"
+            location.ends_with("git@github.com:Gaurgle/fleetz.git"),
+            "remote URL not flush right: {location:?}"
         );
     }
 
@@ -1528,21 +1659,35 @@ mod tests {
     }
 
     #[test]
+    /// On a narrow pane each row sheds its own remote half rather than
+    /// truncating it. The local half always survives: it is the half you
+    /// cannot look up anywhere else.
     fn identity_is_dropped_whole_on_a_narrow_pane() {
-        let (status, url) = pane_rows(cloned_repo(), 34);
-
+        for width in [24u16, 30, 34, 48, 80] {
+            let (state, location, _) = header_rows(cloned_repo(), width);
+            // The local half always survives: it is the half you cannot look
+            // up anywhere else.
+            assert!(
+                location.contains("~/repos/fleetz"),
+                "w{width}: local path lost: {location:?}"
+            );
+            // A remote half is either complete and flush right, or absent.
+            // Never a truncated fragment.
+            assert!(
+                !state.contains("Gaurgle") || state.ends_with("Gaurgle"),
+                "w{width}: owner truncated: {state:?}"
+            );
+            assert!(
+                !location.contains("github.com")
+                    || location.ends_with("git@github.com:Gaurgle/fleetz.git"),
+                "w{width}: URL truncated: {location:?}"
+            );
+        }
+        // And at a width that cannot hold it, it really is gone.
+        let (_, location, _) = header_rows(cloned_repo(), 34);
         assert!(
-            status.contains("~/repos/fleetz"),
-            "path must survive: {status:?}"
-        );
-        assert!(
-            !status.contains("Gaurgle"),
-            "owner should be dropped, not truncated: {status:?}"
-        );
-        // Dropping is all-or-nothing: no orphan name row without its owner.
-        assert!(
-            !url.ends_with("fleetz") || url.contains("git@github.com:Gaurgle/fleetz.git"),
-            "name row orphaned: {url:?}"
+            !location.contains("github.com"),
+            "URL should have been dropped: {location:?}"
         );
     }
 }

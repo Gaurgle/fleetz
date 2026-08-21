@@ -898,6 +898,13 @@ pub struct App {
     /// The divider currently held by the mouse, if any. Set on a press that
     /// lands on a boundary and cleared on release, so drag events in between
     /// resize instead of doing whatever the panel under the cursor does.
+    /// Whether the repo pane draws the detailed PR section under the header.
+    ///
+    /// Set from `-p` after construction, like the other launch options, so it
+    /// stays out of `App::new`'s signature. It gates *drawing* only: the PR
+    /// data rides every poll regardless, since a smaller page would not cost
+    /// any less.
+    pub show_pr_detail: bool,
     pub dragging: Option<crate::ui::Divider>,
     /// Screen column the in-progress contribution-strip pan is measured from,
     /// or None when no drag is underway. Separate from `dragging`, which owns
@@ -1000,6 +1007,7 @@ impl App {
             contrib_scroll: std::cell::Cell::new(crate::contributions::WEEKS),
             contrib_visible_weeks: std::cell::Cell::new(crate::contributions::WEEKS),
             persist_pane_sizes: false,
+            show_pr_detail: false,
             dragging: None,
             contrib_drag: None,
             loading: false,

@@ -21,7 +21,8 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 - Open pull requests per repo
 - CI status as a `◉` status lamp: green passed, red failed, blinking orange while running. From GitHub's `statusCheckRollup`, kept live in watch mode
 - Active worktrees (`wt` badge) and stashes (archive-glyph badge)
-- Open PR count on the repo row, on the detail pane's status line, and in the footer
+- Open PR count and numbers on the repo row, in the repo pane, and in the footer
+- Repo pane header reads local-to-remote: local path, branch and stashes on the left of each row, remote URL, PRs and CI flush right
 - Repo groups defined in your config (cycle with `g`)
 - Repo ownership in the detail pane: `owner/name` flush right on the status
   line, colored and glyphed by kind (org, private, public)
@@ -73,7 +74,7 @@ footer as repos are re-stat'd. The count field is capped per unit (hours up to
 | Flag | Description |
 |------|-------------|
 | `--author NAME` | Filter displayed commits by author (substring match) |
-| `-p, --prs` | Include open pull request *detail* (title, author, age, review state). The count itself always shows: it rides the poll for free, while the list doubles the query cost |
+| `-p, --prs` | Draw the detailed PR section (title, author, age, review state). Counts and numbers always show; the data is fetched either way, since a one-PR page costs exactly what a five-PR page with every field costs |
 | `--watch` | Force watch mode on for this session |
 | `--no-watch` | Force watch mode off for this session |
 | `--interval SECS` | Watch refresh interval, overriding `refresh_interval` |

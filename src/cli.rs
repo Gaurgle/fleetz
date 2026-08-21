@@ -30,7 +30,11 @@ pub struct Args {
     #[arg(long)]
     pub author: Option<String>,
 
-    /// Include open pull request counts
+    /// Show the full open-PR list (title, author, age, review state).
+    ///
+    /// PR counts and numbers always show; this only controls the detailed
+    /// section in the repo pane. The data is fetched either way, because a
+    /// one-PR page costs exactly what a five-PR page with every field costs.
     #[arg(short = 'p', long)]
     pub prs: bool,
 
