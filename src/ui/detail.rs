@@ -412,17 +412,11 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         }
     };
 
-    let mut right_title: Vec<Span> = Vec::new();
-    if repo.ci_status != CiStatus::Unknown {
-        let (ci_sym, ci_color, ci_label) = badges::ci_display(&repo.ci_status);
-        // Named, not just a glyph: "✓ passed" in a pane frame reads as
-        // ambiguous praise for whatever the pane holds, whereas "CI passed"
-        // says what actually passed.
-        right_title.push(Span::styled(
-            format!(" {ci_sym} CI {ci_label} "),
-            Style::default().fg(ci_color),
-        ));
-    }
+    // CI used to be named in this frame as well. It sits on the header's
+    // remote row now, beside the PRs, which is where the other things GitHub
+    // knows live -- and the frame was repeating those exact words a row
+    // above them. The right title is left free rather than refilled.
+    let right_title: Vec<Span> = Vec::new();
 
     let panel = panel
         .title_top(
@@ -505,17 +499,19 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // worktree count are drawn in SUBTEXT rather than OVERLAY: OVERLAY is for
     // paths and furniture, and at that brightness real news reads as
     // decoration you have already dismissed.
-    let mut local_extra: Vec<String> = Vec::new();
+    // Each carries its own colour rather than a shared grey. A stash is real
+    // news and gets the colour its badge uses; a worktree count is closer to
+    // furniture, so it keeps the quieter one.
+    let mut local_extra: Vec<(String, ratatui::style::Color)> = Vec::new();
     if repo.stash_count > 0 {
         let noun = if repo.stash_count == 1 {
             "stash"
         } else {
             "stashes"
         };
-        local_extra.push(format!(
-            "{} {} {noun}",
-            badges::STASH_GLYPH,
-            repo.stash_count
+        local_extra.push((
+            format!("{} {} {noun}", badges::STASH_GLYPH, repo.stash_count),
+            colors::STASH_CLR,
         ));
     }
     if !repo.worktrees.is_empty() {
@@ -524,15 +520,15 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             "worktrees"
         };
-        local_extra.push(format!("{} {noun}", repo.worktrees.len()));
+        local_extra.push((format!("{} {noun}", repo.worktrees.len()), colors::SUBTEXT));
     }
-    for extra in local_extra {
+    for (extra, color) in local_extra {
         if row3_left.is_empty() {
             row3_left.push(Span::raw("  "));
         } else {
             row3_left.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
         }
-        row3_left.push(Span::styled(extra, Style::default().fg(colors::SUBTEXT)));
+        row3_left.push(Span::styled(extra, Style::default().fg(color)));
     }
 
     // Row 3 right: facts that live on GitHub.
@@ -1319,6 +1315,49 @@ mod tests {
         assert!(
             facts.contains(badges::STASH_GLYPH),
             "the repo list's glyph is missing: {facts:?}"
+        );
+    }
+
+    /// Grey said "shown because we must, not because you want it", which is
+    /// right for a path and wrong for a stash. The badge and the pane have to
+    /// pick the same colour, or the two disagree about what a stash looks
+    /// like the moment either is touched.
+    #[test]
+    fn stashes_are_not_drawn_as_furniture() {
+        for grey in [colors::OVERLAY, colors::SUBTEXT, colors::SURFACE] {
+            assert_ne!(colors::STASH_CLR, grey, "stash is news, not furniture");
+        }
+        assert_ne!(colors::STASH_CLR, colors::RED, "nor a failing build");
+        assert_ne!(colors::STASH_CLR, colors::YELLOW, "nor uncommitted work");
+    }
+
+    /// CI was named in the pane frame and again on the header's remote row,
+    /// in the same words one line apart. The frame gave way: the row groups
+    /// it with the PRs, which is the other half of what GitHub knows.
+    #[test]
+    fn ci_is_named_once_not_in_the_frame_as_well() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut r = cloned_repo();
+        r.ci_status = CiStatus::Passed;
+        let app = crate::app::App::new(vec![r], "t".to_string(), 92, 44);
+        let mut term = Terminal::new(TestBackend::new(92, 20)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let rows: Vec<String> = (0..20u16)
+            .map(|y| (0..92u16).map(|x| buf[(x, y)].symbol()).collect())
+            .collect();
+
+        assert!(
+            !rows[0].contains("CI"),
+            "frame should not name CI: {:?}",
+            rows[0]
+        );
+        assert!(
+            rows.iter().any(|r| r.contains("CI ◉ passed")),
+            "but the header row still should"
         );
     }
 

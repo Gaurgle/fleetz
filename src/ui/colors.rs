@@ -39,6 +39,17 @@ pub const SUBTEXT: Color = Color::Rgb(166, 173, 200);
 
 pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers, borders
 
+/// Stashed work, in the repo list's badge and in the repo pane alike.
+///
+/// Catppuccin `flamingo`. Grey was the wrong answer twice over: `OVERLAY` is
+/// the colour of paths and other things shown because they must be, so a
+/// stash rendered in it reads as "nothing to see", and the badge and the pane
+/// have to agree anyway. Warm rather than cool because a stash is your own
+/// parked work, and adjacent to `YELLOW` without being it: uncommitted
+/// changes and changes you deliberately put away are neighbours, not the same
+/// state. Clear of `RED`, which is CI failing.
+pub const STASH_CLR: Color = Color::Rgb(242, 205, 205);
+
 /// Contribution intensity for the GitHub source, empty through busiest.
 ///
 /// Sampled straight off github.com's dark-dimmed contribution graph rather

@@ -183,7 +183,7 @@ pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>,
     let stash = stash_text(repo);
     if !stash.is_empty() {
         width += stash.chars().count();
-        spans.push(Span::styled(stash, Style::default().fg(colors::OVERLAY)));
+        spans.push(Span::styled(stash, Style::default().fg(colors::STASH_CLR)));
     }
 
     let worktree = worktree_text(repo);
