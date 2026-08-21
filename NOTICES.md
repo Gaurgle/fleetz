@@ -1,6 +1,6 @@
 # Third-party notices
 
-fleetz is MIT licensed (see `license` in `Cargo.toml`). It carries code derived
+fleetz is MIT licensed (see [LICENSE](LICENSE)). It carries code derived
 from the project below, whose licence requires its notice to travel with it.
 
 ## lazygit
