@@ -232,6 +232,33 @@ was a percentage or a constant.
   `panel_rects` reach the split through, so hit testing cannot drift from it --
   and a test asserts that directly, because that drift fails silently.
 
+### Fifth pass: what stays on screen
+
+Three fixes, all the same shape: the pane was throwing away context you were
+still using.
+
+- **The repo header is pinned.** The three-row local/remote block scrolled with
+  the body, so two hundred rows into a history the pane no longer said which
+  repo it was. It sits outside the scrolling paragraph now, beside the readout
+  row that was already pinned for the same reason. A short pane gives it up
+  rather than spending half its height on it: the frame's own title still
+  names the repo, and the history is what you came for.
+- **The active tab wears its view's colour**, and only the active one. Each
+  echoes something its view already draws -- `info` the repo-name blue,
+  `commits` the gold of its hashes, `reflog` the mauve of its action words,
+  `graph` the sky of its first lane. That is not four new meanings: every one
+  is already on the screen below it, which is what keeps the
+  one-colour-per-concept rule intact. The colour holds even when the pane is
+  unfocused, because which mode you are in is worth reading from across the
+  screen; the keys, separators and inactive tabs dim instead.
+- **Switching views no longer scrolls the one you arrive in.** `cycle_history_view`
+  set `follow_selection`, on the reasoning that arriving should show you where
+  that view's cursor is. But `graph` anchors its selection to the top of the
+  pane, so asking for the tab scrolled its own `history` label off and landed
+  you on a commit. Each view already keeps its own offset, and its cursor was
+  left in step with it, so restoring the offset shows the cursor anyway. The
+  follow now fires only when the cursor actually moves.
+
 ### Still open
 
 - Backward cycling, if four views proves enough to want it.

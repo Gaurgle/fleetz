@@ -168,6 +168,24 @@ pub fn ref_color(kind: crate::model::RefKind) -> Color {
 /// instantly separable from the branch name it points at.
 pub const TEAL: Color = Color::Rgb(148, 226, 213);
 
+/// The colour a history view's tab wears while it is the active one.
+///
+/// Each echoes something that view's own content already draws, so the tab is
+/// a cue rather than decoration: `info` takes the repo-name blue it summarises,
+/// `commits` the gold its hashes are drawn in, `reflog` the mauve of its own
+/// action words, and `graph` the sky of its first lane. That keeps the
+/// one-colour-per-concept rule -- none of these is a new meaning, each is a
+/// meaning already on the screen below it.
+pub fn history_view_color(view: crate::app::HistoryView) -> Color {
+    use crate::app::HistoryView;
+    match view {
+        HistoryView::Info => SAPPHIRE,
+        HistoryView::Commits => HASH_CLR,
+        HistoryView::Reflog => MAUVE,
+        HistoryView::Graph => graph_lane_color(0),
+    }
+}
+
 /// Color for one character column of a `git log --graph` ASCII prefix. Each
 /// column holds a single branch "lane" for as long as that lane is alive, so
 /// coloring by column index gives parallel lines distinct dull hues -- similar

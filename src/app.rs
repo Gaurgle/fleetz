@@ -1732,9 +1732,13 @@ impl App {
         let i = self.history_view.index();
         let next = if back { (i + n - 1) % n } else { (i + 1) % n };
         self.history_view = HistoryView::ALL[next];
-        // Arriving in a view should show you where its cursor is, not
-        // wherever its offset happened to be left.
-        self.follow_selection.set(true);
+        // Deliberately does not follow the selection. Each view keeps its own
+        // scroll offset, so arriving restores where you left that view --
+        // which is where its cursor is anyway, since the two were left in
+        // step. Following on arrival meant the expanded graph, which anchors
+        // its selection to the top of the pane, scrolled its own header off
+        // the moment you switched to it: you asked for the tab and got a
+        // commit, not a page.
         self.needs_redraw = true;
     }
 

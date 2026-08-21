@@ -620,6 +620,11 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(row3));
     }
     lines.push(Line::from(""));
+    // Everything above this point identifies the repo -- what state it is in,
+    // where it lives, which branch is out. It is the answer to "which repo am
+    // I looking at", and scrolling a two-hundred row history is exactly when
+    // that question comes back. Held out of the scrolling body below.
+    let header_rows = lines.len();
 
     // Branches (worktrees shown inline under the branch they're checked out on)
     let view = app.history_view;
@@ -902,6 +907,36 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // content instead of a fixed cap. Clamping here alone only fixed the
     // display: the offset itself kept climbing, so scrolling back stalled for
     // as many keypresses as it had overshot.
+    // Pinned only when the pane can spare the rows. On a short pane the
+    // history is what you came for, and a header taking half the height to
+    // repeat what the frame's own title already says is the worse trade.
+    const MIN_BODY_ROWS: u16 = 6;
+    let header_h = header_rows as u16;
+    let pin_header = area.height >= header_h + MIN_BODY_ROWS;
+
+    let (header_area, area) = match pin_header {
+        true => {
+            let split =
+                Layout::vertical([Constraint::Length(header_h), Constraint::Min(1)]).split(area);
+            (Some(split[0]), split[1])
+        }
+        false => (None, area),
+    };
+    let lines = match pin_header {
+        true => {
+            let body = lines.split_off(header_rows);
+            frame.render_widget(Paragraph::new(lines), header_area.expect("split"));
+            body
+        }
+        false => lines,
+    };
+    // Rows above the split are no longer in the scrolling body, so every row
+    // index the sections recorded has to come down with them.
+    let selected_row = match pin_header {
+        true => selected_row.and_then(|r| r.checked_sub(header_rows)),
+        false => selected_row,
+    };
+
     let max_scroll = wrapped_row_count(&lines, area.width).saturating_sub(area.height);
     app.detail_max_scroll.set(max_scroll);
     let mut scroll = app.detail_scroll().min(max_scroll);
@@ -1505,24 +1540,25 @@ fn commit_stat_text(c: &crate::model::Commit) -> String {
 /// tight for all four and it shows the active one alone, which is the half
 /// that cannot be dropped.
 fn view_switcher(active: HistoryView, focused: bool, budget: usize) -> Line<'static> {
-    let (key, slash, dot, on, off) = if focused {
+    // The active tab wears its own view's colour in either state: which mode
+    // the pane is in is worth reading from across the screen, and it is the
+    // one thing here that a dimmed switcher must still say. Everything around
+    // it -- the keys, the separators, the inactive tabs -- drops back when the
+    // pane is not focused, so a bright switcher never pulls the eye to a pane
+    // you are not in.
+    let on = colors::history_view_color(active);
+    let (key, slash, dot, off) = if focused {
         (
             colors::TEXT,
             colors::OVERLAY,
             colors::SURFACE,
-            colors::LAVENDER,
             colors::SUBTEXT,
         )
     } else {
-        // An unfocused pane's border and title are furniture, and a bright
-        // switcher on one would pull the eye to the pane you are not in. It
-        // still has to say which view is active, so the pair stays one step
-        // apart rather than collapsing to a single colour.
         (
             colors::OVERLAY,
             colors::SURFACE,
             colors::SURFACE,
-            colors::SUBTEXT,
             colors::SURFACE,
         )
     };
@@ -2143,6 +2179,174 @@ mod tests {
         assert_eq!(
             rects.repo_list.width, REPO_LIST_MAX_COLS,
             "hit testing still thinks the list is the uncapped width"
+        );
+    }
+
+    /// The repo header identifies what you are looking at, and scrolling two
+    /// hundred rows of history is exactly when that question comes back. It
+    /// sits outside the scrolling body now, like the pinned readout above it.
+    #[test]
+    fn the_repo_header_survives_scrolling() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut r = busy_repo();
+        r.graph = (0..200)
+            .map(|i| crate::model::GraphLine {
+                lanes: vec![crate::graph::commit_cell()],
+                hash: format!("h{i:06}"),
+                is_merge: false,
+                refs: vec![],
+                author: "Gaurgle".to_string(),
+                message: format!("subject {i}"),
+            })
+            .collect();
+
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), 92, 30);
+        app.history_view = HistoryView::Commits;
+        app.set_detail_scroll(40);
+        let mut term = Terminal::new(TestBackend::new(92, 24)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let text: String = (0..24u16)
+            .map(|y| (0..92u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            text.contains("~/repos/fleetz"),
+            "header scrolled away:\n{text}"
+        );
+        assert!(text.contains("synced"), "status scrolled away");
+        assert!(
+            text.contains("h000040"),
+            "the body did not scroll with the header pinned"
+        );
+    }
+
+    /// A short pane spends its rows on the content you came for. The header
+    /// repeats what the frame's own title already says, so it is the half that
+    /// gives way rather than taking half the height.
+    #[test]
+    fn a_short_pane_lets_the_header_scroll_rather_than_eat_the_body() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut r = busy_repo();
+        r.graph = (0..40)
+            .map(|i| crate::model::GraphLine {
+                lanes: vec![crate::graph::commit_cell()],
+                hash: format!("h{i:06}"),
+                is_merge: false,
+                refs: vec![],
+                author: "Gaurgle".to_string(),
+                message: format!("subject {i}"),
+            })
+            .collect();
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), 92, 10);
+        app.history_view = HistoryView::Commits;
+        app.set_detail_scroll(30);
+        let mut term = Terminal::new(TestBackend::new(92, 10)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let text: String = (0..10u16)
+            .map(|y| (0..92u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("h0000"),
+            "a short pane showed no history at all:\n{text}"
+        );
+    }
+
+    /// Only the active tab is coloured, and it wears the colour its own view's
+    /// content uses. One lit tab reads instantly; four lit ones are a palette.
+    #[test]
+    fn only_the_active_tab_wears_its_view_colour() {
+        for view in HistoryView::ALL {
+            let line = view_switcher(view, true, 200);
+            let label = |v: HistoryView| {
+                line.spans
+                    .iter()
+                    .find(|s| s.content == v.label())
+                    .unwrap_or_else(|| panic!("{} tab missing", v.label()))
+            };
+            assert_eq!(
+                label(view).style.fg,
+                Some(colors::history_view_color(view)),
+                "the {} tab is not lit while it is active",
+                view.label()
+            );
+            for other in HistoryView::ALL.iter().filter(|v| **v != view) {
+                assert_eq!(
+                    label(*other).style.fg,
+                    Some(colors::SUBTEXT),
+                    "the {} tab is lit while {} is active",
+                    other.label(),
+                    view.label()
+                );
+            }
+        }
+    }
+
+    /// The colours have to be four, not one repeated: the point is telling
+    /// them apart at a glance from across the screen.
+    #[test]
+    fn the_four_view_colours_are_distinct() {
+        let mut seen = Vec::new();
+        for view in HistoryView::ALL {
+            let c = colors::history_view_color(view);
+            assert!(!seen.contains(&c), "{} shares a colour", view.label());
+            seen.push(c);
+        }
+    }
+
+    /// Arriving in a view shows its page, not one of its commits. Switching
+    /// used to follow the selection, and the expanded graph anchors its
+    /// selection to the top of the pane -- so asking for the tab scrolled its
+    /// own header off and landed you on a commit.
+    #[test]
+    fn switching_views_does_not_scroll_the_one_you_arrive_in() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut r = busy_repo();
+        r.graph_expanded = (0..30)
+            .flat_map(|i| {
+                vec![
+                    format!("* commit e{i:06} (HEAD -> main)"),
+                    "| Author: Gaurgle <g@example.com>".to_string(),
+                    "|".to_string(),
+                    format!("|     expanded subject {i}"),
+                ]
+            })
+            .collect();
+
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), 92, 30);
+        while app.history_view != HistoryView::Graph {
+            app.cycle_history_view(false);
+        }
+        assert_eq!(app.detail_scroll(), 0, "arriving already moved the offset");
+
+        let mut term = Terminal::new(TestBackend::new(92, 24)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        assert_eq!(
+            app.detail_scroll(),
+            0,
+            "the first frame after arriving scrolled the page"
+        );
+        let buf = term.backend().buffer().clone();
+        let text: String = (0..24u16)
+            .map(|y| (0..92u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("history"), "the section label scrolled off");
+        assert!(
+            text.contains("e000000"),
+            "the first commit is not on screen"
         );
     }
 
