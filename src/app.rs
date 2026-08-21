@@ -1309,8 +1309,10 @@ impl App {
         let Some(repo) = self.selected_repo() else {
             return 0;
         };
-        // Connector rows carry no commit, so they are not stops.
-        let graph_commits = || repo.graph.iter().filter(|g| !g.hash.is_empty()).count();
+        // One row per commit: the graph is computed from parent hashes rather
+        // than read out of `git log --graph`, so there are no connector rows
+        // to skip past. See `crate::graph`.
+        let graph_commits = || repo.graph.len();
         match self.history_view {
             // Info shows the newest few with their diffstats.
             HistoryView::Info => repo.commits.len().min(RECENT_COMMITS_IN_INFO),
@@ -1380,14 +1382,7 @@ impl App {
         let i = self
             .detail_selected()
             .min(self.selected_commit_count().saturating_sub(1));
-        // Connector rows carry no commit, so they are not stops.
-        let graph_nth = |n: usize| {
-            repo.graph
-                .iter()
-                .filter(|g| !g.hash.is_empty())
-                .nth(n)
-                .map(|g| g.hash.as_str())
-        };
+        let graph_nth = |n: usize| repo.graph.get(n).map(|g| g.hash.as_str());
         match self.history_view {
             HistoryView::Info => repo.commits.get(i).map(|c| c.hash.as_str()),
             HistoryView::Commits | HistoryView::Graph => graph_nth(i),
@@ -1956,7 +1951,7 @@ mod tests {
 
         // `commits` walks the graph rows, not the diffstat list.
         app.repos[0].graph = vec![crate::model::GraphLine {
-            prefix: "* ".to_string(),
+            lanes: vec![crate::graph::commit_cell()],
             hash: "aaa".to_string(),
             is_merge: false,
             refs: vec![],

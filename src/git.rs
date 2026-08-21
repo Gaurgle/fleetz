@@ -512,10 +512,13 @@ fn parse_reflog_output(output: &str) -> Vec<ReflogEntry> {
         .collect()
 }
 
-/// Render `git log --graph` over the given local branches (their union of
-/// reachable commits), limited to `limit` commits. The graph's ASCII
-/// topology is git's own -- we just capture and colorize it, rather than
-/// recomputing branch layout ourselves.
+/// Read the given local branches' history (their union of reachable commits),
+/// limited to `limit` commits, and lay out its graph column.
+///
+/// Deliberately *not* `--graph`. Git's own graph is a picture with filler rows
+/// in it, and translating it to box drawing loses more than it keeps -- see
+/// `crate::graph` for the argument. All that is needed from git is `%p`; the
+/// topology falls out of that.
 pub async fn graph(repo_path: &Path, branches: &[String], limit: u32) -> Vec<GraphLine> {
     if branches.is_empty() {
         return Vec::new();
@@ -523,7 +526,6 @@ pub async fn graph(repo_path: &Path, branches: &[String], limit: u32) -> Vec<Gra
 
     let mut args = vec![
         "log".to_string(),
-        "--graph".to_string(),
         "--color=never".to_string(),
         // `--decorate=full` with `%D` rather than `%d`: the full form spells
         // out refs/heads/, refs/remotes/ and refs/tags/, which is what lets
@@ -531,10 +533,11 @@ pub async fn graph(repo_path: &Path, branches: &[String], limit: u32) -> Vec<Gra
         // guessing from the short name. `%D` drops the parens and the leading
         // space `%d` adds, so the entries split cleanly on ", ".
         "--decorate=full".to_string(),
-        // %P is the parent list: two or more entries means a merge. Free to
-        // ask for, and the only way to tell a merge from an ordinary commit,
-        // since git's own graph draws both with the same `*`.
-        "--format=GRAPH|%h|%P|%D|%aN|%s".to_string(),
+        // %p, not %P: the abbreviated form, so a parent hash is spelled the
+        // same here as the child's own %h is one row down. The layout matches
+        // the two against each other, so a mismatch would leave every pipe
+        // dangling and every commit in a lane of its own.
+        "--format=%h|%p|%D|%aN|%s".to_string(),
         "-n".to_string(),
         limit.to_string(),
     ];
@@ -606,37 +609,58 @@ pub async fn graph_expanded(repo_path: &Path, branches: &[String], limit: u32) -
     }
 }
 
+/// One row per commit, in the order git listed them, with the graph column
+/// computed rather than parsed.
 fn parse_graph_output(output: &str) -> Vec<GraphLine> {
-    const MARKER: &str = "GRAPH|";
-    output
+    struct Row {
+        hash: String,
+        parents: Vec<String>,
+        refs: Vec<crate::model::GitRef>,
+        author: String,
+        message: String,
+    }
+
+    let rows: Vec<Row> = output
         .lines()
-        .map(|line| match line.find(MARKER) {
-            Some(idx) => {
-                let prefix = line[..idx].to_string();
-                let rest = &line[idx + MARKER.len()..];
-                // The subject stays last: it is the only field that can
-                // itself contain a `|`, so it has to be whatever splitn
-                // leaves rather than a field with a bound.
-                let parts: Vec<&str> = rest.splitn(5, '|').collect();
-                GraphLine {
-                    prefix,
-                    hash: parts.first().unwrap_or(&"").to_string(),
-                    is_merge: parts
-                        .get(1)
-                        .is_some_and(|p| p.split_whitespace().count() > 1),
-                    refs: parse_refs(parts.get(2).unwrap_or(&"")),
-                    author: parts.get(3).unwrap_or(&"").to_string(),
-                    message: parts.get(4).unwrap_or(&"").to_string(),
-                }
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            // The subject stays last: it is the only field that can itself
+            // contain a `|`, so it has to be whatever splitn leaves rather
+            // than a field with a bound.
+            let parts: Vec<&str> = line.splitn(5, '|').collect();
+            Row {
+                hash: parts.first().unwrap_or(&"").to_string(),
+                parents: parts
+                    .get(1)
+                    .unwrap_or(&"")
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect(),
+                refs: parse_refs(parts.get(2).unwrap_or(&"")),
+                author: parts.get(3).unwrap_or(&"").to_string(),
+                message: parts.get(4).unwrap_or(&"").to_string(),
             }
-            None => GraphLine {
-                prefix: line.to_string(),
-                hash: String::new(),
-                is_merge: false,
-                refs: Vec::new(),
-                author: String::new(),
-                message: String::new(),
-            },
+        })
+        .collect();
+
+    let commits: Vec<crate::graph::Commit<'_>> = rows
+        .iter()
+        .map(|r| crate::graph::Commit {
+            hash: &r.hash,
+            parents: &r.parents,
+        })
+        .collect();
+    let mut lanes = crate::graph::layout(&commits);
+
+    rows.into_iter()
+        .zip(lanes.drain(..))
+        .map(|(r, lanes)| GraphLine {
+            lanes,
+            is_merge: r.parents.len() > 1,
+            hash: r.hash,
+            refs: r.refs,
+            author: r.author,
+            message: r.message,
         })
         .collect()
 }
@@ -1264,10 +1288,9 @@ mod tests {
     fn parse_graph_output_commit_line() {
         // `%D` under `--decorate=full`: no parens, no leading space, and every
         // ref spelled out to its refs/ prefix.
-        let output = "* GRAPH|a1b2c3d|9999999|HEAD -> refs/heads/main, refs/remotes/origin/main|Alice|feat: add feature";
+        let output = "a1b2c3d|9999999|HEAD -> refs/heads/main, refs/remotes/origin/main|Alice|feat: add feature";
         let lines = parse_graph_output(output);
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].prefix, "* ");
         assert_eq!(lines[0].hash, "a1b2c3d");
         assert_eq!(lines[0].author, "Alice");
         assert_eq!(lines[0].message, "feat: add feature");
@@ -1288,7 +1311,7 @@ mod tests {
     /// why this reads `--decorate=full` rather than guessing from the name.
     #[test]
     fn a_local_branch_named_like_a_remote_is_not_mistaken_for_one() {
-        let output = "* GRAPH|a1b2c3d|9999999|refs/heads/origin/thing|Alice|wip";
+        let output = "a1b2c3d|9999999|refs/heads/origin/thing|Alice|wip";
         let refs = &parse_graph_output(output)[0].refs;
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].kind, RefKind::Local);
@@ -1299,7 +1322,7 @@ mod tests {
     fn parse_graph_output_classifies_tags_and_a_detached_head() {
         // git keeps its "tag: " marker under --decorate=full; the ref is
         // spelled out behind it rather than in place of it.
-        let output = "* GRAPH|a1b2c3d|9999999|HEAD, tag: refs/tags/v1.0|Alice|release";
+        let output = "a1b2c3d|9999999|HEAD, tag: refs/tags/v1.0|Alice|release";
         let refs = &parse_graph_output(output)[0].refs;
         assert_eq!(refs.len(), 2);
         // Detached: HEAD stands alone rather than riding a branch, so it must
@@ -1316,7 +1339,7 @@ mod tests {
     /// two remote refs, all in one decoration list.
     #[test]
     fn parse_graph_output_handles_a_tagged_release_commit() {
-        let output = "* GRAPH|78cdfac|9999999 8888888|HEAD -> refs/heads/main, tag: refs/tags/v0.4.0, refs/remotes/origin/main, refs/remotes/origin/HEAD|AR|release";
+        let output = "78cdfac|9999999 8888888|HEAD -> refs/heads/main, tag: refs/tags/v0.4.0, refs/remotes/origin/main, refs/remotes/origin/HEAD|AR|release";
         let refs = &parse_graph_output(output)[0].refs;
         let got: Vec<_> = refs.iter().map(|r| (r.kind, r.name.as_str())).collect();
         assert_eq!(
@@ -1351,37 +1374,46 @@ mod tests {
             ("", false, "the root commit has no parents"),
         ];
         for (parents, expected, why) in cases {
-            let output = format!("* GRAPH|a1b2c3d|{parents}||Alice|subject");
+            let output = format!("a1b2c3d|{parents}||Alice|subject");
             let lines = parse_graph_output(&output);
             assert_eq!(lines[0].is_merge, expected, "{why}");
         }
     }
 
-    /// A connector row carries no commit at all, so it can never be a merge.
-    #[test]
-    fn a_connector_row_is_never_a_merge() {
-        let lines = parse_graph_output("|\\  ");
-        assert!(!lines[0].is_merge);
-        assert!(lines[0].hash.is_empty());
-    }
-
     #[test]
     fn a_commit_with_no_decorations_has_no_refs() {
-        let output = "* GRAPH|a1b2c3d|9999999||Alice|feat: add feature";
+        let output = "a1b2c3d|9999999||Alice|feat: add feature";
         assert!(parse_graph_output(output)[0].refs.is_empty());
     }
 
+    /// The property that replaced the connector-row handling this parser used
+    /// to need. `git log --graph` interleaves rows carrying no commit, which
+    /// forced every consumer to check for an empty hash; dropping `--graph`
+    /// means a row and a commit are now the same thing.
     #[test]
-    fn parse_graph_output_connector_line_has_no_commit_data() {
-        let output = "* GRAPH|a1b2c3d|9999999||Alice|feat: add feature\n|\\  \n| * GRAPH|d4e5f6g|7777777||Bob|other branch commit";
+    fn every_row_carries_a_commit() {
+        let output = "a1b2c3d|9999999||Alice|feat: add feature\n\nd4e5f6g|a1b2c3d||Bob|other branch commit\n";
         let lines = parse_graph_output(output);
-        assert_eq!(lines.len(), 3);
-        assert_eq!(lines[1].prefix, "|\\  ");
-        assert!(lines[1].hash.is_empty());
-        assert!(lines[1].message.is_empty());
-        assert_eq!(lines[2].prefix, "| * ");
-        assert_eq!(lines[2].hash, "d4e5f6g");
-        assert_eq!(lines[2].author, "Bob");
+        assert_eq!(lines.len(), 2, "the blank line is not a row");
+        assert!(
+            lines.iter().all(|l| !l.hash.is_empty()),
+            "a row with no commit on it got through"
+        );
+        assert_eq!(lines[1].hash, "d4e5f6g");
+        assert_eq!(lines[1].author, "Bob");
+    }
+
+    /// The graph column is computed here, not read out of git, so the parser
+    /// owes each row its lanes. A child and its parent share a lane.
+    #[test]
+    fn parsing_lays_out_the_graph_column() {
+        let output = "a1b2c3d|d4e5f6g||Alice|child\nd4e5f6g|7777777||Alice|parent";
+        let lines = parse_graph_output(output);
+        let drawn: Vec<String> = lines
+            .iter()
+            .map(|l| l.lanes.iter().map(|c| c.glyph).collect())
+            .collect();
+        assert_eq!(drawn, vec![crate::graph::COMMIT_NODE.to_string(); 2]);
     }
 
     fn start_day() -> chrono::NaiveDate {

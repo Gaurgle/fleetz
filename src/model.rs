@@ -281,10 +281,14 @@ impl GitRef {
 /// an empty hash/refs/author/message and only the prefix.
 #[derive(Debug, Clone)]
 pub struct GraphLine {
-    pub prefix: String,
+    /// The graph column for this row, one cell per lane, computed from parent
+    /// hashes by `crate::graph`. Not git's own `--graph` art: see that
+    /// module's header for why.
+    pub lanes: Vec<crate::graph::Cell>,
     pub hash: String,
-    /// Two or more parents. Git's `--graph` draws every commit as `*`
-    /// regardless, so the distinction has to come from `%P`.
+    /// Two or more parents, which is what makes the row draw a merge node.
+    /// Comes from `%p`, the only field that can tell a merge from an ordinary
+    /// commit.
     pub is_merge: bool,
     pub refs: Vec<GitRef>,
     pub author: String,

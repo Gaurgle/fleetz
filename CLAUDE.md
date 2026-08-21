@@ -143,6 +143,16 @@ step 1 within 4% of the empty slate, which is itself blue-hued, and loses a
 whole intensity level. Interpolating between two palette colours looks tidy
 and reads as one flat tone, which defeats the point of a heatmap.
 
+**The compact history graph is computed, not parsed.** `git::graph` does not
+pass `--graph`; it asks for `%p` and `crate::graph` derives the topology, the
+way lazygit does. Re-adding `--graph` would bring back the filler rows that
+carry no commit -- which is what forced row indices and commit indices apart
+everywhere -- and its single-column diagonals, which cannot be drawn in box
+characters. `%p` not `%P`: a parent hash must be spelled the same way the
+child's own `%h` is, or every pipe dangles. The expanded view is the one place
+that still reproduces git's own drawing, because reproducing its block layout
+is the whole point of that view.
+
 **Status vocabulary is split by kind.** Counters are numeric (`3↓ 2↑ 4!`),
 categorical states are words (`not cloned`). A repo that is not cloned has all
 counters at zero and must never render as synced: `RepoStatus::is_synced()`

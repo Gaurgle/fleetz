@@ -101,7 +101,7 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `J` / `K` | Scroll the detail pane (works from the repo list too) |
 | `PgUp` / `PgDn` | Scroll focused pane by a page |
 | `v` | Toggle detail vs compact view |
-| `[` / `]` | Repo pane: step its body between four views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history in git's graph column; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`. Each keeps its own scroll position and selection, and the inspector follows whichever is active |
+| `[` / `]` | Repo pane: step its body between four views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`. Each keeps its own scroll position and selection, and the inspector follows whichever is active |
 | `c` | Toggle the contributions strip: three years of activity, GitHub-style. Each day is a half-block square with its own padding, so the grid fits in 11 rows; it scrolls rather than shrinking, with the newest week pinned to the right edge, and no day is marked until you move the cursor |
 | `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
 | `4` | Focus the contributions strip (only while it is open) |
@@ -288,3 +288,15 @@ This tool was previously named `epoz`. The `epoz` name now belongs to the deskto
 
 - [repoz](https://github.com/Gaurgle/repoz): the headless one-shot version
 - [notez](https://github.com/Gaurgle/notez-cli): local-first CLI note-taking with interactive todos
+
+## Credits
+
+The commit graph in the repo pane is a port of [lazygit](https://github.com/jesseduffield/lazygit)'s,
+from `pkg/gui/presentation/graph/` at `v0.59.0` -- including the insight that
+makes it work, which is to compute the topology from parent hashes instead of
+parsing `git log --graph`. That is what lets the history draw one row per
+commit instead of interleaving git's filler rows. Nine of lazygit's own test
+fixtures are ported with it. lazygit is MIT licensed; see [NOTICES.md](NOTICES.md).
+
+[repoz](https://github.com/Gaurgle/repoz) is fleetz's sibling and the source of
+its discovery rules, time-slot logic and status vocabulary.

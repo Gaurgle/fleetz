@@ -7,6 +7,7 @@ mod discovery;
 mod fuzzy;
 mod git;
 mod github;
+mod graph;
 mod model;
 mod time;
 mod ui;

@@ -128,12 +128,77 @@ been the wrong fix. The sweep did get dearer -- `log -200 --numstat` is
 0.23s against 0.05s for `-6` -- but it is gated on `WorkKey`, so it is paid
 once per changed repo rather than per sweep.
 
+### Third rework: the graph is computed, not parsed
+
+The second rework translated `git log --graph`'s ASCII into box drawing. That
+was the wrong mechanism, and reading lazygit's source made it obvious why:
+**lazygit never passes `--graph` at all.** Its log format is
+`--pretty=format:+%H%x00%at%x00%aN%x00%ae%x00%P%x00%m%x00%D%x00%s` -- `%P` is
+all it needs -- and it computes the topology itself in
+`pkg/gui/presentation/graph/`. That buys two things translation cannot:
+
+- **One row per commit, always.** git's graph emits a filler row for every
+  fan-out and every collapse. Those rows carry no commit, so the hash, author
+  and subject columns had to be held open on a line that said nothing, and
+  every consumer had to count commits separately from rows. A merge now fans
+  out *on the merge commit's own row*. Over 26 commits of `pinz`, git needs 46
+  lines to say what this says in 26.
+- **Two columns per lane.** The second column is where the horizontal `─`
+  lives. git packs a diagonal into one column, which cannot be translated: a
+  `╯` with no `─` to its left is punctuation floating beside the line it is
+  supposed to join, which is exactly how the translated version looked.
+
+`src/graph.rs` is the port. Pipes carry `from_pos`/`to_pos`/`from_hash`/
+`to_hash`/kind; each commit terminates the pipes pointing at it, starts one
+per parent, and slides continuing pipes left into freed lanes. Cells carry
+`up/down/left/right` flags and resolve through a 16-entry box-drawing table.
+Nine of lazygit's own fixtures are ported alongside it, which is the point of
+porting rather than approximating: the cases they cover (a lane with room to
+move left, a merge filling a gap before a continuing pipe, an unreferenced
+tip) are easy to get subtly wrong and hard to notice.
+
+Four deliberate deviations:
+
+- **Node glyphs stay `⚬` and `⊛`.** lazygit's `◯` and `⏣` are both East Asian
+  Ambiguous, and the node is the one glyph here free to choose.
+- **Pipes are coloured by lane of origin, not by author.** lazygit's scheme
+  paints a single-maintainer repo in one flat hue. Its *mechanism* is better
+  than the old one, though, and is kept: the style rides on the pipe, so a
+  branch holds its colour as it migrates lanes rather than being recoloured by
+  whichever lane it currently occupies.
+- **The column is padded, not ragged.** lazygit lets each row be as wide as it
+  needs, so subjects step rightwards under a merge. A dashboard is read by
+  scanning a column.
+- **No pipe highlight for the selected commit.** The row wash and the `▸`
+  already say which row; a third signal is noise.
+
+Two things measurement changed:
+
+- **The padding needed a cap.** `pinz` reaches twenty lanes -- 39 columns --
+  over 200 commits, and padding the other 190 rows to that spends a third of
+  the pane on whitespace. The column is capped at a quarter of the pane width;
+  past the cap a row keeps its whole graph and gives up subject width instead,
+  which is honest, because that row really does have twenty branches in it.
+- **`MIN_MESSAGE_W` is no longer a floor on the rendered message.** It was,
+  and on a row deeper than the cap it forced the row one column past the pane
+  edge, wrapping it and shifting every row below -- the same class of bug the
+  second rework thought it had fixed. It now governs only whether the ref list
+  is drawn, which is the lever that can actually yield. A test builds a
+  24-lane history and asserts no row exceeds the pane at three widths; it
+  failed on its first run.
+
+The expanded view (`graph`) still reproduces `git log --graph` verbatim,
+filler rows and all, because reproducing git's block layout is what it is for.
+The two views therefore draw topology differently, which is a loose end.
+
 ### Still open
 
 - Backward cycling, if four views proves enough to want it.
 - Direct jumps to a named view, which needs a pane-local key mode the app
   does not otherwise have.
 - Whether Graph shows `--all`.
+- Whether the expanded view should also drop `--graph` and share the computed
+  layout, so the two views agree on what the topology looks like.
 - Whether a reflog selection outside the loaded commit range should trigger a
   fetch for that one commit, rather than the inspector reporting it is out of
   range.
