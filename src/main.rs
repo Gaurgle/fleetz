@@ -1759,9 +1759,9 @@ fn spawn_github_poll(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, config: 
     let tx = tx.clone();
     let repo_limit = config.repo_limit;
     // PR data is always fetched now, so the cache key no longer varies by it.
-    let cache = cache::ApiCache::new(config.cache_ttl, repo_limit, true);
+    let cache = cache::ApiCache::new(config.cache_ttl, repo_limit);
     tokio::spawn(async move {
-        let result = github::fetch_repos(repo_limit, &cache, true).await;
+        let result = github::fetch_repos(repo_limit, &cache, github::CacheMode::Bypass).await;
         let _ = tx.send(AppEvent::Github(result.map(Box::new)));
     });
 }
@@ -1820,7 +1820,7 @@ async fn load_repos(
     }
 
     // Fetch from GitHub (with caching)
-    let api_cache = cache::ApiCache::new(config.cache_ttl, config.repo_limit, args.prs);
+    let api_cache = cache::ApiCache::new(config.cache_ttl, config.repo_limit);
     let fetch = fetch_dataset(config, &api_cache, bypass_cache).await?;
     let (dataset, calendar) = (fetch.repos, fetch.calendar);
 
@@ -1898,7 +1898,11 @@ async fn fetch_dataset(
     cache: &cache::ApiCache,
     bypass_cache: bool,
 ) -> Result<github::GithubFetch, String> {
-    github::fetch_repos(config.repo_limit, cache, bypass_cache).await
+    let mode = match bypass_cache {
+        true => github::CacheMode::Bypass,
+        false => github::CacheMode::AnyCached,
+    };
+    github::fetch_repos(config.repo_limit, cache, mode).await
 }
 
 /// Which of `targets` are worth spending a `git fetch` on before the first

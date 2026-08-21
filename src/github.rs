@@ -367,22 +367,36 @@ fn split_viewer(viewer: Viewer, today: chrono::NaiveDate) -> GithubFetch {
 
 /// Fetch repos from GitHub GraphQL API with disk caching.
 /// `bypass_cache`: if true, skips reading cache but still writes (used by the `R` reload).
+/// How much the caller is willing to trust the disk cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheMode {
+    /// Serve any cached payload, however old, rather than waiting on the
+    /// network. Startup uses this: the whole repo list is derived from this
+    /// dataset, so blocking on it meant six to nine seconds of nothing before
+    /// the first paint. A poll fires on the first tick of the event loop and
+    /// replaces it a moment later, so the staleness is measured in seconds and
+    /// the wait is gone.
+    AnyCached,
+    /// Ignore the cache and go to the network. The background poll and `R`,
+    /// which exist precisely to be current.
+    Bypass,
+}
+
 pub async fn fetch_repos(
     repo_limit: u32,
     cache: &crate::cache::ApiCache,
-    bypass_cache: bool,
+    mode: CacheMode,
 ) -> Result<GithubFetch, String> {
     // One "today" for the whole fetch, so every path builds the same grid.
     let today = chrono::Local::now().date_naive();
 
-    // Try cache first. A payload written before the calendar field existed
-    // parses fine but carries no calendar, and serving it would show an empty
-    // year for as long as the TTL lasts. Treat that as a miss: the whole
-    // point of the poll is that the calendar rides along for free.
-    if !bypass_cache
-        && let Some(fetch) = parse_cached(cache.read(), today)
-        && fetch.calendar.is_some()
-        && fetch.has_pr_counts
+    // A payload written before the calendar field existed parses fine but
+    // carries no calendar, and serving it would show an empty year. Same for
+    // one written before PR counts rode along. Treat either as a miss: the
+    // whole point of the poll is that both come for free.
+    let usable = |raw| parse_cached(raw, today).filter(|f| f.calendar.is_some() && f.has_pr_counts);
+    if mode == CacheMode::AnyCached
+        && let Some(fetch) = usable(cache.read()).or_else(|| usable(cache.read_stale()))
     {
         return Ok(fetch);
     }
@@ -1018,5 +1032,70 @@ mod tests {
         }}}"#;
         let fetch = parse_cached(Some(new.to_string()), day("2026-08-18")).unwrap();
         assert!(fetch.calendar.is_some(), "a current payload is servable");
+    }
+    /// Startup used to block on the network for the whole GitHub fetch --
+    /// measured at 5.7s to 8.7s against a 57-repo account -- because the repo
+    /// list is derived from that dataset and a `cache_ttl` of two minutes
+    /// meant any launch after a short break was a miss. It serves whatever is
+    /// on disk now, however old; a poll fires on the first tick of the event
+    /// loop and replaces it a moment later.
+    #[tokio::test]
+    async fn startup_serves_an_expired_payload_rather_than_waiting_on_the_network() {
+        let dir = std::env::temp_dir().join(format!("fleetz_stale_cache_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("github-50.json");
+        std::fs::write(
+            &path,
+            r#"{"data":{"viewer":{
+                "repositories":{"nodes":[]},
+                "contributionsCollection":{"contributionCalendar":{"weeks":[
+                  {"contributionDays":[{"date":"2026-08-18","contributionCount":7}]}
+                ]}}
+            }}}"#,
+        )
+        .unwrap();
+
+        // TTL zero, so the payload is expired the instant it is written.
+        let cache = crate::cache::ApiCache::at(path, 0);
+        assert!(cache.read().is_none(), "fixture is not actually expired");
+
+        let fetch = fetch_repos(50, &cache, CacheMode::AnyCached)
+            .await
+            .expect("an expired payload should still be served");
+        assert!(
+            fetch.calendar.is_some(),
+            "served a payload the caller will reject as calendar-less"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The ordinary case, alongside the expired one above: a payload inside
+    /// its TTL is served without a network round trip at all.
+    ///
+    /// `CacheMode::Bypass` is deliberately not covered here. Observing it
+    /// means observing a network call, and a unit test that reaches GitHub is
+    /// worse than no test -- it fails on a plane and passes for the wrong
+    /// reason behind a proxy.
+    #[tokio::test]
+    async fn a_fresh_payload_is_served_without_touching_the_network() {
+        let dir = std::env::temp_dir().join(format!("fleetz_bypass_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("github-50.json");
+        std::fs::write(
+            &path,
+            r#"{"data":{"viewer":{"repositories":{"nodes":[]},
+            "contributionsCollection":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[{"date":"2026-08-18","contributionCount":7}]}]}}}}}"#,
+        )
+        .unwrap();
+        let cache = crate::cache::ApiCache::at(path, 86_400);
+        assert!(cache.read().is_some(), "fixture should be fresh");
+        assert!(
+            fetch_repos(50, &cache, CacheMode::AnyCached).await.is_ok(),
+            "AnyCached should have taken the fixture"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

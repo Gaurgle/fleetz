@@ -186,7 +186,10 @@ refresh_interval = 60
 # detected, and floored at 15s.
 github_poll_interval = 30
 
-# GitHub API cache TTL in seconds
+# GitHub API cache TTL in seconds. Launch does not wait on this: it paints
+# from whatever is cached, however old, and the poll that fires a moment
+# later replaces it. The TTL bounds how long a *running* fleetz will reuse a
+# payload before going back to the network.
 cache_ttl = 120
 
 # Write pane sizes back on exit and restore them next launch. Off by

@@ -175,6 +175,15 @@ so a remote GitHub reports as pushed before then is already in hand
 no `FETCH_HEAD` means the clone has never fetched -- or the fleet renders as
 more up to date than it is.
 
+**Launch paints from the cache, however stale.** The repo list is derived from
+the GraphQL dataset, so blocking on it cost 6-9s before the first frame --
+dwarfing discovery (0.1s) and statting the fleet (0.6s). Startup passes
+`CacheMode::AnyCached`; the poll on the first tick replaces it. Only a
+never-run install waits, and it has nothing to show anyway. Keyed by
+`repo_limit` alone: never re-add `-p`, which decides whether PR data is
+*drawn*, not whether it is fetched -- in the key it made startup and the poll
+write separate files that could not warm each other.
+
 **Never widen the GitHub fetch without checking the cache.** Results are cached
 on disk with a TTL (`cache.rs`, `cache_ttl` config key); `r` rebuilds from cache
 and `R` bypasses it. Adding a field to the GraphQL query is free, adding a

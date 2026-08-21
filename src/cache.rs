@@ -9,16 +9,39 @@ pub struct ApiCache {
 }
 
 impl ApiCache {
-    pub fn new(ttl_secs: u64, repo_limit: u32, include_prs: bool) -> Self {
+    /// Keyed by `repo_limit` alone.
+    ///
+    /// It used to be keyed by `-p` as well, from when that flag decided
+    /// whether PR data was fetched. It now decides only whether PR data is
+    /// *drawn*, so the query is identical either way -- but the key was never
+    /// updated, and the two halves of the app disagreed about it: startup
+    /// passed `args.prs` (false by default) while the background poll
+    /// hardcoded true. They wrote two files and each only ever read its own,
+    /// so the poll's fresh payload could not warm the next launch.
+    pub fn new(ttl_secs: u64, repo_limit: u32) -> Self {
         let cache_dir = dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("~/.cache"))
             .join("fleetz");
         // Pre-keying versions wrote a single github.json for every query
-        // shape; remove it so it cannot be served for the wrong flags.
+        // shape, and the split-by-PR versions wrote two; remove both so
+        // neither can be served for a query shape that no longer exists.
         let _ = std::fs::remove_file(cache_dir.join("github.json"));
-        let prs = if include_prs { "prs" } else { "noprs" };
+        for stale in ["prs", "noprs"] {
+            let _ =
+                std::fs::remove_file(cache_dir.join(format!("github-{repo_limit}-{stale}.json")));
+        }
         Self {
-            path: cache_dir.join(format!("github-{repo_limit}-{prs}.json")),
+            path: cache_dir.join(format!("github-{repo_limit}.json")),
+            ttl: Duration::from_secs(ttl_secs),
+        }
+    }
+
+    /// Test constructor with an explicit path, so a test can plant a payload
+    /// of a chosen age without going near the real cache directory.
+    #[cfg(test)]
+    pub fn at(path: PathBuf, ttl_secs: u64) -> Self {
+        Self {
+            path,
             ttl: Duration::from_secs(ttl_secs),
         }
     }
@@ -56,11 +79,15 @@ mod tests {
 
     #[test]
     fn cache_path_varies_by_query_shape() {
-        let a = ApiCache::new(300, 50, false);
-        let b = ApiCache::new(300, 50, true);
-        let c = ApiCache::new(300, 100, false);
-        assert_ne!(a.path, b.path);
-        assert_ne!(a.path, c.path);
+        // `repo_limit` is the only thing left that changes what is asked for,
+        // so it is the only thing the key may vary by. This used to also split
+        // on `-p`, back when that flag decided whether PR data was fetched;
+        // it now decides only whether PR data is drawn. Keeping the split
+        // meant startup and the background poll wrote two files and each read
+        // only its own, so a launch could never be warmed by the poll before
+        // it.
+        assert_ne!(ApiCache::new(300, 50).path, ApiCache::new(300, 100).path);
+        assert_eq!(ApiCache::new(300, 50).path, ApiCache::new(999, 50).path);
     }
 
     #[test]
