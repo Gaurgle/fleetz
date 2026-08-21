@@ -7,6 +7,11 @@ pub struct BranchStatus {
     pub upstream: Option<String>,
     pub behind: u32,
     pub ahead: u32,
+    /// The branch HEAD is currently on, from `for-each-ref`'s `%(HEAD)`.
+    ///
+    /// Nothing used to record it, so every local branch drew identically and
+    /// the pane could not answer the first question anyone asks it.
+    pub is_head: bool,
 }
 
 /// One file touched by a commit, from `git log --numstat`. `added`/`removed`

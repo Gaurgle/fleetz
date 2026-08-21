@@ -505,10 +505,22 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     if !repo.branches.is_empty() || !repo.remote_only_branches.is_empty() {
         lines.push(Line::from(section_label("branches")));
         for b in &repo.branches {
-            let mut branch_spans = vec![Span::styled(
-                format!("  {}", b.name),
-                Style::default().fg(colors::TEXT),
-            )];
+            // The checked-out branch gets git's own `*` marker, which keeps
+            // the name column aligned, painted in the colour the history
+            // pane already uses for HEAD so the two agree about what "where
+            // you are" looks like. Nothing marked it before, so a repo with
+            // two level branches drew them identically and the pane could
+            // not answer the first thing anyone asks it.
+            let head_color = colors::ref_color(crate::model::RefKind::Head);
+            let (marker, name_color) = if b.is_head {
+                ("* ", head_color)
+            } else {
+                ("  ", colors::TEXT)
+            };
+            let mut branch_spans = vec![
+                Span::styled(marker, Style::default().fg(head_color)),
+                Span::styled(b.name.clone(), Style::default().fg(name_color)),
+            ];
             if b.behind > 0 {
                 branch_spans.push(Span::styled(
                     format!(" {} behind", b.behind),
@@ -521,7 +533,18 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
                     Style::default().fg(colors::PEACH),
                 ));
             }
-            if b.behind == 0 && b.ahead == 0 && b.upstream.is_some() {
+            // An untracked branch used to render bare, which reads as "fine"
+            // when it actually means "not on any remote". Same trap as a
+            // not-cloned repo whose counters are all zero: say the state in
+            // words rather than letting silence stand in for health. That
+            // also makes the ✓ mean one thing again -- level with an upstream
+            // that exists -- instead of covering two cases by omission.
+            if b.upstream.is_none() {
+                branch_spans.push(Span::styled(
+                    " no upstream",
+                    Style::default().fg(colors::OVERLAY),
+                ));
+            } else if b.behind == 0 && b.ahead == 0 {
                 branch_spans.push(Span::styled(" ✓", Style::default().fg(colors::GREEN)));
             }
             lines.push(Line::from(branch_spans));

@@ -171,7 +171,10 @@ pub async fn branch_statuses(repo_path: &Path) -> Vec<BranchStatus> {
         repo_path,
         &[
             "for-each-ref",
-            "--format=%(refname:short)\t%(upstream:short)\t%(upstream:track)",
+            // `%(HEAD)` is `*` on the checked-out branch and a space on every
+            // other, so which branch you are on rides the query that was
+            // already being made rather than costing a second subprocess.
+            "--format=%(HEAD)\t%(refname:short)\t%(upstream:short)\t%(upstream:track)",
             "refs/heads/",
         ],
     )
@@ -247,12 +250,13 @@ fn parse_branch_output(output: &str) -> Vec<BranchStatus> {
         .filter(|l| !l.is_empty())
         .map(|line| {
             let parts: Vec<&str> = line.split('\t').collect();
-            let name = parts.first().unwrap_or(&"").to_string();
+            let is_head = parts.first().is_some_and(|h| h.trim() == "*");
+            let name = parts.get(1).unwrap_or(&"").to_string();
             let upstream = parts
-                .get(1)
+                .get(2)
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string());
-            let track = parts.get(2).unwrap_or(&"");
+            let track = parts.get(3).unwrap_or(&"");
 
             let (ahead, behind) = parse_track_info(track);
 
@@ -261,6 +265,7 @@ fn parse_branch_output(output: &str) -> Vec<BranchStatus> {
                 upstream,
                 behind,
                 ahead,
+                is_head,
             }
         })
         .collect()
@@ -774,10 +779,55 @@ pub async fn worktree_list(repo_path: &Path) -> Vec<crate::model::Worktree> {
     parse_worktree_output(&stdout, repo_path)
 }
 
+/// Whether two paths name the same directory, tolerating spellings that
+/// differ without the target differing: case on a case-insensitive
+/// filesystem, and symlinked parents.
+///
+/// The raw `==` this replaces let the MAIN worktree through whenever
+/// discovery and git disagreed about spelling. On macOS a configured
+/// `repo_dir` of `~/repos` resolves happily against a `~/Repos` on disk, so
+/// discovery carries the lowercase form while `git worktree list` reports the
+/// real casing -- and the repo root then rendered as though it were a linked
+/// worktree of itself, duplicating the path already shown in the pane header
+/// under a second spelling.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        // Unreadable either way: fall back to having already compared them.
+        _ => false,
+    }
+}
+
+/// A path with `$HOME` collapsed to `~`, separator included. Without it this
+/// printed `~Repos/pinz`, which is not a path anything would accept.
+fn tilde_path(path: &Path) -> String {
+    let home = dirs::home_dir().unwrap_or_default();
+    match path.strip_prefix(&home) {
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
+    }
+}
+
 fn parse_worktree_output(output: &str, main_path: &Path) -> Vec<crate::model::Worktree> {
     let mut worktrees = Vec::new();
     let mut current_path = String::new();
     let mut current_branch = String::new();
+
+    // Only LINKED worktrees are worth listing. The main one is just the repo,
+    // whose path the pane header already prints.
+    let push_linked = |path: &str, branch: &str, out: &mut Vec<crate::model::Worktree>| {
+        let wt_path = std::path::Path::new(path);
+        if branch.is_empty() || same_dir(wt_path, main_path) {
+            return;
+        }
+        out.push(crate::model::Worktree {
+            path: tilde_path(wt_path),
+            branch: branch.to_string(),
+        });
+    };
 
     for line in output.lines() {
         if let Some(p) = line.strip_prefix("worktree ") {
@@ -786,38 +836,15 @@ fn parse_worktree_output(output: &str, main_path: &Path) -> Vec<crate::model::Wo
         } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
             current_branch = b.to_string();
         } else if line.is_empty() && !current_path.is_empty() {
-            // Skip the main worktree
-            let wt_path = std::path::Path::new(&current_path);
-            if wt_path != main_path && !current_branch.is_empty() {
-                let home = dirs::home_dir().unwrap_or_default();
-                let display = format!(
-                    "~{}",
-                    wt_path.strip_prefix(&home).unwrap_or(wt_path).display()
-                );
-                worktrees.push(crate::model::Worktree {
-                    path: display,
-                    branch: current_branch.clone(),
-                });
-            }
+            push_linked(&current_path, &current_branch, &mut worktrees);
             current_path.clear();
             current_branch.clear();
         }
     }
 
-    // Handle last entry without trailing newline
+    // Last entry when the output has no trailing blank line.
     if !current_path.is_empty() {
-        let wt_path = std::path::Path::new(&current_path);
-        if wt_path != main_path && !current_branch.is_empty() {
-            let home = dirs::home_dir().unwrap_or_default();
-            let display = format!(
-                "~{}",
-                wt_path.strip_prefix(&home).unwrap_or(wt_path).display()
-            );
-            worktrees.push(crate::model::Worktree {
-                path: display,
-                branch: current_branch,
-            });
-        }
+        push_linked(&current_path, &current_branch, &mut worktrees);
     }
 
     worktrees
@@ -882,7 +909,9 @@ mod tests {
 
     #[test]
     fn parse_branch_output_basic() {
-        let output = "main\torigin/main\t[behind 3]\nfeat/x\torigin/feat/x\t[ahead 1]\n";
+        // `%(HEAD)` leads each row: "*" on the checked-out branch, a single
+        // space on the others. Taken from real `for-each-ref` output.
+        let output = " \tmain\torigin/main\t[behind 3]\n*\tfeat/x\torigin/feat/x\t[ahead 1]\n";
         let branches = parse_branch_output(output);
         assert_eq!(branches.len(), 2);
         assert_eq!(branches[0].name, "main");
@@ -893,13 +922,98 @@ mod tests {
         assert_eq!(branches[1].ahead, 1);
     }
 
+    /// Which branch you are on. Nothing carried it before, so the detail pane
+    /// drew two level branches identically and could not say which was HEAD.
+    #[test]
+    fn parse_branch_output_marks_the_checked_out_branch() {
+        let output = " \tmain\torigin/main\t\n*\tfeat/x\torigin/feat/x\t\n";
+        let branches = parse_branch_output(output);
+        assert!(!branches[0].is_head, "main is not checked out");
+        assert!(branches[1].is_head, "feat/x is");
+        assert_eq!(
+            branches.iter().filter(|b| b.is_head).count(),
+            1,
+            "exactly one branch can be HEAD"
+        );
+    }
+
     #[test]
     fn parse_branch_output_no_upstream() {
-        let output = "local-only\t\t\n";
+        let output = "*\tlocal-only\t\t\n";
         let branches = parse_branch_output(output);
         assert_eq!(branches.len(), 1);
         assert_eq!(branches[0].name, "local-only");
         assert!(branches[0].upstream.is_none());
+        assert!(branches[0].is_head);
+    }
+
+    /// Real `git worktree list --porcelain` output, one entry per blank-line
+    /// separated block. Built with `concat!` rather than a continued string
+    /// literal: rustfmt bakes a continuation's indentation into the value,
+    /// which silently stops every line matching its prefix.
+    fn worktree_block(path: &str, sha: &str, branch: &str) -> String {
+        format!("worktree {path}\nHEAD {sha}\nbranch refs/heads/{branch}\n")
+    }
+
+    /// `git worktree list` always reports the main worktree first. It is just
+    /// the repo, whose path the pane header already prints, so listing it
+    /// again under a branch duplicated that line in a second spelling.
+    #[test]
+    fn parse_worktree_output_skips_the_main_worktree() {
+        let main = std::path::Path::new("/Users/me/repos/pinz");
+        let output = worktree_block("/Users/me/repos/pinz", "16d99c6", "feat/header-version");
+        assert!(parse_worktree_output(&output, main).is_empty());
+    }
+
+    #[test]
+    fn parse_worktree_output_keeps_linked_worktrees() {
+        let main = std::path::Path::new("/Users/me/repos/pinz");
+        let output = format!(
+            "{}\n{}",
+            worktree_block("/Users/me/repos/pinz", "16d99c6", "main"),
+            worktree_block("/Users/me/repos/pinz-hotfix", "abc1234", "hotfix"),
+        );
+        let wts = parse_worktree_output(&output, main);
+        assert_eq!(wts.len(), 1, "only the linked one, got {wts:?}");
+        assert_eq!(wts[0].branch, "hotfix");
+        // Trailing entry with no blank line after it still lands.
+        assert!(wts[0].path.ends_with("pinz-hotfix"));
+    }
+
+    /// Regression: `format!("~{}", ..)` dropped the separator and printed
+    /// `~Repos/pinz`, which is not a path anything would accept.
+    #[test]
+    fn a_worktree_under_home_keeps_its_path_separator() {
+        let home = dirs::home_dir().expect("home");
+        let linked = home.join("work").join("side");
+        let output = worktree_block(&linked.display().to_string(), "abc1234", "side");
+        let wts = parse_worktree_output(&output, std::path::Path::new("/nowhere"));
+        assert_eq!(wts[0].path, "~/work/side", "got {}", wts[0].path);
+    }
+
+    /// The main-worktree filter compares paths that reach the same directory
+    /// by different spellings: git reports the real casing while a configured
+    /// `repo_dir` may carry another, and on a case-insensitive filesystem
+    /// both resolve. A raw `==` missed that and leaked the repo root.
+    #[test]
+    fn same_dir_sees_through_a_symlinked_spelling() {
+        let base = std::env::temp_dir().join("fleetz_same_dir_test");
+        let _ = std::fs::remove_dir_all(&base);
+        let real = base.join("real");
+        std::fs::create_dir_all(&real).expect("create");
+        let link = base.join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+        assert!(same_dir(&real, &real), "a path matches itself");
+        #[cfg(unix)]
+        assert!(same_dir(&link, &real), "a symlink reaches the same dir");
+        assert!(
+            !same_dir(&real, &base.join("other")),
+            "different dirs stay different"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
