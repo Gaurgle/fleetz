@@ -51,14 +51,30 @@ pub fn split_right_column(area: Rect, pct: u16) -> (Rect, Option<Rect>) {
 /// Split the main area into the repo list and the right column. Shared by
 /// `render` and `ui::panel_rects` for the same reason as the vertical split.
 pub fn split_main(area: Rect, repo_list_pct: u16) -> (Rect, Rect) {
-    let h = Layout::horizontal([
-        Constraint::Percentage(repo_list_pct),
-        Constraint::Percentage(100 - repo_list_pct),
-    ])
-    .spacing(1)
-    .split(area);
+    // A percentage of a very wide terminal is more room than a repo row can
+    // use: the row is a name and a handful of badges, and everything past
+    // about fifty columns is leader dots. The right column has the opposite
+    // appetite -- commit subjects grow into whatever they are given -- so the
+    // surplus goes there.
+    //
+    // Only the default yields. Once the divider has been dragged the number
+    // is the user's answer to this question and is honoured exactly, however
+    // wide the terminal.
+    let width = if repo_list_pct == crate::app::DEFAULT_REPO_LIST_PCT {
+        (area.width * repo_list_pct / 100).min(REPO_LIST_MAX_COLS)
+    } else {
+        area.width * repo_list_pct / 100
+    };
+    let h = Layout::horizontal([Constraint::Length(width), Constraint::Min(0)])
+        .spacing(1)
+        .split(area);
     (h[0], h[1])
 }
+
+/// Columns past which the repo list is only drawing longer dots: two borders,
+/// two columns of padding, the marker and kind glyph, a generous name, the
+/// dot fill, and the widest badge run a row can carry (`1PR 1 3↓ 2↑ 5!`).
+const REPO_LIST_MAX_COLS: u16 = 52;
 
 /// PR numbers shown inline on the header's remote row before the rest are
 /// summarised with a `+`. Two keeps the row short enough that CI still fits
@@ -417,27 +433,27 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // CI used to be named in this frame as well. It sits on the header's
     // remote row now, beside the PRs, which is where the other things GitHub
     // knows live -- and the frame was repeating those exact words a row
-    // above them. The right title is left free rather than refilled.
-    let right_title: Vec<Span> = Vec::new();
+    // above them. The right title carries the view switcher instead.
+    let status = repo.short_status();
+    let left_title = Line::from(vec![
+        Span::styled(" [2] ", Style::default().fg(num_color)),
+        Span::styled(
+            repo.name.clone(),
+            Style::default()
+                .fg(colors::SAPPHIRE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" {status} "), Style::default().fg(colors::OVERLAY)),
+    ]);
+    // Two corners and a column of border either side of the two titles, so
+    // they cannot meet in the middle and overprint.
+    let budget = (area.width as usize)
+        .saturating_sub(2)
+        .saturating_sub(span_width(&left_title.spans) + 2);
 
     let panel = panel
-        .title_top(
-            Line::from(vec![
-                Span::styled(" [2] ", Style::default().fg(num_color)),
-                Span::styled(
-                    repo.name.clone(),
-                    Style::default()
-                        .fg(colors::SAPPHIRE)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(" {} ", repo.short_status()),
-                    Style::default().fg(colors::OVERLAY),
-                ),
-            ])
-            .left_aligned(),
-        )
-        .title_top(Line::from(right_title).right_aligned());
+        .title_top(left_title.left_aligned())
+        .title_top(view_switcher(app.history_view, focused, budget));
     let inner = panel.inner(area);
     frame.render_widget(panel, area);
 
@@ -604,8 +620,6 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(row3));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(view_tabs(app.history_view)));
-    lines.push(Line::from(""));
 
     // Branches (worktrees shown inline under the branch they're checked out on)
     let view = app.history_view;
@@ -716,19 +730,14 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         let selected_hash = app.inspected_hash().unwrap_or_default().to_string();
         for raw in &repo.graph_expanded {
             // The block the selection names starts here, so scrolling to it
-            // puts the whole commit on screen rather than its last line.
-            if !selected_hash.is_empty()
-                && raw
-                    .split_whitespace()
-                    .skip_while(|w| *w != "commit")
-                    .nth(1)
-                    .is_some_and(|h| {
-                        h.trim_end_matches(|c: char| !c.is_alphanumeric()) == selected_hash
-                    })
-            {
+            // puts the whole commit on screen rather than its last line, and
+            // so the marker lands on the row that names the commit rather
+            // than on some line of its message.
+            let is_sel = opens_commit(raw, &selected_hash);
+            if is_sel {
                 selected_row = Some(lines.len());
             }
-            lines.push(expanded_graph_line(raw, &selected_hash, width));
+            lines.push(expanded_graph_line(raw, &selected_hash, is_sel, width));
         }
         lines.push(Line::from(""));
     }
@@ -746,12 +755,19 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             let msg_budget = width.saturating_sub(prefix_len + action_len + 1).max(10);
             let description = crate::ui::truncate(&entry.description, msg_budget);
 
-            if ri == app.detail_selected() {
+            let is_sel = ri == app.detail_selected();
+            if is_sel {
                 selected_row = Some(lines.len());
             }
+            // The same caret and wash the commit lists use. A bolded hash was
+            // all this had, which marks one token and leaves the eye to find
+            // which -- the work the marker exists to save.
             let mut reflog_spans = vec![
-                Span::raw("  "),
-                Span::styled(entry.hash.clone(), hash_style(ri == app.detail_selected())),
+                Span::styled(
+                    if is_sel { "▸ " } else { "  " },
+                    Style::default().fg(colors::SAPPHIRE),
+                ),
+                Span::styled(entry.hash.clone(), hash_style(is_sel)),
             ];
             if !entry.action.is_empty() {
                 reflog_spans.push(Span::styled(
@@ -761,6 +777,9 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             }
             reflog_spans.push(Span::raw(" "));
             reflog_spans.push(Span::styled(description, Style::default().fg(colors::TEXT)));
+            if is_sel {
+                reflog_spans = wash(pad_to(reflog_spans, width));
+            }
             lines.push(Line::from(reflog_spans));
         }
         lines.push(Line::from(""));
@@ -1386,7 +1405,34 @@ fn hash_style(selected: bool) -> Style {
 /// topology keeps its per-lane colours and the text after it is styled by what
 /// git put there. The commit whose hash matches `selected` goes bold, which is
 /// the only way this view can say what the inspector is showing.
-fn expanded_graph_line(raw: &str, selected_hash: &str, width: usize) -> Line<'static> {
+/// Whether this line of `git log --graph`'s expanded output is the `commit
+/// <hash>` line that opens `hash`'s block.
+fn opens_commit(raw: &str, hash: &str) -> bool {
+    !hash.is_empty()
+        && raw
+            .split_whitespace()
+            .skip_while(|w| *w != "commit")
+            .nth(1)
+            .is_some_and(|h| h.trim_end_matches(|c: char| !c.is_alphanumeric()) == hash)
+}
+
+/// Hold a row open to `width` so a selection wash covers the line rather than
+/// stopping where its text does, which reads as a highlight on the words
+/// instead of a cursor on the row.
+fn pad_to(mut spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let used = span_width(&spans);
+    if used < width {
+        spans.push(Span::raw(" ".repeat(width - used)));
+    }
+    spans
+}
+
+fn expanded_graph_line(
+    raw: &str,
+    selected_hash: &str,
+    is_selected: bool,
+    width: usize,
+) -> Line<'static> {
     const GRAPH_CHARS: [char; 6] = ['*', '|', '\\', '/', '_', ' '];
     let split = raw
         .char_indices()
@@ -1394,7 +1440,10 @@ fn expanded_graph_line(raw: &str, selected_hash: &str, width: usize) -> Line<'st
         .map_or(raw.len(), |(i, _)| i);
     let (prefix, rest) = raw.split_at(split);
 
-    let mut spans = vec![Span::raw("  ")];
+    let mut spans = vec![Span::styled(
+        if is_selected { "▸ " } else { "  " },
+        Style::default().fg(colors::SAPPHIRE),
+    )];
     spans.extend(graph_prefix_spans_raw(prefix));
 
     let rest = crate::ui::truncate(rest, width.saturating_sub(2 + prefix.chars().count()));
@@ -1415,6 +1464,9 @@ fn expanded_graph_line(raw: &str, selected_hash: &str, width: usize) -> Line<'st
         Style::default().fg(colors::TEXT)
     };
     spans.push(Span::styled(rest, style));
+    if is_selected {
+        spans = wash(pad_to(spans, width));
+    }
     Line::from(spans)
 }
 
@@ -1437,29 +1489,75 @@ fn commit_stat_text(c: &crate::model::Commit) -> String {
 }
 
 /// A bold section header inside the detail pane (e.g. "branches", "history").
-/// The view switcher, one row under the header.
+/// The view switcher, drawn in the pane's top border rather than in its body.
 ///
-/// Drawn above the scrolling body so it does not scroll away: it is how you
-/// know what you are looking at, which is exactly the thing that must not
-/// disappear when you page down. Active view in the focus colour used
-/// elsewhere, inactive in SUBTEXT rather than OVERLAY -- these are choices
-/// you can make, not furniture.
-fn view_tabs(active: HistoryView) -> Vec<Span<'static>> {
-    let mut spans = vec![Span::raw("  ")];
-    for (i, view) in HistoryView::ALL.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
+/// It belongs in the frame because it answers "what am I looking at", and the
+/// body scrolls: a strip at the top of the body is gone by the second page,
+/// which is exactly when the question gets asked. The doc comment this
+/// replaces claimed it was pinned. It never was.
+///
+/// The keys ride along with it, since a switcher that does not say how to
+/// switch answers half the question. `[` and `]` are drawn as two lit keys
+/// either side of a dimmed `/`, so the pair reads as "either bracket" rather
+/// than as the single `/` key -- which is bound to search.
+///
+/// `budget` is the border width left over after the pane's own title. Too
+/// tight for all four and it shows the active one alone, which is the half
+/// that cannot be dropped.
+fn view_switcher(active: HistoryView, focused: bool, budget: usize) -> Line<'static> {
+    let (key, slash, dot, on, off) = if focused {
+        (
+            colors::TEXT,
+            colors::OVERLAY,
+            colors::SURFACE,
+            colors::LAVENDER,
+            colors::SUBTEXT,
+        )
+    } else {
+        // An unfocused pane's border and title are furniture, and a bright
+        // switcher on one would pull the eye to the pane you are not in. It
+        // still has to say which view is active, so the pair stays one step
+        // apart rather than collapsing to a single colour.
+        (
+            colors::OVERLAY,
+            colors::SURFACE,
+            colors::SURFACE,
+            colors::SUBTEXT,
+            colors::SURFACE,
+        )
+    };
+    let bold = |c| Style::default().fg(c).add_modifier(Modifier::BOLD);
+
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::styled("[", bold(key)),
+        Span::styled("/", Style::default().fg(slash)),
+        Span::styled("]", bold(key)),
+        Span::raw(" "),
+    ];
+
+    // " [/] " + every label + " · " between each + a trailing space.
+    let labels: usize = HistoryView::ALL
+        .iter()
+        .map(|v| v.label().chars().count())
+        .sum();
+    let full = 5 + labels + 3 * (HistoryView::COUNT - 1) + 1;
+
+    if full <= budget {
+        for (i, view) in HistoryView::ALL.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(" · ", Style::default().fg(dot)));
+            }
+            spans.push(match *view == active {
+                true => Span::styled(view.label(), bold(on)),
+                false => Span::styled(view.label(), Style::default().fg(off)),
+            });
         }
-        let style = if *view == active {
-            Style::default()
-                .fg(colors::LAVENDER)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(colors::SUBTEXT)
-        };
-        spans.push(Span::styled(view.label(), style));
+    } else {
+        spans.push(Span::styled(active.label(), bold(on)));
     }
-    spans
+    spans.push(Span::raw(" "));
+    Line::from(spans).right_aligned()
 }
 
 fn section_label(text: &str) -> Span<'static> {
@@ -1867,7 +1965,7 @@ mod tests {
     /// the glyph would only stop it looking like the thing it is copying.
     #[test]
     fn the_expanded_graph_keeps_gits_own_node() {
-        let text: String = expanded_graph_line("* commit a1b2c3d", "", 80)
+        let text: String = expanded_graph_line("* commit a1b2c3d", "", false, 80)
             .spans
             .iter()
             .map(|s| s.content.as_ref())
@@ -1897,6 +1995,155 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The switcher moved into the border because the body scrolls. The doc
+    /// comment on the old one claimed it was pinned above the scrolling
+    /// content; it was the scrolling content's first row, so paging down took
+    /// it off screen -- exactly when "what am I looking at" gets asked.
+    #[test]
+    fn the_view_switcher_is_in_the_border_and_says_which_keys_move_it() {
+        for view in HistoryView::ALL {
+            let border = pane_text(view, 92)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            for tab in HistoryView::ALL {
+                assert!(
+                    border.contains(tab.label()),
+                    "{} view: the border is missing the {} tab: {border:?}",
+                    view.label(),
+                    tab.label()
+                );
+            }
+            assert!(
+                border.contains("[/]"),
+                "{} view: the border does not say which keys switch: {border:?}",
+                view.label()
+            );
+        }
+    }
+
+    /// The regression itself: scroll the body to the bottom and the switcher
+    /// is still there, because it is not in the body.
+    #[test]
+    fn scrolling_to_the_bottom_does_not_lose_the_view_switcher() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut r = busy_repo();
+        r.graph = (0..200)
+            .map(|i| crate::model::GraphLine {
+                lanes: vec![crate::graph::commit_cell()],
+                hash: format!("h{i:06}"),
+                is_merge: false,
+                refs: vec![],
+                author: "Gaurgle".to_string(),
+                message: format!("subject {i}"),
+            })
+            .collect();
+        r.reflog = (0..200)
+            .map(|i| crate::model::ReflogEntry {
+                hash: format!("r{i:06}"),
+                action: "commit".to_string(),
+                description: format!("entry {i}"),
+            })
+            .collect();
+
+        for view in HistoryView::ALL {
+            let mut app = crate::app::App::new(vec![r.clone()], "t".to_string(), 92, 30);
+            app.history_view = view;
+            app.set_detail_scroll(150);
+            let mut term = Terminal::new(TestBackend::new(92, 30)).unwrap();
+            term.draw(|f| render_detail_pane(f, f.area(), &app))
+                .unwrap();
+            let buf = term.backend().buffer().clone();
+            let border: String = (0..92u16).map(|x| buf[(x, 0)].symbol()).collect();
+            assert!(
+                border.contains(view.label()),
+                "{} view: scrolled away: {border:?}",
+                view.label()
+            );
+        }
+    }
+
+    /// One selection marker across all four views. Reflog and the expanded
+    /// graph bolded the hash and nothing else, which marks a single token and
+    /// leaves the eye to find which token it was -- in a two-hundred row list
+    /// that search is the work the caret exists to save.
+    #[test]
+    fn every_view_marks_its_selection_the_same_way() {
+        for view in HistoryView::ALL {
+            let text = pane_text(view, 92);
+            assert!(
+                text.contains("▸ "),
+                "{} view has no selection caret:\n{text}",
+                view.label()
+            );
+        }
+    }
+
+    /// A percentage of a very wide terminal is more room than a repo row can
+    /// use: past about fifty columns the list is only drawing longer dots.
+    /// The right column has the opposite appetite, so the surplus goes there.
+    #[test]
+    fn the_repo_list_stops_growing_once_the_rows_have_what_they_need() {
+        use ratatui::layout::Rect;
+        let at = |w: u16| {
+            let (list, right) =
+                split_main(Rect::new(0, 0, w, 40), crate::app::DEFAULT_REPO_LIST_PCT);
+            (list.width, right.width)
+        };
+
+        // Below the cap nothing changes: the percentage is still the answer.
+        let (list, _) = at(120);
+        assert_eq!(list, 120 * crate::app::DEFAULT_REPO_LIST_PCT / 100);
+
+        let (narrow_list, narrow_right) = at(150);
+        let (wide_list, wide_right) = at(300);
+        assert_eq!(wide_list, REPO_LIST_MAX_COLS, "the list kept growing");
+        assert!(
+            wide_right - narrow_right >= 150,
+            "the surplus did not reach the right column: {narrow_right} -> {wide_right}"
+        );
+        assert!(narrow_list <= REPO_LIST_MAX_COLS);
+    }
+
+    /// Only the default yields to the cap. Once the divider has been dragged
+    /// the number is the user's answer to this question, and a cap that
+    /// overrode it would make the drag look broken.
+    #[test]
+    fn a_dragged_divider_is_honoured_past_the_cap() {
+        use ratatui::layout::Rect;
+        let dragged = crate::app::DEFAULT_REPO_LIST_PCT + 5;
+        let (list, _) = split_main(Rect::new(0, 0, 300, 40), dragged);
+        assert_eq!(list.width, 300 * dragged / 100);
+        assert!(list.width > REPO_LIST_MAX_COLS);
+    }
+
+    /// The standing invariant: `panel_rects` must report the rectangles
+    /// `render` draws, and both reach the split through `split_main`. A cap
+    /// added to one side only is exactly the drift that function exists to
+    /// prevent, and it fails silently -- clicks land on the wrong pane.
+    #[test]
+    fn the_capped_split_is_the_one_hit_testing_uses() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = crate::app::App::new(vec![busy_repo()], "t".to_string(), 300, 40);
+        let mut term = Terminal::new(TestBackend::new(300, 40)).unwrap();
+        let mut drawn = None;
+        term.draw(|f| {
+            drawn = Some(crate::ui::panel_rects(f.area(), &app));
+            crate::ui::render(f, &app);
+        })
+        .unwrap();
+        let rects = drawn.expect("panel_rects");
+        assert_eq!(
+            rects.repo_list.width, REPO_LIST_MAX_COLS,
+            "hit testing still thinks the list is the uncapped width"
+        );
     }
 
     /// The inspector follows whichever list is active, resolving the hash

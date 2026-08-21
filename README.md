@@ -100,8 +100,8 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `j` / `k`, `↑` / `↓` | Repo list: move selection · Detail: pick commit · Inspector: scroll · Contributions: move the day cursor up/down a weekday (a caret above the grid marks the column) |
 | `J` / `K` | Scroll the detail pane (works from the repo list too) |
 | `PgUp` / `PgDn` | Scroll focused pane by a page |
-| `v` | Toggle detail vs compact view |
-| `[` / `]` | Repo pane: step its body between four views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`. Each keeps its own scroll position and selection, and the inspector follows whichever is active |
+| `v` | Toggle detail vs compact view. The compact grid packs as many columns as the terminal has room for |
+| `[` / `]` | Repo pane: step its body between four views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`. Each keeps its own scroll position and selection, and the inspector follows whichever is active. The active view is named in the pane's top border, so it survives scrolling |
 | `c` | Toggle the contributions strip: three years of activity, GitHub-style. Each day is a half-block square with its own padding, so the grid fits in 11 rows; it scrolls rather than shrinking, with the newest week pinned to the right edge, and no day is marked until you move the cursor |
 | `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
 | `4` | Focus the contributions strip (only while it is open) |

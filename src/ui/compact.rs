@@ -55,15 +55,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    // Below this width a second column would squeeze each repo's name/status
-    // below a usable minimum, so fall back to one dense column instead.
-    const MIN_TWO_COL_WIDTH: usize = 48;
-    let columns = if content.width as usize >= MIN_TWO_COL_WIDTH {
-        2
-    } else {
-        1
-    };
-    let col_width = (content.width as usize / columns).saturating_sub(1);
+    let columns = column_count(&visible, content.width as usize);
+    let col_width = cell_width(columns, content.width as usize);
 
     let selected = app.selected_repo_index().unwrap_or(usize::MAX);
     let mut lines: Vec<Line> = Vec::new();
@@ -73,7 +66,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         for (i, entry) in row.iter().enumerate() {
             if i > 0 {
                 let prev_len: usize = row_spans.iter().map(|s| s.content.chars().count()).sum();
-                let pad = col_width.saturating_sub(prev_len) + 2;
+                let pad = col_width.saturating_sub(prev_len) + GUTTER;
                 row_spans.push(Span::raw(" ".repeat(pad)));
             }
             row_spans.extend(compact_repo_spans(
@@ -88,6 +81,55 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, content);
+}
+
+/// Blank columns between two grid cells.
+const GUTTER: usize = 2;
+
+/// Dots kept between the longest name and the badges, so the fill still reads
+/// as a fill rather than as two tokens jammed together.
+const MIN_DOTS: usize = 3;
+
+/// Name columns a cell plans for. Longer names truncate, which is cheaper than
+/// letting one `marshall-code-test` set the width of every column in the grid
+/// -- the same tax the history pane's graph column had to be capped against.
+const NAME_TARGET: usize = 20;
+
+/// More columns than this and the eye stops reading a grid and starts reading
+/// noise, however much room the terminal has.
+const MAX_COLUMNS: usize = 6;
+
+/// How many grid columns `width` can carry, given what the visible repos
+/// actually need.
+///
+/// Was a constant 2, at any width from 48 columns to 300. That is the whole
+/// bug: a wider terminal bought longer leader dots instead of more repos on
+/// screen, in the one view whose entire job is showing the fleet at once.
+fn column_count(visible: &[(usize, &RepoStatus)], width: usize) -> usize {
+    if visible.is_empty() || width == 0 {
+        return 1;
+    }
+    let widest_name = visible
+        .iter()
+        .map(|(_, r)| r.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(NAME_TARGET);
+    let widest_badges = visible
+        .iter()
+        .map(|(_, r)| badges::badge_spans(r, false).1)
+        .max()
+        .unwrap_or(0);
+    // Mirrors what `compact_repo_spans` lays out: marker, glyph, name, the
+    // space-dots-space fill, then the badges.
+    let cell = badges::MARKER_W + badges::GLYPH_W + widest_name + 1 + MIN_DOTS + 1 + widest_badges;
+    ((width + GUTTER) / (cell + GUTTER)).clamp(1, MAX_COLUMNS)
+}
+
+/// The width one cell gets, with the gutters taken out first so the row lands
+/// inside `width` rather than one column past it for every column added.
+fn cell_width(columns: usize, width: usize) -> usize {
+    width.saturating_sub(GUTTER * (columns - 1)) / columns
 }
 
 fn compact_repo_spans(
@@ -128,4 +170,142 @@ fn compact_repo_spans(
     ];
     spans.extend(badge_spans);
     spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{CiStatus, RepoKind, RepoLocation};
+
+    fn repo(name: &str) -> RepoStatus {
+        RepoStatus {
+            daily: None,
+            name: name.to_string(),
+            path: Some("~/repos/x".to_string()),
+            location: RepoLocation::Primary,
+            branches: vec![],
+            commits: vec![],
+            behind: 3,
+            ahead: 2,
+            dirty: 5,
+            pr_count: 1,
+            prs: vec![],
+            ci_status: CiStatus::Unknown,
+            ci_workflow: None,
+            ci_duration: None,
+            groups: vec![],
+            stash_count: 1,
+            stash_entries: vec![],
+            worktrees: vec![],
+            reflog: vec![],
+            graph: vec![],
+            graph_expanded: Vec::new(),
+            repo_kind: RepoKind::Public,
+            owner: Some("Gaurgle".to_string()),
+            remote_url: None,
+            remote_only_branches: vec![],
+            work_key: None,
+        }
+    }
+
+    fn fleet(n: usize) -> Vec<RepoStatus> {
+        (0..n).map(|i| repo(&format!("repo-{i:02}"))).collect()
+    }
+
+    /// The bug this view had: the column count was the constant 2 at every
+    /// width from 48 columns to 300, so a wider terminal bought longer leader
+    /// dots rather than more repos on screen -- in the one view whose whole
+    /// job is showing the fleet at once.
+    #[test]
+    fn a_wider_pane_shows_more_columns() {
+        let repos = fleet(30);
+        let visible: Vec<(usize, &RepoStatus)> = repos.iter().enumerate().collect();
+
+        let narrow = column_count(&visible, 58);
+        let normal = column_count(&visible, 98);
+        let wide = column_count(&visible, 196);
+        assert!(
+            narrow < normal && normal < wide,
+            "width buys nothing: 58 -> {narrow}, 98 -> {normal}, 196 -> {wide}"
+        );
+        assert!(wide >= 4, "a 196-column pane fits four cells, got {wide}");
+    }
+
+    #[test]
+    fn the_column_count_stays_within_its_bounds() {
+        let repos = fleet(4);
+        let visible: Vec<(usize, &RepoStatus)> = repos.iter().enumerate().collect();
+        assert_eq!(column_count(&visible, 1), 1, "never zero columns");
+        assert_eq!(
+            column_count(&visible, 10_000),
+            MAX_COLUMNS,
+            "a grid stops being readable long before it stops fitting"
+        );
+        assert_eq!(column_count(&[], 200), 1, "an empty fleet still lays out");
+    }
+
+    /// Names widen the cell, but only up to `NAME_TARGET`. Past that a single
+    /// outlier would be setting the width of every column in the grid, which
+    /// is the same tax the history pane's graph column had to be capped
+    /// against; it truncates instead.
+    #[test]
+    fn a_name_past_the_target_stops_widening_the_grid() {
+        let at_target = {
+            let mut f = fleet(8);
+            f.push(repo(&"n".repeat(NAME_TARGET)));
+            f
+        };
+        let far_past = {
+            let mut f = fleet(8);
+            f.push(repo(&"n".repeat(NAME_TARGET * 4)));
+            f
+        };
+
+        let a: Vec<(usize, &RepoStatus)> = at_target.iter().enumerate().collect();
+        let b: Vec<(usize, &RepoStatus)> = far_past.iter().enumerate().collect();
+        assert_eq!(
+            column_count(&a, 196),
+            column_count(&b, 196),
+            "a name four times the target changed the layout"
+        );
+
+        // And it does widen up to the target, which is the other half of the
+        // rule: a fleet of short names should pack more columns than one of
+        // target-length ones.
+        let short_repos = fleet(8);
+        let short: Vec<(usize, &RepoStatus)> = short_repos.iter().enumerate().collect();
+        assert!(
+            column_count(&short, 196) > column_count(&a, 196),
+            "short names should pack tighter than target-length ones"
+        );
+    }
+
+    /// The old cell arithmetic was `width / columns - 1`, which happens to
+    /// land exactly on `width` at two columns and one column past it for every
+    /// column after that. Adding columns would have overrun the pane.
+    #[test]
+    fn a_full_row_of_cells_fits_inside_the_pane() {
+        for width in [40usize, 58, 98, 140, 196, 240] {
+            let columns =
+                column_count(&fleet(30).iter().enumerate().collect::<Vec<_>>()[..], width);
+            let cell = cell_width(columns, width);
+            let row = columns * cell + GUTTER * (columns - 1);
+            assert!(
+                row <= width,
+                "{columns} cells of {cell} plus gutters is {row}, past a {width}-column pane"
+            );
+        }
+    }
+
+    /// Every cell is exactly the width the grid allotted it, which is what
+    /// lets the row arithmetic above hold and the columns line up.
+    #[test]
+    fn a_cell_fills_its_column_exactly() {
+        let r = repo("fleetz");
+        for width in [30usize, 44, 60] {
+            let spans = compact_repo_spans(&r, false, width, false);
+            let drawn: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+            assert_eq!(drawn, width, "a {width}-column cell drew {drawn}");
+        }
+    }
 }

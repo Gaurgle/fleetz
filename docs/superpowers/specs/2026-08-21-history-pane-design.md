@@ -191,6 +191,47 @@ The expanded view (`graph`) still reproduces `git log --graph` verbatim,
 filler rows and all, because reproducing git's block layout is what it is for.
 The two views therefore draw topology differently, which is a loose end.
 
+### Fourth pass: the switcher moves to the frame, and width buys information
+
+Two things this document got wrong, both found by using it.
+
+- **The switcher was never pinned.** This spec said it sat "above the
+  scrolling content so it does not scroll away", and the doc comment on
+  `view_tabs` repeated the claim. It was the scrolling body's first row, so
+  paging down took it off screen -- exactly when "what am I looking at" gets
+  asked. It is a right-aligned title on the pane's top border now, which is
+  structurally scroll-proof, and it carries the keys that move it: `[` and `]`
+  drawn as two lit keys either side of a dimmed `/`, so the pair does not read
+  as the single `/` key, which is bound to search. Too narrow for all four and
+  it shows the active one alone. The body gets its two rows back.
+- **Only two of the four views marked their selection.** `info` and `commits`
+  had the caret and the row wash; `reflog` and `graph` bolded the hash and
+  nothing else, which marks one token and leaves the eye to find which. All
+  four now share `▸` plus the wash. In `graph`, whose rows are lines rather
+  than commits, the marker lands on the `commit <hash>` line that opens the
+  block -- the same row the scroll already anchors to, so the two agree.
+
+Separately, and from the same look at the app as a whole: **more terminal
+width was buying no more information anywhere.** Every horizontal dimension
+was a percentage or a constant.
+
+- The compact grid was `columns = if width >= 48 { 2 } else { 1 }` -- two
+  columns at 48 and two at 300. It now derives the count from what the visible
+  repos need (widest name capped at `NAME_TARGET`, widest badge run, a minimum
+  dot fill), clamped to six. Twenty-nine repos went from fifteen rows to eight
+  at 200 columns. The old cell arithmetic, `width / columns - 1`, lands exactly
+  on `width` at two columns and one past it for every column after, so it had
+  to be fixed before more columns were possible; a test pins the row inside the
+  pane at six widths.
+- The repo list was a flat 35% of the terminal, which is 70 columns at 200 for
+  a row that needs about 45. It is capped at `REPO_LIST_MAX_COLS`, and the
+  surplus goes to the right column, whose commit subjects grow into whatever
+  they are given. Only the default yields: once the divider has been dragged
+  the number is the user's answer and is honoured exactly, however wide the
+  terminal. The cap lives in `split_main`, the one function both `render` and
+  `panel_rects` reach the split through, so hit testing cannot drift from it --
+  and a test asserts that directly, because that drift fails silently.
+
 ### Still open
 
 - Backward cycling, if four views proves enough to want it.
