@@ -54,9 +54,9 @@ Settled in discussion:
 - **Q3: the Graph view replaces the inline graph**, and `recent commits` and
   `reflog` became views for the same reason. Still open: whether Graph should
   show `--all` rather than the current local-branch scope.
-- **Q4: one cycle key, `V`.** Follows the `c`/`C` precedent -- uppercase
-  cycles what its lowercase toggles. Backward cycling is not bound; with four
-  views the worst case is three presses.
+- **Q4: `[` and `]`.** lazygit's own binding for the gesture, and unlike a
+  shifted letter it gives backwards for free. `V` was tried first and
+  rejected in use.
 - **Q5: the view does not persist.** It resets to `Info` each launch, like
   the pane sizes do by default.
 
@@ -86,6 +86,47 @@ Two things fell out of the rework:
 - The pinned readout was still indexing `repo.commits` whatever was on screen,
   so under `commits`, `reflog` and `graph` it named a commit from a different
   list. It resolves the hash now, like the inspector. A test caught it.
+
+### Second rework: the tight graph
+
+Driven by lazygit's commits pane, which is denser than the first cut managed.
+
+- **The graph is translated, not replayed.** git's ASCII becomes box drawing
+  (`│ ╯ ╮ ─`); the node becomes `⚬`, or `⊛` for a merge -- the asterisk git
+  already used, circled. Box drawing is East Asian Ambiguous, which was the
+  stated objection to it earlier in this document. That objection was wrong:
+  every pane border in the app is already drawn with the same characters, so
+  a terminal that mis-sized them would have broken fleetz long ago. The nodes
+  stay Narrow regardless, being the one glyph free to choose.
+- **Columns follow lazygit: hash, author, graph, subject.** The topology is
+  context for a row rather than its identity, and leading with it pushed the
+  columns you actually read rightwards by however wide the branching was.
+- **Selection is a whole-row wash plus a `▸`**, not a bolded hash. Bold marks
+  one token and the eye still has to find which; in a two-hundred row list
+  that is the work.
+- **`info` carries the same list**, capped at `RECENT_COMMIT_COUNT` = 6, with
+  the diffstat dot-filled right. One renderer for both, so they cannot drift.
+- **The expanded view anchors a selected commit to the top** of the pane
+  rather than merely bringing it on screen: its blocks run to twenty lines,
+  so a header at the last visible row leaves its body below the fold.
+
+Two bugs worth remembering, both self-inflicted and both caught by tests
+rather than by looking:
+
+- **The pane fought itself.** `detail_nav_up` unwound the scroll offset and
+  the next frame's follow-the-selection put it straight back, so `k` did
+  nothing at all. The renderer now follows only when the selection *moved*: a
+  flag the cursor sets and the render pass clears. Free scrolling and
+  cursor-dragging are different gestures and must not share a mechanism.
+- **Rows overflowed.** Refs long enough to fill the pane pushed the diffstat
+  onto a line of its own, and a forced `.max(1)` dot made it worse. Refs are
+  dropped whole on a narrow pane now and the subject keeps a 24-column floor.
+
+Measured, not guessed: 1300 lines of expanded graph render in under 1ms a
+frame, so the paragraph was never the bottleneck and slicing it would have
+been the wrong fix. The sweep did get dearer -- `log -200 --numstat` is
+0.23s against 0.05s for `-6` -- but it is gated on `WorkKey`, so it is paid
+once per changed repo rather than per sweep.
 
 ### Still open
 
