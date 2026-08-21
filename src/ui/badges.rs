@@ -78,7 +78,7 @@ fn ci_text(repo: &RepoStatus) -> String {
 /// Octicon `archive`. Stash has no formal glyph, but VS Code and GitHub
 /// Desktop both draw it as an archive box, so this is borrowed rather than
 /// invented -- which is the whole test for putting a symbol on screen.
-const STASH_GLYPH: &str = "\u{f411}";
+pub const STASH_GLYPH: &str = "\u{f411}";
 
 /// Worktrees get letters, not a glyph, because git worktrees have no
 /// conventional symbol at all. `⎇` was the obvious candidate and is wrong:

@@ -500,6 +500,11 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(colors::ref_color(crate::model::RefKind::Head)),
         ));
     }
+    // Stashes carry the same glyph the repo list uses, so the eye can find
+    // them here the way it learned to find them there. Both these and the
+    // worktree count are drawn in SUBTEXT rather than OVERLAY: OVERLAY is for
+    // paths and furniture, and at that brightness real news reads as
+    // decoration you have already dismissed.
     let mut local_extra: Vec<String> = Vec::new();
     if repo.stash_count > 0 {
         let noun = if repo.stash_count == 1 {
@@ -507,7 +512,11 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             "stashes"
         };
-        local_extra.push(format!("{} {noun}", repo.stash_count));
+        local_extra.push(format!(
+            "{} {} {noun}",
+            badges::STASH_GLYPH,
+            repo.stash_count
+        ));
     }
     if !repo.worktrees.is_empty() {
         let noun = if repo.worktrees.len() == 1 {
@@ -523,7 +532,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             row3_left.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
         }
-        row3_left.push(Span::styled(extra, Style::default().fg(colors::OVERLAY)));
+        row3_left.push(Span::styled(extra, Style::default().fg(colors::SUBTEXT)));
     }
 
     // Row 3 right: facts that live on GitHub.
@@ -721,9 +730,20 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             // message + " " + dots + right == avail
             let dot_count = avail.saturating_sub(msg_len + 1 + right).max(1);
 
+            // The selected row's hash goes bold: the ▸ marker sits in a
+            // fixed-width column of its own, so on a long list the eye has to
+            // travel to find it. Bolding the hash puts the emphasis on the
+            // thing the inspector below is actually showing.
+            let hash_style = if is_sel {
+                Style::default()
+                    .fg(colors::HASH_CLR)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(colors::HASH_CLR)
+            };
             let mut commit_spans = vec![
                 Span::styled(marker, marker_style),
-                Span::styled(c.hash.clone(), Style::default().fg(colors::HASH_CLR)),
+                Span::styled(c.hash.clone(), hash_style),
                 Span::raw(" "),
                 Span::styled(author, Style::default().fg(colors::author_color(&c.author))),
                 Span::raw(author_pad),
@@ -1228,6 +1248,78 @@ mod tests {
 
     fn span_text(spans: &[Span]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// The inspector below shows one commit; the list has to say which. The
+    /// ▸ marker lives in its own fixed-width column, so on a long list the
+    /// eye has to travel to it -- bold puts the weight on the hash itself.
+    #[test]
+    fn the_selected_commits_hash_is_bold() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut r = cloned_repo();
+        r.commits = (0..3)
+            .map(|i| crate::model::Commit {
+                hash: format!("abc123{i}"),
+                author: "Gaurgle".to_string(),
+                date: Some(chrono::Utc::now()),
+                message: format!("commit {i}"),
+                body: String::new(),
+                insertions: 0,
+                deletions: 0,
+                files: vec![],
+            })
+            .collect();
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), 100, 44);
+        app.detail_selected = 1;
+
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+
+        // Only the list rows, which are the ones carrying the dot fill. The
+        // pinned readout above the body repeats the selected hash, and
+        // counting that as a list row makes the test pass for the wrong
+        // reason -- the readout has always been styled separately.
+        let mut weights = Vec::new();
+        for y in 0..30u16 {
+            let row: String = (0..100u16).map(|x| buf[(x, y)].symbol()).collect();
+            for i in 0..3 {
+                // A list row carries both the hash and its message. The
+                // pinned readout above the body repeats the selected hash on
+                // its own (`[2/3 · abc1231]`), and counting that as a list
+                // row makes this pass for the wrong reason: the readout has
+                // always been styled separately from the list.
+                if !row.contains(&format!("commit {i}")) {
+                    continue;
+                }
+                if let Some(col) = row.find(&format!("abc123{i}")) {
+                    weights.push((i, buf[(col as u16, y)].modifier.contains(Modifier::BOLD)));
+                }
+            }
+        }
+        assert_eq!(weights.len(), 3, "one list row per commit: {weights:?}");
+        for (i, bold) in weights {
+            assert_eq!(bold, i == 1, "hash {i} boldness wrong");
+        }
+    }
+
+    /// Stashes were drawn in OVERLAY, the colour used for paths and other
+    /// furniture, which made a real fact read as something already dismissed.
+    /// They also carry the repo list's glyph now, so the same symbol means
+    /// the same thing in both panes.
+    #[test]
+    fn the_stash_count_is_findable_in_the_repo_pane() {
+        let mut r = cloned_repo();
+        r.stash_count = 3;
+        let (_, _, facts) = header_rows(r, 100);
+        assert!(facts.contains("3 stashes"), "got {facts:?}");
+        assert!(
+            facts.contains(badges::STASH_GLYPH),
+            "the repo list's glyph is missing: {facts:?}"
+        );
     }
 
     /// This pane is the repo's main window, so an open PR belongs on its top
