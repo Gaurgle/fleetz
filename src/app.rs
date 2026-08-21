@@ -889,7 +889,13 @@ pub struct App {
     ///
     /// Per view rather than shared, because a shared offset is wrong the
     /// moment you switch back to something you had already scrolled.
-    pub detail_scrolls: [u16; HistoryView::COUNT],
+    ///
+    /// `Cell` for the same reason `contrib_scroll` is one: the render pass is
+    /// the only place that knows which screen row the selection landed on, so
+    /// it is the only place that can scroll to keep it visible. Walking a
+    /// cursor through two hundred rows the pane never followed is what made
+    /// the view look frozen.
+    pub detail_scrolls: [std::cell::Cell<u16>; HistoryView::COUNT],
     /// Index of the row highlighted in each history view, whose commit the
     /// inspector shows. Reset to 0 when the selected repo changes.
     ///
@@ -1046,7 +1052,7 @@ impl App {
             active_group: None,
             focused_panel: FocusedPanel::RepoList,
             history_view: HistoryView::default(),
-            detail_scrolls: [0; HistoryView::COUNT],
+            detail_scrolls: std::array::from_fn(|_| std::cell::Cell::new(0)),
             detail_selections: [0; HistoryView::COUNT],
             inspector_scroll: 0,
             detail_max_scroll: std::cell::Cell::new(0),
@@ -1327,6 +1333,8 @@ impl App {
         if self.detail_selected() + 1 < self.selected_commit_count() {
             self.select_commit_down();
         } else {
+            // Past the last row there is still content below it -- branches,
+            // stashes -- so keep scrolling rather than stopping dead.
             self.scroll_detail(1);
         }
     }
@@ -1686,11 +1694,12 @@ impl App {
     /// caller wants the current one; the arrays exist so switching views does
     /// not lose where you were in the one you left.
     pub fn detail_scroll(&self) -> u16 {
-        self.detail_scrolls[self.history_view.index()]
+        self.detail_scrolls[self.history_view.index()].get()
     }
 
-    pub fn set_detail_scroll(&mut self, value: u16) {
-        self.detail_scrolls[self.history_view.index()] = value;
+    /// Takes `&self` because the renderer sets it too -- see the field.
+    pub fn set_detail_scroll(&self, value: u16) {
+        self.detail_scrolls[self.history_view.index()].set(value);
     }
 
     pub fn detail_selected(&self) -> usize {

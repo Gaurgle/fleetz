@@ -685,119 +685,25 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
     }
 
-    // Recent commits, repoz print_commit_line style: hash, fixed-width author
-    // code, message, then a dot-fill running out to a diffstat right-aligned
-    // at the pane edge. The dots always fill to the edge -- even when a commit
-    // has no diffstat -- so every row reads to the same right margin.
-    // The newest few with their diffstats: a glance, and the one place the
-    // per-commit churn is shown. `commits` carries the complete list in the
-    // graph's own column layout, which has no room for a diffstat.
-    if view == HistoryView::Info && !repo.commits.is_empty() {
-        lines.push(Line::from(section_label("recent commits")));
-        // Authors show as a fixed-width short code (see ui::author_code), so
-        // the message column after it never drifts.
-        let author_w = crate::ui::AUTHOR_W;
-
-        // The commit the inspector is showing gets a ▸ marker so it's clear
-        // which row the pane below reflects; the marker brightens while the
-        // detail/inspector panels are the ones being driven.
-        let sel = app.detail_selected();
-        let commits_active = matches!(
-            app.focused_panel,
-            FocusedPanel::Detail | FocusedPanel::Inspector
-        );
-
-        for (ci, c) in repo.commits.iter().take(RECENT_COMMIT_COUNT).enumerate() {
-            let author = crate::ui::author_code(&c.author);
-            let author_pad = " ".repeat(author_w.saturating_sub(author.chars().count()));
-            let is_sel = ci == sel;
-            let marker = if is_sel { "▸ " } else { "  " };
-            let marker_style = if is_sel && commits_active {
-                Style::default()
-                    .fg(colors::SAPPHIRE)
-                    .add_modifier(Modifier::BOLD)
-            } else if is_sel {
-                Style::default().fg(colors::SAPPHIRE)
-            } else {
-                Style::default().fg(colors::SURFACE)
-            };
-
-            // marker(2) + hash + " " + author-column + " " up to the message start.
-            let prefix_len = 2 + c.hash.chars().count() + 1 + author_w + 1;
-            let stat_text = commit_stat_text(c);
-            let stat_len = stat_text.chars().count();
-            let right = if stat_len > 0 { 1 + stat_len } else { 0 }; // space + stat
-
-            let avail = width.saturating_sub(prefix_len);
-            // Leave room for a leading space, at least one dot, and the stat.
-            let msg_budget = avail.saturating_sub(2 + right).max(6);
-            let message = crate::ui::truncate(&c.message, msg_budget);
-            let msg_len = message.chars().count();
-            // message + " " + dots + right == avail
-            let dot_count = avail.saturating_sub(msg_len + 1 + right).max(1);
-
-            // The selected row's hash goes bold: the ▸ marker sits in a
-            // fixed-width column of its own, so on a long list the eye has to
-            // travel to find it. Bolding the hash puts the emphasis on the
-            // thing the inspector below is actually showing.
-            let hash_style = if is_sel {
-                Style::default()
-                    .fg(colors::HASH_CLR)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(colors::HASH_CLR)
-            };
-            let mut commit_spans = vec![
-                Span::styled(marker, marker_style),
-                Span::styled(c.hash.clone(), hash_style),
-                Span::raw(" "),
-                Span::styled(author, Style::default().fg(colors::author_color(&c.author))),
-                Span::raw(author_pad),
-                Span::raw(" "),
-                Span::styled(message, Style::default().fg(colors::TEXT)),
-                Span::raw(" "),
-                Span::styled("·".repeat(dot_count), Style::default().fg(colors::SURFACE)),
-            ];
-
-            if stat_len > 0 {
-                commit_spans.push(Span::raw(" "));
-                if c.insertions > 0 {
-                    commit_spans.push(Span::styled(
-                        format!("+{}", c.insertions),
-                        Style::default().fg(colors::DIFF_ADD),
-                    ));
-                    if c.deletions > 0 {
-                        commit_spans.push(Span::raw(" "));
-                    }
-                }
-                if c.deletions > 0 {
-                    commit_spans.push(Span::styled(
-                        format!("-{}", c.deletions),
-                        Style::default().fg(colors::DIFF_DEL),
-                    ));
-                }
-            }
-
-            lines.push(Line::from(commit_spans));
-        }
-        lines.push(Line::from(""));
-    }
-
-    // History graph -- git's own --graph topology, just colorized. The ASCII
-    // prefix's width varies line to line with the branch topology (a merge
-    // pulls it wider than a straight line), so it's padded to the widest
-    // prefix in this repo's graph -- otherwise hash/author/message would
-    // drift left and right per row. Author gets its own fixed-width, per-
-    // author-colored column (hashed to a dull palette -- see
-    // colors::author_color) so commits read as "who did this" at a glance,
-    // the same way the repo list's badge columns stay put regardless of
-    // what's on a given row.
     // The compact graph list: git's topology in a column, then hash, author,
     // decorations and subject. `info` shows the newest few as a glance;
     // `commits` shows the lot.
-    if view == HistoryView::Commits && !repo.graph.is_empty() {
-        lines.push(Line::from(section_label("commits")));
-        lines.extend(graph_list_lines(repo, width, app.detail_selected(), None));
+    // `info` shows the newest few, `commits` the lot, through one renderer so
+    // the two cannot drift into drawing the same rows differently.
+    let mut selected_row: Option<usize> = None;
+    if matches!(view, HistoryView::Info | HistoryView::Commits) && !repo.graph.is_empty() {
+        let limit = (view == HistoryView::Info).then_some(RECENT_COMMIT_COUNT);
+        lines.push(Line::from(section_label(match view {
+            HistoryView::Info => "recent commits",
+            _ => "commits",
+        })));
+        lines.extend(graph_list_lines(
+            repo,
+            width,
+            app.detail_selected(),
+            limit,
+            &mut selected_row,
+        ));
         lines.push(Line::from(""));
     }
 
@@ -809,6 +715,19 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(section_label("history")));
         let selected_hash = app.inspected_hash().unwrap_or_default().to_string();
         for raw in &repo.graph_expanded {
+            // The block the selection names starts here, so scrolling to it
+            // puts the whole commit on screen rather than its last line.
+            if !selected_hash.is_empty()
+                && raw
+                    .split_whitespace()
+                    .skip_while(|w| *w != "commit")
+                    .nth(1)
+                    .is_some_and(|h| {
+                        h.trim_end_matches(|c: char| !c.is_alphanumeric()) == selected_hash
+                    })
+            {
+                selected_row = Some(lines.len());
+            }
             lines.push(expanded_graph_line(raw, &selected_hash, width));
         }
         lines.push(Line::from(""));
@@ -827,6 +746,9 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             let msg_budget = width.saturating_sub(prefix_len + action_len + 1).max(10);
             let description = crate::ui::truncate(&entry.description, msg_budget);
 
+            if ri == app.detail_selected() {
+                selected_row = Some(lines.len());
+            }
             let mut reflog_spans = vec![
                 Span::raw("  "),
                 Span::styled(entry.hash.clone(), hash_style(ri == app.detail_selected())),
@@ -963,7 +885,25 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // as many keypresses as it had overshot.
     let max_scroll = wrapped_row_count(&lines, area.width).saturating_sub(area.height);
     app.detail_max_scroll.set(max_scroll);
-    let scroll = app.detail_scroll().min(max_scroll);
+    let mut scroll = app.detail_scroll().min(max_scroll);
+
+    // Follow the cursor. This is the only place that knows which row the
+    // selection landed on, since the row depends on how many sections were
+    // drawn above it and how the graph's connector rows fell.
+    //
+    // Without it the cursor walked rows that were off screen and the pane sat
+    // still, so `j` looked like it did nothing at all -- survivable at six
+    // commits, and the whole view at two hundred.
+    if let Some(row) = selected_row {
+        let row = row as u16;
+        if row < scroll {
+            scroll = row;
+        } else if row >= scroll + area.height {
+            scroll = row + 1 - area.height;
+        }
+        scroll = scroll.min(max_scroll);
+        app.set_detail_scroll(scroll);
+    }
 
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
@@ -1201,6 +1141,7 @@ fn graph_list_lines(
     width: usize,
     selected: usize,
     limit: Option<usize>,
+    selected_row: &mut Option<usize>,
 ) -> Vec<Line<'static>> {
     let prefix_w = repo
         .graph
@@ -1225,6 +1166,9 @@ fn graph_list_lines(
             break;
         }
         let is_sel = commit_index == selected;
+        if is_sel {
+            *selected_row = Some(lines.len());
+        }
         commit_index += 1;
 
         let author = crate::ui::author_code(&g.author);
@@ -1237,10 +1181,22 @@ fn graph_list_lines(
         } else {
             1 + g.refs_width()
         };
-        let msg_budget = width
-            .saturating_sub(2 + prefix_w + g.hash.chars().count() + 1 + author_w + 1 + refs_len)
-            .max(10);
+        // The churn, looked up by hash: the graph rows and the commit list are
+        // separate probes, so a row deeper than the commit window simply has
+        // none rather than showing a wrong one.
+        let stat = repo
+            .commits
+            .iter()
+            .find(|c| c.hash == g.hash)
+            .map(commit_stat_text)
+            .unwrap_or_default();
+        let stat_len = stat.chars().count();
+        let right = if stat_len > 0 { 1 + stat_len } else { 0 };
+        let used = 2 + prefix_w + g.hash.chars().count() + 1 + author_w + 1 + refs_len;
+        let msg_budget = width.saturating_sub(used + 2 + right).max(10);
         let message = crate::ui::truncate(&g.message, msg_budget);
+        let msg_len = message.chars().count();
+        let dot_count = width.saturating_sub(used + msg_len + 1 + right).max(1);
 
         let mut graph_spans = vec![Span::raw("  ")];
         graph_spans.extend(graph_prefix_spans(&g.prefix, g.is_merge));
@@ -1255,9 +1211,32 @@ fn graph_list_lines(
         graph_spans.extend(ref_spans(&g.refs));
         graph_spans.push(Span::raw(" "));
         graph_spans.push(Span::styled(message, Style::default().fg(colors::TEXT)));
+        graph_spans.push(Span::raw(" "));
+        graph_spans.push(Span::styled(
+            "·".repeat(dot_count),
+            Style::default().fg(colors::SURFACE),
+        ));
+        if stat_len > 0 {
+            graph_spans.push(Span::raw(" "));
+            graph_spans.extend(stat_spans(&stat));
+        }
         lines.push(Line::from(graph_spans));
     }
     lines
+}
+
+/// `+12 -3` split so additions and deletions keep their own colours.
+fn stat_spans(stat: &str) -> Vec<Span<'static>> {
+    stat.split_whitespace()
+        .map(|part| {
+            let color = if part.starts_with('+') {
+                colors::DIFF_ADD
+            } else {
+                colors::DIFF_DEL
+            };
+            Span::styled(format!("{part} "), Style::default().fg(color))
+        })
+        .collect()
 }
 
 /// The selected row's hash goes bold in every list, so the pane always says
@@ -1595,16 +1574,67 @@ mod tests {
                 .join("\n")
         };
 
+        // Both draw the same list through one renderer; only the length
+        // differs, which is the point of sharing it.
         let info = rendered(HistoryView::Info);
-        assert!(info.contains("c000005"), "the 6th is shown");
+        assert!(info.contains("g000005"), "the 6th is shown");
         assert!(
-            !info.contains("c000006"),
+            !info.contains("g000006"),
             "the 7th is not: {RECENT_COMMIT_COUNT} max"
         );
 
         let commits = rendered(HistoryView::Commits);
-        assert!(commits.contains("g000000") && commits.contains("g000020"));
-        assert!(!commits.contains("c000000"), "commits draws the graph list");
+        assert!(commits.contains("g000000"), "commits starts at the newest");
+        assert!(commits.contains("g000020"), "and runs past info's cap");
+    }
+
+    /// Regression: the cursor walked every row before the pane scrolled at
+    /// all. Survivable at six commits and the whole view at two hundred --
+    /// `j` moved a cursor that was already off screen, so the pane looked
+    /// frozen. It follows the selection now.
+    #[test]
+    fn the_pane_scrolls_to_keep_the_selection_visible() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut r = busy_repo();
+        r.graph = (0..200)
+            .map(|i| crate::model::GraphLine {
+                prefix: "* ".to_string(),
+                hash: format!("h{i:06}"),
+                is_merge: false,
+                refs: vec![],
+                author: "Gaurgle".to_string(),
+                message: format!("subject {i}"),
+            })
+            .collect();
+
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), 96, 30);
+        app.history_view = HistoryView::Commits;
+
+        let draw = |app: &crate::app::App| {
+            let mut term = Terminal::new(TestBackend::new(96, 20)).unwrap();
+            term.draw(|f| render_detail_pane(f, f.area(), app)).unwrap();
+            let buf = term.backend().buffer().clone();
+            (0..20u16)
+                .map(|y| (0..96u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        assert!(draw(&app).contains("h000000"), "opens at the newest");
+        assert_eq!(app.detail_scroll(), 0);
+
+        // A selection far below the fold must drag the pane with it.
+        app.set_detail_selected(120);
+        let shown = draw(&app);
+        assert!(shown.contains("h000120"), "selection off screen: {shown:?}");
+        assert!(app.detail_scroll() > 0, "the pane did not follow");
+
+        // And back up again.
+        app.set_detail_selected(2);
+        let shown = draw(&app);
+        assert!(shown.contains("h000002"), "did not come back: {shown:?}");
     }
 
     /// Every list bolds its selection, so the pane always says which commit
@@ -1747,20 +1777,17 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let mut r = cloned_repo();
-        r.commits = (0..3)
-            .map(|i| crate::model::Commit {
+        r.graph = (0..3)
+            .map(|i| crate::model::GraphLine {
+                prefix: "* ".to_string(),
                 hash: format!("abc123{i}"),
+                is_merge: false,
+                refs: vec![],
                 author: "Gaurgle".to_string(),
-                date: Some(chrono::Utc::now()),
                 message: format!("commit {i}"),
-                body: String::new(),
-                insertions: 0,
-                deletions: 0,
-                files: vec![],
             })
             .collect();
         let mut app = crate::app::App::new(vec![r], "t".to_string(), 100, 44);
-        // `info` is where the diffstat list lives; `commits` is the graph.
         app.history_view = HistoryView::Info;
         app.set_detail_selected(1);
 
