@@ -1901,6 +1901,52 @@ async fn fetch_dataset(
     github::fetch_repos(config.repo_limit, cache, bypass_cache).await
 }
 
+/// Which of `targets` are worth spending a `git fetch` on before the first
+/// paint.
+///
+/// Startup used to fetch every repo past the cutoff and await all of them
+/// before statting anything -- around 0.8s of network per repo at
+/// `FETCH_CONCURRENCY`, so a wide time window put six seconds of nothing in
+/// front of the fleet while a narrow one cost under a second. The window was
+/// never the real variable: it only decides how many repos reach this loop.
+///
+/// `remotes_that_moved` already answers this for every later poll by diffing
+/// two GitHub datasets, but the first poll of a session has no previous
+/// dataset to diff against, so it fell back to fetching everything. There is a
+/// baseline on disk, though: `FETCH_HEAD`'s mtime is when this clone last
+/// fetched. A remote GitHub says was pushed before then is already in hand.
+///
+/// Unknowns fetch. No `pushed_at` means no GitHub match (a local-only clone,
+/// where the remote could be anywhere), and no `FETCH_HEAD` means this clone
+/// has never fetched at all; both have to be read as stale.
+///
+/// Clock skew is survivable in the one direction it can bite: a local clock
+/// running ahead can make a needed fetch look unnecessary, and the next poll
+/// picks it up, because that comparison is GitHub-to-GitHub and immune.
+fn stale_remotes(
+    targets: &[(discovery::FoundRepo, RepoLocation)],
+    active: &[github::GithubRepo],
+) -> Vec<std::path::PathBuf> {
+    let pushed: HashMap<String, chrono::DateTime<chrono::Utc>> = active
+        .iter()
+        .map(|r| (r.name.to_lowercase(), r.pushed_at))
+        .collect();
+
+    targets
+        .iter()
+        .filter(|(found, _)| {
+            let Some(pushed_at) = pushed.get(&found.name.to_lowercase()) else {
+                return true;
+            };
+            match git::last_fetch_at(&found.path) {
+                Some(fetched) => *pushed_at > chrono::DateTime::<chrono::Utc>::from(fetched),
+                None => true,
+            }
+        })
+        .map(|(found, _)| found.path.clone())
+        .collect()
+}
+
 /// Cutoff + header for the current view. An active TimeWindow (set by the
 /// in-TUI selector or loaded from state) takes precedence over the launch
 /// mode; Dirty mode never reaches here.
@@ -2021,10 +2067,10 @@ async fn assemble_view(
     }
 
     if git_fetch {
+        let stale = stale_remotes(&targets, &active);
         let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(FETCH_CONCURRENCY));
         let mut set = tokio::task::JoinSet::new();
-        for (found, _) in &targets {
-            let path = found.path.clone();
+        for path in stale {
             let sem = sem.clone();
             set.spawn(async move {
                 let _permit = sem.acquire().await;
@@ -2408,6 +2454,101 @@ mod tests {
         after.work_key = Some(key("bbb"));
         assert!(!repo_moved(&before, &after));
         assert!(!repo_moved(&after, &test_repo()));
+    }
+
+    /// A clone whose remote GitHub last touched before our last `git fetch`
+    /// is already in hand, and startup should not spend a network round trip
+    /// re-confirming it. This is the whole startup cost: fetching every repo
+    /// past the cutoff was around 0.8s of network each, so a wide time window
+    /// put seconds of nothing in front of the fleet.
+    fn fetch_fixture(tag: &str, names: &[&str], write_fetch_head: bool) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("fleetz_stale_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for name in names {
+            let git = dir.join(name).join(".git");
+            std::fs::create_dir_all(&git).unwrap();
+            if write_fetch_head {
+                std::fs::write(git.join("FETCH_HEAD"), b"x").unwrap();
+            }
+        }
+        dir
+    }
+
+    fn found_targets(dir: &Path, names: &[&str]) -> Vec<(discovery::FoundRepo, RepoLocation)> {
+        names
+            .iter()
+            .map(|n| {
+                (
+                    discovery::FoundRepo {
+                        name: (*n).to_string(),
+                        path: dir.join(n),
+                    },
+                    RepoLocation::Primary,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_remote_pushed_before_our_last_fetch_is_not_fetched_again() {
+        // FETCH_HEAD is written now, so a push dated 2001 is comfortably
+        // older than it whatever the machine's clock says.
+        let dir = fetch_fixture("skip", &["alpha"], true);
+        let targets = found_targets(&dir, &["alpha"]);
+        let active = vec![gh("alpha", "2001-01-01T00:00:00Z")];
+        assert!(
+            stale_remotes(&targets, &active).is_empty(),
+            "fetched a remote we already had"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_remote_pushed_since_our_last_fetch_is_fetched() {
+        let dir = fetch_fixture("stale", &["alpha"], true);
+        let targets = found_targets(&dir, &["alpha"]);
+        let active = vec![gh("alpha", "2099-01-01T00:00:00Z")];
+        assert_eq!(stale_remotes(&targets, &active).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Both unknowns have to read as stale. A clone that has never fetched
+    /// writes no `FETCH_HEAD`, and a repo with no GitHub match has no
+    /// `pushed_at` to compare against -- skipping either would silently show
+    /// the fleet as more up to date than it is.
+    #[test]
+    fn an_unknown_baseline_is_treated_as_stale() {
+        let never = fetch_fixture("never", &["alpha"], false);
+        let active = vec![gh("alpha", "2001-01-01T00:00:00Z")];
+        assert_eq!(
+            stale_remotes(&found_targets(&never, &["alpha"]), &active).len(),
+            1,
+            "a clone that never fetched was skipped"
+        );
+        let _ = std::fs::remove_dir_all(&never);
+
+        let unmatched = fetch_fixture("unmatched", &["local-only"], true);
+        assert_eq!(
+            stale_remotes(&found_targets(&unmatched, &["local-only"]), &active).len(),
+            1,
+            "a repo with no GitHub match was skipped"
+        );
+        let _ = std::fs::remove_dir_all(&unmatched);
+    }
+
+    /// The case that motivated this: a fleet opened again an hour later
+    /// fetches nothing at all, so startup no longer scales with the time
+    /// window -- which only ever decided how many repos reached the loop.
+    #[test]
+    fn a_warm_fleet_costs_no_network_at_startup() {
+        let names = ["alpha", "beta", "gamma", "delta"];
+        let dir = fetch_fixture("warm", &names, true);
+        let active: Vec<_> = names
+            .iter()
+            .map(|n| gh(n, "2001-01-01T00:00:00Z"))
+            .collect();
+        assert!(stale_remotes(&found_targets(&dir, &names), &active).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn gh(name: &str, pushed: &str) -> github::GithubRepo {

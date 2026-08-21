@@ -166,6 +166,15 @@ you less. `git fetch` is priced per remote, so the reverse holds: use the poll's
 `pushed_at` diff to find which remotes moved (`remotes_that_moved`) and fetch
 only those.
 
+The first poll of a session has no previous dataset to diff, and used to fall
+back to fetching every repo past the cutoff -- around 0.8s of network each, so
+a wide time window put seconds of nothing in front of the fleet. It has a
+baseline on disk instead: `FETCH_HEAD`'s mtime is when that clone last fetched,
+so a remote GitHub reports as pushed before then is already in hand
+(`stale_remotes`). Unknowns must fetch -- no `pushed_at` means no GitHub match,
+no `FETCH_HEAD` means the clone has never fetched -- or the fleet renders as
+more up to date than it is.
+
 **Never widen the GitHub fetch without checking the cache.** Results are cached
 on disk with a TTL (`cache.rs`, `cache_ttl` config key); `r` rebuilds from cache
 and `R` bypasses it. Adding a field to the GraphQL query is free, adding a

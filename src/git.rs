@@ -127,6 +127,19 @@ pub fn resolve_git_dir(repo_path: &Path) -> Option<std::path::PathBuf> {
     })
 }
 
+/// When this clone last ran `git fetch`, from the mtime of `FETCH_HEAD`.
+///
+/// `None` means it has never fetched -- a fresh `git clone` writes no
+/// `FETCH_HEAD` -- which the caller must read as "assume stale", not as
+/// "nothing to do".
+pub fn last_fetch_at(repo_path: &Path) -> Option<std::time::SystemTime> {
+    let git_dir = resolve_git_dir(repo_path)?;
+    std::fs::metadata(git_dir.join("FETCH_HEAD"))
+        .ok()?
+        .modified()
+        .ok()
+}
+
 /// Cheap change detector: if none of these moved, the expensive probes
 /// (log, reflog, graph, stash, worktree) cannot have new answers. Untracked
 /// files do not touch the index, so dirty_count is always probed regardless.
