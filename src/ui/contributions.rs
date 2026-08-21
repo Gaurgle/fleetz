@@ -765,7 +765,7 @@ mod tests {
         let visible = visible_weeks(area);
         assert!(visible < WEEKS, "test premise: the year does not fit");
 
-        let app = App::new(vec![], "test".to_string(), false, 40, 40);
+        let app = App::new(vec![], "test".to_string(), 40, 40);
         assert_eq!(
             first_week(&app, visible),
             WEEKS - visible,
@@ -793,7 +793,7 @@ mod tests {
     }
 
     fn app_with_calendar(total_per_day: u32) -> App {
-        let mut app = App::new(Vec::new(), "test".to_string(), false, 120, 44);
+        let mut app = App::new(Vec::new(), "test".to_string(), 120, 44);
         app.contributions = ContributionsMode::Github;
         let today = chrono::Local::now().date_naive();
         let mut cal = Calendar::new(today, Source::Github);
@@ -892,7 +892,7 @@ mod tests {
     /// grid is painted: an empty year would read as "you did nothing".
     #[test]
     fn the_github_source_draws_a_frame_but_no_grid_before_the_first_poll() {
-        let mut app = App::new(Vec::new(), "test".to_string(), false, 120, 44);
+        let mut app = App::new(Vec::new(), "test".to_string(), 120, 44);
         app.contributions = ContributionsMode::Github;
         assert!(app.github_calendar.is_none());
         let lines = drawn(120, &app);

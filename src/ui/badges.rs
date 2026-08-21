@@ -75,9 +75,25 @@ fn ci_text(repo: &RepoStatus) -> String {
     }
 }
 
+/// Octicon `git-pull-request`. GitHub's own icon set, which is where the PR
+/// data comes from, so the symbol names its source.
+const PR_GLYPH: &str = "\u{f407}";
+
+/// Octicon `archive`. Stash has no formal glyph, but VS Code and GitHub
+/// Desktop both draw it as an archive box, so this is borrowed rather than
+/// invented -- which is the whole test for putting a symbol on screen.
+const STASH_GLYPH: &str = "\u{f411}";
+
+/// Worktrees get letters, not a glyph, because git worktrees have no
+/// conventional symbol at all. `⎇` was the obvious candidate and is wrong:
+/// U+2387 is the Alt key, adopted by shell prompts to mean *branch*, so it
+/// would read as "branch" in a column sitting beside actual branch counts.
+/// Two unambiguous letters beat a symbol a reader has to be taught.
+const WORKTREE_ABBR: &str = "wt";
+
 fn pr_text(repo: &RepoStatus) -> String {
     if repo.pr_count > 0 {
-        format!("{}PR ", repo.pr_count)
+        format!("{}{PR_GLYPH} ", repo.pr_count)
     } else {
         String::new()
     }
@@ -85,7 +101,7 @@ fn pr_text(repo: &RepoStatus) -> String {
 
 fn stash_text(repo: &RepoStatus) -> String {
     if repo.stash_count > 0 {
-        format!("{}s ", repo.stash_count)
+        format!("{}{STASH_GLYPH} ", repo.stash_count)
     } else {
         String::new()
     }
@@ -93,7 +109,7 @@ fn stash_text(repo: &RepoStatus) -> String {
 
 fn worktree_text(repo: &RepoStatus) -> String {
     if !repo.worktrees.is_empty() {
-        format!("{}w ", repo.worktrees.len())
+        format!("{}{WORKTREE_ABBR} ", repo.worktrees.len())
     } else {
         String::new()
     }
@@ -262,6 +278,51 @@ mod tests {
         assert!(text.ends_with("3!"), "got {text:?}");
         assert!(text.starts_with('◉'), "CI leads the group: {text:?}");
         assert_eq!(width, text.chars().count(), "width matches what is drawn");
+    }
+
+    /// Regression: stash rendered as `3s` and worktrees as `1w`, which are
+    /// the same shorthand the age column uses for seconds and weeks. On a row
+    /// reading `dotfiles ··· 3s ✓` there was nothing to say whether that was
+    /// three stashes or three seconds.
+    #[test]
+    fn no_counter_badge_reads_as_a_unit_of_time() {
+        let mut busy = repo("busy");
+        busy.pr_count = 2;
+        busy.stash_count = 3;
+        busy.worktrees = vec![crate::model::Worktree {
+            path: "~/repos/x-hotfix".to_string(),
+            branch: "hotfix".to_string(),
+        }];
+
+        let (text, _) = rendered(&busy);
+        // Whole tokens, not substrings: `1wt` legitimately contains `1w`, and
+        // asserting on the substring would forbid the very fix being tested.
+        // The real property is that no complete badge token is digits
+        // followed by a lone duration letter.
+        for token in text.split_whitespace() {
+            let digits: String = token.chars().take_while(char::is_ascii_digit).collect();
+            if digits.is_empty() {
+                continue;
+            }
+            let rest = &token[digits.len()..];
+            assert!(
+                !matches!(rest, "s" | "m" | "h" | "d" | "w"),
+                "badge token {token:?} in {text:?} reads as a duration"
+            );
+        }
+        assert!(text.contains(&format!("3{STASH_GLYPH}")), "got {text:?}");
+        assert!(text.contains("1wt"), "got {text:?}");
+    }
+
+    /// The badge column is right-aligned off `badge_spans`' own width, so a
+    /// glyph counted wrong shifts every status token on the row.
+    #[test]
+    fn the_reported_width_matches_the_glyphs_drawn() {
+        let mut busy = repo("busy");
+        busy.pr_count = 2;
+        busy.stash_count = 3;
+        let (text, width) = rendered(&busy);
+        assert_eq!(width, text.chars().count(), "got {text:?}");
     }
 
     #[test]

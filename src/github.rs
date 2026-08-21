@@ -221,13 +221,25 @@ struct GraphQlError {
 
 /// Build the GraphQL query string.
 fn build_query(repo_limit: u32, include_prs: bool, today: chrono::NaiveDate) -> String {
+    // The COUNT is free and the LIST is not. Measured against the live API on
+    // the same fleet: no PR field at all and `totalCount` alone both price at
+    // cost 13 / nodeCount 2625, while adding `first: 5` nodes takes it to
+    // cost 26 / nodeCount 9125 -- double the cost, triple the nodes, because
+    // a paged connection is charged per node while a bare count is not.
+    //
+    // So knowing a repo has open PRs rides along for nothing and is always
+    // on, which is all "am I forgetting a PR" needs. Titles, authors and
+    // review state stay behind `-p`, where the price is asked for. This is
+    // the "never widen the GitHub fetch without checking the cache"
+    // invariant applied rather than waived: the widening that was free
+    // shipped, the widening that was not stayed opt-in.
     let pr_field = if include_prs {
         r#"pullRequests(states: OPEN, first: 5, orderBy: {field: CREATED_AT, direction: DESC}) {
         totalCount
         nodes { number, title, author { login }, createdAt, url, reviewDecision }
       }"#
     } else {
-        ""
+        "pullRequests(states: OPEN) { totalCount }"
     };
     // The repo fields are identical for both sources, so they are built once
     // and interpolated twice.
@@ -786,7 +798,16 @@ mod tests {
     fn build_query_without_prs() {
         let q = build_query(50, false, day("2026-08-18"));
         assert!(q.contains("first: 50"));
-        assert!(!q.contains("pullRequests"));
+        // The count is always asked for; only the node list is optional.
+        assert!(q.contains("pullRequests(states: OPEN) { totalCount }"));
+        // Matched against the PR field itself: a bare "first: 5" is also a
+        // substring of the "first: 50" repo limit, so that spelling would
+        // fail for a reason that has nothing to do with PRs.
+        assert!(
+            !q.contains("pullRequests(states: OPEN, first:"),
+            "no paged node list without -p"
+        );
+        assert!(!q.contains("reviewDecision"));
         assert!(q.contains("statusCheckRollup"));
     }
 
@@ -923,6 +944,30 @@ mod tests {
         let viewer = response.data.unwrap().viewer;
         let cal = parse_calendar(viewer.contribution_years, day("2026-08-18")).unwrap();
         assert_eq!(cal.total(), 3);
+    }
+
+    /// Knowing a repo has open PRs is free; listing them is not. Measured on
+    /// the live API: no PR field and `totalCount` alone both price at cost 13
+    /// / nodeCount 2625, while `first: 5` nodes take it to 26 / 9125. So the
+    /// count ships unconditionally and the list stays behind `-p`. If the
+    /// bare count ever grows a `first:` connection it stops being free, and
+    /// the "never widen the fetch" invariant bites.
+    #[test]
+    fn the_pr_count_rides_every_query_but_the_list_does_not() {
+        let today = day("2026-08-18");
+        let plain = build_query(50, false, today);
+        assert!(plain.contains("pullRequests(states: OPEN) { totalCount }"));
+        assert!(
+            !plain.contains("pullRequests(states: OPEN, first:"),
+            "the paged list must stay opt-in"
+        );
+
+        let detailed = build_query(50, true, today);
+        assert!(detailed.contains("pullRequests(states: OPEN, first: 5,"));
+        assert!(detailed.contains("reviewDecision"));
+        // Still one request either way.
+        assert_eq!(plain.matches("viewer").count(), 1);
+        assert_eq!(detailed.matches("viewer").count(), 1);
     }
 
     /// Measured before it was written: `contributionCalendar` has no `first:`

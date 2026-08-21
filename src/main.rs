@@ -221,7 +221,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Empty app first: the terminal comes up before any network or
     // filesystem work, and the initial load fills it in from the background.
     let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
-    let mut app = App::new(Vec::new(), String::new(), args.prs, term_width, term_height);
+    let mut app = App::new(Vec::new(), String::new(), term_width, term_height);
     // Config sets the default; the flags are one-session overrides. `w` still
     // toggles it live, and that choice is not persisted.
     app.watch_mode = resolve_watch(args.watch, args.no_watch, config.watch);
@@ -2480,7 +2480,7 @@ mod tests {
     }
 
     fn app_with(ci: &[model::CiStatus]) -> App {
-        let mut app = App::new(Vec::new(), String::new(), false, 100, 40);
+        let mut app = App::new(Vec::new(), String::new(), 100, 40);
         app.repos = ci
             .iter()
             .map(|status| RepoStatus {
@@ -2573,7 +2573,7 @@ mod tests {
     /// is showing GitHub's own numbers.
     #[test]
     fn the_daily_probe_is_skipped_unless_the_local_source_is_showing() {
-        let mut app = App::new(vec![test_repo()], "h".to_string(), false, 120, 44);
+        let mut app = App::new(vec![test_repo()], "h".to_string(), 120, 44);
         assert_eq!(app.contributions, app::ContributionsMode::Off);
         assert!(
             contrib_probe(&app).is_none(),
@@ -2595,7 +2595,7 @@ mod tests {
 
     #[test]
     fn the_probe_carries_the_configured_author_override() {
-        let mut app = App::new(vec![test_repo()], "h".to_string(), false, 120, 44);
+        let mut app = App::new(vec![test_repo()], "h".to_string(), 120, 44);
         app.contributions = app::ContributionsMode::Local;
         app.contrib_author = Some(r"me@work.com\|me@home.com".to_string());
         let probe = contrib_probe(&app).unwrap();
@@ -2606,7 +2606,7 @@ mod tests {
     /// strip blank until the first background poll landed minutes later.
     #[test]
     fn a_load_result_stores_its_calendar_on_the_app() {
-        let mut app = App::new(Vec::new(), "h".to_string(), false, 120, 44);
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
         assert!(app.github_calendar.is_none());
         let today = chrono::Local::now().date_naive();
         let mut cal = contributions::Calendar::new(today, contributions::Source::Github);
@@ -2633,7 +2633,7 @@ mod tests {
     /// calendar. It must not blank the one already on screen.
     #[test]
     fn a_window_apply_does_not_blank_the_calendar() {
-        let mut app = App::new(Vec::new(), "h".to_string(), false, 120, 44);
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
         let today = chrono::Local::now().date_naive();
         let mut cal = contributions::Calendar::new(today, contributions::Source::Github);
         cal.add(today, 9);

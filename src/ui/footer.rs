@@ -52,7 +52,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             };
             vec![Span::styled(msg.text.clone(), Style::default().fg(color))]
         }
-        None => summary_spans(&summary, app.show_prs),
+        None => summary_spans(&summary),
     };
 
     let full_hints = keybind_hints(app.view, true);
@@ -80,7 +80,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-fn summary_spans(summary: &Summary, show_prs: bool) -> Vec<Span<'static>> {
+fn summary_spans(summary: &Summary) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let dot = || Span::styled(" · ", Style::default().fg(colors::SURFACE));
 
@@ -119,7 +119,10 @@ fn summary_spans(summary: &Summary, show_prs: bool) -> Vec<Span<'static>> {
         ));
         spans.push(dot());
     }
-    if show_prs && summary.pr_count > 0 {
+    // Not gated on the `-p` flag: the count rides every poll for free, and a
+    // footer that stays silent about three open PRs because the detail list
+    // was not asked for is the failure this whole summary exists to prevent.
+    if summary.pr_count > 0 {
         spans.push(Span::styled(
             format!("{} PRs", summary.pr_count),
             Style::default().fg(colors::MAUVE),
@@ -233,7 +236,7 @@ mod tests {
             not_cloned_count: 3,
             ..Default::default()
         };
-        let rendered = text(&summary_spans(&summary, false));
+        let rendered = text(&summary_spans(&summary));
         assert_eq!(rendered, "3 not cloned", "got {rendered:?}");
         assert!(
             !rendered.contains("not local"),

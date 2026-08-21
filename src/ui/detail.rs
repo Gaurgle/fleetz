@@ -552,7 +552,10 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             for wt in repo.worktrees.iter().filter(|wt| wt.branch == b.name) {
                 shown_worktrees.insert(&wt.path);
                 lines.push(Line::from(Span::styled(
-                    format!("    ⎇ {}", wt.path),
+                    // The word, not a glyph: `⎇` is the Alt key symbol that
+                    // shell prompts use for *branch*, so it read as "branch"
+                    // in a list of branches. Categorical things get words.
+                    format!("    worktree {}", wt.path),
                     Style::default().fg(colors::OVERLAY),
                 )));
             }
@@ -1316,7 +1319,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let app = crate::app::App::new(vec![repo], "test".to_string(), false, width, 40);
+        let app = crate::app::App::new(vec![repo], "test".to_string(), width, 40);
         let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
         terminal
             .draw(|f| {
@@ -1351,7 +1354,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let mut app = crate::app::App::new(vec![repo], "test".to_string(), false, width, 40);
+        let mut app = crate::app::App::new(vec![repo], "test".to_string(), width, 40);
         app.detail_selected = selected;
         let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
         terminal
@@ -1402,13 +1405,8 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let width = 60;
-        let mut app = crate::app::App::new(
-            vec![repo_with_commits(4)],
-            "test".to_string(),
-            false,
-            width,
-            40,
-        );
+        let mut app =
+            crate::app::App::new(vec![repo_with_commits(4)], "test".to_string(), width, 40);
         app.detail_selected = 1;
         let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
         terminal

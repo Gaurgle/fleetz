@@ -769,7 +769,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let app = crate::app::App::new(Vec::new(), header.to_string(), false, width, 40);
+        let app = crate::app::App::new(Vec::new(), header.to_string(), width, 40);
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
         terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -1051,7 +1051,7 @@ mod tests {
     }
 
     fn layout_app() -> crate::app::App {
-        crate::app::App::new(Vec::new(), "test".to_string(), false, 120, 44)
+        crate::app::App::new(Vec::new(), "test".to_string(), 120, 44)
     }
 
     /// `panel_rects` and `render` must agree about the strip, or clicks land

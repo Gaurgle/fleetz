@@ -827,7 +827,6 @@ pub struct App {
     pub status_message: Option<StatusMessage>,
     pub header: String,
     pub should_quit: bool,
-    pub show_prs: bool,
     pub watch_mode: bool,
     pub refresh_interval: u64,
     pub last_refreshed: Option<DateTime<Local>>,
@@ -963,13 +962,7 @@ pub fn initial_view(term_width: u16, term_height: u16) -> View {
 }
 
 impl App {
-    pub fn new(
-        repos: Vec<RepoStatus>,
-        header: String,
-        show_prs: bool,
-        term_width: u16,
-        term_height: u16,
-    ) -> Self {
+    pub fn new(repos: Vec<RepoStatus>, header: String, term_width: u16, term_height: u16) -> Self {
         Self {
             repos,
             view: initial_view(term_width, term_height),
@@ -980,7 +973,6 @@ impl App {
             status_message: None,
             header,
             should_quit: false,
-            show_prs,
             watch_mode: false,
             refresh_interval: 60,
             last_refreshed: Some(Local::now()),
@@ -1630,7 +1622,7 @@ mod tests {
                 work_key: None,
             })
             .collect();
-        App::new(repos, "test".to_string(), false, 120, 40)
+        App::new(repos, "test".to_string(), 120, 40)
     }
 
     /// Regression: the footer folded `self.repos` while the repo list drew
