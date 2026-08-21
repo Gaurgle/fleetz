@@ -1,7 +1,8 @@
 # History pane (selectable Commits / Reflog / Graph views)
 
 Date: 2026-08-21
-Status: **draft, not approved** — open questions below need answers first
+Status: **shipped**, Option B. Kept for the reasoning; the open questions
+below record what was decided and what is still open.
 
 ## Problem
 
@@ -39,9 +40,39 @@ Settled in discussion:
 - **Ordinary commits render as `⚬`, merges keep `*`.** Shipped separately
   ahead of this spec; see "Already landed" below.
 
-## Open questions
+## Questions, as resolved
 
-These change the design materially. Answer before implementation.
+### Resolved
+
+- **Q1, the inspector: it follows the selection.** Not a peer view. It
+  resolves the selected *hash* against the loaded commit list, so Commits,
+  Reflog and Graph all reach the same inspector, and `Info` borrows the
+  commit view's selection rather than blanking it.
+- **Q2, layout: Option B.** Views live inside the repo pane with the header
+  pinned above them. No geometry moved: `split_main`, `split_right_column`,
+  `split_main_area` and `panel_rects` are untouched.
+- **Q3: the Graph view replaces the inline graph**, and `recent commits` and
+  `reflog` became views for the same reason. Still open: whether Graph should
+  show `--all` rather than the current local-branch scope.
+- **Q4: one cycle key, `V`.** Follows the `c`/`C` precedent -- uppercase
+  cycles what its lowercase toggles. Backward cycling is not bound; with four
+  views the worst case is three presses.
+- **Q5: the view does not persist.** It resets to `Info` each launch, like
+  the pane sizes do by default.
+
+### Still open
+
+- Backward cycling, if four views proves enough to want it.
+- Direct jumps to a named view, which needs a pane-local key mode the app
+  does not otherwise have.
+- Whether Graph shows `--all`.
+- Whether a reflog selection outside the loaded commit range should trigger a
+  fetch for that one commit, rather than the inspector reporting it is out of
+  range.
+
+## Original open questions
+
+Kept because they record the reasoning, not just the outcome.
 
 ### 1. Is the inspector a peer view, or does it follow the selection?
 

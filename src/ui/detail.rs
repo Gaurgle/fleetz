@@ -6,7 +6,7 @@ use ratatui::widgets::{
     Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap,
 };
 
-use crate::app::{App, FocusedPanel};
+use crate::app::{App, FocusedPanel, HistoryView};
 use crate::model::{CiStatus, Commit, RepoStatus};
 use crate::ui::badges;
 use crate::ui::colors;
@@ -230,7 +230,7 @@ fn render_selected_commit_readout(frame: &mut Frame, area: Rect, app: &App) {
     if repo.commits.is_empty() {
         return;
     }
-    let index = app.detail_selected.min(repo.commits.len() - 1);
+    let index = app.detail_selected().min(repo.commits.len() - 1);
     let Some(commit) = repo.commits.get(index) else {
         return;
     };
@@ -602,10 +602,15 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(row3));
     }
     lines.push(Line::from(""));
+    lines.push(Line::from(view_tabs(app.history_view)));
+    lines.push(Line::from(""));
 
     // Branches (worktrees shown inline under the branch they're checked out on)
+    let view = app.history_view;
     let mut shown_worktrees = std::collections::HashSet::new();
-    if !repo.branches.is_empty() || !repo.remote_only_branches.is_empty() {
+    if view == HistoryView::Info
+        && (!repo.branches.is_empty() || !repo.remote_only_branches.is_empty())
+    {
         lines.push(Line::from(section_label("branches")));
         for b in &repo.branches {
             // The checked-out branch gets git's own `*` marker, which keeps
@@ -682,7 +687,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // code, message, then a dot-fill running out to a diffstat right-aligned
     // at the pane edge. The dots always fill to the edge -- even when a commit
     // has no diffstat -- so every row reads to the same right margin.
-    if !repo.commits.is_empty() {
+    if view == HistoryView::Commits && !repo.commits.is_empty() {
         lines.push(Line::from(section_label("recent commits")));
         // Authors show as a fixed-width short code (see ui::author_code), so
         // the message column after it never drifts.
@@ -691,7 +696,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         // The commit the inspector is showing gets a ▸ marker so it's clear
         // which row the pane below reflects; the marker brightens while the
         // detail/inspector panels are the ones being driven.
-        let sel = app.detail_selected;
+        let sel = app.detail_selected();
         let commits_active = matches!(
             app.focused_panel,
             FocusedPanel::Detail | FocusedPanel::Inspector
@@ -782,7 +787,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // colors::author_color) so commits read as "who did this" at a glance,
     // the same way the repo list's badge columns stay put regardless of
     // what's on a given row.
-    if !repo.graph.is_empty() {
+    if view == HistoryView::Graph && !repo.graph.is_empty() {
         lines.push(Line::from(section_label("history")));
         let prefix_w = repo
             .graph
@@ -838,7 +843,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     // Reflog -- recent HEAD movements, for a "what did I just do" glance.
-    if !repo.reflog.is_empty() {
+    if view == HistoryView::Reflog && !repo.reflog.is_empty() {
         lines.push(Line::from(section_label("reflog")));
         for entry in &repo.reflog {
             let prefix_len = 2 + entry.hash.chars().count();
@@ -871,7 +876,8 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // with the other things GitHub knows. The workflow name and duration stay
     // here: they are detail rather than state, and the header row has to
     // leave room for the PR numbers beside them.
-    if repo.ci_status != CiStatus::Unknown
+    if view == HistoryView::Info
+        && repo.ci_status != CiStatus::Unknown
         && (repo.ci_workflow.is_some() || repo.ci_duration.is_some())
     {
         let (_, ci_color, _) = badges::ci_display(&repo.ci_status);
@@ -890,7 +896,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // PRs
     // Gated on `-p`: the header row already names the open PRs by number, so
     // this section is the opt-in detail rather than the news itself.
-    if app.show_pr_detail && !repo.prs.is_empty() {
+    if view == HistoryView::Info && app.show_pr_detail && !repo.prs.is_empty() {
         let pr_label = if repo.prs.len() == 1 { "PR" } else { "PRs" };
         lines.push(Line::from(section_label(&format!(
             "{} open {pr_label}",
@@ -942,7 +948,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .filter(|wt| !shown_worktrees.contains(&wt.path))
         .collect();
-    if !orphan_worktrees.is_empty() {
+    if view == HistoryView::Info && !orphan_worktrees.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(section_label("other worktrees")));
         for wt in orphan_worktrees {
@@ -960,7 +966,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     // Stashes
-    if repo.stash_count > 0 {
+    if view == HistoryView::Info && repo.stash_count > 0 {
         lines.push(Line::from(""));
         lines.push(Line::from(section_label(&format!(
             "{} stash{}",
@@ -985,7 +991,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // as many keypresses as it had overshot.
     let max_scroll = wrapped_row_count(&lines, area.width).saturating_sub(area.height);
     app.detail_max_scroll.set(max_scroll);
-    let scroll = app.detail_scroll.min(max_scroll);
+    let scroll = app.detail_scroll().min(max_scroll);
 
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
@@ -1015,7 +1021,15 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
 
     let Some(c) = app.inspected_commit() else {
-        let empty = Paragraph::new("no commit selected")
+        // Distinguish "nothing selected" from "selected something this pane
+        // cannot show". The reflog reaches back further than the commit list
+        // does, so picking an old entry names a real commit that simply was
+        // not loaded -- saying "no commit selected" there would be a lie.
+        let text = match app.inspected_hash() {
+            Some(hash) => format!("{hash} is outside the loaded commit range"),
+            None => "no commit selected".to_string(),
+        };
+        let empty = Paragraph::new(text)
             .style(Style::default().fg(colors::OVERLAY))
             .block(block);
         frame.render_widget(empty, area);
@@ -1241,6 +1255,31 @@ fn commit_stat_text(c: &crate::model::Commit) -> String {
 }
 
 /// A bold section header inside the detail pane (e.g. "branches", "history").
+/// The view switcher, one row under the header.
+///
+/// Drawn above the scrolling body so it does not scroll away: it is how you
+/// know what you are looking at, which is exactly the thing that must not
+/// disappear when you page down. Active view in the focus colour used
+/// elsewhere, inactive in SUBTEXT rather than OVERLAY -- these are choices
+/// you can make, not furniture.
+fn view_tabs(active: HistoryView) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::raw("  ")];
+    for (i, view) in HistoryView::ALL.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
+        }
+        let style = if *view == active {
+            Style::default()
+                .fg(colors::LAVENDER)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(colors::SUBTEXT)
+        };
+        spans.push(Span::styled(view.label(), style));
+    }
+    spans
+}
+
 fn section_label(text: &str) -> Span<'static> {
     Span::styled(
         text.to_string(),
@@ -1317,7 +1356,160 @@ mod tests {
         }
     }
 
-    /// The inspector below shows one commit; the list has to say which. The
+    /// A repo carrying something for every view, so a view showing the wrong
+    /// section is visible rather than merely absent.
+    fn busy_repo() -> RepoStatus {
+        let mut r = cloned_repo();
+        r.stash_count = 2;
+        r.branches = vec![crate::model::BranchStatus {
+            name: "main".to_string(),
+            upstream: Some("origin/main".to_string()),
+            behind: 0,
+            ahead: 0,
+            is_head: true,
+        }];
+        r.commits = vec![crate::model::Commit {
+            hash: "a1b2c3d".to_string(),
+            author: "Gaurgle".to_string(),
+            date: Some(chrono::Utc::now()),
+            message: "feat: a thing".to_string(),
+            body: String::new(),
+            insertions: 3,
+            deletions: 1,
+            files: vec![],
+        }];
+        r.reflog = vec![crate::model::ReflogEntry {
+            hash: "a1b2c3d".to_string(),
+            action: "commit".to_string(),
+            description: "feat: a thing".to_string(),
+        }];
+        r.graph = vec![crate::model::GraphLine {
+            prefix: "* ".to_string(),
+            hash: "a1b2c3d".to_string(),
+            is_merge: false,
+            refs: vec![],
+            author: "Gaurgle".to_string(),
+            message: "feat: a thing".to_string(),
+        }];
+        r
+    }
+
+    fn pane_text(view: HistoryView, width: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), width, 44);
+        app.history_view = view;
+        let mut term = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..30u16)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Each view draws its own section and none of the others'. The whole
+    /// point is that they take turns rather than queueing for one scroll
+    /// offset, so a section leaking across views defeats it.
+    #[test]
+    fn each_view_shows_only_its_own_section() {
+        let sections = [
+            (HistoryView::Info, "branches"),
+            (HistoryView::Commits, "recent commits"),
+            (HistoryView::Reflog, "reflog"),
+            (HistoryView::Graph, "history"),
+        ];
+        for (view, own) in sections {
+            let text = pane_text(view, 92);
+            assert!(text.contains(own), "{} missing {own:?}", view.label());
+            for (other_view, other) in sections {
+                if other_view == view || other == own {
+                    continue;
+                }
+                // The tab strip names every view, so match the section label
+                // rather than the word alone.
+                assert!(
+                    !text.contains(&format!(" {other}\n")) || other == own,
+                    "{} leaked the {other:?} section",
+                    view.label()
+                );
+            }
+        }
+    }
+
+    /// The header and the switcher are what tell you where you are, so they
+    /// must survive every view and every scroll.
+    #[test]
+    fn the_header_and_tab_strip_are_in_every_view() {
+        for view in HistoryView::ALL {
+            let text = pane_text(view, 92);
+            assert!(text.contains("~/repos/fleetz"), "{}", view.label());
+            assert!(text.contains("synced"), "{}", view.label());
+            for tab in HistoryView::ALL {
+                assert!(
+                    text.contains(tab.label()),
+                    "{} is missing the {} tab",
+                    view.label(),
+                    tab.label()
+                );
+            }
+        }
+    }
+
+    /// The inspector follows whichever list is active, resolving the hash
+    /// rather than an index -- the reflog and the commit list are different
+    /// lists of different lengths, so an index into one means nothing in the
+    /// other.
+    #[test]
+    fn the_inspector_follows_the_active_view() {
+        for view in [
+            HistoryView::Commits,
+            HistoryView::Reflog,
+            HistoryView::Graph,
+        ] {
+            let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), 92, 44);
+            app.history_view = view;
+            assert_eq!(
+                app.inspected_hash(),
+                Some("a1b2c3d"),
+                "{} did not reach the commit",
+                view.label()
+            );
+            assert_eq!(
+                app.inspected_commit().map(|c| c.message.as_str()),
+                Some("feat: a thing"),
+                "{}",
+                view.label()
+            );
+        }
+    }
+
+    /// Info draws no list, so it borrows the commit view's selection instead
+    /// of blanking the inspector: reading the branches should not throw away
+    /// the commit you were looking at.
+    #[test]
+    fn the_info_view_keeps_the_inspector_populated() {
+        let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), 92, 44);
+        app.history_view = HistoryView::Info;
+        assert_eq!(app.inspected_hash(), Some("a1b2c3d"));
+    }
+
+    /// A reflog entry can name a commit older than the loaded list. Saying
+    /// "no commit selected" there would be a lie: something is selected, it
+    /// just is not in the window.
+    #[test]
+    fn a_selection_outside_the_loaded_range_is_not_reported_as_none() {
+        let mut r = busy_repo();
+        r.reflog[0].hash = "deadbee".to_string();
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), 92, 44);
+        app.history_view = HistoryView::Reflog;
+        assert_eq!(app.inspected_hash(), Some("deadbee"), "still a selection");
+        assert!(app.inspected_commit().is_none(), "but not a loaded commit");
+    }
+
+    /// The inspector below shows one commit; the list has to say which.    /// The inspector below shows one commit; the list has to say which. The
     /// ▸ marker lives in its own fixed-width column, so on a long list the
     /// eye has to travel to it -- bold puts the weight on the hash itself.
     #[test]
@@ -1339,7 +1531,8 @@ mod tests {
             })
             .collect();
         let mut app = crate::app::App::new(vec![r], "t".to_string(), 100, 44);
-        app.detail_selected = 1;
+        app.history_view = HistoryView::Commits;
+        app.set_detail_selected(1);
 
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         term.draw(|f| render_detail_pane(f, f.area(), &app))
@@ -1735,7 +1928,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let mut app = crate::app::App::new(vec![repo], "test".to_string(), width, 40);
-        app.detail_selected = selected;
+        app.set_detail_selected(selected);
         let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
         terminal
             .draw(|f| render_detail_pane(f, f.area(), &app))
@@ -1787,7 +1980,7 @@ mod tests {
         let width = 60;
         let mut app =
             crate::app::App::new(vec![repo_with_commits(4)], "test".to_string(), width, 40);
-        app.detail_selected = 1;
+        app.set_detail_selected(1);
         let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
         terminal
             .draw(|f| render_detail_pane(f, f.area(), &app))

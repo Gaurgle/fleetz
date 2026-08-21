@@ -27,6 +27,53 @@ pub enum FocusedPanel {
     Contributions,
 }
 
+/// Which rendering of a repo's history the pane body is showing.
+///
+/// `Info` is the reference view -- branches, worktrees, stashes -- and the
+/// default, so the pane opens on the facts you glance at rather than on a
+/// list you have to read. The other three are history, each dense because it
+/// does one job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HistoryView {
+    #[default]
+    Info,
+    Commits,
+    Reflog,
+    Graph,
+}
+
+impl HistoryView {
+    /// Every view, in the order the tab strip draws them and `V` cycles them.
+    pub const ALL: [Self; 4] = [Self::Info, Self::Commits, Self::Reflog, Self::Graph];
+    pub const COUNT: usize = Self::ALL.len();
+
+    /// Index into the per-view scroll and selection arrays.
+    pub fn index(self) -> usize {
+        match self {
+            Self::Info => 0,
+            Self::Commits => 1,
+            Self::Reflog => 2,
+            Self::Graph => 3,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Commits => "commits",
+            Self::Reflog => "reflog",
+            Self::Graph => "graph",
+        }
+    }
+
+    /// Whether this view draws a list the inspector can follow. `Info` does
+    /// not, so entering it leaves the inspector showing whatever was last
+    /// selected rather than blanking it.
+    pub fn is_list(self) -> bool {
+        !matches!(self, Self::Info)
+    }
+}
+
 /// Whether the contribution strip is showing, and from which source.
 /// Persisted to `config.toml` as one key, so the source survives a restart
 /// along with the open state.
@@ -833,11 +880,26 @@ pub struct App {
     pub group_names: Vec<String>,
     pub active_group: Option<usize>,
     pub focused_panel: FocusedPanel,
-    pub detail_scroll: u16,
-    /// Index of the commit highlighted in the detail pane's recent-commits
-    /// list, which the inspector shows in full. Reset to 0 when the selected
-    /// repo changes.
-    pub detail_selected: usize,
+    /// Which rendering of history the repo pane's body is showing.
+    ///
+    /// The pane used to stack branches, commits, the graph, the reflog,
+    /// worktrees and stashes into one scrolling paragraph, all competing for
+    /// a single offset: reaching the graph meant scrolling past the commits.
+    /// They are four answers to different questions, so they take turns
+    /// instead of queueing.
+    pub history_view: HistoryView,
+    /// Scroll offset per history view, indexed by `HistoryView::index`.
+    ///
+    /// Per view rather than shared, because a shared offset is wrong the
+    /// moment you switch back to something you had already scrolled.
+    pub detail_scrolls: [u16; HistoryView::COUNT],
+    /// Index of the row highlighted in each history view, whose commit the
+    /// inspector shows. Reset to 0 when the selected repo changes.
+    ///
+    /// Per view for the same reason as the scroll offset, and because the
+    /// lists have different lengths: an index valid in the reflog is
+    /// meaningless against the commit list.
+    pub detail_selections: [usize; HistoryView::COUNT],
     /// Scroll offset for the inspector pane (long commit bodies).
     pub inspector_scroll: u16,
     /// Largest useful scroll offset for each pane, measured by the renderer,
@@ -986,8 +1048,9 @@ impl App {
             group_names: Vec::new(),
             active_group: None,
             focused_panel: FocusedPanel::RepoList,
-            detail_scroll: 0,
-            detail_selected: 0,
+            history_view: HistoryView::default(),
+            detail_scrolls: [0; HistoryView::COUNT],
+            detail_selections: [0; HistoryView::COUNT],
             inspector_scroll: 0,
             detail_max_scroll: std::cell::Cell::new(0),
             inspector_max_scroll: std::cell::Cell::new(0),
@@ -1042,8 +1105,8 @@ impl App {
         if self.selected >= len {
             self.selected = len.saturating_sub(1);
         }
-        self.detail_scroll = 0;
-        self.detail_selected = 0;
+        self.set_detail_scroll(0);
+        self.set_detail_selected(0);
         self.inspector_scroll = 0;
     }
 
@@ -1217,29 +1280,43 @@ impl App {
     /// so moving to a different repo always starts its detail from the top
     /// with the first commit selected rather than inheriting stale offsets.
     fn reset_detail_view(&mut self) {
-        self.detail_scroll = 0;
-        self.detail_selected = 0;
+        self.set_detail_scroll(0);
+        self.set_detail_selected(0);
         self.inspector_scroll = 0;
     }
 
     /// Number of commits in the recent-commits list of the selected repo --
     /// the range the inspector's commit cursor moves over.
+    /// Rows the cursor can walk in the *active* history view.
+    ///
+    /// Not `commits.len()` any more: the cursor walks whichever list is on
+    /// screen, and an index valid against the commit list is meaningless
+    /// against the reflog. `Info` draws no list, so it has no cursor.
     pub fn selected_commit_count(&self) -> usize {
-        self.selected_repo().map_or(0, |r| r.commits.len())
+        let Some(repo) = self.selected_repo() else {
+            return 0;
+        };
+        match self.history_view {
+            HistoryView::Info => 0,
+            HistoryView::Commits => repo.commits.len(),
+            HistoryView::Reflog => repo.reflog.len(),
+            // Connector rows carry no commit, so they are not stops.
+            HistoryView::Graph => repo.graph.iter().filter(|g| !g.hash.is_empty()).count(),
+        }
     }
 
     /// Move the inspector's commit cursor within the selected repo's commits.
     pub fn select_commit_up(&mut self) {
-        if self.detail_selected > 0 {
-            self.detail_selected -= 1;
+        if self.detail_selected() > 0 {
+            self.set_detail_selected(self.detail_selected() - 1);
             self.inspector_scroll = 0;
         }
     }
 
     pub fn select_commit_down(&mut self) {
         let max = self.selected_commit_count().saturating_sub(1);
-        if self.detail_selected < max {
-            self.detail_selected += 1;
+        if self.detail_selected() < max {
+            self.set_detail_selected(self.detail_selected() + 1);
             self.inspector_scroll = 0;
         }
     }
@@ -1248,7 +1325,7 @@ impl App {
     /// commits, then -- once past the last one -- scroll the pane so the
     /// history/reflog/CI sections below the commits become reachable.
     pub fn detail_nav_down(&mut self) {
-        if self.detail_selected + 1 < self.selected_commit_count() {
+        if self.detail_selected() + 1 < self.selected_commit_count() {
             self.select_commit_down();
         } else {
             self.scroll_detail(1);
@@ -1258,7 +1335,7 @@ impl App {
     /// Detail-pane up-navigation: unwind any content scroll first, then step
     /// the commit cursor back up -- the mirror of `detail_nav_down`.
     pub fn detail_nav_up(&mut self) {
-        if self.detail_scroll > 0 {
+        if self.detail_scroll() > 0 {
             self.scroll_detail(-1);
         } else {
             self.select_commit_up();
@@ -1266,9 +1343,44 @@ impl App {
     }
 
     /// The commit the inspector is currently showing, if any.
+    /// The hash the active history view has selected.
+    ///
+    /// `Info` draws no list, so it borrows the commit view's selection rather
+    /// than blanking the inspector: switching to Info to read the branches
+    /// should not throw away the commit you were looking at.
+    pub fn inspected_hash(&self) -> Option<&str> {
+        let repo = self.selected_repo()?;
+        let view = if self.history_view.is_list() {
+            self.history_view
+        } else {
+            HistoryView::Commits
+        };
+        let i = self.detail_selections[view.index()];
+        match view {
+            HistoryView::Info => None,
+            HistoryView::Commits => repo.commits.get(i).map(|c| c.hash.as_str()),
+            HistoryView::Reflog => repo.reflog.get(i).map(|e| e.hash.as_str()),
+            HistoryView::Graph => repo
+                .graph
+                .iter()
+                .filter(|g| !g.hash.is_empty())
+                .nth(i)
+                .map(|g| g.hash.as_str()),
+        }
+    }
+
+    /// The commit the inspector should show: whatever the active view
+    /// selected, resolved against the loaded commit list.
+    ///
+    /// Resolved by hash rather than by index, because the reflog and the
+    /// graph are different lists of different lengths -- an index into one
+    /// means nothing in another. Returns None when the selection names a
+    /// commit outside the loaded window, which the reflog can easily do:
+    /// it reaches back further than the commit list does.
     pub fn inspected_commit(&self) -> Option<&crate::model::Commit> {
-        self.selected_repo()
-            .and_then(|r| r.commits.get(self.detail_selected))
+        let repo = self.selected_repo()?;
+        let hash = self.inspected_hash()?;
+        repo.commits.iter().find(|c| c.hash == hash)
     }
 
     /// Scroll the inspector by `delta` lines, clamped to the content the last
@@ -1305,7 +1417,7 @@ impl App {
         // always land somewhere predictable rather than carry over whatever
         // was focused/scrolled before.
         self.focused_panel = FocusedPanel::RepoList;
-        self.detail_scroll = 0;
+        self.set_detail_scroll(0);
     }
 
     /// Cycle keyboard focus: repo list -> detail -> inspector -> repo list.
@@ -1499,8 +1611,8 @@ impl App {
     /// which read as the pane being stuck.
     pub fn scroll_detail(&mut self, delta: i32) {
         let max = self.detail_max_scroll.get() as i32;
-        let current = self.detail_scroll as i32;
-        self.detail_scroll = (current + delta).clamp(0, max) as u16;
+        let current = self.detail_scroll() as i32;
+        self.set_detail_scroll((current + delta).clamp(0, max) as u16);
     }
 
     pub fn toggle_help(&mut self) {
@@ -1567,6 +1679,34 @@ impl App {
     /// whole fleet. The list walks `visible_repos`, so folding `self.repos`
     /// here left the footer describing repos a quick filter or a search had
     /// already hidden.
+    /// Scroll offset and selection for the *active* history view. Every
+    /// caller wants the current one; the arrays exist so switching views does
+    /// not lose where you were in the one you left.
+    pub fn detail_scroll(&self) -> u16 {
+        self.detail_scrolls[self.history_view.index()]
+    }
+
+    pub fn set_detail_scroll(&mut self, value: u16) {
+        self.detail_scrolls[self.history_view.index()] = value;
+    }
+
+    pub fn detail_selected(&self) -> usize {
+        self.detail_selections[self.history_view.index()]
+    }
+
+    pub fn set_detail_selected(&mut self, value: usize) {
+        self.detail_selections[self.history_view.index()] = value;
+    }
+
+    /// Step to the next history view, wrapping. One key rather than four,
+    /// because `1`-`4` already focus panes and a pane-local number mode is a
+    /// modality the app does not otherwise have.
+    pub fn cycle_history_view(&mut self) {
+        let next = (self.history_view.index() + 1) % HistoryView::COUNT;
+        self.history_view = HistoryView::ALL[next];
+        self.needs_redraw = true;
+    }
+
     pub fn summary(&self) -> Summary {
         Summary::from_refs(self.visible_repos().into_iter().map(|(_, r)| r))
     }
@@ -1599,6 +1739,19 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn commit(hash: &str) -> crate::model::Commit {
+        crate::model::Commit {
+            hash: hash.to_string(),
+            author: "Gaurgle".to_string(),
+            date: None,
+            message: format!("subject {hash}"),
+            body: String::new(),
+            insertions: 0,
+            deletions: 0,
+            files: vec![],
+        }
+    }
 
     fn make_app(n: usize) -> App {
         let repos: Vec<RepoStatus> = (0..n)
@@ -1686,6 +1839,83 @@ mod tests {
         // And back the other way.
         app.pan_contributions(58, 50);
         assert_eq!(app.contrib_scroll.get(), start);
+    }
+
+    /// One key steps through every view and comes back where it started.
+    #[test]
+    fn cycling_history_views_wraps_through_all_of_them() {
+        let mut app = make_app(1);
+        assert_eq!(app.history_view, HistoryView::Info, "opens on the facts");
+
+        let mut seen = vec![app.history_view];
+        for _ in 1..HistoryView::COUNT {
+            app.cycle_history_view();
+            seen.push(app.history_view);
+        }
+        assert_eq!(seen, HistoryView::ALL.to_vec(), "in tab-strip order");
+
+        app.cycle_history_view();
+        assert_eq!(app.history_view, HistoryView::Info, "wraps");
+    }
+
+    /// Scroll and selection are per view. A shared offset is wrong the moment
+    /// you switch back to something you had already scrolled -- you would
+    /// land wherever the other list happened to leave you.
+    #[test]
+    fn each_view_keeps_its_own_place() {
+        let mut app = make_app(1);
+
+        app.history_view = HistoryView::Commits;
+        app.set_detail_scroll(12);
+        app.set_detail_selected(3);
+
+        app.history_view = HistoryView::Reflog;
+        assert_eq!(app.detail_scroll(), 0, "a fresh view starts at the top");
+        assert_eq!(app.detail_selected(), 0);
+        app.set_detail_scroll(40);
+        app.set_detail_selected(7);
+
+        app.history_view = HistoryView::Commits;
+        assert_eq!(app.detail_scroll(), 12, "commits kept its place");
+        assert_eq!(app.detail_selected(), 3);
+
+        app.history_view = HistoryView::Reflog;
+        assert_eq!(app.detail_scroll(), 40, "and so did the reflog");
+        assert_eq!(app.detail_selected(), 7);
+    }
+
+    /// The cursor walks whichever list is on screen, so its bound is that
+    /// list's length. Info draws none, so it has no cursor at all.
+    #[test]
+    fn the_cursor_is_bounded_by_the_active_views_list() {
+        let mut app = make_app(1);
+        app.repos[0].commits = vec![commit("aaa"), commit("bbb")];
+        app.repos[0].reflog = vec![
+            crate::model::ReflogEntry {
+                hash: "aaa".to_string(),
+                action: "commit".to_string(),
+                description: "one".to_string(),
+            },
+            crate::model::ReflogEntry {
+                hash: "bbb".to_string(),
+                action: "checkout".to_string(),
+                description: "two".to_string(),
+            },
+            crate::model::ReflogEntry {
+                hash: "ccc".to_string(),
+                action: "pull".to_string(),
+                description: "three".to_string(),
+            },
+        ];
+
+        app.history_view = HistoryView::Info;
+        assert_eq!(app.selected_commit_count(), 0, "info draws no list");
+
+        app.history_view = HistoryView::Commits;
+        assert_eq!(app.selected_commit_count(), 2);
+
+        app.history_view = HistoryView::Reflog;
+        assert_eq!(app.selected_commit_count(), 3, "a longer list of its own");
     }
 
     #[test]
@@ -2167,12 +2397,12 @@ mod tests {
         for _ in 0..100 {
             app.scroll_detail(1);
         }
-        assert_eq!(app.detail_scroll, 12, "never runs past the content");
+        assert_eq!(app.detail_scroll(), 12, "never runs past the content");
 
         // The very next scroll back must move the view, not burn off phantom
         // offset.
         app.scroll_detail(-1);
-        assert_eq!(app.detail_scroll, 11);
+        assert_eq!(app.detail_scroll(), 11);
     }
 
     #[test]
@@ -2197,7 +2427,7 @@ mod tests {
         let mut app = make_app(1);
         app.detail_max_scroll.set(0);
         app.scroll_detail(10);
-        assert_eq!(app.detail_scroll, 0);
+        assert_eq!(app.detail_scroll(), 0);
     }
 
     #[test]
@@ -2205,9 +2435,9 @@ mod tests {
         let mut app = make_app(1);
         app.detail_max_scroll.set(4);
         app.scroll_detail(10); // one PageDown
-        assert_eq!(app.detail_scroll, 4);
+        assert_eq!(app.detail_scroll(), 4);
         app.scroll_detail(-10); // one PageUp
-        assert_eq!(app.detail_scroll, 0);
+        assert_eq!(app.detail_scroll(), 0);
     }
 
     #[test]

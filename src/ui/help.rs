@@ -32,6 +32,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ),
         ("PgUp/PgDn", "Scroll focused pane by a page"),
         ("v", "Toggle detail ↔ compact view"),
+        ("V", "Repo pane: cycle info / commits / reflog / graph"),
         ("c", "Toggle the contributions strip (a year of activity)"),
         (
             "h/l \u{2190}/\u{2192}",

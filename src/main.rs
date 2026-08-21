@@ -1127,6 +1127,10 @@ async fn handle_normal_input(
             app.should_quit = true;
         }
         KeyCode::Char('c') => app.toggle_contributions(),
+        // Uppercase cycles what its lowercase toggles, the same shape as
+        // `c`/`C` for the contributions strip: `v` switches the whole-app
+        // view, `V` steps the repo pane's body through its four.
+        KeyCode::Char('V') => app.cycle_history_view(),
         KeyCode::Char('C') => {
             app.cycle_contributions_source();
             // Switching to the local source is useless without a histogram,
