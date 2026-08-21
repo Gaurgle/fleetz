@@ -280,6 +280,9 @@ impl GitRef {
 pub struct GraphLine {
     pub prefix: String,
     pub hash: String,
+    /// Two or more parents. Git's `--graph` draws every commit as `*`
+    /// regardless, so the distinction has to come from `%P`.
+    pub is_merge: bool,
     pub refs: Vec<GitRef>,
     pub author: String,
     pub message: String,

@@ -796,7 +796,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             let prefix_pad = " ".repeat(prefix_w.saturating_sub(g.prefix.chars().count()));
             if g.hash.is_empty() {
                 let mut spans = vec![Span::raw("  ")];
-                spans.extend(graph_prefix_spans(&g.prefix));
+                spans.extend(graph_prefix_spans(&g.prefix, g.is_merge));
                 spans.push(Span::raw(prefix_pad));
                 lines.push(Line::from(spans));
                 continue;
@@ -817,7 +817,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             let message = crate::ui::truncate(&g.message, msg_budget);
 
             let mut graph_spans = vec![Span::raw("  ")];
-            graph_spans.extend(graph_prefix_spans(&g.prefix));
+            graph_spans.extend(graph_prefix_spans(&g.prefix, g.is_merge));
             graph_spans.push(Span::raw(prefix_pad));
             graph_spans.push(Span::styled(
                 g.hash.clone(),
@@ -1186,7 +1186,21 @@ fn ref_spans(refs: &[crate::model::GitRef]) -> Vec<Span<'static>> {
     spans
 }
 
-fn graph_prefix_spans(prefix: &str) -> Vec<Span<'static>> {
+/// An ordinary commit's node in the graph column.
+///
+/// Git draws every commit as `*`, which is a heavy glyph repeated on every
+/// row and makes a long history read as noise. A small circle carries the
+/// same meaning at a fraction of the weight, and leaves `*` free to mean the
+/// one thing worth picking out: a merge.
+///
+/// U+26AC is East Asian Narrow. That is not incidental -- the graph column is
+/// tiled arithmetic padded to the widest prefix, so an Ambiguous-width glyph
+/// would be one column in some terminals and two in others, and every row
+/// after it would misalign. The obvious candidates (`●` `○` `•` `◆` `⊙`) are
+/// all Ambiguous; this one and `◦` `∘` `◊` are not.
+const COMMIT_NODE: char = '⚬';
+
+fn graph_prefix_spans(prefix: &str, is_merge: bool) -> Vec<Span<'static>> {
     prefix
         .chars()
         .enumerate()
@@ -1195,6 +1209,13 @@ fn graph_prefix_spans(prefix: &str) -> Vec<Span<'static>> {
                 colors::SURFACE
             } else {
                 colors::graph_lane_color(i)
+            };
+            // Exactly one `*` per commit row, and none on a connector row, so
+            // this cannot touch the lane characters around it.
+            let ch = if ch == '*' && !is_merge {
+                COMMIT_NODE
+            } else {
+                ch
             };
             Span::styled(ch.to_string(), Style::default().fg(color))
         })
@@ -1244,6 +1265,56 @@ mod tests {
 
     fn span_text(spans: &[Span]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// `*` on every row is a heavy glyph that turns a long history into
+    /// noise. Ordinary commits get a light node; `*` is kept for merges,
+    /// which is the one row worth picking out of a column.
+    #[test]
+    fn only_merges_keep_the_asterisk() {
+        let ordinary: String = graph_prefix_spans("* ", false)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(ordinary, "⚬ ", "got {ordinary:?}");
+
+        let merge: String = graph_prefix_spans("* ", true)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(merge, "* ", "merges keep the asterisk: {merge:?}");
+
+        // Lane characters are untouched either way: the substitution must not
+        // reach past the single node on the row.
+        let branched: String = graph_prefix_spans("| * ", false)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(branched, "| ⚬ ", "got {branched:?}");
+        let connector: String = graph_prefix_spans("|/  ", false)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(connector, "|/  ");
+    }
+
+    /// The graph column is padded to the widest prefix and drawn per cell, so
+    /// an Ambiguous-width node would be one column in some terminals and two
+    /// in others, and every row after it would misalign. Narrow is a
+    /// requirement here, not a preference.
+    #[test]
+    fn the_commit_node_occupies_one_column() {
+        // Ratatui's own measurement, which is the one the layout uses, so a
+        // mismatch here is a mismatch on screen. U+26AC is East Asian Narrow;
+        // the obvious alternatives (● ○ • ◆ ⊙) are all Ambiguous, meaning
+        // their width is a terminal setting rather than a property.
+        assert_eq!(Span::from(COMMIT_NODE.to_string()).width(), 1);
+        for ambiguous in ['●', '○', '•', '◆', '⊙'] {
+            assert_ne!(
+                COMMIT_NODE, ambiguous,
+                "{ambiguous} is Ambiguous-width and would misalign the column"
+            );
+        }
     }
 
     /// The inspector below shows one commit; the list has to say which. The
@@ -1427,6 +1498,7 @@ mod tests {
             let line = crate::model::GraphLine {
                 prefix: "* ".to_string(),
                 hash: "a1b2c3d".to_string(),
+                is_merge: false,
                 refs: refs.clone(),
                 author: "Alice".to_string(),
                 message: "feat: thing".to_string(),
