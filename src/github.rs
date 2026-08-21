@@ -25,6 +25,15 @@ pub struct GithubRepo {
 pub struct GithubFetch {
     pub repos: Vec<GithubRepo>,
     pub calendar: Option<Box<Calendar>>,
+    /// Whether the payload carried the `pullRequests` field at all.
+    ///
+    /// Distinct from "every repo has zero open PRs", which is a perfectly
+    /// ordinary answer. A payload written before the count was requested has
+    /// the field absent on every node, so the two are told apart by the
+    /// presence of the key rather than by its value. Without that, an
+    /// upgraded install serves its old cache and reports no PRs anywhere for
+    /// a full TTL, silently.
+    pub has_pr_counts: bool,
 }
 
 // --- Raw deserialization types (match GraphQL response shape) ---
@@ -339,13 +348,18 @@ fn split_viewer(viewer: Viewer, today: chrono::NaiveDate) -> GithubFetch {
         organizations,
         contribution_years,
     } = viewer;
+    let nodes = merge_sources(Viewer {
+        repositories,
+        organizations,
+        contribution_years: Default::default(),
+    });
+    // An empty fleet carries no evidence either way, so it must not be read
+    // as a stale payload -- that would make every poll a cache miss forever.
+    let has_pr_counts = nodes.is_empty() || nodes.iter().any(|n| n.pull_requests.is_some());
     GithubFetch {
-        repos: parse_repos(merge_sources(Viewer {
-            repositories,
-            organizations,
-            contribution_years: Default::default(),
-        })),
+        repos: parse_repos(nodes),
         calendar: parse_calendar(contribution_years, today).map(Box::new),
+        has_pr_counts,
     }
 }
 
@@ -367,6 +381,7 @@ pub async fn fetch_repos(
     if !bypass_cache
         && let Some(fetch) = parse_cached(cache.read(), today)
         && fetch.calendar.is_some()
+        && fetch.has_pr_counts
     {
         return Ok(fetch);
     }
@@ -840,6 +855,39 @@ mod tests {
         assert!(!window_exceeds_dataset(&repos, old_cutoff, 50));
         // Empty dataset: nothing to warn about.
         assert!(!window_exceeds_dataset(&[], old_cutoff, 50));
+    }
+
+    /// Regression: an install upgrading past the always-on PR count reads its
+    /// own old cache first. That payload parses fine and has the calendar, so
+    /// it used to be served -- reporting no open PRs anywhere for a full TTL,
+    /// with no way to tell that from a genuinely quiet fleet. The field being
+    /// absent on every node is the signal, not the counts being zero.
+    #[test]
+    fn a_cached_payload_without_pr_counts_is_treated_as_stale() {
+        let today = day("2026-08-18");
+        let without = r#"{"data":{"viewer":{"repositories":{"nodes":[
+            {"name":"a","pushedAt":"2026-08-01T00:00:00Z"}
+        ]}}}}"#;
+        let fetch = parse_cached(Some(without.to_string()), today).unwrap();
+        assert!(!fetch.has_pr_counts, "no pullRequests key anywhere");
+
+        // A fleet that genuinely has no open PRs still carries the field, and
+        // must NOT be mistaken for a stale payload.
+        let quiet = r#"{"data":{"viewer":{"repositories":{"nodes":[
+            {"name":"a","pushedAt":"2026-08-01T00:00:00Z","pullRequests":{"totalCount":0}}
+        ]}}}}"#;
+        let fetch = parse_cached(Some(quiet.to_string()), today).unwrap();
+        assert!(fetch.has_pr_counts, "zero PRs is an answer, not an absence");
+        assert_eq!(fetch.repos[0].pr_count, 0);
+    }
+
+    /// An empty fleet carries no evidence either way. Reading that as stale
+    /// would make every poll a guaranteed cache miss.
+    #[test]
+    fn an_empty_repo_list_is_not_mistaken_for_a_stale_payload() {
+        let empty = r#"{"data":{"viewer":{"repositories":{"nodes":[]}}}}"#;
+        let fetch = parse_cached(Some(empty.to_string()), day("2026-08-18")).unwrap();
+        assert!(fetch.has_pr_counts);
     }
 
     /// The calendar rides the existing payload, so an old cache file (written

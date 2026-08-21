@@ -75,10 +75,6 @@ fn ci_text(repo: &RepoStatus) -> String {
     }
 }
 
-/// Octicon `git-pull-request`. GitHub's own icon set, which is where the PR
-/// data comes from, so the symbol names its source.
-const PR_GLYPH: &str = "\u{f407}";
-
 /// Octicon `archive`. Stash has no formal glyph, but VS Code and GitHub
 /// Desktop both draw it as an archive box, so this is borrowed rather than
 /// invented -- which is the whole test for putting a symbol on screen.
@@ -93,7 +89,7 @@ const WORKTREE_ABBR: &str = "wt";
 
 fn pr_text(repo: &RepoStatus) -> String {
     if repo.pr_count > 0 {
-        format!("{}{PR_GLYPH} ", repo.pr_count)
+        format!("{}PR ", repo.pr_count)
     } else {
         String::new()
     }
@@ -181,7 +177,7 @@ pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>,
     let pr = pr_text(repo);
     if !pr.is_empty() {
         width += pr.chars().count();
-        spans.push(Span::styled(pr, Style::default().fg(colors::MAUVE)));
+        spans.push(Span::styled(pr, Style::default().fg(colors::PR_CLR)));
     }
 
     let stash = stash_text(repo);
@@ -312,6 +308,9 @@ mod tests {
         }
         assert!(text.contains(&format!("3{STASH_GLYPH}")), "got {text:?}");
         assert!(text.contains("1wt"), "got {text:?}");
+        // `2PR` is letters, but `PR` is not a duration, so it was never the
+        // problem the other two were.
+        assert!(text.contains("2PR"), "got {text:?}");
     }
 
     /// The badge column is right-aligned off `badge_spans`' own width, so a

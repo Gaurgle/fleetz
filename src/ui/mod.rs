@@ -355,7 +355,7 @@ fn filter_color(kind: FilterKind) -> Color {
         // the tag word itself is what distinguishes them.
         FilterKind::Behind | FilterKind::Ahead => colors::PEACH,
         FilterKind::CiFailed => colors::RED,
-        FilterKind::HasPrs => colors::MAUVE,
+        FilterKind::HasPrs => colors::PR_CLR,
         FilterKind::HasStashes => colors::OVERLAY,
     }
 }

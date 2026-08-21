@@ -125,7 +125,7 @@ fn summary_spans(summary: &Summary) -> Vec<Span<'static>> {
     if summary.pr_count > 0 {
         spans.push(Span::styled(
             format!("{} PRs", summary.pr_count),
-            Style::default().fg(colors::MAUVE),
+            Style::default().fg(colors::PR_CLR),
         ));
         spans.push(dot());
     }

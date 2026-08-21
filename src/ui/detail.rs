@@ -459,14 +459,27 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     let status_icon = if repo.is_synced() { "✓" } else { "○" };
     let path_str = repo.path.as_deref().unwrap_or("not cloned");
 
-    let mut status_line = vec![
-        Span::styled(
-            format!("{status_icon} {}", repo.long_status()),
-            Style::default().fg(status_color),
-        ),
-        Span::raw("   "),
-        Span::styled(path_str.to_string(), Style::default().fg(colors::OVERLAY)),
-    ];
+    let mut status_line = vec![Span::styled(
+        format!("{status_icon} {}", repo.long_status()),
+        Style::default().fg(status_color),
+    )];
+    // Open PRs sit with the sync state rather than only in their own section
+    // further down. This pane is the repo's main window, and "there is a PR
+    // waiting on this" is the same kind of fact as "you are three behind":
+    // something you want off the top line, not something you scroll for.
+    if repo.pr_count > 0 {
+        let label = if repo.pr_count == 1 { "PR" } else { "PRs" };
+        status_line.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
+        status_line.push(Span::styled(
+            format!("{} open {label}", repo.pr_count),
+            Style::default().fg(colors::PR_CLR),
+        ));
+    }
+    status_line.push(Span::raw("   "));
+    status_line.push(Span::styled(
+        path_str.to_string(),
+        Style::default().fg(colors::OVERLAY),
+    ));
     let mut url_line: Vec<Span> = Vec::new();
     if let Some(ref url) = repo.remote_url {
         url_line.push(Span::styled(
@@ -801,7 +814,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             let mut pr_spans = vec![
                 Span::styled(
                     format!("  #{}", pr.number),
-                    Style::default().fg(colors::MAUVE),
+                    Style::default().fg(colors::PR_CLR),
                 ),
                 Span::raw(" "),
                 Span::styled(title, Style::default().fg(colors::TEXT)),
@@ -815,13 +828,11 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             }
             lines.push(Line::from(pr_spans));
         }
-    } else if repo.pr_count > 0 {
-        let pr_label = if repo.pr_count == 1 { "PR" } else { "PRs" };
-        lines.push(Line::from(section_label(&format!(
-            "{} open {pr_label}",
-            repo.pr_count
-        ))));
     }
+    // No count-only fallback here any more: without `-p` there is no list to
+    // head, and the status line at the top of the pane already carries the
+    // number. A bare heading repeating it three sections down was the same
+    // fact twice.
 
     // Worktrees not matched to a local branch above (e.g. detached HEAD) --
     // the common case is already shown inline under its branch.
@@ -1132,6 +1143,45 @@ mod tests {
 
     fn span_text(spans: &[Span]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// This pane is the repo's main window, so an open PR belongs on its top
+    /// line beside the sync state, not only in a section three groups down
+    /// that a default run does not even render.
+    #[test]
+    fn the_status_line_says_when_a_repo_has_open_prs() {
+        let with_prs = |n: u32| {
+            let mut r = cloned_repo();
+            r.pr_count = n;
+            pane_rows(r, 120).0
+        };
+
+        let two = with_prs(2);
+        assert!(two.contains("2 open PRs"), "got {two:?}");
+        // Still on the same row as the sync state and the path.
+        assert!(two.contains("synced") && two.contains("~/repos/fleetz"));
+
+        let one = with_prs(1);
+        assert!(one.contains("1 open PR"), "singular: {one:?}");
+        assert!(!one.contains("1 open PRs"), "got {one:?}");
+
+        let none = with_prs(0);
+        assert!(!none.contains("open PR"), "silent when there are none");
+    }
+
+    /// One colour per concept: the badge, the footer count, the PR number in
+    /// the list, and the `#prs` filter tag must not drift apart. They used to
+    /// share MAUVE with section labels, which made a PR count read as
+    /// furniture instead of as news.
+    #[test]
+    fn every_pr_surface_uses_the_same_colour() {
+        assert_eq!(
+            crate::ui::filter_color(crate::app::FilterKind::HasPrs),
+            colors::PR_CLR,
+            "the filter tag must match the badge"
+        );
+        assert_ne!(colors::PR_CLR, colors::MAUVE, "PRs are not a section label");
+        assert_ne!(colors::PR_CLR, colors::PEACH, "nor a sync counter");
     }
 
     /// `refs_width` budgets the message column and `ref_spans` draws the

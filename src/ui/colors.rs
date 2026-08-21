@@ -6,7 +6,15 @@ pub const GREEN: Color = Color::Rgb(166, 227, 161); // ahead / synced
 pub const YELLOW: Color = Color::Rgb(249, 226, 175); // uncommitted
 pub const SAPPHIRE: Color = Color::Rgb(116, 199, 236); // repo names
 pub const LAVENDER: Color = Color::Rgb(180, 190, 254); // headers
-pub const MAUVE: Color = Color::Rgb(203, 166, 247); // section labels / PRs
+pub const MAUVE: Color = Color::Rgb(203, 166, 247); // section labels
+
+/// Open pull requests, everywhere one is counted or listed.
+///
+/// A warmer orange than `PEACH`, which already means behind/ahead in the
+/// counters, so a PR badge cannot be mistaken for a sync state at a glance.
+/// Split out of `MAUVE` because that is the section-label colour: a PR count
+/// wearing it read as furniture rather than as news.
+pub const PR_CLR: Color = Color::Rgb(240, 152, 88);
 /// Commit hashes, everywhere one is drawn: the history graph, the reflog,
 /// and the recent-commits list.
 ///

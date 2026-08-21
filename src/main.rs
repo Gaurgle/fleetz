@@ -596,6 +596,7 @@ async fn run_event_loop(
                         let github::GithubFetch {
                             repos: dataset,
                             calendar,
+                            has_pr_counts: _,
                         } = *fetch;
                         // The calendar rides the same payload as the repos, so
                         // a poll that updated CI also refreshed the year at no

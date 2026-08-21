@@ -21,6 +21,7 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 - Open pull requests per repo
 - CI status as a `◉` status lamp: green passed, red failed, blinking orange while running. From GitHub's `statusCheckRollup`, kept live in watch mode
 - Active worktrees (`wt` badge) and stashes (archive-glyph badge)
+- Open PR count on the repo row, on the detail pane's status line, and in the footer
 - Repo groups defined in your config (cycle with `g`)
 - Repo ownership in the detail pane: `owner/name` flush right on the status
   line, colored and glyphed by kind (org, private, public)
