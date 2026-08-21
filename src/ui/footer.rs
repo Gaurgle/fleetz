@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Padding, Paragraph};
 
 use crate::app::{App, View};
-use crate::model::Summary;
+use crate::model::{NOT_CLONED, Summary};
 use crate::ui::colors;
 
 /// Render the footer: summary stats on the left, keybind hints on the right.
@@ -112,9 +112,9 @@ fn summary_spans(summary: &Summary, show_prs: bool) -> Vec<Span<'static>> {
         ));
         spans.push(dot());
     }
-    if summary.not_local_count > 0 {
+    if summary.not_cloned_count > 0 {
         spans.push(Span::styled(
-            format!("{} not local", summary.not_local_count),
+            format!("{} {NOT_CLONED}", summary.not_cloned_count),
             Style::default().fg(colors::OVERLAY),
         ));
         spans.push(dot());
@@ -220,6 +220,25 @@ mod tests {
 
     fn text(spans: &[Span]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// The footer used to call this state "not local", the only place in the
+    /// app that did. Two rows above it the repo list draws a "local changes"
+    /// section, which is a different set entirely (LocalOnly, not NotCloned),
+    /// so the two read as contradicting each other. Both sides now go through
+    /// `model::NOT_CLONED`.
+    #[test]
+    fn the_summary_names_uncloned_repos_the_way_the_badge_does() {
+        let summary = Summary {
+            not_cloned_count: 3,
+            ..Default::default()
+        };
+        let rendered = text(&summary_spans(&summary, false));
+        assert_eq!(rendered, "3 not cloned", "got {rendered:?}");
+        assert!(
+            !rendered.contains("not local"),
+            "'not local' negates the 'local changes' section header"
+        );
     }
 
     #[test]

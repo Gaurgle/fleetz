@@ -99,10 +99,11 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `J` / `K` | Scroll the detail pane (works from the repo list too) |
 | `PgUp` / `PgDn` | Scroll focused pane by a page |
 | `v` | Toggle detail vs compact view |
-| `c` | Toggle the contributions strip: a year of activity, GitHub-style. Each day is a half-block square with its own padding, so the whole year fits in 11 rows; the grid scrolls rather than shrinking, and no day is marked until you move the cursor |
+| `c` | Toggle the contributions strip: three years of activity, GitHub-style. Each day is a half-block square with its own padding, so the grid fits in 11 rows; it scrolls rather than shrinking, with the newest week pinned to the right edge, and no day is marked until you move the cursor |
 | `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
 | `4` | Focus the contributions strip (only while it is open) |
 | `h` / `l`, `←` / `→` | Contributions: move the day cursor back/forward a week. The grid scrolls with it, oldest weeks hiding off to the left |
+| mouse | Contributions: click picks a day, drag pans the grid, and any wheel axis (including shift-wheel) scrolls it sideways |
 | `Home` / `End` | Contributions: jump to the oldest / newest week |
 | `Enter` | Open repo in lazygit (pull / merge live here) |
 | `e` | Open repo in `$EDITOR` |
@@ -150,6 +151,9 @@ repo_dir = "~/repos"
 extra_dirs = ["~/.dotfiles"]
 
 # Contribution strip: "github" (default, your GitHub calendar), "local"
+# Covers three years. GitHub caps one contributionsCollection at a year, so
+# the poll asks for one aliased window per year -- still a single request, and
+# measured at the same rate-limit cost as asking for none.
 # (your commits in the repos currently listed), or "off". `c` toggles it and
 # `C` switches source; this is what a fresh launch starts from. The two
 # sources use different colour ladders (green for github, blue for local)

@@ -67,15 +67,24 @@ const INSPECTOR_FILE_CAP: usize = 30;
 
 /// Render the detail view: repo list (left 35%) + a right column (65%) that
 /// stacks the detail pane over the inspector pane.
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let (list_area, right_area) = split_main(area, app.repo_list_pct);
-
+/// Draw the three Detail panes into rectangles `ui::panel_rects` already
+/// computed.
+///
+/// It takes the rects rather than an area to split, because the splitting is
+/// no longer purely detail's business: the contribution strip is carved out
+/// of the right column between the horizontal and vertical splits, so the
+/// order lives one level up where both views can be seen at once.
+pub fn render(
+    frame: &mut Frame,
+    list_area: Rect,
+    detail_area: Rect,
+    inspector_area: Option<Rect>,
+    app: &App,
+) {
     render_repo_list(frame, list_area, app);
-
-    // Dock the inspector under the detail pane, but only when there's room --
-    // on a short terminal the detail pane keeps the whole column.
-    let (detail_area, inspector_area) = split_right_column(right_area, app.inspector_pct);
     render_detail_pane(frame, detail_area, app);
+    // The inspector is docked under the detail pane only when there's room --
+    // on a short terminal the detail pane keeps the whole column.
     if let Some(inspector_area) = inspector_area {
         render_inspector(frame, inspector_area, app);
     }
@@ -654,10 +663,13 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             }
             let author = crate::ui::author_code(&g.author);
             let author_pad = " ".repeat(author_w.saturating_sub(author.chars().count()));
+            // Leading space plus the parenthesised list; measured rather than
+            // rendered-then-measured, so the message budget is known before
+            // any span exists.
             let refs_len = if g.refs.is_empty() {
                 0
             } else {
-                1 + g.refs.chars().count()
+                1 + g.refs_width()
             };
             let msg_budget = width
                 .saturating_sub(2 + prefix_w + g.hash.chars().count() + 1 + author_w + 1 + refs_len)
@@ -677,12 +689,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(colors::author_color(&g.author)),
             ));
             graph_spans.push(Span::raw(author_pad));
-            if !g.refs.is_empty() {
-                graph_spans.push(Span::styled(
-                    format!(" {}", g.refs),
-                    Style::default().fg(colors::MAUVE),
-                ));
-            }
+            graph_spans.extend(ref_spans(&g.refs));
             graph_spans.push(Span::raw(" "));
             graph_spans.push(Span::styled(message, Style::default().fg(colors::TEXT)));
             lines.push(Line::from(graph_spans));
@@ -1009,6 +1016,38 @@ fn wrapped_row_count(lines: &[Line], width: u16) -> u16 {
 /// Colorize a `git log --graph` ASCII prefix by character column ("lane"),
 /// so parallel branch lines read as distinct dull hues instead of one flat,
 /// nearly-invisible color -- see colors::graph_lane_color.
+/// A commit's decorations, coloured per ref kind: `(HEAD -> main, origin/main)`
+/// with HEAD, the local branch and the remote branch each in their own colour
+/// rather than the whole blob in one.
+///
+/// Returns the leading space too, so a commit with no decorations contributes
+/// nothing at all rather than a stray column. Must agree with
+/// `GraphLine::refs_width`, which budgets the message column against it.
+fn ref_spans(refs: &[crate::model::GitRef]) -> Vec<Span<'static>> {
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    let punct = || Style::default().fg(colors::OVERLAY);
+    let mut spans = vec![Span::styled(" (", punct())];
+    for (i, r) in refs.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(", ", punct()));
+        }
+        if r.is_head {
+            spans.push(Span::styled(
+                crate::model::HEAD_ARROW,
+                Style::default().fg(colors::ref_color(crate::model::RefKind::Head)),
+            ));
+        }
+        spans.push(Span::styled(
+            r.name.clone(),
+            Style::default().fg(colors::ref_color(r.kind)),
+        ));
+    }
+    spans.push(Span::styled(")", punct()));
+    spans
+}
+
 fn graph_prefix_spans(prefix: &str) -> Vec<Span<'static>> {
     prefix
         .chars()
@@ -1055,7 +1094,88 @@ fn section_label(text: &str) -> Span<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{RepoKind, RepoLocation};
+    use crate::model::{GitRef, RefKind, RepoKind, RepoLocation};
+
+    fn git_ref(kind: RefKind, name: &str, is_head: bool) -> GitRef {
+        GitRef {
+            kind,
+            name: name.to_string(),
+            is_head,
+        }
+    }
+
+    fn span_text(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// `refs_width` budgets the message column and `ref_spans` draws the
+    /// refs. Two pieces of arithmetic over the same thing: when they drift,
+    /// the message is truncated to the wrong width and nothing fails.
+    #[test]
+    fn the_measured_ref_width_matches_what_gets_drawn() {
+        let cases: Vec<Vec<GitRef>> = vec![
+            vec![],
+            vec![git_ref(RefKind::Local, "main", true)],
+            vec![git_ref(RefKind::Head, "HEAD", false)],
+            vec![
+                git_ref(RefKind::Local, "main", true),
+                git_ref(RefKind::Remote, "origin/main", false),
+                git_ref(RefKind::Tag, "v1.0", false),
+            ],
+        ];
+        for refs in cases {
+            let line = crate::model::GraphLine {
+                prefix: "* ".to_string(),
+                hash: "a1b2c3d".to_string(),
+                refs: refs.clone(),
+                author: "Alice".to_string(),
+                message: "feat: thing".to_string(),
+            };
+            let drawn = span_text(&ref_spans(&refs));
+            // refs_width excludes the leading space; ref_spans emits it.
+            let measured = if refs.is_empty() {
+                0
+            } else {
+                line.refs_width() + 1
+            };
+            assert_eq!(drawn.chars().count(), measured, "width drift on {drawn:?}");
+        }
+    }
+
+    #[test]
+    fn an_attached_head_draws_the_arrow_and_a_detached_one_does_not() {
+        let attached = span_text(&ref_spans(&[
+            git_ref(RefKind::Local, "main", true),
+            git_ref(RefKind::Remote, "origin/main", false),
+        ]));
+        assert_eq!(attached, " (HEAD -> main, origin/main)");
+
+        // Detached HEAD sitting on a tag: git separates these with a comma,
+        // not an arrow. HEAD does not point at the tag.
+        let detached = span_text(&ref_spans(&[
+            git_ref(RefKind::Head, "HEAD", false),
+            git_ref(RefKind::Tag, "v1.0", false),
+        ]));
+        assert_eq!(detached, " (HEAD, v1.0)");
+    }
+
+    /// Regression: the whole `(...)` blob was drawn in one flat mauve, so a
+    /// local branch and its remote counterpart were indistinguishable.
+    #[test]
+    fn each_ref_kind_gets_its_own_colour() {
+        let kinds = [RefKind::Head, RefKind::Local, RefKind::Remote, RefKind::Tag];
+        let seen: std::collections::HashSet<_> =
+            kinds.iter().map(|k| colors::ref_color(*k)).collect();
+        assert_eq!(seen.len(), kinds.len(), "two kinds share a colour");
+    }
+
+    /// A hash is a hash in every pane, but `YELLOW` already means
+    /// "uncommitted" in the badges and the footer. The gold has to be its own
+    /// colour, not a second meaning stacked on that one.
+    #[test]
+    fn the_hash_gold_is_not_the_uncommitted_yellow() {
+        assert_ne!(colors::HASH_CLR, colors::YELLOW);
+    }
 
     fn repo(name: &str, kind: RepoKind, owner: Option<&str>) -> RepoStatus {
         RepoStatus {

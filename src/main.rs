@@ -702,6 +702,9 @@ async fn handle_key(
     handle_normal_input(app, terminal, key, tx, args, config, repo_dir).await
 }
 
+/// Weeks one wheel notch moves the contribution grid.
+const CONTRIB_SCROLL_WEEKS: i32 = 3;
+
 /// Mouse: left-click focuses the panel under the cursor; the scroll wheel
 /// scrolls whichever panel the cursor is over, regardless of which panel has
 /// keyboard focus. Ignored while an overlay or the search input is up.
@@ -734,6 +737,19 @@ fn handle_mouse_input(
         return;
     }
 
+    // A strip pan owns its events for the same reason, and for the same
+    // reason it is checked before the panel lookup: a drag that wanders off
+    // the strip should keep panning, not silently stop.
+    if let Some(from) = app.contrib_drag {
+        match m.kind {
+            MouseEventKind::Drag(MouseButton::Left) => {
+                app.contrib_drag = Some(app.pan_contributions(from, m.column));
+            }
+            _ => app.contrib_drag = None,
+        }
+        return;
+    }
+
     // Grabbing a boundary starts a resize instead of focusing a panel.
     if m.kind == MouseEventKind::Down(MouseButton::Left)
         && let Some(divider) = rects.divider_at(m.column, m.row)
@@ -760,23 +776,40 @@ fn handle_mouse_input(
                 app.contrib_cursor = Some(slot);
                 app.needs_redraw = true;
             }
+            // Press inside the strip also arms a pan, so the same gesture
+            // that picks a day can drag the year past it.
+            if panel == FocusedPanel::Contributions {
+                app.contrib_drag = Some(m.column);
+            }
         }
         // Scroll the panel under the cursor without changing focus.
+        //
+        // The strip is a horizontal timeline, so every wheel axis moves it
+        // sideways: a vertical wheel over it would otherwise do nothing a
+        // user could see. Terminals disagree about whether shift+wheel
+        // arrives as ScrollLeft/Right or as a plain wheel, so both are
+        // handled and both mean the same thing here.
+        MouseEventKind::ScrollDown | MouseEventKind::ScrollRight
+            if panel == FocusedPanel::Contributions =>
+        {
+            app.scroll_contributions(CONTRIB_SCROLL_WEEKS)
+        }
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollLeft
+            if panel == FocusedPanel::Contributions =>
+        {
+            app.scroll_contributions(-CONTRIB_SCROLL_WEEKS)
+        }
         MouseEventKind::ScrollDown => match panel {
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
             FocusedPanel::Inspector => app.scroll_inspector(1),
-            // A wheel over the strip scrolls the grid without disturbing the
-            // cursor, which is what a wheel does everywhere else in the app.
-            FocusedPanel::Contributions => app.scroll_contributions(3),
+            FocusedPanel::Contributions => {}
         },
         MouseEventKind::ScrollUp => match panel {
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.detail_nav_up(),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
-            FocusedPanel::Contributions => {
-                app.move_contrib_cursor(0, -1, chrono::Local::now().date_naive())
-            }
+            FocusedPanel::Contributions => {}
         },
         _ => {}
     }

@@ -6,8 +6,30 @@
 
 use chrono::{Datelike, Duration, NaiveDate};
 
-/// Columns in the grid. GitHub returns exactly 53 and so do we.
-pub const WEEKS: usize = 53;
+/// Years of history the grid covers.
+///
+/// GitHub's own graph shows one. Fleetz shows more because a year of squares
+/// leaves most of a wide pane empty, and because the account is older than
+/// the window: the year before last holds real work that simply had nowhere
+/// to be drawn. One GraphQL call still covers all of it -- see
+/// `year_windows`.
+pub const YEARS: i64 = 3;
+
+/// Columns in the grid: 52 whole weeks per year, plus the partial one today
+/// sits in. 364 is a whole number of weeks, so every year adds exactly 52
+/// columns and the grid stays rectangular however far back it reaches.
+pub const WEEKS: usize = 52 * YEARS as usize + 1;
+
+/// How the strip's title names the span it is showing. Derived from `YEARS`
+/// rather than written out, so a grid that reaches back three years cannot
+/// keep announcing "the last year".
+pub fn span_label() -> String {
+    if YEARS == 1 {
+        "the last year".to_string()
+    } else {
+        format!("the last {YEARS} years")
+    }
+}
 
 /// Cells in the grid: 53 columns of 7 days. Slots past today exist so the
 /// array is a fixed size, and are excluded from every aggregate.
@@ -36,15 +58,41 @@ impl Source {
     }
 }
 
-/// The Sunday the grid opens on: the Sunday on or before `today - 364d`.
+/// The Sunday the grid opens on: the Sunday on or before `today - 364*YEARS`.
 ///
-/// Reproduces GitHub's own window exactly. Probed on 2026-08-18, the API
-/// opened its calendar on 2025-08-17, which is what this returns. Because
-/// 364 is a whole number of weeks, the result is always 52 weeks plus a
-/// partial one back from today, so the grid is always 53 columns wide.
+/// At `YEARS == 1` this reproduces GitHub's own window exactly. Probed on
+/// 2026-08-18, the API opened its calendar on 2025-08-17, which is what
+/// `year_windows` still puts its newest window on. Because 364 is a whole
+/// number of weeks, the result is always `52 * YEARS` weeks plus a partial
+/// one back from today, so the grid is always `WEEKS` columns wide.
 pub fn grid_start(today: NaiveDate) -> NaiveDate {
-    let back = today - Duration::days(364);
+    let back = today - Duration::days(364 * YEARS);
     back - Duration::days(back.weekday().num_days_from_sunday() as i64)
+}
+
+/// The `[from, to]` windows to ask GitHub for, newest first, tiling exactly
+/// from `grid_start` to today.
+///
+/// `contributionsCollection` refuses a range longer than a year, so a
+/// multi-year grid needs one window per year. They ride the same request as
+/// aliased fields, which is why this is affordable: the full poll measured at
+/// cost 13 / nodeCount 2625 both with four of these and with none, so the
+/// price does not move. Fields, not requests, which is what the "never widen
+/// the GitHub fetch" invariant permits.
+///
+/// Disjoint by construction, and the last one is clamped to `grid_start`
+/// rather than running past it: whole windows would leave a few unqueried
+/// days at the far left that could only ever render as zero.
+pub fn year_windows(today: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {
+    let start = grid_start(today);
+    let mut windows = Vec::new();
+    let mut to = today;
+    while to >= start {
+        let from = (to - Duration::days(364)).max(start);
+        windows.push((from, to));
+        to = from - Duration::days(1);
+    }
+    windows
 }
 
 /// One repo's commits per grid slot. `u16` because no repo gets 65k commits
@@ -104,6 +152,20 @@ impl Calendar {
     pub fn add(&mut self, date: NaiveDate, count: u32) {
         if let Some(slot) = self.slot(date) {
             self.counts[slot] += count;
+        }
+    }
+
+    /// Record a day's count, replacing whatever was there.
+    ///
+    /// The GitHub source needs this where the local one needs `add`. Its
+    /// calendar arrives as several one-year windows, and GitHub pads each
+    /// window out to whole weeks, so two adjacent windows can both report the
+    /// same day. Summing those would silently double it. The local source has
+    /// the opposite requirement: its counts are genuinely summed across
+    /// repos, so it keeps `add`.
+    pub fn set(&mut self, date: NaiveDate, count: u32) {
+        if let Some(slot) = self.slot(date) {
+            self.counts[slot] = count;
         }
     }
 
@@ -185,33 +247,76 @@ mod tests {
         NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
     }
 
-    /// The exact start the live API returned when this was designed: probing
-    /// `contributionCalendar` on 2026-08-18 opened the grid on 2025-08-17.
-    /// If this drifts, the two sources stop sharing a grid.
+    /// At one year this reproduced GitHub's own window: probing
+    /// `contributionCalendar` on 2026-08-18 opened its grid on 2025-08-17.
+    /// The grid is `YEARS` long now and no longer shares a start with it, so
+    /// what has to hold is that the newest *window* still reaches back a full
+    /// year from today. If that drifts, the recent year stops matching what
+    /// github.com draws for the same account.
     #[test]
-    fn grid_start_matches_the_probed_github_calendar() {
-        assert_eq!(grid_start(d("2026-08-18")), d("2025-08-17"));
+    fn the_newest_window_still_covers_githubs_own_year() {
+        let today = d("2026-08-18");
+        let (from, to) = year_windows(today)[0];
+        assert_eq!(to, today, "the newest window ends today");
+        assert!(from <= d("2025-08-19"), "a full year back, got {from}");
     }
 
     #[test]
-    fn grid_start_is_always_a_sunday_and_always_53_columns() {
+    fn grid_start_is_always_a_sunday_and_always_weeks_columns() {
         // Walk a full week of "today"s so every weekday is covered.
         for offset in 0..7 {
             let today = d("2026-08-16") + chrono::Duration::days(offset);
             let start = grid_start(today);
             assert_eq!(start.weekday(), chrono::Weekday::Sun, "today {today}");
             let span = (today - start).num_days();
-            assert_eq!(span / 7, 52, "today {today} spans {span} days");
+            assert_eq!(span / 7, 52 * YEARS, "today {today} spans {span} days");
             assert!((span as usize) < SLOTS);
+        }
+    }
+
+    /// The windows must tile `[grid_start, today]` exactly: a gap leaves
+    /// columns that can only ever render zero, and an overlap would double a
+    /// day if `parse_calendar` ever went back to summing them.
+    #[test]
+    fn year_windows_tile_the_grid_with_no_gap_and_no_overlap() {
+        for offset in 0..7 {
+            let today = d("2026-08-16") + chrono::Duration::days(offset);
+            let windows = year_windows(today);
+            assert_eq!(windows[0].1, today, "newest window ends today");
+            assert_eq!(
+                windows.last().unwrap().0,
+                grid_start(today),
+                "oldest window must reach the grid's first day"
+            );
+            for pair in windows.windows(2) {
+                let (newer, older) = (pair[0], pair[1]);
+                assert_eq!(
+                    older.1 + Duration::days(1),
+                    newer.0,
+                    "windows must abut exactly"
+                );
+            }
+            for (from, to) in &windows {
+                assert!(
+                    (*to - *from).num_days() < 365,
+                    "GitHub rejects a range longer than a year"
+                );
+            }
         }
     }
 
     #[test]
     fn slots_outside_the_year_are_rejected() {
-        let cal = Calendar::new(d("2026-08-18"), Source::Local);
-        assert_eq!(cal.slot(d("2025-08-17")), Some(0));
-        assert_eq!(cal.slot(d("2025-08-16")), None, "day before the grid opens");
-        assert_eq!(cal.slot(d("2026-08-18")), Some(366));
+        let today = d("2026-08-18");
+        let start = grid_start(today);
+        let cal = Calendar::new(today, Source::Local);
+        assert_eq!(cal.slot(start), Some(0));
+        assert_eq!(
+            cal.slot(start - Duration::days(1)),
+            None,
+            "day before the grid opens"
+        );
+        assert_eq!(cal.slot(today), Some((today - start).num_days() as usize));
     }
 
     #[test]
@@ -238,9 +343,12 @@ mod tests {
 
     #[test]
     fn day_at_maps_back_to_a_real_date() {
-        let mut cal = Calendar::new(d("2026-08-18"), Source::Local);
-        cal.add(d("2025-08-19"), 3); // Tuesday of the first column
-        assert_eq!(cal.day_at(0, 2), Some((d("2025-08-19"), 3)));
+        let today = d("2026-08-18");
+        let mut cal = Calendar::new(today, Source::Local);
+        // Tuesday of the first column, whichever date that now is.
+        let tuesday = grid_start(today) + Duration::days(2);
+        cal.add(tuesday, 3);
+        assert_eq!(cal.day_at(0, 2), Some((tuesday, 3)));
         assert_eq!(cal.day_at(WEEKS - 1, 6), None, "past today");
     }
 
@@ -274,11 +382,11 @@ mod tests {
     fn month_labels_land_on_the_column_the_month_opens_in() {
         let cal = Calendar::new(d("2026-08-18"), Source::Github);
         let labels = cal.month_labels();
-        assert_eq!(labels[0], (0, "Aug"), "grid opens 2025-08-17");
+        assert_eq!(labels[0], (0, "Aug"), "grid opens 2023-08-20");
         assert_eq!(labels[1].1, "Sep");
-        // Thirteen months are touched: Aug 2025 through Aug 2026.
-        assert_eq!(labels.len(), 13);
-        assert_eq!(labels[12].1, "Aug");
+        // Twelve months per year, plus the partial one the grid opens in.
+        assert_eq!(labels.len(), 12 * YEARS as usize + 1);
+        assert_eq!(labels.last().unwrap().1, "Aug");
         // Strictly increasing columns, one label per column at most.
         assert!(labels.windows(2).all(|w| w[0].0 < w[1].0));
     }

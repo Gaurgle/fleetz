@@ -900,6 +900,11 @@ pub struct App {
     /// lands on a boundary and cleared on release, so drag events in between
     /// resize instead of doing whatever the panel under the cursor does.
     pub dragging: Option<crate::ui::Divider>,
+    /// Screen column the in-progress contribution-strip pan is measured from,
+    /// or None when no drag is underway. Separate from `dragging`, which owns
+    /// pane resizing: a pan moves content inside a pane rather than moving
+    /// the boundary between two.
+    pub contrib_drag: Option<u16>,
     /// True while the initial load or an R reload is in flight.
     pub loading: bool,
     /// When the in-flight watch sweep started, or None when idle. Doubles as
@@ -1004,6 +1009,7 @@ impl App {
             contrib_visible_weeks: std::cell::Cell::new(crate::contributions::WEEKS),
             persist_pane_sizes: false,
             dragging: None,
+            contrib_drag: None,
             loading: false,
             sweep_started: None,
             sweep_manual: false,
@@ -1442,6 +1448,24 @@ impl App {
         }
     }
 
+    /// Pan the grid by a drag from screen column `from` to `to`, and report
+    /// the anchor the next sample should measure against.
+    ///
+    /// The content follows the hand, the way grabbing a map works: dragging
+    /// right pulls older weeks in from the left. The returned anchor lags
+    /// `to` by whatever part of the drag did not add up to a whole week, so
+    /// a slow drag accumulates instead of rounding to zero on every sample
+    /// and never moving at all.
+    pub fn pan_contributions(&mut self, from: u16, to: u16) -> u16 {
+        let weeks = crate::ui::contributions::weeks_dragged(to as i32 - from as i32);
+        if weeks == 0 {
+            return from;
+        }
+        self.scroll_contributions(-weeks);
+        let consumed = crate::ui::contributions::cols_for_weeks(weeks);
+        (from as i32 + consumed).max(0) as u16
+    }
+
     /// Scroll the grid by whole weeks without moving the cursor.
     pub fn scroll_contributions(&mut self, delta: i32) {
         let visible = self.contrib_visible_weeks.get().max(1);
@@ -1539,8 +1563,12 @@ impl App {
             .is_some_and(|m| m.created.elapsed() >= ttl)
     }
 
+    /// Footer counts for what the repo list is currently drawing, not for the
+    /// whole fleet. The list walks `visible_repos`, so folding `self.repos`
+    /// here left the footer describing repos a quick filter or a search had
+    /// already hidden.
     pub fn summary(&self) -> Summary {
-        Summary::from_repos(&self.repos)
+        Summary::from_refs(self.visible_repos().into_iter().map(|(_, r)| r))
     }
 
     /// Repos grouped by location for the repo list pane.
@@ -1603,6 +1631,83 @@ mod tests {
             })
             .collect();
         App::new(repos, "test".to_string(), false, 120, 40)
+    }
+
+    /// Regression: the footer folded `self.repos` while the repo list drew
+    /// `visible_repos`, so with a filter on it reported repos that were not
+    /// on screen. The two walk the same list now.
+    /// Regression: the wheel could only ever move the grid one way. The strip
+    /// opens with `contrib_scroll` pinned to the newest week, so scrolling
+    /// "newer" was already clamped and did nothing, and the arm that should
+    /// have scrolled older had been wired to a cursor move instead. The
+    /// symptom was a strip where the only thing the mouse could do was walk
+    /// the selected day upward.
+    #[test]
+    fn the_wheel_scrolls_the_grid_both_ways() {
+        let mut app = make_app(1);
+        app.contrib_visible_weeks.set(20);
+        let max = crate::contributions::WEEKS - 20;
+        app.contrib_scroll.set(max);
+
+        // Newer, from the right edge: already there, nothing to give.
+        app.scroll_contributions(3);
+        assert_eq!(app.contrib_scroll.get(), max, "clamped at the newest week");
+
+        // Older must actually move, which is the half that was missing.
+        app.scroll_contributions(-3);
+        assert_eq!(app.contrib_scroll.get(), max - 3);
+        app.scroll_contributions(3);
+        assert_eq!(app.contrib_scroll.get(), max, "and back again");
+
+        // Neither direction disturbs the day cursor.
+        assert_eq!(app.contrib_cursor, None);
+    }
+
+    /// Dragging pulls the grid along with the pointer, and a drag too short
+    /// to be worth a whole week banks its columns instead of discarding
+    /// them -- otherwise a slow drag rounds to zero forever and never moves.
+    #[test]
+    fn dragging_pans_the_grid_and_banks_the_remainder() {
+        let mut app = make_app(1);
+        app.contrib_visible_weeks.set(20);
+        let start = crate::contributions::WEEKS - 20;
+        app.contrib_scroll.set(start);
+
+        // One column is less than a week: nothing moves, anchor unchanged.
+        let anchor = app.pan_contributions(50, 51);
+        assert_eq!(anchor, 50, "sub-week drag keeps its anchor");
+        assert_eq!(app.contrib_scroll.get(), start);
+
+        // Dragging right pulls older weeks in from the left.
+        let anchor = app.pan_contributions(50, 58);
+        assert_eq!(app.contrib_scroll.get(), start - 4, "8 columns = 4 weeks");
+        assert_eq!(anchor, 58, "anchor advances by what was consumed");
+
+        // And back the other way.
+        app.pan_contributions(58, 50);
+        assert_eq!(app.contrib_scroll.get(), start);
+    }
+
+    #[test]
+    fn the_summary_describes_only_what_the_list_is_drawing() {
+        let mut app = make_app(4);
+        app.repos[0].dirty = 3;
+        app.repos[1].dirty = 1;
+        app.repos[2].behind = 2;
+        app.repos[3].location = RepoLocation::NotCloned;
+
+        let all = app.summary();
+        assert_eq!(all.dirty_count, 2, "unfiltered, the whole fleet counts");
+        assert_eq!(all.behind_count, 1);
+        assert_eq!(all.not_cloned_count, 1);
+
+        // Narrow to a single repo by name; the footer must follow the list.
+        app.search_query = "repo-0".to_string();
+        let filtered = app.summary();
+        assert_eq!(app.visible_repos().len(), 1, "test premise");
+        assert_eq!(filtered.dirty_count, 1);
+        assert_eq!(filtered.behind_count, 0, "repo-2 is filtered out of view");
+        assert_eq!(filtered.not_cloned_count, 0, "repo-3 is filtered out too");
     }
 
     #[test]

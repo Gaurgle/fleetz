@@ -7,7 +7,15 @@ pub const YELLOW: Color = Color::Rgb(249, 226, 175); // uncommitted
 pub const SAPPHIRE: Color = Color::Rgb(116, 199, 236); // repo names
 pub const LAVENDER: Color = Color::Rgb(180, 190, 254); // headers
 pub const MAUVE: Color = Color::Rgb(203, 166, 247); // section labels / PRs
-pub const HASH_CLR: Color = Color::Rgb(140, 155, 180); // commit hashes
+/// Commit hashes, everywhere one is drawn: the history graph, the reflog,
+/// and the recent-commits list.
+///
+/// Gold rather than the grey-blue this used to be, because `git log`'s own
+/// hash colour is yellow and the pane is read next to a terminal that draws
+/// it that way. Deliberately *not* `YELLOW`: that one already means
+/// "uncommitted" in the badges and the footer, and a hash sharing it would
+/// put two meanings on one colour.
+pub const HASH_CLR: Color = Color::Rgb(214, 179, 106);
 pub const DIFF_ADD: Color = Color::Rgb(134, 194, 134); // +N lines
 pub const DIFF_DEL: Color = Color::Rgb(210, 140, 140); // -N lines
 pub const OVERLAY: Color = Color::Rgb(127, 132, 156); // paths, subtle text
@@ -91,16 +99,46 @@ pub fn author_color(name: &str) -> Color {
     AUTHOR_PALETTE[hash as usize % AUTHOR_PALETTE.len()]
 }
 
-/// Dull, distinct hues per graph "lane" -- a different palette from author
-/// colors so the two don't get visually confused on the same line.
+/// Distinct hues per graph "lane", in the rotation `git log --graph --color`
+/// uses, so a topology read here and in a terminal side by side has its lanes
+/// in the same order.
+///
+/// Saturated rather than the muted set this started as: the lanes are the
+/// structure of the pane, and at low saturation parallel branches were only
+/// nominally distinguishable. Held at Catppuccin brightness instead of raw
+/// ANSI so the graph still belongs to the rest of the palette. Kept clear of
+/// `AUTHOR_PALETTE`, which is dull on purpose, so the lane and the author
+/// code on the same row never read as one colour.
 const GRAPH_PALETTE: [Color; 6] = [
-    Color::Rgb(140, 170, 190), // dull cyan
-    Color::Rgb(190, 150, 140), // dull orange
-    Color::Rgb(150, 180, 140), // dull green
-    Color::Rgb(180, 140, 180), // dull magenta
-    Color::Rgb(190, 185, 140), // dull yellow
-    Color::Rgb(140, 150, 190), // dull blue
+    Color::Rgb(137, 220, 235), // sky
+    Color::Rgb(250, 179, 135), // peach
+    Color::Rgb(166, 227, 161), // green
+    Color::Rgb(245, 194, 231), // pink
+    Color::Rgb(249, 226, 175), // yellow
+    Color::Rgb(137, 180, 250), // blue
 ];
+
+/// Colour for one commit decoration, by what the ref actually is.
+///
+/// The four kinds answer different questions -- where am I, what do I have,
+/// what does the remote have, what is pinned -- so they get four colours
+/// rather than the single flat mauve the whole `(...)` blob used to take.
+/// The pairings are `git log --decorate`'s own: HEAD teal, local green,
+/// remote peach (git uses red, which means "CI failed" here), tag yellow.
+pub fn ref_color(kind: crate::model::RefKind) -> Color {
+    use crate::model::RefKind;
+    match kind {
+        RefKind::Head => TEAL,
+        RefKind::Local => GREEN,
+        RefKind::Remote => PEACH,
+        RefKind::Tag => YELLOW,
+        RefKind::Other => OVERLAY,
+    }
+}
+
+/// Catppuccin `teal`. The HEAD marker, and nothing else: it has to be
+/// instantly separable from the branch name it points at.
+pub const TEAL: Color = Color::Rgb(148, 226, 213);
 
 /// Color for one character column of a `git log --graph` ASCII prefix. Each
 /// column holds a single branch "lane" for as long as that lane is alive, so

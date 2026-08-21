@@ -173,6 +173,101 @@ pub struct ReflogEntry {
     pub description: String,
 }
 
+/// What a decoration on a commit points at. Kept apart because the kinds read
+/// as different things at a glance -- where you are, what you have, what the
+/// remote has, what is pinned -- and one flat colour for the whole
+/// `(HEAD -> main, origin/main, tag: v1)` blob threw that away.
+///
+/// Classified from `--decorate=full`'s `refs/heads/`, `refs/remotes/` and
+/// `refs/tags/` prefixes rather than guessed from the short names, so a local
+/// branch called `origin/thing` cannot be mistaken for a remote one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefKind {
+    /// A detached HEAD, which git decorates as a bare `HEAD`. An *attached*
+    /// HEAD is not one of these: it rides on the branch it points at, as
+    /// `GitRef::is_head`.
+    Head,
+    /// A local branch (`refs/heads/`).
+    Local,
+    /// A remote-tracking branch (`refs/remotes/`).
+    Remote,
+    /// A tag (`refs/tags/`).
+    Tag,
+    /// Anything else git decorated with: `refs/stash`, notes, replace refs.
+    Other,
+}
+
+/// The arrow git draws between an attached HEAD and its branch, and what the
+/// renderer measures the decoration by.
+pub const HEAD_ARROW: &str = "HEAD -> ";
+
+/// One decoration on a commit: its kind and the name to print, with the
+/// `refs/...` prefix already stripped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRef {
+    pub kind: RefKind,
+    pub name: String,
+    /// True for the branch HEAD is attached to, drawn as `HEAD -> name`.
+    ///
+    /// A flag on the branch rather than a marker of its own, because git
+    /// separates the two with an arrow and every other pair with a comma. As
+    /// its own list entry it would need the renderer to special-case which
+    /// separator follows it, and to get that wrong for a detached HEAD
+    /// sitting on a tag (`HEAD, tag: v1`), where the comma is correct.
+    pub is_head: bool,
+}
+
+impl GitRef {
+    /// Classify one comma-separated entry of `%D` under `--decorate=full` and
+    /// strip its prefix. Returns None for an empty entry.
+    pub fn parse(entry: &str) -> Option<Self> {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            return None;
+        }
+        // Detached: git decorates it as a bare "HEAD", with nothing to strip.
+        if entry == "HEAD" {
+            return Some(Self {
+                kind: RefKind::Head,
+                name: "HEAD".to_string(),
+                is_head: false,
+            });
+        }
+        let (is_head, entry) = match entry.strip_prefix(HEAD_ARROW) {
+            Some(rest) => (true, rest),
+            None => (false, entry),
+        };
+        // `--decorate=full` spells the ref out but keeps git's own "tag: "
+        // marker in front of it, so a tag arrives as "tag: refs/tags/v1.0".
+        // Verified against a real tagged commit: assuming the full form
+        // dropped the marker left the raw prefix on screen.
+        let entry = entry.strip_prefix("tag: ").unwrap_or(entry);
+        for (prefix, kind) in [
+            ("refs/heads/", RefKind::Local),
+            ("refs/remotes/", RefKind::Remote),
+            ("refs/tags/", RefKind::Tag),
+        ] {
+            if let Some(name) = entry.strip_prefix(prefix) {
+                return Some(Self {
+                    kind,
+                    name: name.to_string(),
+                    is_head,
+                });
+            }
+        }
+        Some(Self {
+            kind: RefKind::Other,
+            name: entry.trim_start_matches("refs/").to_string(),
+            is_head,
+        })
+    }
+
+    /// Printed width, the `HEAD -> ` arrow included.
+    pub fn width(&self) -> usize {
+        self.name.chars().count() + if self.is_head { HEAD_ARROW.len() } else { 0 }
+    }
+}
+
 /// One rendered line of `git log --graph`: the ASCII graph prefix plus the
 /// commit it points at. Pure connector lines (no commit on that row) carry
 /// an empty hash/refs/author/message and only the prefix.
@@ -180,9 +275,23 @@ pub struct ReflogEntry {
 pub struct GraphLine {
     pub prefix: String,
     pub hash: String,
-    pub refs: String,
+    pub refs: Vec<GitRef>,
     pub author: String,
     pub message: String,
+}
+
+impl GraphLine {
+    /// Printed width of the decoration list, parens and separators included,
+    /// so the detail pane can budget the message column without rendering the
+    /// refs twice and measuring the result.
+    pub fn refs_width(&self) -> usize {
+        if self.refs.is_empty() {
+            return 0;
+        }
+        // "(a, b)": two parens, plus ", " between every pair.
+        let names: usize = self.refs.iter().map(GitRef::width).sum();
+        names + 2 + 2 * (self.refs.len() - 1)
+    }
 }
 
 /// Which kind of GitHub owner a repo belongs to, for the org/private/public
@@ -222,8 +331,10 @@ pub fn owner_from_remote_url(url: &str) -> Option<String> {
 }
 
 /// What a not-cloned repo reports instead of a counter summary, in both the
-/// short and long status forms (repoz prints the same words).
-const NOT_CLONED: &str = "not cloned";
+/// short and long status forms (repoz prints the same words). The footer
+/// summary reads it too, so the count and the badge can never disagree about
+/// what the state is called.
+pub const NOT_CLONED: &str = "not cloned";
 
 impl RepoStatus {
     /// Active on GitHub with no local clone, so its counters are all zero for
@@ -305,12 +416,15 @@ pub struct Summary {
     pub ahead_count: u32,
     pub dirty_count: u32,
     pub synced_count: u32,
-    pub not_local_count: u32,
+    pub not_cloned_count: u32,
     pub pr_count: u32,
 }
 
 impl Summary {
-    pub fn from_repos(repos: &[RepoStatus]) -> Self {
+    /// Count over borrowed repos rather than a slice, so the footer can
+    /// summarize the filtered view the repo list is drawing without cloning
+    /// the repos back out of it.
+    pub fn from_refs<'a>(repos: impl Iterator<Item = &'a RepoStatus>) -> Self {
         let mut s = Self::default();
         for r in repos {
             if r.behind > 0 {
@@ -323,7 +437,7 @@ impl Summary {
                 s.dirty_count += 1;
             }
             if r.location == RepoLocation::NotCloned {
-                s.not_local_count += 1;
+                s.not_cloned_count += 1;
             } else if r.is_synced() {
                 s.synced_count += 1;
             }
@@ -484,7 +598,7 @@ mod tests {
 
     #[test]
     fn summary_counts_correctly() {
-        let repos = vec![
+        let repos = [
             make_repo("a", 3, 0, 0),
             make_repo("b", 0, 0, 0),
             make_repo("c", 0, 2, 1),
@@ -495,11 +609,11 @@ mod tests {
                 r
             },
         ];
-        let s = Summary::from_repos(&repos);
+        let s = Summary::from_refs(repos.iter());
         assert_eq!(s.behind_count, 1);
         assert_eq!(s.ahead_count, 1);
         assert_eq!(s.dirty_count, 1);
         assert_eq!(s.synced_count, 1);
-        assert_eq!(s.not_local_count, 1);
+        assert_eq!(s.not_cloned_count, 1);
     }
 }

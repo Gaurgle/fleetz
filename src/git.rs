@@ -520,7 +520,13 @@ pub async fn graph(repo_path: &Path, branches: &[String], limit: u32) -> Vec<Gra
         "log".to_string(),
         "--graph".to_string(),
         "--color=never".to_string(),
-        "--format=GRAPH|%h|%d|%aN|%s".to_string(),
+        // `--decorate=full` with `%D` rather than `%d`: the full form spells
+        // out refs/heads/, refs/remotes/ and refs/tags/, which is what lets
+        // the pane colour a decoration by what it actually is instead of
+        // guessing from the short name. `%D` drops the parens and the leading
+        // space `%d` adds, so the entries split cleanly on ", ".
+        "--decorate=full".to_string(),
+        "--format=GRAPH|%h|%D|%aN|%s".to_string(),
         "-n".to_string(),
         limit.to_string(),
     ];
@@ -541,6 +547,16 @@ pub async fn graph(repo_path: &Path, branches: &[String], limit: u32) -> Vec<Gra
     parse_graph_output(&stdout)
 }
 
+/// Split one `%D` field into classified refs. Splitting on "," rather than
+/// ", " because git omits neither, but a ref name cannot contain a comma
+/// while `GitRef::parse` trims the space anyway.
+fn parse_refs(field: &str) -> Vec<crate::model::GitRef> {
+    field
+        .split(',')
+        .filter_map(crate::model::GitRef::parse)
+        .collect()
+}
+
 fn parse_graph_output(output: &str) -> Vec<GraphLine> {
     const MARKER: &str = "GRAPH|";
     output
@@ -553,7 +569,7 @@ fn parse_graph_output(output: &str) -> Vec<GraphLine> {
                 GraphLine {
                     prefix,
                     hash: parts.first().unwrap_or(&"").to_string(),
-                    refs: parts.get(1).unwrap_or(&"").trim().to_string(),
+                    refs: parse_refs(parts.get(1).unwrap_or(&"")),
                     author: parts.get(2).unwrap_or(&"").to_string(),
                     message: parts.get(3).unwrap_or(&"").to_string(),
                 }
@@ -561,7 +577,7 @@ fn parse_graph_output(output: &str) -> Vec<GraphLine> {
             None => GraphLine {
                 prefix: line.to_string(),
                 hash: String::new(),
-                refs: String::new(),
+                refs: Vec::new(),
                 author: String::new(),
                 message: String::new(),
             },
@@ -816,6 +832,7 @@ pub fn is_protected_branch(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::RefKind;
 
     #[test]
     fn unfetched_branches_skips_ones_with_local_counterpart() {
@@ -1029,14 +1046,86 @@ mod tests {
 
     #[test]
     fn parse_graph_output_commit_line() {
-        let output = "* GRAPH|a1b2c3d| (HEAD -> main, origin/main)|Alice|feat: add feature";
+        // `%D` under `--decorate=full`: no parens, no leading space, and every
+        // ref spelled out to its refs/ prefix.
+        let output = "* GRAPH|a1b2c3d|HEAD -> refs/heads/main, refs/remotes/origin/main|Alice|feat: add feature";
         let lines = parse_graph_output(output);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].prefix, "* ");
         assert_eq!(lines[0].hash, "a1b2c3d");
-        assert_eq!(lines[0].refs, "(HEAD -> main, origin/main)");
         assert_eq!(lines[0].author, "Alice");
         assert_eq!(lines[0].message, "feat: add feature");
+
+        let refs = &lines[0].refs;
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].kind, RefKind::Local);
+        assert_eq!(refs[0].name, "main");
+        assert!(refs[0].is_head, "HEAD is attached to main");
+        assert_eq!(refs[1].kind, RefKind::Remote);
+        assert_eq!(refs[1].name, "origin/main");
+        assert!(!refs[1].is_head);
+    }
+
+    /// The prefixes are what make the classification safe. A local branch
+    /// literally named `origin/thing` is legal, and the short `%d` form draws
+    /// it identically to the remote-tracking ref of the same name -- which is
+    /// why this reads `--decorate=full` rather than guessing from the name.
+    #[test]
+    fn a_local_branch_named_like_a_remote_is_not_mistaken_for_one() {
+        let output = "* GRAPH|a1b2c3d|refs/heads/origin/thing|Alice|wip";
+        let refs = &parse_graph_output(output)[0].refs;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].kind, RefKind::Local);
+        assert_eq!(refs[0].name, "origin/thing");
+    }
+
+    #[test]
+    fn parse_graph_output_classifies_tags_and_a_detached_head() {
+        // git keeps its "tag: " marker under --decorate=full; the ref is
+        // spelled out behind it rather than in place of it.
+        let output = "* GRAPH|a1b2c3d|HEAD, tag: refs/tags/v1.0|Alice|release";
+        let refs = &parse_graph_output(output)[0].refs;
+        assert_eq!(refs.len(), 2);
+        // Detached: HEAD stands alone rather than riding a branch, so it must
+        // not pick up the arrow that would claim it points at the tag.
+        assert_eq!(refs[0].kind, RefKind::Head);
+        assert_eq!(refs[0].name, "HEAD");
+        assert!(!refs[0].is_head);
+        assert_eq!(refs[1].kind, RefKind::Tag);
+        assert_eq!(refs[1].name, "v1.0");
+    }
+
+    /// The real shape of a tagged release commit, taken from a live repo
+    /// rather than written from memory: HEAD attached to a branch, a tag, and
+    /// two remote refs, all in one decoration list.
+    #[test]
+    fn parse_graph_output_handles_a_tagged_release_commit() {
+        let output = "* GRAPH|78cdfac|HEAD -> refs/heads/main, tag: refs/tags/v0.4.0, refs/remotes/origin/main, refs/remotes/origin/HEAD|AR|release";
+        let refs = &parse_graph_output(output)[0].refs;
+        let got: Vec<_> = refs.iter().map(|r| (r.kind, r.name.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![
+                (RefKind::Local, "main"),
+                (RefKind::Tag, "v0.4.0"),
+                (RefKind::Remote, "origin/main"),
+                (RefKind::Remote, "origin/HEAD"),
+            ]
+        );
+        assert!(refs[0].is_head);
+        // The regression: "tag: " survived the strip and the raw
+        // "tag: refs/tags/v0.4.0" was drawn in the pane.
+        assert!(
+            !refs[1].name.contains("refs/"),
+            "prefix leaked into the drawn name: {}",
+            refs[1].name
+        );
+    }
+
+    #[test]
+    fn a_commit_with_no_decorations_has_no_refs() {
+        let output = "* GRAPH|a1b2c3d||Alice|feat: add feature";
+        assert!(parse_graph_output(output)[0].refs.is_empty());
     }
 
     #[test]

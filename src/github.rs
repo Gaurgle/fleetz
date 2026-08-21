@@ -48,10 +48,18 @@ struct Viewer {
     /// needed; absent in cached payloads written before this was added.
     #[serde(default)]
     organizations: Option<OrganizationConnection>,
-    /// The account-wide contribution calendar. Absent in cached payloads
-    /// written before this was added, exactly like `organizations`.
-    #[serde(rename = "contributionsCollection", default)]
-    contributions_collection: Option<ContributionsCollection>,
+    /// The account-wide contribution calendars, one per year of the grid,
+    /// keyed by the alias `build_query` gave each one.
+    ///
+    /// Flattened rather than named, because the number of windows follows
+    /// `contributions::YEARS` and Rust has no variadic struct fields. Safe
+    /// here in a way it would not be against an arbitrary API: a GraphQL
+    /// response carries exactly the fields the query asked for, and the only
+    /// ones not already declared above are these aliases. A payload cached
+    /// before the calendar was multi-year lands its lone
+    /// `contributionsCollection` key in the same map and still parses.
+    #[serde(flatten, default)]
+    contribution_years: std::collections::BTreeMap<String, ContributionsCollection>,
 }
 
 #[derive(Deserialize)]
@@ -78,20 +86,31 @@ struct CalendarDay {
     contribution_count: u32,
 }
 
-/// Fold the API's week/day nesting into our own grid. The API's own week
-/// boundaries are ignored on purpose: `Calendar` derives the slot from the
-/// date, so the two sources land on the same cells even if GitHub ever
+/// Fold every year window's week/day nesting into one grid. The API's own
+/// week boundaries are ignored on purpose: `Calendar` derives the slot from
+/// the date, so the two sources land on the same cells even if GitHub ever
 /// changes where it starts a week.
+///
+/// `set` rather than `add`, defensively. Probed against the live API the
+/// windows come back trimmed to exactly the range asked for, so today they do
+/// not overlap -- but `contributionCalendar` is a week-shaped structure and
+/// nothing in the contract stops it rounding a window out to week boundaries.
+/// If it ever does, summing the shared day would silently double it and the
+/// year total with it. Setting costs nothing and cannot.
 fn parse_calendar(
-    collection: Option<ContributionsCollection>,
+    years: std::collections::BTreeMap<String, ContributionsCollection>,
     today: chrono::NaiveDate,
 ) -> Option<Calendar> {
-    let collection = collection?;
+    if years.is_empty() {
+        return None;
+    }
     let mut calendar = Calendar::new(today, Source::Github);
-    for week in collection.contribution_calendar.weeks {
-        for day in week.contribution_days {
-            if let Ok(date) = chrono::NaiveDate::parse_from_str(&day.date, "%Y-%m-%d") {
-                calendar.add(date, day.contribution_count);
+    for collection in years.into_values() {
+        for week in collection.contribution_calendar.weeks {
+            for day in week.contribution_days {
+                if let Ok(date) = chrono::NaiveDate::parse_from_str(&day.date, "%Y-%m-%d") {
+                    calendar.set(date, day.contribution_count);
+                }
             }
         }
     }
@@ -201,7 +220,7 @@ struct GraphQlError {
 }
 
 /// Build the GraphQL query string.
-fn build_query(repo_limit: u32, include_prs: bool) -> String {
+fn build_query(repo_limit: u32, include_prs: bool, today: chrono::NaiveDate) -> String {
     let pr_field = if include_prs {
         r#"pullRequests(states: OPEN, first: 5, orderBy: {field: CREATED_AT, direction: DESC}) {
         totalCount
@@ -237,18 +256,31 @@ fn build_query(repo_limit: u32, include_prs: bool) -> String {
     // viewer.repositories at any affiliation. Without the second source those
     // repos are invisible to fleetz even though you can push to them. repoz
     // hits the same wall and solves it the same way.
-    // The calendar field is free: measured at cost 1 / nodeCount 0 on its own,
-    // and it has no `first:` connection, so unioning it here leaves the poll at
-    // its existing price. A field, not a request, which is what the "never
-    // widen the GitHub fetch without checking the cache" invariant permits.
-    format!(
-        r#"{{ viewer {{
-  contributionsCollection {{
+    // The calendar fields are free. Measured against the live API: this whole
+    // query prices at cost 13 / nodeCount 2625 both with the four aliases and
+    // with them stripped out, because none has a `first:` connection to pay
+    // for. Fields, not requests, which is what the "never widen the GitHub
+    // fetch without checking the cache" invariant permits. One alias per year
+    // because contributionsCollection refuses a range longer than a year.
+    let calendar_fields: String = crate::contributions::year_windows(today)
+        .into_iter()
+        .enumerate()
+        .map(|(i, (from, to))| {
+            format!(
+                r#"  y{i}: contributionsCollection(from: "{}T00:00:00Z", to: "{}T23:59:59Z") {{
     contributionCalendar {{
       weeks {{ contributionDays {{ date, contributionCount }} }}
     }}
   }}
-  repositories(first: {repo_limit}, orderBy: {{field: PUSHED_AT, direction: DESC}},
+"#,
+                from.format("%Y-%m-%d"),
+                to.format("%Y-%m-%d")
+            )
+        })
+        .collect();
+    format!(
+        r#"{{ viewer {{
+{calendar_fields}  repositories(first: {repo_limit}, orderBy: {{field: PUSHED_AT, direction: DESC}},
     affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {{
     {repo_fields}
   }}
@@ -293,15 +325,15 @@ fn split_viewer(viewer: Viewer, today: chrono::NaiveDate) -> GithubFetch {
     let Viewer {
         repositories,
         organizations,
-        contributions_collection,
+        contribution_years,
     } = viewer;
     GithubFetch {
         repos: parse_repos(merge_sources(Viewer {
             repositories,
             organizations,
-            contributions_collection: None,
+            contribution_years: Default::default(),
         })),
-        calendar: parse_calendar(contributions_collection, today).map(Box::new),
+        calendar: parse_calendar(contribution_years, today).map(Box::new),
     }
 }
 
@@ -329,7 +361,7 @@ pub async fn fetch_repos(
 
     // Fetch fresh
     let token = get_gh_token().await?;
-    let query = build_query(repo_limit, include_prs);
+    let query = build_query(repo_limit, include_prs, today);
 
     let client = reqwest::Client::new();
     let resp = match client
@@ -752,7 +784,7 @@ mod tests {
 
     #[test]
     fn build_query_without_prs() {
-        let q = build_query(50, false);
+        let q = build_query(50, false, day("2026-08-18"));
         assert!(q.contains("first: 50"));
         assert!(!q.contains("pullRequests"));
         assert!(q.contains("statusCheckRollup"));
@@ -760,7 +792,7 @@ mod tests {
 
     #[test]
     fn build_query_with_prs() {
-        let q = build_query(25, true);
+        let q = build_query(25, true, day("2026-08-18"));
         assert!(q.contains("first: 25"));
         assert!(q.contains("pullRequests"));
         assert!(q.contains("reviewDecision"));
@@ -797,9 +829,13 @@ mod tests {
         let json = r#"{"data":{"viewer":{"repositories":{"nodes":[]}}}}"#;
         let response: GraphQlResponse = serde_json::from_str(json).unwrap();
         let viewer = response.data.unwrap().viewer;
-        assert!(parse_calendar(viewer.contributions_collection, day("2026-08-18")).is_none());
+        assert!(parse_calendar(viewer.contribution_years, day("2026-08-18")).is_none());
     }
 
+    /// A payload carrying the single un-aliased `contributionsCollection` key
+    /// is what an install upgraded from the one-year grid reads out of its
+    /// cache. It has to keep parsing: the flattened map takes it like any
+    /// other year window.
     #[test]
     fn payload_with_a_calendar_lands_on_the_right_days() {
         let json = r#"{"data":{"viewer":{
@@ -814,10 +850,61 @@ mod tests {
         }}}"#;
         let response: GraphQlResponse = serde_json::from_str(json).unwrap();
         let viewer = response.data.unwrap().viewer;
-        let cal = parse_calendar(viewer.contributions_collection, day("2026-08-18")).unwrap();
+        let cal = parse_calendar(viewer.contribution_years, day("2026-08-18")).unwrap();
         assert_eq!(cal.total(), 9);
-        assert_eq!(cal.day_at(0, 0).unwrap().1, 2, "grid opens on 2025-08-17");
+        // The three-year grid opens on 2023-08-20, so 2025-08-17 is no longer
+        // slot 0: it is the Sunday of week 104.
+        assert_eq!(cal.day_at(104, 0).unwrap().1, 2);
         assert_eq!(cal.max(), 7);
+    }
+
+    /// GitHub pads each window out to whole weeks, so two adjacent year
+    /// windows can both report the same day. `parse_calendar` must `set` it,
+    /// not `add` it: summing the overlap silently doubles that day and the
+    /// year total with it.
+    #[test]
+    fn a_day_reported_by_two_year_windows_is_not_counted_twice() {
+        let json = r#"{"data":{"viewer":{
+            "repositories":{"nodes":[]},
+            "y0":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[{"date":"2025-08-19","contributionCount":4}]}
+            ]}},
+            "y1":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[
+                {"date":"2025-08-19","contributionCount":4},
+                {"date":"2024-08-20","contributionCount":3}
+              ]}
+            ]}}
+        }}}"#;
+        let response: GraphQlResponse = serde_json::from_str(json).unwrap();
+        let cal = parse_calendar(
+            response.data.unwrap().viewer.contribution_years,
+            day("2026-08-18"),
+        )
+        .unwrap();
+        assert_eq!(cal.total(), 7, "the shared day was counted twice");
+    }
+
+    /// Every year of the grid must be asked for, or the oldest columns render
+    /// as an empty year that looks like a bug rather than like no data.
+    #[test]
+    fn the_query_covers_every_year_of_the_grid() {
+        let today = day("2026-08-18");
+        let windows = crate::contributions::year_windows(today);
+        assert_eq!(windows.len(), 3, "three years, three windows");
+        let q = build_query(50, false, today);
+        for (i, _) in windows.iter().enumerate() {
+            assert!(
+                q.contains(&format!("y{i}: contributionsCollection")),
+                "missing y{i}"
+            );
+        }
+        // The oldest window must reach the grid's own first day, not stop a
+        // few days short and leave unqueried columns pinned at zero.
+        assert_eq!(
+            windows.last().unwrap().0,
+            crate::contributions::grid_start(today)
+        );
     }
 
     /// A malformed date must drop that one day, not the whole calendar.
@@ -834,7 +921,7 @@ mod tests {
         }}}"#;
         let response: GraphQlResponse = serde_json::from_str(json).unwrap();
         let viewer = response.data.unwrap().viewer;
-        let cal = parse_calendar(viewer.contributions_collection, day("2026-08-18")).unwrap();
+        let cal = parse_calendar(viewer.contribution_years, day("2026-08-18")).unwrap();
         assert_eq!(cal.total(), 3);
     }
 
@@ -843,7 +930,7 @@ mod tests {
     /// ever grows one, this query stops being free and the invariant bites.
     #[test]
     fn the_calendar_field_rides_the_existing_query() {
-        let q = build_query(50, false);
+        let q = build_query(50, false, day("2026-08-18"));
         assert!(q.contains("contributionsCollection"));
         assert!(q.contains("contributionCalendar"));
         assert!(!q.contains("contributionCalendar(first"));

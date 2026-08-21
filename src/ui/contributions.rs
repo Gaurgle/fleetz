@@ -1,12 +1,22 @@
 //! The contribution strip: a year of activity docked under the main panes.
 //!
-//! Drawn with half-block characters. A day is the upper half of a `▀`, and
+//! Drawn with half-block characters. A day is the lower half of a `▄`, and
 //! since a terminal cell is about twice as tall as it is wide, that half is a
-//! genuinely square pixel. The lower half is left unpainted, which is what
-//! pads the grid vertically: the gap below a square is exactly as tall as the
+//! genuinely square pixel. The upper half is left unpainted, which is what
+//! pads the grid vertically: the gap above a square is exactly as tall as the
 //! square, and the gap beside it exactly as wide, so the padding is equal in
 //! both directions. A full-height block would be a rectangle needing a whole
 //! blank row to pad it, which is twice the cost for the same look.
+//!
+//! The *lower* half rather than the upper: text ink sits between the baseline
+//! and the x-height, which is the lower middle of a cell, so a square anchored
+//! to the top of its row floats above the `Mon`/`Wed`/`Fri` label beside it.
+//! Nothing in Unicode paints a centred half, and the Nerd Font squares that
+//! would be centred are all East Asian Ambiguous: one column in some
+//! terminals and two in others. This grid does exact column arithmetic that
+//! `slot_at` reverses to route clicks, so an ambiguous-width cell would
+//! misplace every click and overflow every row, silently. Narrow by
+//! definition beats centred by luck.
 //!
 //! The grid draws at a fixed size and scrolls, rather than shrinking to fit.
 //! The newest weeks are pinned to the right edge and older ones hide off to
@@ -22,9 +32,9 @@ use crate::app::{App, ContributionsMode, FocusedPanel};
 use crate::contributions::{Calendar, WEEKS};
 use crate::ui::colors;
 
-/// One day, drawn as the upper half of a character cell. The lower half is
+/// One day, drawn as the lower half of a character cell. The upper half is
 /// deliberately left unpainted: it is the vertical padding.
-const CELL: &str = "▀";
+const CELL: &str = "▄";
 /// Points at the column holding the marked day, since a single bright half
 /// cell is easy to lose in a year of them.
 const CARET: &str = "▾";
@@ -48,13 +58,19 @@ const GUTTER: u16 = 4;
 const FRAME_COLS: u16 = 2;
 
 /// First grid row, counted from the strip's outer top edge: row 0 is the
-/// border, row 1 the month labels, row 2 the caret row.
-const FIRST_DAY_ROW: u16 = 3;
+/// border, row 1 the month labels, which the caret shares.
+const FIRST_DAY_ROW: u16 = 2;
 
-/// Rows the strip occupies: border, months, caret row, the seven day rows,
+/// Rows the strip occupies: border, the month/caret row, the seven day rows,
 /// border. The count, the source, and the legend all ride in the borders
 /// rather than costing rows of their own.
-pub const CONTRIB_HEIGHT: u16 = 1 + 1 + 1 + DAY_ROWS + 1;
+///
+/// The caret used to own a row, which was blank whenever no day was marked --
+/// so the common case paid a full row of white space between the labels and
+/// the grid, and it read as a gap rather than as breathing room. Sharing
+/// costs a month label when the two collide, which is cheap: the title spells
+/// the marked date out in full anyway.
+pub const CONTRIB_HEIGHT: u16 = 1 + 1 + DAY_ROWS + 1;
 
 /// Rows the panes above must keep for the strip to be worth docking. Below
 /// this the strip is dropped: a dashboard squeezed into slivers is worse
@@ -88,6 +104,62 @@ pub fn visible_weeks(area: Rect) -> usize {
         .saturating_sub(FRAME_COLS * 2)
         .saturating_sub(GUTTER);
     (grid / WEEK_COLS).min(WEEKS as u16) as usize
+}
+
+/// Blank columns left of the gutter, so the newest week sits flush against
+/// the right edge rather than the oldest sitting against the left.
+///
+/// Time already runs left to right, so the end worth looking at is today's.
+/// `visible_weeks` caps at `WEEKS`, so on a pane wider than a year needs the
+/// surplus used to pool on the right and push today away from the edge the
+/// eye goes to first. The pad sits *before* the gutter so `Mon`/`Wed`/`Fri`
+/// travel with the grid; after it they would strand themselves at the far
+/// left with the surplus between them and the squares they label.
+///
+/// Both the renderer and `slot_at` go through here for the same reason they
+/// both go through `visible_weeks`: an offset applied on one side only
+/// misroutes every click by however wide the pad is, and nothing fails.
+pub fn grid_pad(area: Rect) -> u16 {
+    let inner = area.width.saturating_sub(FRAME_COLS * 2);
+    // Every week emits a trailing gap, the last one included, but nothing is
+    // painted in it: the grid's visible right edge is one column short of the
+    // space it occupies. Reclaim that column or the newest week stops a step
+    // shy of the border.
+    let painted = (visible_weeks(area) as u16 * WEEK_COLS).saturating_sub(GAP_COLS);
+    inner.saturating_sub(GUTTER + painted)
+}
+
+/// Whole weeks a horizontal drag of `cols` screen columns amounts to.
+///
+/// Rounds toward zero, so a drag shorter than one week's worth of columns
+/// moves nothing. The caller keeps the remainder by advancing its anchor only
+/// by what was consumed -- see `App::pan_contributions`.
+pub fn weeks_dragged(cols: i32) -> i32 {
+    cols / WEEK_COLS as i32
+}
+
+/// Screen columns `weeks` weeks occupy, for advancing a drag anchor by
+/// exactly the distance that was turned into scrolling.
+pub fn cols_for_weeks(weeks: i32) -> i32 {
+    weeks * WEEK_COLS as i32
+}
+
+/// Weeks the strip must still fit for it to be worth docking under the right
+/// column alone, leaving the repo list at full height.
+///
+/// One year. Below that the strip stops being a span you take in at a glance
+/// and becomes a keyhole you scroll, and the rows the list gains are not
+/// worth what the grid gives up for them.
+const DOCK_FLOOR_WEEKS: usize = 52;
+
+/// Whether a right column this wide can hold a strip worth docking under it.
+///
+/// The whole point of the full-height repo list is that the list gets rows it
+/// can always use while the strip gives up only its oldest weeks. That trade
+/// stops paying on a narrow terminal, where the column cannot show even a
+/// year, so below this the strip goes back to spanning the full width.
+pub fn worth_docking_in_column(right: Rect) -> bool {
+    visible_weeks(right) >= DOCK_FLOOR_WEEKS
 }
 
 /// The leftmost week to draw: whatever the app asked for, clamped so the
@@ -147,12 +219,10 @@ pub fn title(calendar: &Calendar, cursor: Option<usize>, width: u16) -> String {
     }
 
     let total = thousands(calendar.total());
+    let span = crate::contributions::span_label();
     for candidate in [
-        format!(
-            "{total} {} in the last year ({source})",
-            noun(calendar.total())
-        ),
-        format!("{total} in the last year ({source})"),
+        format!("{total} {} in {span} ({source})", noun(calendar.total())),
+        format!("{total} in {span} ({source})"),
         format!("{total} ({source})"),
     ] {
         if candidate.chars().count() <= width {
@@ -174,7 +244,7 @@ pub fn slot_at(area: Rect, scroll: usize, col: u16, row: u16) -> Option<usize> {
     if weekday >= DAY_ROWS {
         return None;
     }
-    let across = col.checked_sub(area.x + FRAME_COLS + GUTTER)?;
+    let across = col.checked_sub(area.x + FRAME_COLS + grid_pad(area) + GUTTER)?;
     // The trailing column of each step is the gap, not the cell.
     if across % WEEK_COLS >= CELL_COLS {
         return None;
@@ -233,11 +303,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     });
     let inner_width = area.width.saturating_sub(FRAME_COLS * 2);
 
+    let pad = grid_pad(area);
     let mut lines = Vec::with_capacity(CONTRIB_HEIGHT as usize);
-    lines.push(month_line(&calendar, first, visible));
-    lines.push(caret_line(marked));
+    lines.push(month_and_caret_line(&calendar, first, visible, pad, marked));
     for weekday in 0..DAY_ROWS as usize {
-        lines.push(day_line(&calendar, first, visible, weekday, marked));
+        lines.push(day_line(&calendar, first, visible, weekday, marked, pad));
     }
 
     let heading = title(&calendar, cursor, inner_width);
@@ -278,47 +348,76 @@ fn calendar_for(app: &App, today: chrono::NaiveDate) -> Option<std::borrow::Cow<
 }
 
 /// Month labels, one per month that opens inside the visible window, each
-/// sitting over the column its month starts in. A label that would collide
-/// with the one before it is dropped rather than drawn on top of it.
-fn month_line(calendar: &Calendar, first: usize, visible: usize) -> Line<'static> {
-    let mut row = " ".repeat(GUTTER as usize);
+/// sitting over the column its month starts in, with the day cursor's caret
+/// sharing the row.
+///
+/// They share it because the caret is absent most of the time, and a row that
+/// is blank most of the time reads as a gap in the strip rather than as
+/// breathing room under the labels. A label that would collide with the caret
+/// is dropped rather than drawn through: the caret says which column you are
+/// on, which is the more urgent of the two, and the title spells the date out
+/// in full regardless. A label colliding with the label before it is dropped
+/// for the reason it always was.
+fn month_and_caret_line(
+    calendar: &Calendar,
+    first: usize,
+    visible: usize,
+    pad: u16,
+    marked: Option<(usize, usize)>,
+) -> Line<'static> {
+    let base = (pad + GUTTER) as usize;
+    let caret_at = marked.map(|(column, _)| base + column * WEEK_COLS as usize);
+    let label_style = Style::default().fg(colors::OVERLAY);
+
+    let mut row = " ".repeat(base);
     for (week, name) in calendar.month_labels() {
         if week < first || week >= first + visible {
             continue;
         }
-        let at = GUTTER as usize + (week - first) * WEEK_COLS as usize;
+        let at = base + (week - first) * WEEK_COLS as usize;
         let used = row.chars().count();
         // One blank column of clearance, so two labels never touch.
-        if at <= used || at + name.len() > GUTTER as usize + visible * WEEK_COLS as usize {
+        if at <= used || at + name.len() > base + visible * WEEK_COLS as usize {
+            continue;
+        }
+        // Never draw a label through the caret: "M▾r" is worse than no label.
+        if caret_at.is_some_and(|c| c >= at && c < at + name.len()) {
             continue;
         }
         row.push_str(&" ".repeat(at - used));
         row.push_str(name);
     }
-    Line::from(Span::styled(row, Style::default().fg(colors::OVERLAY)))
-}
 
-/// A caret over the column holding the marked day. At this density a single
-/// bright half cell is easy to lose in a year of them, and the caret says
-/// which column to look in while the title says which date it is.
-fn caret_line(marked: Option<(usize, usize)>) -> Line<'static> {
-    let Some((column, _)) = marked else {
-        return Line::from("");
+    let Some(caret_at) = caret_at else {
+        return Line::from(Span::styled(row, label_style));
     };
-    let at = GUTTER as usize + column * WEEK_COLS as usize;
+    let caret = Span::styled(CARET, Style::default().fg(colors::LAVENDER));
+    // The caret can sit past the last label drawn, in which case the row only
+    // needs padding out to it.
+    if row.chars().count() <= caret_at {
+        row.push_str(&" ".repeat(caret_at - row.chars().count()));
+        return Line::from(vec![Span::styled(row, label_style), caret]);
+    }
+    // Otherwise it falls inside the drawn range. The label that would have
+    // covered it was skipped above, so that column is blank and the caret
+    // takes it rather than overwriting a letter.
+    let before: String = row.chars().take(caret_at).collect();
+    let after: String = row.chars().skip(caret_at + 1).collect();
     Line::from(vec![
-        Span::raw(" ".repeat(at)),
-        Span::styled(CARET, Style::default().fg(colors::LAVENDER)),
+        Span::styled(before, label_style),
+        caret,
+        Span::styled(after, label_style),
     ])
 }
 
-/// One row of the grid: a single weekday, drawn in the top half of the row.
+/// One row of the grid: a single weekday, drawn in the bottom half of the row.
 fn day_line(
     calendar: &Calendar,
     first: usize,
     visible: usize,
     weekday: usize,
     marked: Option<(usize, usize)>,
+    pad: u16,
 ) -> Line<'static> {
     // Only three of the seven rows are labelled, as GitHub does: seven labels
     // is a wall of text beside a picture.
@@ -329,10 +428,10 @@ fn day_line(
         _ => "    ",
     };
     let ladder = colors::contrib_ladder(calendar.source());
-    let mut spans = vec![Span::styled(
-        label.to_string(),
-        Style::default().fg(colors::OVERLAY),
-    )];
+    let mut spans = vec![
+        Span::raw(" ".repeat(pad as usize)),
+        Span::styled(label.to_string(), Style::default().fg(colors::OVERLAY)),
+    ];
 
     for column in 0..visible {
         let week = first + column;
@@ -424,35 +523,44 @@ mod tests {
         assert!(split_main_area(area(floor), true).1.is_some());
     }
 
-    /// A half block is a square, and the unpainted half below it is padding
+    /// A half block is a square, and the unpainted half above it is padding
     /// exactly as tall as the square is. One blank column does the same
     /// horizontally, so the gap around every square is equal on all sides
     /// without spending a blank row on it.
+    ///
+    /// The *lower* half: an upper-half square floats above the weekday label
+    /// beside it, since text ink sits between the baseline and the x-height.
+    /// Nothing in Unicode paints a centred half, and every centred Nerd Font
+    /// square is East Asian Ambiguous, which would put this grid's column
+    /// arithmetic at the mercy of a terminal setting.
     #[test]
     fn a_half_cell_square_pads_itself_vertically() {
         assert_eq!(CELL.chars().count(), CELL_COLS as usize);
-        assert_eq!(CELL, "\u{2580}", "upper half only: the rest is padding");
+        assert_eq!(CELL, "\u{2584}", "lower half only: the rest is padding");
         assert_eq!(GAP_COLS, 1);
         assert_eq!(WEEK_COLS, 2);
         assert_eq!(DAY_ROWS, 7, "one row per weekday");
-        // border + months + caret row + grid + border; the count, source and
-        // legend all ride in the borders.
-        assert_eq!(CONTRIB_HEIGHT, 1 + 1 + 1 + 7 + 1);
-        assert_eq!(CONTRIB_HEIGHT, 11);
+        // border + the shared month/caret row + grid + border; the count,
+        // source and legend all ride in the borders. The caret's own row is
+        // gone: blank whenever no day was marked, it read as a gap between
+        // the labels and the grid rather than as breathing room.
+        assert_eq!(CONTRIB_HEIGHT, 1 + 1 + 7 + 1);
+        assert_eq!(CONTRIB_HEIGHT, 10);
     }
 
     /// The grid never shrinks to fit. A narrower pane shows fewer weeks at
     /// the same square size, which is what makes scrolling the answer.
     #[test]
     fn a_narrower_strip_shows_fewer_weeks_at_the_same_size() {
-        // 120 wide: 120 - 4 frame - 4 gutter = 112 grid columns, at 2 each,
-        // which is more than a year needs.
-        assert_eq!(visible_weeks(Rect::new(0, 0, 120, CONTRIB_HEIGHT)), WEEKS);
+        // 120 wide: 120 - 4 frame - 4 gutter = 112 grid columns, at 2 each.
+        assert_eq!(visible_weeks(Rect::new(0, 0, 120, CONTRIB_HEIGHT)), 56);
         assert_eq!(visible_weeks(Rect::new(0, 0, 60, CONTRIB_HEIGHT)), 26);
         assert_eq!(visible_weeks(Rect::new(0, 0, 10, CONTRIB_HEIGHT)), 1);
         assert_eq!(visible_weeks(Rect::new(0, 0, 8, CONTRIB_HEIGHT)), 0);
-        // A year never needs more than 53 columns even on a huge terminal.
-        assert_eq!(visible_weeks(Rect::new(0, 0, 500, CONTRIB_HEIGHT)), WEEKS);
+        // The grid never needs more than its own width, however big the
+        // terminal: past that the surplus becomes right-align pad.
+        let wide = (WEEKS as u16 * WEEK_COLS) + GUTTER + FRAME_COLS * 2 + 40;
+        assert_eq!(visible_weeks(Rect::new(0, 0, wide, CONTRIB_HEIGHT)), WEEKS);
     }
 
     #[test]
@@ -464,39 +572,77 @@ mod tests {
         assert_eq!(thousands(1_234_567), "1,234,567");
     }
 
+    /// Slot 2 is the Tuesday of the first column, whichever date the grid
+    /// opens on. Spelled out so the span can change without these reading as
+    /// a regression.
+    fn slot_two(today: chrono::NaiveDate) -> String {
+        let date = crate::contributions::grid_start(today) + chrono::Duration::days(2);
+        date.format("%a %-d %b").to_string()
+    }
+
+    /// The title must name the span it is actually drawing. It said "the last
+    /// year" while showing three, which is the kind of thing that makes a
+    /// number look wrong when it is right.
     #[test]
     fn the_title_names_the_source_and_the_span() {
         let mut cal = Calendar::new(day("2026-08-18"), Source::Github);
         cal.add(day("2026-08-18"), 3);
+        let span = crate::contributions::span_label();
         assert_eq!(
             title(&cal, None, 120),
-            "3 contributions in the last year (github)"
+            format!("3 contributions in {span} (github)")
+        );
+        assert!(
+            span.contains(&crate::contributions::YEARS.to_string())
+                || crate::contributions::YEARS == 1,
+            "span label must name the year count: {span}"
         );
     }
 
     /// "1 contributions" reads as a bug. A one-commit day is common.
     #[test]
     fn a_count_of_one_is_singular() {
-        let mut cal = Calendar::new(day("2026-08-18"), Source::Local);
-        cal.add(day("2025-08-19"), 1);
-        assert_eq!(title(&cal, Some(2), 120), "1 contribution on Tue 19 Aug");
+        let today = day("2026-08-18");
+        let mut cal = Calendar::new(today, Source::Local);
+        cal.add(
+            crate::contributions::grid_start(today) + chrono::Duration::days(2),
+            1,
+        );
+        assert_eq!(
+            title(&cal, Some(2), 120),
+            format!("1 contribution on {}", slot_two(today))
+        );
         assert_eq!(
             title(&cal, None, 120),
-            "1 contribution in the last year (local)"
+            format!(
+                "1 contribution in {} (local)",
+                crate::contributions::span_label()
+            )
         );
     }
 
     #[test]
     fn a_marked_day_reads_itself_out() {
-        let mut cal = Calendar::new(day("2026-08-18"), Source::Local);
-        cal.add(day("2025-08-19"), 7);
-        assert_eq!(title(&cal, Some(2), 120), "7 contributions on Tue 19 Aug");
+        let today = day("2026-08-18");
+        let mut cal = Calendar::new(today, Source::Local);
+        cal.add(
+            crate::contributions::grid_start(today) + chrono::Duration::days(2),
+            7,
+        );
+        assert_eq!(
+            title(&cal, Some(2), 120),
+            format!("7 contributions on {}", slot_two(today))
+        );
     }
 
     #[test]
     fn a_marked_empty_day_says_none_rather_than_zero() {
-        let cal = Calendar::new(day("2026-08-18"), Source::Local);
-        assert_eq!(title(&cal, Some(2), 120), "no contributions on Tue 19 Aug");
+        let today = day("2026-08-18");
+        let cal = Calendar::new(today, Source::Local);
+        assert_eq!(
+            title(&cal, Some(2), 120),
+            format!("no contributions on {}", slot_two(today))
+        );
     }
 
     /// A narrow strip clipped the source label off the end, which is the one
@@ -510,23 +656,47 @@ mod tests {
         assert_eq!(title(&cal, None, 8), "0");
     }
 
+    /// Screen column of the grid's leftmost cell. Derived rather than
+    /// hardcoded: the grid is pushed right by `grid_pad`, and a test that
+    /// baked in the old flush-left origin would have to be rewritten every
+    /// time the alignment moves instead of catching that it moved wrongly.
+    fn first_col(area: Rect) -> u16 {
+        area.x + FRAME_COLS + grid_pad(area) + GUTTER
+    }
+
+    /// Screen row of the grid's first weekday, derived for the same reason.
+    fn first_row(area: Rect) -> u16 {
+        area.y + FIRST_DAY_ROW
+    }
+
+    /// Row indices into `drawn`, derived from the layout constants so that
+    /// moving a row shows up as a real failure rather than as every render
+    /// test needing a hand edit.
+    const HEADER_ROW: usize = FIRST_DAY_ROW as usize - 1;
+    const FIRST_GRID_ROW: usize = FIRST_DAY_ROW as usize;
+    const LEGEND_ROW: usize = CONTRIB_HEIGHT as usize - 1;
+
     #[test]
     fn a_click_maps_back_to_the_slot_under_it() {
-        // Outer rect: row 0 is the border, row 1 the months, row 2 the caret
-        // row, rows 3..9 the seven day rows. Columns 0..1 are the border and
-        // padding, 2..5 the gutter, so week 0 starts at column 6 and each
-        // week step is 2 columns.
+        // Outer rect: row 0 is the border, row 1 the month labels (which the
+        // caret shares), then the seven day rows. Columns 0..1 are the border
+        // and padding, then the right-align pad, then 4 columns of gutter,
+        // and each week step is 2 columns.
         let area = Rect::new(0, 5, 120, CONTRIB_HEIGHT);
-        assert_eq!(slot_at(area, 0, 6, 8), Some(0), "the Sunday row");
-        assert_eq!(slot_at(area, 0, 7, 8), None, "the gap after the cell");
-        assert_eq!(slot_at(area, 0, 8, 8), Some(7), "next week's Sunday");
-        assert_eq!(slot_at(area, 0, 6, 9), Some(1), "the Monday row");
-        assert_eq!(slot_at(area, 0, 6, 14), Some(6), "the Saturday row");
-        assert_eq!(slot_at(area, 0, 3, 8), None, "the day gutter");
-        assert_eq!(slot_at(area, 0, 6, 5), None, "the top border");
-        assert_eq!(slot_at(area, 0, 6, 6), None, "the month label row");
-        assert_eq!(slot_at(area, 0, 6, 7), None, "the caret row");
-        assert_eq!(slot_at(area, 0, 6, 15), None, "past the last day row");
+        let (c0, r0) = (first_col(area), first_row(area));
+        assert_eq!(slot_at(area, 0, c0, r0), Some(0), "the Sunday row");
+        assert_eq!(slot_at(area, 0, c0 + 1, r0), None, "the gap after the cell");
+        assert_eq!(slot_at(area, 0, c0 + 2, r0), Some(7), "next week's Sunday");
+        assert_eq!(slot_at(area, 0, c0, r0 + 1), Some(1), "the Monday row");
+        assert_eq!(slot_at(area, 0, c0, r0 + 6), Some(6), "the Saturday row");
+        assert_eq!(slot_at(area, 0, c0 - 1, r0), None, "the day gutter");
+        assert_eq!(slot_at(area, 0, c0, area.y), None, "the top border");
+        assert_eq!(slot_at(area, 0, c0, r0 - 1), None, "the month/caret row");
+        assert_eq!(
+            slot_at(area, 0, c0, r0 + DAY_ROWS),
+            None,
+            "past the last day row"
+        );
     }
 
     /// A scrolled grid's leftmost column is not week 0. Clicking it must not
@@ -534,10 +704,73 @@ mod tests {
     #[test]
     fn a_click_on_a_scrolled_grid_accounts_for_the_offset() {
         let area = Rect::new(0, 5, 40, CONTRIB_HEIGHT);
-        assert_eq!(slot_at(area, 10, 6, 8), Some(10 * 7));
-        // Scroll past the end: clamped, never a slot outside the year.
+        let (c0, r0) = (first_col(area), first_row(area));
+        assert_eq!(slot_at(area, 10, c0, r0), Some(10 * 7));
+        // Scroll past the end: clamped, never a slot outside the grid.
         let visible = visible_weeks(area);
-        assert_eq!(slot_at(area, 999, 6, 8), Some((WEEKS - visible) * 7));
+        assert_eq!(slot_at(area, 999, c0, r0), Some((WEEKS - visible) * 7));
+    }
+
+    /// The grid is anchored to the right edge, so the newest week is the one
+    /// against the border. It used to be flush left, which parked a year of
+    /// history under the eye and pushed today into the middle of the pane.
+    #[test]
+    fn the_newest_week_sits_against_the_right_edge() {
+        // Wide enough that the whole grid fits with columns to spare: that
+        // surplus is exactly what used to pool on the right. Derived from
+        // WEEKS so widening the span does not silently gut the test by
+        // making its premise unreachable.
+        let width = WEEKS as u16 * WEEK_COLS + GUTTER + FRAME_COLS * 2 + 20;
+        let area = Rect::new(0, 5, width, CONTRIB_HEIGHT);
+        assert_eq!(visible_weeks(area), WEEKS, "test premise: the year fits");
+        assert!(grid_pad(area) > 0, "test premise: there is surplus width");
+
+        // The newest week's cell must land on the last column inside the
+        // frame. One short of it is the bug this test exists for: the
+        // trailing gap every week emits is unpainted, so a pad that does not
+        // reclaim it leaves a visible notch at the right edge.
+        let last = first_col(area) + (WEEKS as u16 - 1) * WEEK_COLS;
+        assert_eq!(
+            last,
+            area.x + area.width - FRAME_COLS - 1,
+            "newest week is not flush right"
+        );
+    }
+
+    /// The pad must reach the hit-test as well as the renderer. Applied to
+    /// one side only, every click reports a day `pad / 2` weeks too early and
+    /// nothing anywhere fails.
+    #[test]
+    fn the_right_align_pad_moves_the_renderer_and_the_hit_test_together() {
+        let width = WEEKS as u16 * WEEK_COLS + GUTTER + FRAME_COLS * 2 + 20;
+        let area = Rect::new(0, 5, width, CONTRIB_HEIGHT);
+        let pad = grid_pad(area);
+        assert!(pad > 1, "test premise: a pad wide enough to notice");
+        // A click at the old flush-left origin now lands in the pad, which is
+        // not the grid at all.
+        assert_eq!(
+            slot_at(area, 0, area.x + FRAME_COLS + GUTTER, first_row(area)),
+            None,
+            "the old origin is dead space now"
+        );
+        assert_eq!(slot_at(area, 0, first_col(area), first_row(area)), Some(0));
+    }
+
+    /// A pane too narrow for the year opens on the newest weeks, not the
+    /// oldest: `contrib_scroll` starts past the end so `first_week` clamps it
+    /// to the right edge. Nothing guarded this before.
+    #[test]
+    fn a_squeezed_pane_opens_on_the_most_recent_weeks() {
+        let area = Rect::new(0, 5, 40, CONTRIB_HEIGHT);
+        let visible = visible_weeks(area);
+        assert!(visible < WEEKS, "test premise: the year does not fit");
+
+        let app = App::new(vec![], "test".to_string(), false, 40, 40);
+        assert_eq!(
+            first_week(&app, visible),
+            WEEKS - visible,
+            "a fresh strip should open on today, not last August"
+        );
     }
 
     /// Render the strip into a buffer and read it back as text lines.
@@ -581,18 +814,23 @@ mod tests {
             "title: {}",
             lines[0]
         );
-        assert!(lines[1].contains("Aug") || lines[1].contains("Jul"));
-        assert!(
-            !lines[2].contains(CELL),
-            "caret row is blank with no cursor"
-        );
-        assert!(lines[4].contains("Mon "), "Monday row: {}", lines[4]);
-        assert!(lines[6].contains("Wed "));
-        assert!(lines[8].contains("Fri "));
-        for (row, line) in lines.iter().enumerate().take(10).skip(3) {
-            assert!(line.contains(CELL), "row {row} has cells");
+        let header = &lines[HEADER_ROW];
+        assert!(header.contains("Aug") || header.contains("Jul"), "{header}");
+        assert!(!header.contains(CELL), "no grid cells in the label row");
+        assert!(!header.contains(CARET), "no caret before travelling");
+        // Weekday rows, counted off the first: Mon is 1, Wed 3, Fri 5.
+        assert!(lines[FIRST_GRID_ROW + 1].contains("Mon "));
+        assert!(lines[FIRST_GRID_ROW + 3].contains("Wed "));
+        assert!(lines[FIRST_GRID_ROW + 5].contains("Fri "));
+        for (weekday, line) in lines
+            .iter()
+            .enumerate()
+            .skip(FIRST_GRID_ROW)
+            .take(DAY_ROWS as usize)
+        {
+            assert!(line.contains(CELL), "row {weekday} has cells");
         }
-        assert!(lines[10].contains("Less") && lines[10].contains("More"));
+        assert!(lines[LEGEND_ROW].contains("Less") && lines[LEGEND_ROW].contains("More"));
     }
 
     /// The grid opens with the newest weeks against the right edge: today is
@@ -674,19 +912,21 @@ mod tests {
 
         let bare = drawn(120, &app);
         assert!(
-            !bare[2].contains(CARET),
+            !bare[HEADER_ROW].contains(CARET),
             "no caret before travelling: {}",
-            bare[2]
+            bare[HEADER_ROW]
         );
 
         let last = app.contrib_last_slot(chrono::Local::now().date_naive());
         app.contrib_cursor = Some(last - 7 * 3 - 4);
         let lines = drawn(120, &app);
-        assert!(lines[2].contains(CARET), "caret drawn: {}", lines[2]);
+        let header = &lines[HEADER_ROW];
+        assert!(header.contains(CARET), "caret drawn: {header}");
 
-        // The caret sits directly over the marked day's column.
-        let caret_col = lines[2].find(CARET).unwrap();
-        let marked_row = 3 + (last - 7 * 3 - 4) % 7;
+        // The caret sits directly over the marked day's column, in the same
+        // row as the month labels: it shares that row rather than owning one.
+        let caret_col = header.find(CARET).unwrap();
+        let marked_row = FIRST_GRID_ROW + (last - 7 * 3 - 4) % 7;
         assert!(
             lines[marked_row].chars().count() > caret_col,
             "the marked row reaches the caret column"
