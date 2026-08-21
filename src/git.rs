@@ -677,18 +677,42 @@ pub async fn all_branches(repo_path: &Path) -> Vec<String> {
 pub async fn remote_branches(repo_path: &Path) -> Vec<String> {
     let output = run_git(
         repo_path,
-        &["for-each-ref", "--format=%(refname:short)", "refs/remotes/"],
+        &[
+            "for-each-ref",
+            // Both forms: the full refname to filter on, the short one to
+            // show. Filtering on the short name alone missed the symref --
+            // see `parse_remote_branch_output`.
+            "--format=%(refname)\t%(refname:short)",
+            "refs/remotes/",
+        ],
     )
     .await;
 
     match output {
-        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .filter(|l| !l.is_empty() && !l.ends_with("/HEAD"))
-            .map(|l| l.trim().to_string())
-            .collect(),
+        Some(o) if o.status.success() => {
+            parse_remote_branch_output(&String::from_utf8_lossy(&o.stdout))
+        }
         _ => Vec::new(),
     }
+}
+
+/// Short names of the remote-tracking branches, dropping each remote's
+/// default-branch symref.
+///
+/// The symref has to be matched on its FULL refname. `refs/remotes/origin/HEAD`
+/// shortens to bare `origin`, because that resolves to it unambiguously, so a
+/// `ends_with("/HEAD")` test against the short form never fires. The result
+/// was a phantom branch called `origin` sitting in the branches list marked
+/// "not fetched", when it is not a branch at all and points at `origin/main`,
+/// which is fetched.
+fn parse_remote_branch_output(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .filter(|(full, _)| !full.ends_with("/HEAD"))
+        .map(|(_, short)| short.trim().to_string())
+        .filter(|short| !short.is_empty())
+        .collect()
 }
 
 /// Remote branches with no local branch of the same name -- never
@@ -945,6 +969,33 @@ mod tests {
         assert_eq!(branches[0].name, "local-only");
         assert!(branches[0].upstream.is_none());
         assert!(branches[0].is_head);
+    }
+
+    /// Regression: `refs/remotes/origin/HEAD` shortens to bare `origin`, so
+    /// filtering the short name for a "/HEAD" suffix never fired and the
+    /// remote's default-branch symref rendered as a branch you had never
+    /// fetched. It is not a branch, and it points at `origin/main`, which is
+    /// fetched. Taken verbatim from a live repo.
+    #[test]
+    fn remote_branches_drop_the_default_branch_symref() {
+        let stdout = "refs/remotes/origin/HEAD\torigin\n\
+                      refs/remotes/origin/main\torigin/main\n";
+        let remotes = parse_remote_branch_output(stdout);
+        assert!(
+            !remotes.iter().any(|r| r == "origin"),
+            "the symref leaked: {remotes:?}"
+        );
+        assert_eq!(remotes, vec!["origin/main"]);
+    }
+
+    /// A branch legitimately called `.../HEAD-something` must survive: the
+    /// filter matches the suffix, not the substring.
+    #[test]
+    fn a_branch_whose_name_merely_contains_head_survives() {
+        let stdout = "refs/remotes/origin/HEADroom\torigin/HEADroom\n\
+                      refs/remotes/origin/fix/HEAD-parsing\torigin/fix/HEAD-parsing\n";
+        let remotes = parse_remote_branch_output(stdout);
+        assert_eq!(remotes.len(), 2, "got {remotes:?}");
     }
 
     /// Real `git worktree list --porcelain` output, one entry per blank-line
