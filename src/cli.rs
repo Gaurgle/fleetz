@@ -3,6 +3,10 @@ use clap::Parser;
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "fleetz",
+    // Bare `version` takes CARGO_PKG_VERSION, the same string the TUI header
+    // reads through `ui::VERSION`. Naming it explicitly here would give the
+    // two a way to disagree.
+    version,
     about = "Multi-repo dashboard TUI: see what changed across your repos"
 )]
 pub struct Args {
@@ -80,6 +84,7 @@ impl Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
 
     #[test]
     fn default_mode_is_auto() {
@@ -117,5 +122,26 @@ mod tests {
         assert_eq!(args.mode(), Mode::Since("1w".to_string()));
         assert_eq!(args.author.as_deref(), Some("andreas"));
         assert!(args.prs);
+    }
+
+    /// `fleetz --version` did not exist: the header knew the version and the
+    /// CLI did not, because `#[command(..)]` declared `name` and `about` and
+    /// stopped there. Both sides read `CARGO_PKG_VERSION` now, so the flag
+    /// cannot report something the running TUI disagrees with.
+    #[test]
+    fn the_cli_reports_the_same_version_the_header_shows() {
+        assert_eq!(
+            Args::command().get_version(),
+            Some(crate::ui::VERSION),
+            "--version is missing or disagrees with the header"
+        );
+    }
+
+    #[test]
+    fn the_parser_accepts_a_plain_invocation() {
+        // Clap panics at build time on a malformed derive, so parsing once in
+        // a test is what turns that into a failing test rather than a crash
+        // on someone's first run.
+        Args::command().debug_assert();
     }
 }
