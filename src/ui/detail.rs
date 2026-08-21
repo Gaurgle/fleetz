@@ -894,15 +894,25 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // Without it the cursor walked rows that were off screen and the pane sat
     // still, so `j` looked like it did nothing at all -- survivable at six
     // commits, and the whole view at two hundred.
-    if let Some(row) = selected_row {
+    if app.follow_selection.get()
+        && let Some(row) = selected_row
+    {
         let row = row as u16;
-        if row < scroll {
-            scroll = row;
+        // The expanded view anchors the selected commit to the top of the
+        // pane rather than merely bringing it on screen: its blocks run to
+        // twenty lines, and a header scrolled to the last visible row leaves
+        // the body it heads entirely below the fold.
+        let anchor_top = view == HistoryView::Graph || row < scroll;
+        scroll = if anchor_top {
+            row
         } else if row >= scroll + area.height {
-            scroll = row + 1 - area.height;
-        }
+            row + 1 - area.height
+        } else {
+            scroll
+        };
         scroll = scroll.min(max_scroll);
         app.set_detail_scroll(scroll);
+        app.follow_selection.set(false);
     }
 
     let paragraph = Paragraph::new(lines)
@@ -1126,6 +1136,36 @@ fn ref_spans(refs: &[crate::model::GitRef]) -> Vec<Span<'static>> {
 /// all Ambiguous; this one and `◦` `∘` `◊` are not.
 const COMMIT_NODE: char = '⚬';
 
+/// A merge's node. `⊛` is the asterisk git already used, circled, so the
+/// column reads as one family of nodes while merges still stand out.
+///
+/// Narrow, like `COMMIT_NODE`. The circles this most resembles -- `○` `⊙` --
+/// are Ambiguous, and the node is the one glyph here we are free to choose,
+/// so there is no reason to spend that risk on it. The *lanes* are box
+/// drawing and Ambiguous, which is safe for a different reason: every pane
+/// border in the app is already drawn with the same characters, so a terminal
+/// that got their width wrong would have broken fleetz long before this.
+const MERGE_NODE: char = '⊛';
+
+/// git's ASCII graph translated to box drawing, which is what makes lazygit's
+/// history read as a drawn line rather than a row of punctuation.
+fn graph_char(ch: char, is_merge: bool) -> char {
+    match ch {
+        '*' => {
+            if is_merge {
+                MERGE_NODE
+            } else {
+                COMMIT_NODE
+            }
+        }
+        '|' => '│',
+        '/' => '╯',
+        '\\' => '╮',
+        '_' => '─',
+        other => other,
+    }
+}
+
 /// Commits shown in the `info` view: a glance, not a history. `commits`
 /// carries the complete list.
 const RECENT_COMMIT_COUNT: usize = 6;
@@ -1150,14 +1190,33 @@ fn graph_list_lines(
         .max()
         .unwrap_or(0);
     let author_w = crate::ui::AUTHOR_W;
+    let hash_w = repo
+        .graph
+        .iter()
+        .map(|g| g.hash.chars().count())
+        .max()
+        .unwrap_or(7);
     let mut lines = Vec::new();
     let mut commit_index = 0usize;
 
     for g in &repo.graph {
-        let prefix_pad = " ".repeat(prefix_w.saturating_sub(g.prefix.chars().count()));
+        // lazygit's column order: who and what first, then the topology, then
+        // the subject. The graph is context for the row, not its identity, so
+        // leading with it pushed the two columns you actually read rightwards
+        // by however wide the branching happened to be.
+        let prefix: String = g
+            .prefix
+            .chars()
+            .map(|c| graph_char(c, g.is_merge))
+            .collect();
+        let prefix_pad = " ".repeat(prefix_w.saturating_sub(prefix.chars().count()));
+
         if g.hash.is_empty() {
-            let mut spans = vec![Span::raw("  ")];
-            spans.extend(graph_prefix_spans(&g.prefix, g.is_merge));
+            // A connector row: no commit, but the lanes still have to line up
+            // under the ones above, so the hash and author columns are held
+            // open rather than collapsed.
+            let mut spans = vec![Span::raw(" ".repeat(MARKER_W + hash_w + 1 + author_w + 1))];
+            spans.extend(graph_prefix_spans_raw(&prefix));
             spans.push(Span::raw(prefix_pad));
             lines.push(Line::from(spans));
             continue;
@@ -1173,14 +1232,20 @@ fn graph_list_lines(
 
         let author = crate::ui::author_code(&g.author);
         let author_pad = " ".repeat(author_w.saturating_sub(author.chars().count()));
-        // Leading space plus the parenthesised list; measured rather than
-        // rendered-then-measured, so the message budget is known before any
-        // span exists.
-        let refs_len = if g.refs.is_empty() {
-            0
-        } else {
-            1 + g.refs_width()
+        let hash_pad = " ".repeat(hash_w.saturating_sub(g.hash.chars().count()));
+        // Decorations are dropped whole on a narrow pane rather than
+        // truncated, and the subject keeps a floor: a row that spends its
+        // width naming three remotes and then shows nine characters of what
+        // was done has the priority backwards. A branch name is recoverable
+        // from the branches view; the subject is why you are reading the row.
+        let fixed = MARKER_W + hash_w + 1 + author_w + 1 + prefix_w;
+        let refs_budget = width.saturating_sub(fixed + MIN_MESSAGE_W);
+        let refs_len = match g.refs.is_empty() {
+            true => 0,
+            false => 1 + g.refs_width(),
         };
+        let show_refs = refs_len > 0 && refs_len <= refs_budget;
+        let refs_len = if show_refs { refs_len } else { 0 };
         // The churn, looked up by hash: the graph rows and the commit list are
         // separate probes, so a row deeper than the commit window simply has
         // none rather than showing a wrong one.
@@ -1192,49 +1257,118 @@ fn graph_list_lines(
             .unwrap_or_default();
         let stat_len = stat.chars().count();
         let right = if stat_len > 0 { 1 + stat_len } else { 0 };
-        let used = 2 + prefix_w + g.hash.chars().count() + 1 + author_w + 1 + refs_len;
-        let msg_budget = width.saturating_sub(used + 2 + right).max(10);
+        let used = fixed + refs_len;
+        let msg_budget = width.saturating_sub(used + 2 + right).max(MIN_MESSAGE_W);
         let message = crate::ui::truncate(&g.message, msg_budget);
         let msg_len = message.chars().count();
-        let dot_count = width.saturating_sub(used + msg_len + 1 + right).max(1);
+        // Two spaces are spent inside the row -- before the message and before
+        // the dots -- and `right` already carries its own leading one.
+        // Not `.max(1)`: a row whose refs and subject already fill the width
+        // has no room for a fill, and forcing one is what pushed the tail
+        // onto a line of its own.
+        let dot_count = width.saturating_sub(used + msg_len + 2 + right);
 
-        let mut graph_spans = vec![Span::raw("  ")];
-        graph_spans.extend(graph_prefix_spans(&g.prefix, g.is_merge));
-        graph_spans.push(Span::raw(prefix_pad));
-        graph_spans.push(Span::styled(g.hash.clone(), hash_style(is_sel)));
-        graph_spans.push(Span::raw(" "));
-        graph_spans.push(Span::styled(
+        // A pointer as well as the wash: the band says which row, the caret
+        // survives a terminal that renders backgrounds poorly.
+        let mut row = vec![Span::styled(
+            if is_sel { "▸ " } else { "  " },
+            Style::default().fg(colors::SAPPHIRE),
+        )];
+        row.push(Span::styled(g.hash.clone(), hash_style(is_sel)));
+        row.push(Span::raw(hash_pad));
+        row.push(Span::raw(" "));
+        row.push(Span::styled(
             author,
             Style::default().fg(colors::author_color(&g.author)),
         ));
-        graph_spans.push(Span::raw(author_pad));
-        graph_spans.extend(ref_spans(&g.refs));
-        graph_spans.push(Span::raw(" "));
-        graph_spans.push(Span::styled(message, Style::default().fg(colors::TEXT)));
-        graph_spans.push(Span::raw(" "));
-        graph_spans.push(Span::styled(
-            "·".repeat(dot_count),
-            Style::default().fg(colors::SURFACE),
-        ));
-        if stat_len > 0 {
-            graph_spans.push(Span::raw(" "));
-            graph_spans.extend(stat_spans(&stat));
+        row.push(Span::raw(author_pad));
+        row.push(Span::raw(" "));
+        row.extend(graph_prefix_spans_raw(&prefix));
+        row.push(Span::raw(prefix_pad));
+        if show_refs {
+            row.extend(ref_spans(&g.refs));
         }
-        lines.push(Line::from(graph_spans));
+        row.push(Span::raw(" "));
+        row.push(Span::styled(message, Style::default().fg(colors::TEXT)));
+        if dot_count > 0 {
+            row.push(Span::raw(" "));
+            row.push(Span::styled(
+                "·".repeat(dot_count),
+                Style::default().fg(colors::SURFACE),
+            ));
+        }
+        if stat_len > 0 {
+            row.push(Span::raw(" "));
+            row.extend(stat_spans(&stat));
+        }
+        if is_sel {
+            row = wash(row);
+        }
+        lines.push(Line::from(row));
     }
     lines
 }
 
+/// Width of the selection marker column, held open on every row so the rows
+/// do not shift sideways as the cursor moves.
+const MARKER_W: usize = 2;
+
+/// Columns the subject keeps whatever else wants them.
+const MIN_MESSAGE_W: usize = 24;
+
+/// Paint a whole row as selected, keeping each span's own foreground.
+///
+/// The band has to cover the row rather than the text, so the caller pads to
+/// the pane width before this: a wash that stops where the message stops
+/// reads as a highlight on the words, not a cursor on the line.
+fn wash(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    spans
+        .into_iter()
+        .map(|s| {
+            let style = s.style.bg(colors::SELECTED_BG);
+            Span::styled(s.content, style)
+        })
+        .collect()
+}
+
+/// The prefix already translated to box drawing, coloured per lane.
+fn graph_prefix_spans_raw(prefix: &str) -> Vec<Span<'static>> {
+    prefix
+        .chars()
+        .enumerate()
+        .map(|(i, ch)| {
+            let color = if ch == ' ' {
+                colors::SURFACE
+            } else {
+                colors::graph_lane_color(i)
+            };
+            Span::styled(ch.to_string(), Style::default().fg(color))
+        })
+        .collect()
+}
+
 /// `+12 -3` split so additions and deletions keep their own colours.
 fn stat_spans(stat: &str) -> Vec<Span<'static>> {
-    stat.split_whitespace()
-        .map(|part| {
+    // No trailing space on the last part: the caller measured `stat` and
+    // budgeted the row against exactly that width, so an extra column here
+    // pushes the diffstat onto a line of its own.
+    let parts: Vec<&str> = stat.split_whitespace().collect();
+    let last = parts.len().saturating_sub(1);
+    parts
+        .iter()
+        .enumerate()
+        .map(|(i, part)| {
             let color = if part.starts_with('+') {
                 colors::DIFF_ADD
             } else {
                 colors::DIFF_DEL
             };
-            Span::styled(format!("{part} "), Style::default().fg(color))
+            let text = if i == last {
+                (*part).to_string()
+            } else {
+                format!("{part} ")
+            };
+            Span::styled(text, Style::default().fg(color))
         })
         .collect()
 }
@@ -1265,7 +1399,7 @@ fn expanded_graph_line(raw: &str, selected_hash: &str, width: usize) -> Line<'st
     let (prefix, rest) = raw.split_at(split);
 
     let mut spans = vec![Span::raw("  ")];
-    spans.extend(graph_prefix_spans_with(prefix, None));
+    spans.extend(graph_prefix_spans_raw(prefix));
 
     let rest = crate::ui::truncate(rest, width.saturating_sub(2 + prefix.chars().count()));
     let style = if let Some(hash) = rest.strip_prefix("commit ") {
@@ -1286,37 +1420,6 @@ fn expanded_graph_line(raw: &str, selected_hash: &str, width: usize) -> Line<'st
     };
     spans.push(Span::styled(rest, style));
     Line::from(spans)
-}
-
-fn graph_prefix_spans(prefix: &str, is_merge: bool) -> Vec<Span<'static>> {
-    graph_prefix_spans_with(prefix, (!is_merge).then_some(COMMIT_NODE))
-}
-
-/// The prefix with `*` optionally swapped for a lighter node.
-///
-/// `None` leaves it alone, which is what the expanded view wants: that format
-/// spells merges out on their own `Merge:` line, so `*` is not carrying the
-/// distinction there and swapping it would only make the output stop looking
-/// like the `git log --graph` it is reproducing.
-fn graph_prefix_spans_with(prefix: &str, node: Option<char>) -> Vec<Span<'static>> {
-    prefix
-        .chars()
-        .enumerate()
-        .map(|(i, ch)| {
-            let color = if ch == ' ' {
-                colors::SURFACE
-            } else {
-                colors::graph_lane_color(i)
-            };
-            // Exactly one `*` per commit row, and none on a connector row, so
-            // this cannot touch the lane characters around it.
-            let ch = match node {
-                Some(n) if ch == '*' => n,
-                _ => ch,
-            };
-            Span::styled(ch.to_string(), Style::default().fg(color))
-        })
-        .collect()
 }
 
 /// Plain-text diffstat like "+12 -3", for width calc as well as display.
@@ -1392,32 +1495,34 @@ mod tests {
     /// `*` on every row is a heavy glyph that turns a long history into
     /// noise. Ordinary commits get a light node; `*` is kept for merges,
     /// which is the one row worth picking out of a column.
+    /// git draws every commit as `*` and its lanes as punctuation. Both are
+    /// translated: the lanes to box drawing, so the column reads as a drawn
+    /// line, and the node to a circle -- with merges keeping the asterisk,
+    /// circled, so they stay pickable out of the column.
     #[test]
-    fn only_merges_keep_the_asterisk() {
-        let ordinary: String = graph_prefix_spans("* ", false)
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert_eq!(ordinary, "⚬ ", "got {ordinary:?}");
+    fn the_graph_is_translated_to_box_drawing() {
+        assert_eq!(graph_char('*', false), COMMIT_NODE);
+        assert_eq!(graph_char('*', true), MERGE_NODE);
+        assert_eq!(graph_char('|', false), '│');
+        assert_eq!(graph_char('/', false), '╯');
+        assert_eq!(graph_char('\\', false), '╮');
+        assert_eq!(graph_char('_', false), '─');
+        assert_eq!(graph_char(' ', false), ' ', "gaps stay gaps");
+    }
 
-        let merge: String = graph_prefix_spans("* ", true)
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert_eq!(merge, "* ", "merges keep the asterisk: {merge:?}");
-
-        // Lane characters are untouched either way: the substitution must not
-        // reach past the single node on the row.
-        let branched: String = graph_prefix_spans("| * ", false)
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert_eq!(branched, "| ⚬ ", "got {branched:?}");
-        let connector: String = graph_prefix_spans("|/  ", false)
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert_eq!(connector, "|/  ");
+    /// The node is the one glyph here we are free to pick, so it stays Narrow
+    /// even though the lanes cannot be. The lanes are safe for a different
+    /// reason: every pane border in the app is drawn with the same box
+    /// characters already.
+    #[test]
+    fn both_nodes_occupy_one_column() {
+        for node in [COMMIT_NODE, MERGE_NODE] {
+            assert_eq!(Span::from(node.to_string()).width(), 1, "{node}");
+        }
+        for ambiguous in ['●', '○', '•', '◆', '⊙'] {
+            assert_ne!(COMMIT_NODE, ambiguous);
+            assert_ne!(MERGE_NODE, ambiguous);
+        }
     }
 
     /// The graph column is padded to the widest prefix and drawn per cell, so
@@ -1637,6 +1742,60 @@ mod tests {
         assert!(shown.contains("h000002"), "did not come back: {shown:?}");
     }
 
+    /// A row must not spill past the pane. The refs and the subject can each
+    /// eat the width on their own, so the dot fill has to be allowed to
+    /// vanish rather than being forced to one -- that single dot was enough
+    /// to push the diffstat onto a line of its own.
+    #[test]
+    fn no_commit_row_overflows_the_pane() {
+        let mut r = busy_repo();
+        r.commits = vec![crate::model::Commit {
+            hash: "a1b2c3d".to_string(),
+            author: "Gaurgle".to_string(),
+            date: Some(chrono::Utc::now()),
+            message: "x".repeat(200),
+            body: String::new(),
+            insertions: 4321,
+            deletions: 8765,
+            files: vec![],
+        }];
+        r.graph = vec![crate::model::GraphLine {
+            prefix: "* ".to_string(),
+            hash: "a1b2c3d".to_string(),
+            is_merge: false,
+            refs: vec![
+                crate::model::GitRef {
+                    kind: crate::model::RefKind::Local,
+                    name: "a-rather-long-branch-name".to_string(),
+                    is_head: true,
+                },
+                crate::model::GitRef {
+                    kind: crate::model::RefKind::Remote,
+                    name: "origin/a-rather-long-branch-name".to_string(),
+                    is_head: false,
+                },
+            ],
+            author: "Gaurgle".to_string(),
+            message: "x".repeat(200),
+        }];
+
+        for width in [60usize, 80, 100, 140] {
+            let mut row_marker = None;
+            let lines = graph_list_lines(&r, width, 0, None, &mut row_marker);
+            for line in &lines {
+                let drawn: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+                assert!(
+                    drawn <= width,
+                    "row is {drawn} wide in a {width} pane: {:?}",
+                    line.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                );
+            }
+        }
+    }
+
     /// Every list bolds its selection, so the pane always says which commit
     /// the inspector is showing. Only the commit list did before.
     #[test]
@@ -1684,12 +1843,10 @@ mod tests {
         assert!(text.contains("* commit"), "got {text:?}");
         assert!(!text.contains(COMMIT_NODE), "no substitution here");
 
-        // The compact list is the opposite: that is where the swap belongs.
-        let compact: String = graph_prefix_spans("* ", false)
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert_eq!(compact, "⚬ ");
+        // The compact list is the opposite: that is where the translation
+        // belongs, and it takes the lanes with it.
+        assert_eq!(graph_char('*', false), COMMIT_NODE);
+        assert_eq!(graph_char('|', false), '│');
     }
 
     /// The header and the switcher are what tell you where you are, so they

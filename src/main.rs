@@ -1131,10 +1131,11 @@ async fn handle_normal_input(
             app.should_quit = true;
         }
         KeyCode::Char('c') => app.toggle_contributions(),
-        // Uppercase cycles what its lowercase toggles, the same shape as
-        // `c`/`C` for the contributions strip: `v` switches the whole-app
-        // view, `V` steps the repo pane's body through its four.
-        KeyCode::Char('V') => app.cycle_history_view(),
+        // `[` and `]` step the repo pane's body between its four views --
+        // lazygit's own binding for the same gesture, and unlike a shifted
+        // letter it gives backwards for free.
+        KeyCode::Char(']') => app.cycle_history_view(false),
+        KeyCode::Char('[') => app.cycle_history_view(true),
         KeyCode::Char('C') => {
             app.cycle_contributions_source();
             // Switching to the local source is useless without a histogram,

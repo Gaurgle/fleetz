@@ -39,6 +39,15 @@ pub const SUBTEXT: Color = Color::Rgb(166, 173, 200);
 
 pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers, borders
 
+/// Background of the selected row in the repo pane's history lists.
+///
+/// A whole-row wash rather than a bolded hash. Bold marks one token; the eye
+/// still has to find which token, and in a list two hundred rows long that is
+/// the work. A band says it at a glance, which is what lazygit does and why
+/// its lists read so quickly. Catppuccin `surface1`, a lift off the pane
+/// rather than a colour, so it cannot be mistaken for status.
+pub const SELECTED_BG: Color = Color::Rgb(69, 71, 90);
+
 /// Stashed work, in the repo list's badge and in the repo pane alike.
 ///
 /// Catppuccin `flamingo`. Grey was the wrong answer twice over: `OVERLAY` is

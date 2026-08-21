@@ -914,6 +914,15 @@ pub struct App {
     /// are written on the first frame, which is always drawn before any input
     /// is processed.
     pub detail_max_scroll: std::cell::Cell<u16>,
+    /// Set when the cursor moves, cleared once the renderer has scrolled to
+    /// show it.
+    ///
+    /// Without it the renderer re-centred on the selection every frame, which
+    /// fought free scrolling to a standstill: `k` decremented the offset and
+    /// the next frame put it straight back, so the pane looked frozen. The
+    /// pane should chase the cursor when the cursor moves, and otherwise go
+    /// where it is told.
+    pub follow_selection: std::cell::Cell<bool>,
     pub inspector_max_scroll: std::cell::Cell<u16>,
     /// Repaint on the next loop pass. Set by every state change; ticks also
     /// force a paint every 4th frame so the clock and spinner stay live.
@@ -1056,6 +1065,7 @@ impl App {
             detail_selections: [0; HistoryView::COUNT],
             inspector_scroll: 0,
             detail_max_scroll: std::cell::Cell::new(0),
+            follow_selection: std::cell::Cell::new(false),
             inspector_max_scroll: std::cell::Cell::new(0),
             needs_redraw: true,
             spinner_frame: 0,
@@ -1339,13 +1349,18 @@ impl App {
         }
     }
 
-    /// Detail-pane up-navigation: unwind any content scroll first, then step
-    /// the commit cursor back up -- the mirror of `detail_nav_down`.
+    /// Detail-pane up-navigation: step the commit cursor, and let the
+    /// renderer bring it into view.
+    ///
+    /// It used to unwind the content scroll first. Once the renderer began
+    /// following the selection the two fought: this decremented the offset
+    /// and the next frame restored it, so the pane never moved.
     pub fn detail_nav_up(&mut self) {
-        if self.detail_scroll() > 0 {
-            self.scroll_detail(-1);
-        } else {
+        if self.detail_selected() > 0 {
             self.select_commit_up();
+        } else {
+            // At the top of the list there is still the header above it.
+            self.scroll_detail(-1);
         }
     }
 
@@ -1708,14 +1723,23 @@ impl App {
 
     pub fn set_detail_selected(&mut self, value: usize) {
         self.detail_selections[self.history_view.index()] = value;
+        // Any cursor move asks the pane to follow. Scrolling does not, which
+        // is what keeps the two from fighting each other to a standstill.
+        self.follow_selection.set(true);
     }
 
-    /// Step to the next history view, wrapping. One key rather than four,
-    /// because `1`-`4` already focus panes and a pane-local number mode is a
-    /// modality the app does not otherwise have.
-    pub fn cycle_history_view(&mut self) {
-        let next = (self.history_view.index() + 1) % HistoryView::COUNT;
+    /// Step to the next history view, wrapping, or the previous one.
+    ///
+    /// `[` and `]`, which is lazygit's own binding for the same gesture and
+    /// leaves `1`-`4` to go on focusing panes.
+    pub fn cycle_history_view(&mut self, back: bool) {
+        let n = HistoryView::COUNT;
+        let i = self.history_view.index();
+        let next = if back { (i + n - 1) % n } else { (i + 1) % n };
         self.history_view = HistoryView::ALL[next];
+        // Arriving in a view should show you where its cursor is, not
+        // wherever its offset happened to be left.
+        self.follow_selection.set(true);
         self.needs_redraw = true;
     }
 
@@ -1862,13 +1886,19 @@ mod tests {
 
         let mut seen = vec![app.history_view];
         for _ in 1..HistoryView::COUNT {
-            app.cycle_history_view();
+            app.cycle_history_view(false);
             seen.push(app.history_view);
         }
         assert_eq!(seen, HistoryView::ALL.to_vec(), "in tab-strip order");
 
-        app.cycle_history_view();
-        assert_eq!(app.history_view, HistoryView::Info, "wraps");
+        app.cycle_history_view(false);
+        assert_eq!(app.history_view, HistoryView::Info, "wraps forward");
+
+        // And backwards, which a shifted letter could not have given us.
+        app.cycle_history_view(true);
+        assert_eq!(app.history_view, HistoryView::Graph, "wraps backward");
+        app.cycle_history_view(true);
+        assert_eq!(app.history_view, HistoryView::Reflog);
     }
 
     /// Scroll and selection are per view. A shared offset is wrong the moment

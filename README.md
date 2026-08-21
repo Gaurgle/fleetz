@@ -101,7 +101,7 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `J` / `K` | Scroll the detail pane (works from the repo list too) |
 | `PgUp` / `PgDn` | Scroll focused pane by a page |
 | `v` | Toggle detail vs compact view |
-| `V` | Repo pane: cycle its body through four views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history in git's graph column; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`. Each keeps its own scroll position and selection, and the inspector follows whichever is active |
+| `[` / `]` | Repo pane: step its body between four views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history in git's graph column; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`. Each keeps its own scroll position and selection, and the inspector follows whichever is active |
 | `c` | Toggle the contributions strip: three years of activity, GitHub-style. Each day is a half-block square with its own padding, so the grid fits in 11 rows; it scrolls rather than shrinking, with the newest week pinned to the right edge, and no day is marked until you move the cursor |
 | `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
 | `4` | Focus the contributions strip (only while it is open) |
