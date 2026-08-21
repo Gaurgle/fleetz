@@ -168,21 +168,29 @@ pub fn ref_color(kind: crate::model::RefKind) -> Color {
 /// instantly separable from the branch name it points at.
 pub const TEAL: Color = Color::Rgb(148, 226, 213);
 
-/// The colour a history view's tab wears while it is the active one.
+/// The colour one history view answers to, worn by its tab in the pane frame
+/// and by its title inside the pane. One function so the two cannot disagree:
+/// the tab is what you aim at and the title is what confirms you landed.
 ///
-/// Each echoes something that view's own content already draws, so the tab is
-/// a cue rather than decoration: `info` takes the repo-name blue it summarises,
-/// `commits` the gold its hashes are drawn in, `reflog` the mauve of its own
-/// action words, and `graph` the sky of its first lane. That keeps the
-/// one-colour-per-concept rule -- none of these is a new meaning, each is a
-/// meaning already on the screen below it.
+/// Four separable hues -- blue, green, purple, orange -- because telling them
+/// apart at a glance is the job. Where an echo of the view's own content was
+/// available it was taken: `info` wears the repo-name blue it summarises,
+/// `commits` the green of the `+N` column only it and `info` draw, `reflog`
+/// the mauve of its own action words. `graph` is the odd one out and is
+/// picked for contrast rather than echo: its lanes cycle six colours, so
+/// there is nothing for it to echo, and its natural first-lane sky sat right
+/// on top of `info`'s blue.
+///
+/// These are not new meanings, so the one-colour-per-concept rule holds. The
+/// tab strip is also its own context: a peach `graph` tab cannot be mistaken
+/// for the peach `3↓` in a badge column two panes away.
 pub fn history_view_color(view: crate::app::HistoryView) -> Color {
     use crate::app::HistoryView;
     match view {
         HistoryView::Info => SAPPHIRE,
-        HistoryView::Commits => HASH_CLR,
+        HistoryView::Commits => GREEN,
         HistoryView::Reflog => MAUVE,
-        HistoryView::Graph => graph_lane_color(0),
+        HistoryView::Graph => PEACH,
     }
 }
 

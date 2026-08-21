@@ -78,6 +78,18 @@ pub struct Cell {
     pub connector_style: u8,
 }
 
+impl Cell {
+    /// Whether this cell carries a commit node rather than a piece of line.
+    ///
+    /// The renderer paints nodes in the plain text colour rather than the
+    /// lane's: a commit belongs to the history, not to whichever lane it
+    /// happens to sit in, and a column of nodes that changed hue every time a
+    /// branch was reused read as a second signal that meant nothing.
+    pub fn is_node(&self) -> bool {
+        self.glyph == COMMIT_NODE || self.glyph == MERGE_NODE
+    }
+}
+
 /// What a pipe does on the row being drawn. The discriminant order is
 /// load-bearing: pipes are sorted by it, and terminating pipes must sort ahead
 /// of starting ones at the same position.

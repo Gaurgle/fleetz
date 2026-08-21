@@ -620,10 +620,21 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(row3));
     }
     lines.push(Line::from(""));
+    // The view's own title, in the colour its tab wears up in the frame. The
+    // tab is what you aim at; this is what confirms you landed, and saying it
+    // twice in two colours would have made the pair read as two things.
+    lines.push(Line::from(Span::styled(
+        app.history_view.label(),
+        Style::default()
+            .fg(colors::history_view_color(app.history_view))
+            .add_modifier(Modifier::BOLD),
+    )));
+
     // Everything above this point identifies the repo -- what state it is in,
-    // where it lives, which branch is out. It is the answer to "which repo am
-    // I looking at", and scrolling a two-hundred row history is exactly when
-    // that question comes back. Held out of the scrolling body below.
+    // where it lives, which branch is out, and which of its views you are in.
+    // It is the answer to "what am I looking at", and scrolling a two-hundred
+    // row history is exactly when that question comes back. Held out of the
+    // scrolling body below.
     let header_rows = lines.len();
 
     // Branches (worktrees shown inline under the branch they're checked out on)
@@ -712,10 +723,12 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     let mut selected_row: Option<usize> = None;
     if matches!(view, HistoryView::Info | HistoryView::Commits) && !repo.graph.is_empty() {
         let limit = (view == HistoryView::Info).then_some(RECENT_COMMIT_COUNT);
-        lines.push(Line::from(section_label(match view {
-            HistoryView::Info => "recent commits",
-            _ => "commits",
-        })));
+        // `info` still labels this section, because it is one of several it
+        // draws. `commits` does not: the pinned title above already says so,
+        // and the list is the only thing under it.
+        if view == HistoryView::Info {
+            lines.push(Line::from(section_label("recent commits")));
+        }
         lines.extend(graph_list_lines(
             repo,
             width,
@@ -731,7 +744,6 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // than recomposed -- the value is that it looks like what you get in a
     // terminal, so the renderer colours the lines and changes nothing else.
     if view == HistoryView::Graph && !repo.graph_expanded.is_empty() {
-        lines.push(Line::from(section_label("history")));
         let selected_hash = app.inspected_hash().unwrap_or_default().to_string();
         for raw in &repo.graph_expanded {
             // The block the selection names starts here, so scrolling to it
@@ -749,7 +761,6 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
 
     // Reflog -- recent HEAD movements, for a "what did I just do" glance.
     if view == HistoryView::Reflog && !repo.reflog.is_empty() {
-        lines.push(Line::from(section_label("reflog")));
         for (ri, entry) in repo.reflog.iter().enumerate() {
             let prefix_len = 2 + entry.hash.chars().count();
             let action_len = if entry.action.is_empty() {
@@ -1365,9 +1376,16 @@ fn wash(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
 fn lane_spans(cells: &[crate::graph::Cell]) -> Vec<Span<'static>> {
     let mut spans = Vec::with_capacity(cells.len() * 2);
     for cell in cells {
+        // Nodes are plain text, not lane-coloured: a commit belongs to the
+        // history rather than to whichever lane it landed in, and colouring
+        // them made the node column change hue every time a lane was reused.
+        let glyph_color = match cell.is_node() {
+            true => colors::TEXT,
+            false => colors::graph_lane_color(cell.style as usize),
+        };
         spans.push(Span::styled(
             cell.glyph.to_string(),
-            Style::default().fg(colors::graph_lane_color(cell.style as usize)),
+            Style::default().fg(glyph_color),
         ));
         spans.push(Span::styled(
             cell.connector.to_string(),
@@ -1782,7 +1800,7 @@ mod tests {
             (HistoryView::Info, "recent commits"),
             (HistoryView::Commits, "commits"),
             (HistoryView::Reflog, "reflog"),
-            (HistoryView::Graph, "history"),
+            (HistoryView::Graph, "graph"),
         ];
         for (view, own) in sections {
             let text = pane_text(view, 92);
@@ -2343,11 +2361,94 @@ mod tests {
             .map(|y| (0..92u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("history"), "the section label scrolled off");
+        assert!(text.contains("graph"), "the view title scrolled off");
         assert!(
             text.contains("e000000"),
             "the first commit is not on screen"
         );
+    }
+
+    /// The tab in the frame is what you aim at; the title inside the pane is
+    /// what confirms you landed. Same word, same colour, one source -- said
+    /// twice in two colours they read as two different things.
+    #[test]
+    fn the_pinned_title_matches_the_tab_it_belongs_to() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        for view in HistoryView::ALL {
+            let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), 92, 30);
+            app.history_view = view;
+            let mut term = Terminal::new(TestBackend::new(92, 24)).unwrap();
+            term.draw(|f| render_detail_pane(f, f.area(), &app))
+                .unwrap();
+            let buf = term.backend().buffer().clone();
+
+            // The title row is the one inside the pane whose text is exactly
+            // the view's own label -- the frame's tab strip carries all four
+            // on row 0, so start below it.
+            let want = colors::history_view_color(view);
+            let mut found = false;
+            for y in 1..24u16 {
+                let row: String = (0..92u16).map(|x| buf[(x, y)].symbol()).collect();
+                if row.trim().trim_matches('│').trim() != view.label() {
+                    continue;
+                }
+                let x = (0..92u16)
+                    .find(|x| buf[(*x, y)].symbol() == &view.label()[0..1])
+                    .expect("first letter");
+                assert_eq!(
+                    buf[(x, y)].fg,
+                    want,
+                    "the {} title is not in its tab's colour",
+                    view.label()
+                );
+                found = true;
+                break;
+            }
+            assert!(found, "{} has no title row of its own", view.label());
+        }
+    }
+
+    /// A node is a commit, not a branch. Colouring it by lane made the node
+    /// column change hue whenever a lane was reused, which is a signal that
+    /// means nothing -- the lanes either side already say what the topology
+    /// is.
+    #[test]
+    fn graph_nodes_are_plain_text_not_lane_coloured() {
+        let spec: [(&str, &[&str]); 4] = [
+            ("aaaaaaa", &["bbbbbbb", "ccccccc"]),
+            ("ccccccc", &["ddddddd"]),
+            ("bbbbbbb", &["ddddddd"]),
+            ("ddddddd", &[]),
+        ];
+        let parents: Vec<Vec<String>> = spec
+            .iter()
+            .map(|(_, p)| p.iter().map(|s| (*s).to_string()).collect())
+            .collect();
+        let commits: Vec<crate::graph::Commit<'_>> = spec
+            .iter()
+            .zip(&parents)
+            .map(|((hash, _), parents)| crate::graph::Commit { hash, parents })
+            .collect();
+
+        let rows = crate::graph::layout(&commits);
+        let mut nodes = 0usize;
+        let mut lanes = 0usize;
+        for cells in &rows {
+            for span in lane_spans(cells) {
+                let glyph = span.content.chars().next().unwrap_or(' ');
+                if glyph == crate::graph::COMMIT_NODE || glyph == crate::graph::MERGE_NODE {
+                    nodes += 1;
+                    assert_eq!(span.style.fg, Some(colors::TEXT), "a node is lane-coloured");
+                } else if glyph == '\u{2502}' {
+                    lanes += 1;
+                    assert_ne!(span.style.fg, Some(colors::TEXT), "a lane went plain");
+                }
+            }
+        }
+        assert!(nodes >= 4, "fixture drew no nodes");
+        assert!(lanes >= 1, "fixture drew no lanes to contrast against");
     }
 
     /// The inspector follows whichever list is active, resolving the hash

@@ -243,14 +243,29 @@ still using.
   row that was already pinned for the same reason. A short pane gives it up
   rather than spending half its height on it: the frame's own title still
   names the repo, and the history is what you came for.
-- **The active tab wears its view's colour**, and only the active one. Each
-  echoes something its view already draws -- `info` the repo-name blue,
-  `commits` the gold of its hashes, `reflog` the mauve of its action words,
-  `graph` the sky of its first lane. That is not four new meanings: every one
-  is already on the screen below it, which is what keeps the
-  one-colour-per-concept rule intact. The colour holds even when the pane is
-  unfocused, because which mode you are in is worth reading from across the
-  screen; the keys, separators and inactive tabs dim instead.
+- **The active tab wears its view's colour**, and only the active one, and the
+  view repeats that word and that colour as its own pinned title inside the
+  pane -- one `colors::history_view_color` so the two cannot disagree. The tab
+  is what you aim at; the title is what confirms you landed. Said twice in two
+  colours they read as two different things, and the graph view calling itself
+  `history` while its tab said `graph` was exactly that.
+
+  Four separable hues -- blue, green, purple, orange. Where an echo of the
+  view's own content was available it was taken: `info` the repo-name blue,
+  `commits` the green of the `+N` column, `reflog` the mauve of its action
+  words. `graph` is picked for contrast instead: its lanes cycle six colours so
+  there is nothing to echo, and its natural first-lane sky sat on top of
+  `info`'s blue. None of these is a new meaning, so one-colour-per-concept
+  holds; the tab strip is its own context, where a peach `graph` cannot be
+  read as the peach `3↓` two panes away. The colour holds when the pane is
+  unfocused -- which mode you are in is worth reading from across the screen --
+  while the keys, separators and inactive tabs dim.
+
+- **Graph nodes are plain text, not lane-coloured.** A node is a commit, and a
+  commit belongs to the history rather than to whichever lane it happened to
+  land in. Colouring it by lane made the node column change hue every time a
+  lane was reused, which is a signal that means nothing: the lines either side
+  of it already say what the topology is.
 - **Switching views no longer scrolls the one you arrive in.** `cycle_history_view`
   set `follow_selection`, on the reasoning that arriving should show you where
   that view's cursor is. But `graph` anchors its selection to the top of the
