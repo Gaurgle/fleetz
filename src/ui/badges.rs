@@ -230,6 +230,7 @@ mod tests {
             worktrees: vec![],
             reflog: vec![],
             graph: vec![],
+            graph_expanded: Vec::new(),
             repo_kind: RepoKind::Unknown,
             owner: None,
             remote_url: None,

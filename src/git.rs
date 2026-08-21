@@ -565,6 +565,47 @@ fn parse_refs(field: &str) -> Vec<crate::model::GitRef> {
         .collect()
 }
 
+/// `git log --graph` in its expanded form: one block per commit carrying
+/// Merge/Author/Date and the full message, with the graph drawn down the
+/// left of every line.
+///
+/// Returned as raw lines rather than parsed. The compact `graph` above is
+/// parsed because its fields are rendered into columns; this one is git's own
+/// layout and the value is in reproducing it, so the renderer colours the
+/// lines and changes nothing else. A second call rather than one shared with
+/// `graph`, because deriving a column layout from this format is more work
+/// than asking git twice -- and both are gated on `WorkKey`, so an unchanged
+/// repo pays for neither.
+pub async fn graph_expanded(repo_path: &Path, branches: &[String], limit: u32) -> Vec<String> {
+    if branches.is_empty() {
+        return Vec::new();
+    }
+    let mut args = vec![
+        "log".to_string(),
+        "--graph".to_string(),
+        "--color=never".to_string(),
+        "--decorate".to_string(),
+        "--abbrev-commit".to_string(),
+        "--date=relative".to_string(),
+        "-n".to_string(),
+        limit.to_string(),
+    ];
+    args.extend(branches.iter().cloned());
+
+    let output = run_git(
+        repo_path,
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )
+    .await;
+    match output {
+        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .map(|l| l.trim_end().to_string())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn parse_graph_output(output: &str) -> Vec<GraphLine> {
     const MARKER: &str = "GRAPH|";
     output

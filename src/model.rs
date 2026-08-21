@@ -140,6 +140,9 @@ pub struct RepoStatus {
     pub worktrees: Vec<Worktree>,
     pub reflog: Vec<ReflogEntry>,
     pub graph: Vec<GraphLine>,
+    /// `git log --graph` in its expanded form, as raw lines. See
+    /// `git::graph_expanded`.
+    pub graph_expanded: Vec<String>,
     pub repo_kind: RepoKind,
     /// Owner login as reported by the GitHub API, when a fetch matched this
     /// repo. Local-only clones leave it None and fall back to the remote URL
@@ -536,6 +539,7 @@ mod tests {
             worktrees: vec![],
             reflog: vec![],
             graph: vec![],
+            graph_expanded: Vec::new(),
             repo_kind: RepoKind::Unknown,
             owner: None,
             remote_url: None,

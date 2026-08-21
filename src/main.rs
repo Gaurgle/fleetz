@@ -33,9 +33,13 @@ use std::process::Command as StdCommand;
 /// How many commits/reflog entries to show in the detail pane's history
 /// sections. Kept modest -- the pane has no scrolling, and these share it
 /// with branches, CI, PRs, and stashes.
-const RECENT_COMMIT_COUNT: u32 = 6;
-const REFLOG_COUNT: u32 = 6;
-const GRAPH_COMMIT_COUNT: u32 = 10;
+/// Rows fetched for the `commits`, `reflog` and `graph` views, which are
+/// meant to be complete rather than a glance.
+///
+/// Affordable because these probes are already gated on `WorkKey`: a repo
+/// whose HEAD, index and stash log have not moved is skipped entirely, so
+/// the deeper log is paid once per actual change rather than once per sweep.
+const HISTORY_COUNT: u32 = 200;
 
 /// How long a footer status message ("Refreshed", "Watch off", …) stays before
 /// it auto-dismisses back to the summary.
@@ -1686,19 +1690,21 @@ async fn rebuild_repo_status(
     let key = git::work_key(path).await;
     let unchanged = key.is_some() && key == old.work_key;
 
-    let (commits, reflog, graph, stash_entries, worktrees) = if unchanged {
+    let (commits, reflog, graph, graph_expanded, stash_entries, worktrees) = if unchanged {
         (
             old.commits.clone(),
             old.reflog.clone(),
             old.graph.clone(),
+            old.graph_expanded.clone(),
             old.stash_entries.clone(),
             old.worktrees.clone(),
         )
     } else {
         (
-            git::commits(path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await,
-            git::reflog(path, REFLOG_COUNT).await,
-            git::graph(path, &branch_names, GRAPH_COMMIT_COUNT).await,
+            git::commits(path, &format!("-{HISTORY_COUNT}"), true, author).await,
+            git::reflog(path, HISTORY_COUNT).await,
+            git::graph(path, &branch_names, HISTORY_COUNT).await,
+            git::graph_expanded(path, &branch_names, HISTORY_COUNT).await,
             git::stash_list(path).await,
             git::worktree_list(path).await,
         )
@@ -1738,6 +1744,7 @@ async fn rebuild_repo_status(
         commits,
         reflog,
         graph,
+        graph_expanded,
         worktrees,
         work_key: key,
         ..(*old.clone())
@@ -1839,10 +1846,11 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
 
     // Always fetch the diffstat for recent commits so every commit
     // (not just those in a dirty repo) shows its +/- and file list.
-    let commits = git::commits(path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await;
-    let reflog = git::reflog(path, REFLOG_COUNT).await;
+    let commits = git::commits(path, &format!("-{HISTORY_COUNT}"), true, author).await;
+    let reflog = git::reflog(path, HISTORY_COUNT).await;
     let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
-    let graph = git::graph(path, &branch_names, GRAPH_COMMIT_COUNT).await;
+    let graph = git::graph(path, &branch_names, HISTORY_COUNT).await;
+    let graph_expanded = git::graph_expanded(path, &branch_names, HISTORY_COUNT).await;
     let stash_entries = git::stash_list(path).await;
     let stash_count = stash_entries.len() as u32;
     let worktrees = git::worktree_list(path).await;
@@ -1872,6 +1880,7 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
         worktrees,
         reflog,
         graph,
+        graph_expanded,
         repo_kind: model::RepoKind::Unknown,
         owner: None,
         remote_url,
@@ -2133,6 +2142,7 @@ async fn assemble_view(
             worktrees: vec![],
             reflog: vec![],
             graph: vec![],
+            graph_expanded: Vec::new(),
             repo_kind: gh_repo.repo_kind,
             owner: gh_repo.owner.clone(),
             remote_url: None,
@@ -2207,6 +2217,7 @@ async fn local_only_status(
         worktrees: vec![],
         reflog: vec![],
         graph: vec![],
+        graph_expanded: Vec::new(),
         repo_kind,
         // No GitHub match, so the remote URL is the only identity available;
         // `owner_display` parses it at render time.
@@ -2240,11 +2251,12 @@ async fn build_repo_status(
     // Recent history on HEAD, not just the divergent commits -- a glance at
     // "what's been happening here" shouldn't depend on being ahead/behind.
     // Always with the diffstat so every commit shows its +/- and file list.
-    let commits = git::commits(path, &format!("-{RECENT_COMMIT_COUNT}"), true, author).await;
-    let reflog = git::reflog(path, REFLOG_COUNT).await;
+    let commits = git::commits(path, &format!("-{HISTORY_COUNT}"), true, author).await;
+    let reflog = git::reflog(path, HISTORY_COUNT).await;
 
     let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
-    let graph = git::graph(path, &branch_names, GRAPH_COMMIT_COUNT).await;
+    let graph = git::graph(path, &branch_names, HISTORY_COUNT).await;
+    let graph_expanded = git::graph_expanded(path, &branch_names, HISTORY_COUNT).await;
 
     let gh_match = gh_repos
         .iter()
@@ -2291,6 +2303,7 @@ async fn build_repo_status(
         worktrees,
         reflog,
         graph,
+        graph_expanded,
         repo_kind,
         owner,
         remote_url,
@@ -2327,6 +2340,7 @@ mod tests {
             worktrees: vec![],
             reflog: vec![],
             graph: vec![],
+            graph_expanded: Vec::new(),
             repo_kind: model::RepoKind::Unknown,
             owner: None,
             remote_url: None,

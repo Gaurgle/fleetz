@@ -42,6 +42,10 @@ pub enum HistoryView {
     Graph,
 }
 
+/// Commits the `info` view lists. Mirrors `ui::detail::RECENT_COMMIT_COUNT`;
+/// the cursor has to stop where the list does.
+const RECENT_COMMITS_IN_INFO: usize = 6;
+
 impl HistoryView {
     /// Every view, in the order the tab strip draws them and `V` cycles them.
     pub const ALL: [Self; 4] = [Self::Info, Self::Commits, Self::Reflog, Self::Graph];
@@ -64,13 +68,6 @@ impl HistoryView {
             Self::Reflog => "reflog",
             Self::Graph => "graph",
         }
-    }
-
-    /// Whether this view draws a list the inspector can follow. `Info` does
-    /// not, so entering it leaves the inspector showing whatever was last
-    /// selected rather than blanking it.
-    pub fn is_list(self) -> bool {
-        !matches!(self, Self::Info)
     }
 }
 
@@ -1296,12 +1293,14 @@ impl App {
         let Some(repo) = self.selected_repo() else {
             return 0;
         };
+        // Connector rows carry no commit, so they are not stops.
+        let graph_commits = || repo.graph.iter().filter(|g| !g.hash.is_empty()).count();
         match self.history_view {
-            HistoryView::Info => 0,
-            HistoryView::Commits => repo.commits.len(),
+            // Info shows the newest few with their diffstats.
+            HistoryView::Info => repo.commits.len().min(RECENT_COMMITS_IN_INFO),
+            HistoryView::Commits => graph_commits(),
             HistoryView::Reflog => repo.reflog.len(),
-            // Connector rows carry no commit, so they are not stops.
-            HistoryView::Graph => repo.graph.iter().filter(|g| !g.hash.is_empty()).count(),
+            HistoryView::Graph => graph_commits(),
         }
     }
 
@@ -1345,27 +1344,31 @@ impl App {
     /// The commit the inspector is currently showing, if any.
     /// The hash the active history view has selected.
     ///
-    /// `Info` draws no list, so it borrows the commit view's selection rather
-    /// than blanking the inspector: switching to Info to read the branches
-    /// should not throw away the commit you were looking at.
+    /// Every view draws a list of its own, and they are lists of different
+    /// things: `info` the newest commits, `commits` and `graph` the graph
+    /// rows, `reflog` the HEAD movements. Which is why this returns a hash
+    /// rather than an index -- an index into one means nothing in another.
     pub fn inspected_hash(&self) -> Option<&str> {
         let repo = self.selected_repo()?;
-        let view = if self.history_view.is_list() {
-            self.history_view
-        } else {
-            HistoryView::Commits
-        };
-        let i = self.detail_selections[view.index()];
-        match view {
-            HistoryView::Info => None,
-            HistoryView::Commits => repo.commits.get(i).map(|c| c.hash.as_str()),
-            HistoryView::Reflog => repo.reflog.get(i).map(|e| e.hash.as_str()),
-            HistoryView::Graph => repo
-                .graph
+        // Clamped, not bounds-checked: the index survives a repo change and a
+        // view switch, so it can outlive the list it was chosen against. A
+        // stale one resolves to the last row rather than to nothing, which is
+        // what keeps the readout drawn instead of vanishing.
+        let i = self
+            .detail_selected()
+            .min(self.selected_commit_count().saturating_sub(1));
+        // Connector rows carry no commit, so they are not stops.
+        let graph_nth = |n: usize| {
+            repo.graph
                 .iter()
                 .filter(|g| !g.hash.is_empty())
-                .nth(i)
-                .map(|g| g.hash.as_str()),
+                .nth(n)
+                .map(|g| g.hash.as_str())
+        };
+        match self.history_view {
+            HistoryView::Info => repo.commits.get(i).map(|c| c.hash.as_str()),
+            HistoryView::Commits | HistoryView::Graph => graph_nth(i),
+            HistoryView::Reflog => repo.reflog.get(i).map(|e| e.hash.as_str()),
         }
     }
 
@@ -1776,6 +1779,7 @@ mod tests {
                 worktrees: vec![],
                 reflog: vec![],
                 graph: vec![],
+                graph_expanded: Vec::new(),
                 repo_kind: crate::model::RepoKind::Unknown,
                 owner: None,
                 remote_url: None,
@@ -1909,10 +1913,19 @@ mod tests {
         ];
 
         app.history_view = HistoryView::Info;
-        assert_eq!(app.selected_commit_count(), 0, "info draws no list");
+        assert_eq!(app.selected_commit_count(), 2, "info lists the newest few");
 
+        // `commits` walks the graph rows, not the diffstat list.
+        app.repos[0].graph = vec![crate::model::GraphLine {
+            prefix: "* ".to_string(),
+            hash: "aaa".to_string(),
+            is_merge: false,
+            refs: vec![],
+            author: "Gaurgle".to_string(),
+            message: "one".to_string(),
+        }];
         app.history_view = HistoryView::Commits;
-        assert_eq!(app.selected_commit_count(), 2);
+        assert_eq!(app.selected_commit_count(), 1, "graph rows, not commits");
 
         app.history_view = HistoryView::Reflog;
         assert_eq!(app.selected_commit_count(), 3, "a longer list of its own");

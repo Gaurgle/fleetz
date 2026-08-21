@@ -60,6 +60,33 @@ Settled in discussion:
 - **Q5: the view does not persist.** It resets to `Info` each launch, like
   the pane sizes do by default.
 
+### Revised after first use
+
+The first cut put the commit list under `commits` and left `info` as
+reference-only. Using it showed that wrong in three ways, all fixed:
+
+- **`info` needs the newest commits.** It is the glance, and a glance with no
+  commits in it is not one. It lists `RECENT_COMMIT_COUNT` = 6 with their
+  diffstats, which is the one place per-commit churn is shown: the graph
+  column layout has no room for it.
+- **`commits` is the graph list, complete.** git's topology column, then hash,
+  author, decorations and subject -- lazygit's commits pane. `HISTORY_COUNT`
+  = 200 rather than the old 10, and `reflog` the same rather than 6, which is
+  what made both look truncated.
+- **`graph` is git's *expanded* `log --graph`**, one block per commit with
+  Merge/Author/Date and the full message, reproduced rather than recomposed.
+  The first cut used the compact list here, which was not the thing being
+  asked for. Its node stays `*`: that format spells merges out on their own
+  line, so swapping the glyph would only stop it looking like what it copies.
+
+Two things fell out of the rework:
+
+- Every view has its own selection, `info` included, so `HistoryView::is_list`
+  is gone -- there is no view without a list any more.
+- The pinned readout was still indexing `repo.commits` whatever was on screen,
+  so under `commits`, `reflog` and `graph` it named a commit from a different
+  list. It resolves the hash now, like the inspector. A test caught it.
+
 ### Still open
 
 - Backward cycling, if four views proves enough to want it.
