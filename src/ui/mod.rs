@@ -317,8 +317,11 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
             if contributions::worth_docking_in_column(wide_right) {
                 let (right_column, contributions) =
                     contributions::split_main_area(wide_right, open);
-                let (detail, inspector) =
-                    detail::split_right_column(right_column, app.inspector_pct);
+                let (detail, inspector) = detail::split_right_column(
+                    right_column,
+                    app.inspector_pct,
+                    app.shows_inspector(),
+                );
                 PanelRects {
                     main,
                     right_column,
@@ -330,8 +333,11 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
             } else {
                 let (body, contributions) = contributions::split_main_area(main, open);
                 let (repo_list, right_column) = detail::split_main(body, app.repo_list_pct);
-                let (detail, inspector) =
-                    detail::split_right_column(right_column, app.inspector_pct);
+                let (detail, inspector) = detail::split_right_column(
+                    right_column,
+                    app.inspector_pct,
+                    app.shows_inspector(),
+                );
                 PanelRects {
                     main: body,
                     right_column,
@@ -1335,5 +1341,28 @@ mod tests {
     fn a_healthy_launch_shows_no_error_panel() {
         let out = screen(80, 24, |app| app.load_error = None);
         assert!(!out.contains("Could not load the fleet"));
+    }
+
+    /// `panel_rects` must report exactly what `render` draws, or clicks land
+    /// on the wrong pane silently. Both call `split_right_column`, so
+    /// suppressing the inspector in one suppresses it in the other.
+    #[test]
+    fn panel_rects_reports_no_inspector_in_the_graph_view() {
+        let mut app = crate::app::App::new(Vec::new(), String::new(), 120, 44);
+        app.view = View::Detail;
+        app.history_view = crate::app::HistoryView::Graph;
+        let rects = panel_rects(Rect::new(0, 1, 120, 40), &app);
+        assert!(
+            rects.inspector.is_none(),
+            "the graph view still docks an inspector"
+        );
+        let tall = rects.detail.expect("detail is always drawn in Detail view");
+
+        app.history_view = crate::app::HistoryView::Commits;
+        let with = panel_rects(Rect::new(0, 1, 120, 40), &app);
+        assert!(
+            tall.height > with.detail.unwrap().height,
+            "suppressing the inspector did not give its rows to the graph"
+        );
     }
 }

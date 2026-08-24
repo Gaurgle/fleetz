@@ -1159,6 +1159,17 @@ impl App {
         self.load_error.is_some() && self.repos.is_empty()
     }
 
+    /// Whether the inspector is drawn at all.
+    ///
+    /// The graph view's blocks already carry the hash, author, date and full
+    /// message, so an inspector there repeats the block while taking the rows
+    /// the block needs. Read by both `ui::panel_rects` and `ui::render`
+    /// through `detail::split_right_column`, so the two cannot disagree about
+    /// whether the pane exists.
+    pub fn shows_inspector(&self) -> bool {
+        self.history_view != HistoryView::Graph
+    }
+
     pub fn visible_repos(&self) -> Vec<(usize, &RepoStatus)> {
         let active_group = self.active_group.and_then(|i| self.group_names.get(i));
         let parsed = parse_query(&self.search_query);
@@ -1489,7 +1500,9 @@ impl App {
         }
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
-            FocusedPanel::Detail => FocusedPanel::Inspector,
+            FocusedPanel::Detail if self.shows_inspector() => FocusedPanel::Inspector,
+            FocusedPanel::Detail if strip => FocusedPanel::Contributions,
+            FocusedPanel::Detail => FocusedPanel::RepoList,
             FocusedPanel::Inspector if strip => FocusedPanel::Contributions,
             FocusedPanel::Inspector | FocusedPanel::Contributions => FocusedPanel::RepoList,
         };
@@ -1507,6 +1520,11 @@ impl App {
             return;
         }
         if self.view != View::Detail {
+            return;
+        }
+        // The graph view draws no inspector, and focus on a pane that is not
+        // on screen swallows every later keypress.
+        if panel == FocusedPanel::Inspector && !self.shows_inspector() {
             return;
         }
         self.focused_panel = panel;
@@ -1764,6 +1782,11 @@ impl App {
         let i = self.history_view.index();
         let next = if back { (i + n - 1) % n } else { (i + 1) % n };
         self.history_view = HistoryView::ALL[next];
+        // The inspector may have just stopped being drawn; focus cannot stay
+        // on a pane that is not on screen.
+        if self.focused_panel == FocusedPanel::Inspector && !self.shows_inspector() {
+            self.focused_panel = FocusedPanel::Detail;
+        }
         // Deliberately does not follow the selection. Each view keeps its own
         // scroll offset, so arriving restores where you left that view --
         // which is where its cursor is anyway, since the two were left in
@@ -3118,6 +3141,94 @@ mod tests {
         assert!(
             !app.shows_load_error(),
             "the error panel would have replaced three good rows"
+        );
+    }
+
+    /// Scrolling and the cursor are independent: the wheel used to call
+    /// `detail_nav_down`, so it moved the selection instead of the view and
+    /// the pane could only jump from commit to commit.
+    #[test]
+    fn scrolling_the_detail_pane_leaves_the_selection_alone() {
+        let mut app = make_app(3);
+        app.history_view = HistoryView::Graph;
+        app.set_detail_selected(2);
+        let before = app.detail_selected();
+        app.scroll_detail(5);
+        app.scroll_detail(-2);
+        assert_eq!(app.detail_selected(), before, "scrolling moved the cursor");
+    }
+
+    /// The other half: a scroll must not ask the pane to chase the selection,
+    /// or the next frame would undo it.
+    #[test]
+    fn scrolling_does_not_request_follow() {
+        let mut app = make_app(3);
+        app.follow_selection.set(false);
+        app.scroll_detail(5);
+        assert!(
+            !app.follow_selection.get(),
+            "a scroll asked the renderer to follow, which would undo it"
+        );
+    }
+
+    /// The graph block already carries hash, author, date and message, so an
+    /// inspector there repeats it while taking the rows the block needs.
+    #[test]
+    fn the_graph_view_hides_the_inspector() {
+        let mut app = make_app(1);
+        app.history_view = HistoryView::Commits;
+        assert!(app.shows_inspector());
+        app.history_view = HistoryView::Graph;
+        assert!(!app.shows_inspector());
+    }
+
+    /// Tab must not park focus on a pane that is not drawn: every later
+    /// keypress would go somewhere invisible.
+    #[test]
+    fn focus_cycling_skips_a_hidden_inspector() {
+        let mut app = make_app(1);
+        app.history_view = HistoryView::Graph;
+        app.view = View::Detail;
+        app.focused_panel = FocusedPanel::Detail;
+        app.toggle_panel_focus();
+        assert_ne!(
+            app.focused_panel,
+            FocusedPanel::Inspector,
+            "focus landed on a pane the graph view does not draw"
+        );
+    }
+
+    /// The same trap by another door: `3` jumps straight to the inspector.
+    #[test]
+    fn jumping_to_a_hidden_inspector_is_refused() {
+        let mut app = make_app(1);
+        app.history_view = HistoryView::Graph;
+        app.view = View::Detail;
+        app.focused_panel = FocusedPanel::Detail;
+        app.focus_panel(FocusedPanel::Inspector);
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::Detail,
+            "focus went to a hidden pane"
+        );
+    }
+
+    /// And by the third: switching into the graph view while the inspector
+    /// holds focus has to hand it back.
+    #[test]
+    fn entering_the_graph_view_moves_focus_off_the_inspector() {
+        let mut app = make_app(1);
+        app.view = View::Detail;
+        app.history_view = HistoryView::Reflog;
+        app.focused_panel = FocusedPanel::Inspector;
+        // HistoryView::ALL is [Info, Commits, Reflog, Graph], so Reflog steps
+        // forward into Graph.
+        app.cycle_history_view(false);
+        assert_eq!(app.history_view, HistoryView::Graph, "fixture assumption");
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::Detail,
+            "focus left on a hidden pane"
         );
     }
 }

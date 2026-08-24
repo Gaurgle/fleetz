@@ -37,8 +37,10 @@ const DETAIL_MIN_HEIGHT: u16 = 8;
 /// keys move. It is a request, not a promise: the min/max clamp and the detail
 /// pane's floor both outrank it, so a short terminal still yields a readable
 /// split (or drops the inspector entirely) whatever the user asked for.
-pub fn split_right_column(area: Rect, pct: u16) -> (Rect, Option<Rect>) {
-    if area.height < DETAIL_MIN_HEIGHT + INSPECTOR_MIN_HEIGHT {
+pub fn split_right_column(area: Rect, pct: u16, show_inspector: bool) -> (Rect, Option<Rect>) {
+    // The graph view gives the whole column to the history: its blocks
+    // already say what an inspector would.
+    if !show_inspector || area.height < DETAIL_MIN_HEIGHT + INSPECTOR_MIN_HEIGHT {
         return (area, None);
     }
     let height = (area.height * pct / 100)
@@ -720,7 +722,11 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // `commits` shows the lot.
     // `info` shows the newest few, `commits` the lot, through one renderer so
     // the two cannot drift into drawing the same rows differently.
-    let mut selected_row: Option<usize> = None;
+    // The selected block's inclusive row range. The expanded graph's blocks
+    // run to twenty rows and wrap on top of that, so bringing "the selection"
+    // into view means bringing a range into view, not a row. The compact
+    // graph and the reflog report a one-row range and behave as before.
+    let mut selected_block: Option<(usize, usize)> = None;
     if matches!(view, HistoryView::Info | HistoryView::Commits) && !repo.graph.is_empty() {
         let limit = (view == HistoryView::Info).then_some(RECENT_COMMIT_COUNT);
         // `info` still labels this section, because it is one of several it
@@ -734,7 +740,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             width,
             app.detail_selected(),
             limit,
-            &mut selected_row,
+            &mut selected_block,
         ));
         lines.push(Line::from(""));
     }
@@ -745,16 +751,29 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // terminal, so the renderer colours the lines and changes nothing else.
     if view == HistoryView::Graph && !repo.graph_expanded.is_empty() {
         let selected_hash = app.inspected_hash().unwrap_or_default().to_string();
+        let mut open: Option<usize> = None;
         for raw in &repo.graph_expanded {
+            // A block runs from the line naming its commit to the line before
+            // the next one names another, so the end is found by watching for
+            // the next `commit ` line rather than by counting rows.
+            if raw.contains("commit ")
+                && let Some(start) = open.take()
+            {
+                selected_block = Some((start, lines.len().saturating_sub(1)));
+            }
             // The block the selection names starts here, so scrolling to it
             // puts the whole commit on screen rather than its last line, and
             // so the marker lands on the row that names the commit rather
             // than on some line of its message.
             let is_sel = opens_commit(raw, &selected_hash);
             if is_sel {
-                selected_row = Some(lines.len());
+                open = Some(lines.len());
             }
-            lines.push(expanded_graph_line(raw, &selected_hash, is_sel, width));
+            lines.extend(expanded_graph_lines(raw, &selected_hash, is_sel, width));
+        }
+        // The selected block was the last one, so it runs to the end.
+        if let Some(start) = open {
+            selected_block = Some((start, lines.len().saturating_sub(1)));
         }
         lines.push(Line::from(""));
     }
@@ -773,7 +792,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
 
             let is_sel = ri == app.detail_selected();
             if is_sel {
-                selected_row = Some(lines.len());
+                selected_block = Some((lines.len(), lines.len()));
             }
             // The same caret and wash the commit lists use. A bolded hash was
             // all this had, which marks one token and leaves the eye to find
@@ -943,9 +962,12 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     };
     // Rows above the split are no longer in the scrolling body, so every row
     // index the sections recorded has to come down with them.
-    let selected_row = match pin_header {
-        true => selected_row.and_then(|r| r.checked_sub(header_rows)),
-        false => selected_row,
+    let selected_block = match pin_header {
+        // Both ends come down together, and a block whose top is inside the
+        // pinned header is no longer in the scrolling body at all.
+        true => selected_block
+            .and_then(|(t, b)| Some((t.checked_sub(header_rows)?, b.saturating_sub(header_rows)))),
+        false => selected_block,
     };
 
     let max_scroll = wrapped_row_count(&lines, area.width).saturating_sub(area.height);
@@ -960,21 +982,9 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // still, so `j` looked like it did nothing at all -- survivable at six
     // commits, and the whole view at two hundred.
     if app.follow_selection.get()
-        && let Some(row) = selected_row
+        && let Some((top, bottom)) = selected_block
     {
-        let row = row as u16;
-        // The expanded view anchors the selected commit to the top of the
-        // pane rather than merely bringing it on screen: its blocks run to
-        // twenty lines, and a header scrolled to the last visible row leaves
-        // the body it heads entirely below the fold.
-        let anchor_top = view == HistoryView::Graph || row < scroll;
-        scroll = if anchor_top {
-            row
-        } else if row >= scroll + area.height {
-            row + 1 - area.height
-        } else {
-            scroll
-        };
+        scroll = bring_into_view((top as u16, bottom as u16), scroll, area.height);
         scroll = scroll.min(max_scroll);
         app.set_detail_scroll(scroll);
         app.follow_selection.set(false);
@@ -1140,6 +1150,29 @@ fn file_stat_line(f: &crate::model::FileStat) -> Line<'static> {
 
 /// Estimate how many terminal rows `lines` occupy once wrapped to `width`, so
 /// the inspector's scroll offset can be clamped to real content height. A
+/// The scroll offset that brings `block` (an inclusive row range) into view,
+/// moving as little as possible.
+///
+/// Replaces the old rule, which pinned the selected commit to the top of the
+/// pane on every selection change. That kept an oversized block's header on
+/// screen but made stepping one commit move the entire view, so the pane
+/// never felt scrolled, only jumped.
+///
+/// A block taller than the pane still resolves to its top: the header is what
+/// names the commit, and the tail of a long message with no header above it
+/// says nothing about whose message it is.
+fn bring_into_view(block: (u16, u16), scroll: u16, height: u16) -> u16 {
+    let (top, bottom) = block;
+    if top < scroll {
+        return top;
+    }
+    if bottom >= scroll + height {
+        // `min(top)` keeps the header on screen when the block cannot fit.
+        return top.min(bottom + 1 - height);
+    }
+    scroll
+}
+
 /// `Paragraph` wraps long lines, so a raw line count under-counts. Guards a
 /// zero width so a degenerate pane can't divide by zero.
 fn wrapped_row_count(lines: &[Line], width: u16) -> u16 {
@@ -1202,7 +1235,7 @@ fn graph_list_lines(
     width: usize,
     selected: usize,
     limit: Option<usize>,
-    selected_row: &mut Option<usize>,
+    selected_block: &mut Option<(usize, usize)>,
 ) -> Vec<Line<'static>> {
     // Lanes are two columns each. Padded to the widest row rather than left
     // ragged the way lazygit leaves it: a dashboard is read by scanning down a
@@ -1245,7 +1278,7 @@ fn graph_list_lines(
         }
         let is_sel = row == selected;
         if is_sel {
-            *selected_row = Some(row);
+            *selected_block = Some((row, row));
         }
 
         // lazygit's column order: who and what first, then the topology, then
@@ -1491,12 +1524,58 @@ fn pad_to(mut spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     spans
 }
 
-fn expanded_graph_line(
+/// Split `text` into chunks that each fit `budget` columns.
+///
+/// Breaks at spaces where it can and mid-token where it cannot, because a
+/// space-only break never terminates on a token wider than the pane, and a
+/// long URL in a commit message is the common case. Always returns at least
+/// one chunk: git's blocks use blank lines as spacing, and dropping them
+/// would close the gaps between commits.
+fn wrap_text(text: &str, budget: usize) -> Vec<String> {
+    if budget == 0 {
+        return vec![String::new()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut line = String::new();
+    let mut len = 0usize;
+    for word in text.split_inclusive(' ') {
+        let wlen = word.chars().count();
+        if len > 0 && len + wlen > budget {
+            out.push(std::mem::take(&mut line));
+            len = 0;
+        }
+        if wlen > budget {
+            for ch in word.chars() {
+                if len == budget {
+                    out.push(std::mem::take(&mut line));
+                    len = 0;
+                }
+                line.push(ch);
+                len += 1;
+            }
+        } else {
+            line.push_str(word);
+            len += wlen;
+        }
+    }
+    out.push(line);
+    out
+}
+
+/// One raw `git log --graph` line, as the rows it occupies at this width.
+///
+/// Returns a `Vec` because a wrapped line is several rows and the caller
+/// needs the true count: the pane's scroll offset is a row index, so one
+/// source line has to stay one rendered row. Letting the `Paragraph` wrap
+/// instead would split row index from line index, which is exactly the split
+/// the computed graph exists to avoid. Wrapping earlier avoids the problem
+/// that wrapping later creates.
+fn expanded_graph_lines(
     raw: &str,
     selected_hash: &str,
     is_selected: bool,
     width: usize,
-) -> Line<'static> {
+) -> Vec<Line<'static>> {
     const GRAPH_CHARS: [char; 6] = ['*', '|', '\\', '/', '_', ' '];
     let split = raw
         .char_indices()
@@ -1504,13 +1583,6 @@ fn expanded_graph_line(
         .map_or(raw.len(), |(i, _)| i);
     let (prefix, rest) = raw.split_at(split);
 
-    let mut spans = vec![Span::styled(
-        if is_selected { "▸ " } else { "  " },
-        Style::default().fg(colors::SAPPHIRE),
-    )];
-    spans.extend(graph_prefix_spans_raw(prefix));
-
-    let rest = crate::ui::truncate(rest, width.saturating_sub(2 + prefix.chars().count()));
     let style = if let Some(hash) = rest.strip_prefix("commit ") {
         // "commit 1c51c6e (tag: v0.3.0)" -- the hash is the first word.
         let bold = hash
@@ -1527,11 +1599,30 @@ fn expanded_graph_line(
     } else {
         Style::default().fg(colors::TEXT)
     };
-    spans.push(Span::styled(rest, style));
-    if is_selected {
-        spans = wash(pad_to(spans, width));
-    }
-    Line::from(spans)
+
+    let budget = width.saturating_sub(2 + prefix.chars().count());
+    wrap_text(rest, budget)
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            // The caret marks the block, not every row of it.
+            let marker = if is_selected && i == 0 {
+                "\u{25b8} "
+            } else {
+                "  "
+            };
+            let mut spans = vec![Span::styled(
+                marker.to_string(),
+                Style::default().fg(colors::SAPPHIRE),
+            )];
+            spans.extend(graph_prefix_spans_raw(prefix));
+            spans.push(Span::styled(chunk, style));
+            if is_selected {
+                spans = wash(pad_to(spans, width));
+            }
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// Plain-text diffstat like "+12 -3", for width calc as well as display.
@@ -2030,9 +2121,9 @@ mod tests {
     /// the glyph would only stop it looking like the thing it is copying.
     #[test]
     fn the_expanded_graph_keeps_gits_own_node() {
-        let text: String = expanded_graph_line("* commit a1b2c3d", "", false, 80)
-            .spans
+        let text: String = expanded_graph_lines("* commit a1b2c3d", "", false, 80)
             .iter()
+            .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
         assert!(text.contains("* commit"), "got {text:?}");
@@ -3235,5 +3326,98 @@ mod tests {
             colour_of(2),
             "lanes 0 and 1 must be distinguishable"
         );
+    }
+
+    /// The graph view truncated every line to the pane width, so a long
+    /// subject or a long decoration list was simply unreadable. Wrapping
+    /// happens in the builder rather than in the `Paragraph` so one source
+    /// line stays one rendered row, which the scroll arithmetic depends on.
+    #[test]
+    fn a_long_graph_line_wraps_instead_of_truncating() {
+        let raw = "|     feat: rotate the contribution window's from date past GitHub's cache";
+        let rows = expanded_graph_lines(raw, "", false, 40);
+        assert!(rows.len() > 1, "the line was truncated, not wrapped");
+        for row in &rows {
+            let w: usize = row.spans.iter().map(|s| s.content.chars().count()).sum();
+            assert!(w <= 40, "a wrapped row is {w} wide, past the pane's 40");
+        }
+    }
+
+    /// Every row carries the lane prefix. A gap in the pipes reads as a
+    /// topology change that did not happen.
+    #[test]
+    fn wrapped_rows_repeat_the_lane_prefix() {
+        let raw = "| | |     a subject long enough to need more than one row here";
+        let rows = expanded_graph_lines(raw, "", false, 30);
+        assert!(rows.len() > 1, "fixture did not wrap");
+        for (i, row) in rows.iter().enumerate() {
+            let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                text.starts_with("  | | |"),
+                "row {i} lost the lane prefix: {text:?}"
+            );
+        }
+    }
+
+    /// "Dynamic" means it re-wraps to whatever the pane is now, so a narrower
+    /// pane must produce more rows from the same input.
+    #[test]
+    fn a_narrower_pane_produces_more_rows() {
+        let raw = "|     a subject long enough to wrap at several different widths";
+        let wide = expanded_graph_lines(raw, "", false, 60).len();
+        let narrow = expanded_graph_lines(raw, "", false, 30).len();
+        assert!(
+            narrow > wide,
+            "wrapping did not follow the width: {narrow} vs {wide}"
+        );
+    }
+
+    /// A single token longer than the pane must still render, and must
+    /// terminate. Breaking only at spaces loops forever on a long URL.
+    #[test]
+    fn a_token_longer_than_the_pane_still_renders() {
+        let long = "x".repeat(120);
+        let rows = wrap_text(&long, 20);
+        assert_eq!(rows.len(), 6, "expected 120 chars to fill six 20-wide rows");
+        for row in &rows {
+            assert!(row.chars().count() <= 20);
+        }
+        assert_eq!(rows.concat(), long, "characters were dropped");
+    }
+
+    /// Empty input is one empty row, not zero: the blank lines between git's
+    /// blocks are load-bearing spacing.
+    #[test]
+    fn empty_text_wraps_to_a_single_empty_row() {
+        assert_eq!(wrap_text("", 20), vec![String::new()]);
+    }
+
+    /// The graph view pinned the selected commit to the top of the pane on
+    /// every selection change, so stepping one commit moved the whole view.
+    /// A block already fully on screen must not move it at all.
+    #[test]
+    fn a_visible_block_does_not_move_the_view() {
+        assert_eq!(bring_into_view((12, 17), 10, 20), 10);
+    }
+
+    /// A block above the viewport scrolls up to sit at the top.
+    #[test]
+    fn a_block_above_the_viewport_scrolls_to_its_top() {
+        assert_eq!(bring_into_view((4, 9), 10, 20), 4);
+    }
+
+    /// A block below the viewport scrolls down by the least that reveals it.
+    #[test]
+    fn a_block_below_the_viewport_scrolls_the_minimum() {
+        assert_eq!(bring_into_view((30, 34), 10, 20), 15);
+    }
+
+    /// A block taller than the pane cannot be shown whole, so its top wins:
+    /// scrolling to the bottom of an oversized block leaves you looking at
+    /// the tail of a message with nothing to say whose it is. This is the one
+    /// thing the old top-pinning got right.
+    #[test]
+    fn an_oversized_block_shows_its_top() {
+        assert_eq!(bring_into_view((30, 60), 10, 20), 30);
     }
 }

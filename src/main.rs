@@ -835,13 +835,13 @@ fn handle_mouse_input(
         }
         MouseEventKind::ScrollDown => match panel {
             FocusedPanel::RepoList => app.move_down(),
-            FocusedPanel::Detail => app.detail_nav_down(),
+            FocusedPanel::Detail => app.scroll_detail(DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(1),
             FocusedPanel::Contributions => {}
         },
         MouseEventKind::ScrollUp => match panel {
             FocusedPanel::RepoList => app.move_up(),
-            FocusedPanel::Detail => app.detail_nav_up(),
+            FocusedPanel::Detail => app.scroll_detail(-DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
             FocusedPanel::Contributions => {}
         },
@@ -1457,6 +1457,14 @@ const GITHUB_POLL_STUCK_AFTER: std::time::Duration = std::time::Duration::from_s
 /// few points, so this is comfortable; it exists to stop a typo turning the
 /// dashboard into a rate-limit incident.
 const GITHUB_POLL_MIN: u64 = 15;
+
+/// Rows the detail pane scrolls per wheel notch.
+///
+/// The wheel used to call `detail_nav_down/up`, moving the selection rather
+/// than the view, so a notch jumped a whole commit block in the graph view.
+/// The inspector already treats the wheel as a scroll; this makes the detail
+/// pane agree, and makes the help overlay's "wheel scrolls" true.
+const DETAIL_WHEEL_ROWS: i32 = 3;
 
 /// Whether a sweep result means the repo moved in a way CI might care about,
 /// and the next GitHub poll should not wait out its interval.
