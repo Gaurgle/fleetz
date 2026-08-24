@@ -3420,4 +3420,39 @@ mod tests {
     fn an_oversized_block_shows_its_top() {
         assert_eq!(bring_into_view((30, 60), 10, 20), 30);
     }
+
+    /// Scrolling the graph view must not panic at any pane size or offset.
+    /// The wrap and the bring-into-view arithmetic both do width and height
+    /// subtraction, and a deep lane prefix in a narrow pane is where those
+    /// run out of room.
+    #[test]
+    fn the_graph_view_survives_every_scroll_offset() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut repo = busy_repo();
+        repo.graph_expanded = (0..40)
+            .map(|i| format!("| | | | * commit {i:030} a very long trailing subject line indeed"))
+            .collect();
+
+        for (w, h) in [(40u16, 10u16), (80, 30), (24, 6), (200, 50), (16, 5)] {
+            for view in crate::app::HistoryView::ALL {
+                for focus in [
+                    crate::app::FocusedPanel::Detail,
+                    crate::app::FocusedPanel::Inspector,
+                ] {
+                    let mut app = crate::app::App::new(vec![repo.clone()], "h".to_string(), w, h);
+                    app.view = crate::app::View::Detail;
+                    app.history_view = view;
+                    app.focused_panel = focus;
+                    for off in [0i32, 1, 5, 50, 500, 5000, -5000] {
+                        app.scroll_detail(off);
+                        app.detail_nav_down();
+                        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+                        term.draw(|f| crate::ui::render(f, &app)).unwrap();
+                    }
+                }
+            }
+        }
+    }
 }

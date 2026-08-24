@@ -269,6 +269,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Enter TUI
+    // Restore the terminal before a panic prints, or the message lands in raw
+    // mode on the alternate screen: every newline is a bare line feed, so it
+    // staircases off the right edge and is then wiped when the screen is
+    // dropped. The bug is legible, the report of it was not.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = crossterm::execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+        default_hook(info);
+    }));
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
