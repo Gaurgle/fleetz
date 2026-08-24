@@ -1006,6 +1006,25 @@ pub struct App {
     /// `github_poll_inflight` true forever and CI status silently stops
     /// updating for the rest of the session, with nothing on screen to say so.
     pub github_poll_started: Option<std::time::Instant>,
+    /// True while the most recent GitHub poll came back an error, cleared by
+    /// the first one that succeeds.
+    ///
+    /// The failure used to live only in a status message, which the next
+    /// keypress clears. A poll that had been failing for hours therefore
+    /// looked exactly like one that had just succeeded: the calendar and the
+    /// CI lamps kept their last good values and nothing on screen said they
+    /// had stopped moving. Rate limits are the common case and they last an
+    /// hour, so this needs to survive a keypress.
+    pub github_poll_failing: bool,
+    /// Why the last full load failed, while it has left nothing to draw.
+    ///
+    /// A failed initial load used to set only a status message, which the
+    /// next keypress clears. Since the repo list is derived from the GitHub
+    /// dataset, the result was a completely blank dashboard whose one line of
+    /// explanation vanished on the first keystroke -- indistinguishable from
+    /// a fleet that genuinely has no repos in the window. Cleared by the next
+    /// load that succeeds.
+    pub load_error: Option<String>,
     /// Set when a sweep sees a repo's unpushed count fall to zero, which means
     /// you just pushed. That is the one moment CI is about to change and
     /// nothing is `Pending` yet to poll harder on, so it forces the next poll
@@ -1092,6 +1111,8 @@ impl App {
             last_github_poll: None,
             github_poll_inflight: false,
             github_poll_started: None,
+            github_poll_failing: false,
+            load_error: None,
             push_detected: false,
             dataset: Vec::new(),
             window: None,
@@ -1127,6 +1148,17 @@ impl App {
     /// filters -- the latter two both parsed out of `search_query`'s `#tag`
     /// words (see `parse_query`), so there's a single source of truth for
     /// "what's typed" rather than a separate toggled-by-keypress field.
+    /// Whether the main area should give way to the load-failure panel.
+    ///
+    /// Both halves matter. Without `load_error` an empty fleet is just an
+    /// empty fleet. Without `repos.is_empty()` a failed *reload* would replace
+    /// a dashboard full of good rows with an error panel, which is worse than
+    /// the stale data it removed: that case keeps its rows and reports the
+    /// failure in the status line and the header instead.
+    pub fn shows_load_error(&self) -> bool {
+        self.load_error.is_some() && self.repos.is_empty()
+    }
+
     pub fn visible_repos(&self) -> Vec<(usize, &RepoStatus)> {
         let active_group = self.active_group.and_then(|i| self.group_names.get(i));
         let parsed = parse_query(&self.search_query);
@@ -3062,5 +3094,30 @@ mod tests {
         let updates = overlay.config_updates();
         assert!(updates.iter().any(|(k, v)| *k == "contributions"
             && matches!(v, crate::config::SettingValue::Str("local"))));
+    }
+
+    /// A failed initial load used to set only a status message, which the
+    /// next keypress clears. The repo list is derived from the GitHub dataset,
+    /// so the result was a blank dashboard with no stated cause -- identical
+    /// to a fleet with nothing in the window.
+    #[test]
+    fn an_empty_fleet_with_a_failed_load_explains_itself() {
+        let mut app = make_app(0);
+        assert!(!app.shows_load_error(), "nothing has failed yet");
+        app.load_error = Some("rate limited".to_string());
+        assert!(app.shows_load_error());
+    }
+
+    /// The guard's other half: a reload that fails while rows are on screen
+    /// must keep them. Replacing live data with an error panel loses more
+    /// than it explains.
+    #[test]
+    fn a_failed_reload_keeps_a_populated_fleet_on_screen() {
+        let mut app = make_app(3);
+        app.load_error = Some("rate limited".to_string());
+        assert!(
+            !app.shows_load_error(),
+            "the error panel would have replaced three good rows"
+        );
     }
 }

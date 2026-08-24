@@ -426,6 +426,7 @@ fn apply_load_result(
     app.loading = false;
     match result {
         Ok(lr) => {
+            app.load_error = None;
             app.repos = lr.repos;
             apply_groups(&mut app.repos, config);
             app.header = lr.header;
@@ -454,7 +455,12 @@ fn apply_load_result(
                 }
             }
         }
-        Err(e) => app.set_status(format!("Load failed: {e}"), true),
+        Err(e) => {
+            // The status message says it once; `load_error` keeps saying it
+            // for as long as there is nothing on screen to say it instead.
+            app.set_status(format!("Load failed: {e}"), true);
+            app.load_error = Some(e);
+        }
     }
 }
 
@@ -597,6 +603,7 @@ async fn run_event_loop(
                 app.github_poll_inflight = false;
                 app.github_poll_started = None;
                 app.last_github_poll = Some(chrono::Local::now());
+                app.github_poll_failing = result.is_err();
                 match result {
                     Ok(fetch) => {
                         let github::GithubFetch {

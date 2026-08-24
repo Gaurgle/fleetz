@@ -569,13 +569,25 @@ pub fn render(frame: &mut Frame, app: &App) {
     // the view now, which is one more thing two copies would have to agree
     // about.
     let rects = panel_rects(area, app);
-    match app.view {
-        View::Detail => {
-            if let Some(detail_area) = rects.detail {
-                detail::render(frame, rects.repo_list, detail_area, rects.inspector, app);
+    // A load that failed with nothing already on screen gets the main area to
+    // itself. Both views derive their panes from `app.repos`, so an empty
+    // fleet and a failed fetch draw the same empty furniture; without this the
+    // only difference between them was a status line the next keypress wiped.
+    //
+    // Guarded on `repos.is_empty()` so a failed *reload* never blanks a
+    // dashboard that still has good data to show: that case keeps its rows and
+    // says so in the status line and the header instead.
+    if app.shows_load_error() {
+        render_load_error(frame, rects.main, app);
+    } else {
+        match app.view {
+            View::Detail => {
+                if let Some(detail_area) = rects.detail {
+                    detail::render(frame, rects.repo_list, detail_area, rects.inspector, app);
+                }
             }
+            View::Compact => compact::render(frame, rects.main, app),
         }
-        View::Compact => compact::render(frame, rects.main, app),
     }
     if let Some(strip) = rects.contributions {
         contributions::render(frame, strip, app);
@@ -592,6 +604,46 @@ pub fn render(frame: &mut Frame, app: &App) {
         Overlay::Settings(so) => settings::render(frame, area, so),
         Overlay::None => {}
     }
+}
+
+/// Draw why there is nothing to show, in the space the repos would have
+/// filled. Only reached when a load failed and left the fleet empty.
+fn render_load_error(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(reason) = app.load_error.as_deref() else {
+        return;
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Could not load the fleet",
+            Style::default()
+                .fg(colors::PEACH)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(reason, Style::default().fg(colors::TEXT))),
+        Line::from(""),
+        Line::from(Span::styled(
+            "R retries against GitHub, r rebuilds from cache",
+            Style::default().fg(colors::OVERLAY),
+        )),
+    ];
+    // Rate limits are the common way this happens and they clear on their own,
+    // which is worth saying: the reflex otherwise is to go looking for a bug.
+    if reason.contains("rate limit") || reason.contains("RATE_LIMIT") {
+        lines.push(Line::from(Span::styled(
+            "GitHub rate limits reset hourly; this clears on its own.",
+            Style::default().fg(colors::OVERLAY),
+        )));
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(colors::SURFACE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(
+        ratatui::widgets::Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: true }),
+        inner,
+    );
 }
 
 /// Render the header. The left (name/header/group) and right (refresh time/
@@ -665,6 +717,20 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             )]
         })
     };
+    // A GitHub poll that keeps failing has to say so somewhere that survives
+    // a keypress. The status message it also sets is cleared by the next key,
+    // so a rate limit -- which lasts an hour and is the common way this fails
+    // -- left the CI lamps and the contribution strip frozen at their last
+    // good values with nothing on screen to say they had stopped moving.
+    //
+    // `PEACH`, not `RED`: red already means CI failed, and this is the same
+    // thing the overdue `swept` timestamp beside it means, which is that a
+    // refresh is not keeping up. Never dropped by the fit loop, for the same
+    // reason `loading` is not: while it lasts it is the most important thing
+    // on the line.
+    let gh_fail_span = app
+        .github_poll_failing
+        .then(|| Span::styled(" ⚠ github ", Style::default().fg(colors::PEACH)));
     // Persistent indicator so the `w` toggle's state is visible at a glance,
     // not just in the transient status message when it flips.
     //
@@ -702,6 +768,9 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         let mut right: Vec<Span> = Vec::new();
         if let Some(ref l) = loading_span {
             right.extend(l.iter().cloned());
+        }
+        if let Some(ref g) = gh_fail_span {
+            right.push(g.clone());
         }
         if let Some(ref w) = watch_span {
             right.push(w.clone());
@@ -766,10 +835,21 @@ mod tests {
 
     /// The rendered header line, border and all.
     fn header_row(header: &str, width: u16) -> String {
+        header_row_with(header, width, |_| {})
+    }
+
+    /// The same, with a hook to set app state the header reads.
+    fn header_row_with(
+        header: &str,
+        width: u16,
+        setup: impl FnOnce(&mut crate::app::App),
+    ) -> String {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let app = crate::app::App::new(Vec::new(), header.to_string(), width, 40);
+        let mut app = crate::app::App::new(Vec::new(), header.to_string(), width, 40);
+        setup(&mut app);
+        let app = app;
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
         terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -1161,5 +1241,99 @@ mod tests {
         let rects = panel_rects(Rect::new(0, 0, 120, 18), &app);
         assert!(rects.contributions.is_none());
         assert!(rects.repo_list.height > 0, "the panes survive");
+    }
+
+    /// A GitHub poll that failed has to leave a mark that a keypress cannot
+    /// clear. It used to set only a status message, so a rate limit -- an
+    /// hour long -- was invisible within one keystroke, and the frozen CI
+    /// lamps and contribution strip looked like current data.
+    #[test]
+    fn a_failing_github_poll_is_marked_in_the_header() {
+        let row = header_row_with("", 80, |app| app.github_poll_failing = true);
+        assert!(row.contains("⚠ github"), "no failure marker in: {row:?}");
+    }
+
+    /// The other half: a healthy poll must not leave a warning sitting there.
+    #[test]
+    fn a_healthy_github_poll_leaves_the_header_clean() {
+        let row = header_row_with("", 80, |app| app.github_poll_failing = false);
+        assert!(!row.contains("⚠"), "spurious failure marker in: {row:?}");
+    }
+
+    /// The fit loop drops the version, then the timestamp, then the group,
+    /// then the header text. This marker is not on that list: a narrow
+    /// terminal is not a reason to hide that the data stopped updating.
+    #[test]
+    fn the_failure_marker_survives_a_narrow_header() {
+        let row = header_row_with("last 7 days", 30, |app| app.github_poll_failing = true);
+        assert!(
+            row.contains("⚠ github"),
+            "marker dropped by the fit loop: {row:?}"
+        );
+    }
+
+    /// The whole screen rendered, so the test sees what the user sees.
+    fn screen(width: u16, height: u16, setup: impl FnOnce(&mut crate::app::App)) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = crate::app::App::new(Vec::new(), String::new(), width, height);
+        setup(&mut app);
+        let app = app;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The failure this closes. A failed initial load left `repos` empty and
+    /// said why only in a status message, which `clear_status` wipes on the
+    /// next keypress -- so a rate-limited launch was a blank dashboard with no
+    /// stated cause, identical to a fleet with nothing in the window.
+    #[test]
+    fn a_failed_load_says_why_instead_of_drawing_nothing() {
+        let out = screen(80, 24, |app| {
+            app.load_error = Some("GitHub API errors: API rate limit exceeded".to_string());
+        });
+        assert!(
+            out.contains("Could not load the fleet"),
+            "no cause given:\n{out}"
+        );
+        assert!(
+            out.contains("rate limit exceeded"),
+            "the reason itself is missing:\n{out}"
+        );
+    }
+
+    /// A rate limit clears itself, and saying so is the difference between
+    /// waiting and going bug-hunting.
+    #[test]
+    fn a_rate_limited_load_says_it_clears_on_its_own() {
+        let out = screen(80, 24, |app| {
+            app.load_error = Some("GitHub API errors: API rate limit exceeded".to_string());
+        });
+        assert!(out.contains("clears on its own"), "no reassurance:\n{out}");
+        // A different failure must not claim to be self-healing.
+        let other = screen(80, 24, |app| {
+            app.load_error = Some("GitHub API request failed: dns error".to_string());
+        });
+        assert!(
+            !other.contains("clears on its own"),
+            "wrong advice:\n{other}"
+        );
+    }
+
+    /// The clean case: nothing failed, so nothing is claimed.
+    #[test]
+    fn a_healthy_launch_shows_no_error_panel() {
+        let out = screen(80, 24, |app| app.load_error = None);
+        assert!(!out.contains("Could not load the fleet"));
     }
 }
