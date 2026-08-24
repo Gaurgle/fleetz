@@ -95,30 +95,62 @@ pub fn year_windows(today: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {
     windows
 }
 
-/// Days the `recent` window re-asks for, today included.
+/// Days merged from the `recent` payload, today included.
 ///
-/// GitHub answers a year-long `contributionsCollection` from a precomputed
-/// index that lags behind the live one. Probed on 2026-08-24 at 12:19 CEST,
-/// three commits pushed at 12:03 that day were already on the profile graph
-/// and already visible to a one-day window (`totalContributions: 3`), while
-/// the 2025-08-25..2026-08-24 window the grid is built from still reported
-/// that day as 0. The green strip drew the zero it was handed, so a day's
-/// work went missing until GitHub's own index caught up.
-///
-/// Seven rather than one because the lag has no documented bound, and a week
-/// is still free: an alias with no `first:` connection adds no cost to the
-/// query.
+/// Fixed at seven regardless of how wide the window actually asked for, so
+/// the merge never has to know which `from` the rotation picked. That matters
+/// because a payload read back from the disk cache was built under a
+/// different rotation than the one in force when it is parsed.
 const RECENT_DAYS: i64 = 7;
 
-/// The `[from, to]` window re-asked for at full freshness, laid over the year
-/// windows. A subset of the newest one from `year_windows`, deliberately: the
-/// point is to ask the same days a second way, not to reach days the year
-/// windows miss.
-pub fn recent_window(today: NaiveDate) -> (NaiveDate, NaiveDate) {
-    (
-        (today - Duration::days(RECENT_DAYS - 1)).max(grid_start(today)),
-        today,
-    )
+/// How long one `from` date is held before the rotation moves on, and how
+/// many distinct dates it cycles through.
+///
+/// GitHub caches a `contributionsCollection` response against the `from`
+/// **date** alone. Probed 2026-08-24: `to` is not part of the key, nor is the
+/// time component of `from`, and the entry survived two hours, eight pushes
+/// and thirteen minutes of being left completely alone. So a query that asks
+/// the same `from` every poll reads its own stale answer all day, which is
+/// exactly what the strip was doing: 3 contributions on screen against 11 on
+/// github.com.
+///
+/// Any `from` not asked for recently answers fresh, so the window rotates.
+/// Holding each date five minutes bounds how stale today's cell can be, and
+/// 358 dates put the full cycle at just over 29 hours, comfortably past any
+/// entry lifetime observed. Both numbers matter: shorten the hold and the
+/// cycle stops clearing the entry lifetime; shorten the cycle and the
+/// rotation starts serving its own leftovers.
+const ROTATION_HOLD_SECS: i64 = 300;
+const ROTATION_SPAN: i64 = 358;
+/// The hold bounds how stale today's cell can be, and it is the one cell
+/// anybody actually looks at; the cycle has to clear any observed entry
+/// lifetime. Raising either past these breaks the pair.
+const _: () = assert!(ROTATION_HOLD_SECS <= 600 && ROTATION_SPAN * ROTATION_HOLD_SECS >= 24 * 3600);
+
+/// Which slot of the rotation `now` falls in. Separate from `recent_window`
+/// so the caller supplies the clock and the window stays a pure function.
+pub fn rotation_tick(now: chrono::DateTime<chrono::Utc>) -> i64 {
+    now.timestamp().div_euclid(ROTATION_HOLD_SECS)
+}
+
+/// The `[from, to]` window to re-ask for, laid over the year windows.
+///
+/// `to` is always today; only `from` rotates, because only `from` is in
+/// GitHub's cache key. It reaches back at least `RECENT_DAYS` so the merge
+/// range is always covered with margin, and never more than a year, which
+/// `contributionsCollection` refuses.
+pub fn recent_window(today: NaiveDate, tick: i64) -> (NaiveDate, NaiveDate) {
+    let back = RECENT_DAYS + tick.rem_euclid(ROTATION_SPAN);
+    ((today - Duration::days(back)).max(grid_start(today)), today)
+}
+
+/// The oldest day taken from a `recent` payload, whatever window produced it.
+///
+/// The window is always wider than this, so the padded week at its far edge
+/// can never reach the merged range and zero a day only the year windows know
+/// about.
+pub fn recent_merge_floor(today: NaiveDate) -> NaiveDate {
+    today - Duration::days(RECENT_DAYS - 1)
 }
 
 /// One repo's commits per grid slot. `u16` because no repo gets 65k commits
@@ -439,5 +471,103 @@ mod tests {
         cal.add_daily(&counts);
         assert_eq!(cal.total(), 0);
         assert_eq!(cal.max(), 0);
+    }
+
+    /// The property the rotation exists for: a poll must not re-ask a `from`
+    /// GitHub already has a cached answer against. Consecutive holds have to
+    /// differ, or the rotation is decoration.
+    #[test]
+    fn consecutive_holds_ask_different_from_dates() {
+        let today = d("2026-08-24");
+        let a = recent_window(today, 100).0;
+        let b = recent_window(today, 101).0;
+        assert_ne!(a, b, "two holds in a row asked the same question");
+    }
+
+    /// The cycle has to outlast a cached entry, or the rotation comes back
+    /// round to its own leftovers. Probed 2026-08-24, one entry was still
+    /// serving a two-hour-old answer after eight pushes and thirteen minutes
+    /// untouched, so the bar is "hours, generously".
+    #[test]
+    fn the_full_cycle_outlasts_a_cached_entry() {
+        let today = d("2026-08-24");
+        let seen: std::collections::HashSet<NaiveDate> = (0..ROTATION_SPAN)
+            .map(|t| recent_window(today, t).0)
+            .collect();
+        assert_eq!(
+            seen.len() as i64,
+            ROTATION_SPAN,
+            "the rotation repeats a date inside one cycle"
+        );
+        let cycle_hours = ROTATION_SPAN * ROTATION_HOLD_SECS / 3600;
+        assert!(
+            cycle_hours >= 24,
+            "full cycle is only {cycle_hours}h, short enough to serve its own leftovers"
+        );
+    }
+
+    /// `contributionsCollection` refuses a range longer than a year, so no
+    /// point in the rotation may produce one.
+    #[test]
+    fn no_rotation_point_asks_for_more_than_a_year() {
+        let today = d("2026-08-24");
+        for tick in 0..ROTATION_SPAN {
+            let (from, to) = recent_window(today, tick);
+            assert!(
+                (to - from).num_days() <= 364,
+                "tick {tick} spans {} days",
+                (to - from).num_days()
+            );
+        }
+    }
+
+    /// The merge takes a fixed seven days whatever the rotation asked for, and
+    /// the window must always cover them with room to spare. Without the
+    /// margin, the padded week at the window's far edge could reach into the
+    /// merged range and zero a day only the year windows know about.
+    #[test]
+    fn every_window_covers_the_merged_days_with_margin() {
+        let today = d("2026-08-24");
+        let floor = recent_merge_floor(today);
+        for tick in 0..ROTATION_SPAN {
+            let (from, to) = recent_window(today, tick);
+            assert!(
+                from < floor,
+                "tick {tick}: window starts inside the merged range"
+            );
+            assert_eq!(to, today, "tick {tick}: window must reach today");
+        }
+    }
+
+    /// The merge floor must not move with the rotation. A payload read back
+    /// from the disk cache was built under whatever rotation was in force when
+    /// it was written, which the parser has no way to recover; if the clamp
+    /// depended on that, a cached payload would be merged against the wrong
+    /// floor.
+    #[test]
+    fn the_merge_floor_does_not_depend_on_the_rotation() {
+        let today = d("2026-08-24");
+        assert_eq!(recent_merge_floor(today), today - Duration::days(6));
+    }
+
+    /// The tick has to actually advance with the clock, and hold steady inside
+    /// one slot.
+    #[test]
+    fn the_tick_advances_once_per_hold() {
+        use chrono::TimeZone;
+        let at = |s: i64| chrono::Utc.timestamp_opt(s, 0).single().unwrap();
+        // Aligned to a hold boundary, so "one second before the next slot"
+        // means what it says.
+        let base = 1_787_000_000 - 1_787_000_000 % ROTATION_HOLD_SECS;
+        assert_eq!(
+            rotation_tick(at(base)),
+            rotation_tick(at(base + ROTATION_HOLD_SECS - 1)),
+            "the tick moved inside a single hold"
+        );
+        assert_ne!(
+            rotation_tick(at(base)),
+            rotation_tick(at(base + ROTATION_HOLD_SECS)),
+            "the tick failed to advance at the hold boundary"
+        );
     }
 }

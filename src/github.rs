@@ -132,8 +132,8 @@ fn parse_calendar(
     // only source for everything older, and a padded week reaching back past
     // the window would `set` those days to the zero it pads with.
     if let Some(collection) = recent {
-        let (from, _) = crate::contributions::recent_window(today);
-        fill(&mut calendar, collection, Some(from));
+        let floor = crate::contributions::recent_merge_floor(today);
+        fill(&mut calendar, collection, Some(floor));
     }
     Some(calendar)
 }
@@ -295,7 +295,7 @@ const ORG_REPO_LIMIT: u32 = 12;
 /// Raising either back past what it replaced puts the 26-point query back.
 const _: () = assert!(MAX_ORGS < 25 && ORG_REPO_LIMIT < 50);
 
-fn build_query(repo_limit: u32, today: chrono::NaiveDate) -> String {
+fn build_query(repo_limit: u32, today: chrono::NaiveDate, rotation: i64) -> String {
     // PR numbers cannot be had cheaply, and half-measures buy nothing.
     // Measured against the live API on the same fleet:
     //
@@ -379,7 +379,7 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate) -> String {
     // just worked can come back as 0 from `y0` while a short window on the
     // same date reports it correctly. Another alias, so still no request and
     // still no `first:` connection to pay for.
-    let (recent_from, recent_to) = crate::contributions::recent_window(today);
+    let (recent_from, recent_to) = crate::contributions::recent_window(today, rotation);
     let recent_field = format!(
         r#"  recent: contributionsCollection(from: "{}T00:00:00Z", to: "{}T23:59:59Z") {{
     contributionCalendar {{
@@ -494,7 +494,11 @@ pub async fn fetch_repos(
 
     // Fetch fresh
     let token = get_gh_token().await?;
-    let query = build_query(repo_limit, today);
+    let query = build_query(
+        repo_limit,
+        today,
+        crate::contributions::rotation_tick(chrono::Utc::now()),
+    );
 
     let client = reqwest::Client::new();
     let resp = match client
@@ -939,7 +943,7 @@ mod tests {
     /// fall back to and `-p` gates drawing rather than fetching.
     #[test]
     fn build_query_always_asks_for_full_pr_data() {
-        let q = build_query(50, day("2026-08-18"));
+        let q = build_query(50, day("2026-08-18"), 0);
         assert!(q.contains("first: 50"));
         assert!(q.contains("pullRequests(states: OPEN, first: 5,"));
         assert!(q.contains("totalCount"));
@@ -1077,7 +1081,7 @@ mod tests {
         let today = day("2026-08-18");
         let windows = crate::contributions::year_windows(today);
         assert_eq!(windows.len(), 3, "three years, three windows");
-        let q = build_query(50, today);
+        let q = build_query(50, today, 0);
         for (i, _) in windows.iter().enumerate() {
             assert!(
                 q.contains(&format!("y{i}: contributionsCollection")),
@@ -1116,7 +1120,7 @@ mod tests {
     /// ever grows one, this query stops being free and the invariant bites.
     #[test]
     fn the_calendar_field_rides_the_existing_query() {
-        let q = build_query(50, day("2026-08-18"));
+        let q = build_query(50, day("2026-08-18"), 0);
         assert!(q.contains("contributionsCollection"));
         assert!(q.contains("contributionCalendar"));
         assert!(!q.contains("contributionCalendar(first"));
@@ -1302,7 +1306,7 @@ mod tests {
     #[test]
     fn a_recent_week_padded_past_its_start_cannot_blank_older_days() {
         let today = day("2026-08-18");
-        let (from, _) = crate::contributions::recent_window(today);
+        let from = crate::contributions::recent_merge_floor(today);
         let before = (from - chrono::Duration::days(1))
             .format("%Y-%m-%d")
             .to_string();
@@ -1330,12 +1334,125 @@ mod tests {
         );
     }
 
+    /// Re-checks, against the live API, the GitHub behaviour the rotation is
+    /// built on. Not part of the suite: it needs the network and an
+    /// authenticated `gh`, and a unit test that reaches GitHub is worse than
+    /// no test -- it fails on a plane and passes for the wrong reason behind a
+    /// proxy. Run it by hand when the strip looks wrong again:
+    ///
+    ///   cargo test rotation_premise -- --ignored --nocapture
+    ///
+    /// It asks the same day through two `from` dates and prints both. They may
+    /// legitimately agree when nothing has changed recently; what would be
+    /// news is them agreeing *right after a push that only one reports*, which
+    /// would mean the cache is gone and the rotation is now dead weight.
+    #[tokio::test]
+    #[ignore]
+    async fn rotation_premise_still_holds() {
+        let today = chrono::Local::now().date_naive();
+        let day_str = today.format("%Y-%m-%d").to_string();
+        let ask = |from: chrono::NaiveDate| {
+            let q = format!(
+                r#"{{ viewer {{ c: contributionsCollection(from: "{}T00:00:00Z", to: "{}T23:59:59Z") {{ contributionCalendar {{ weeks {{ contributionDays {{ date contributionCount }} }} }} }} }} }}"#,
+                from.format("%Y-%m-%d"),
+                day_str
+            );
+            async move {
+                let out = tokio::process::Command::new("gh")
+                    .args(["api", "graphql", "-f"])
+                    .arg(format!("query={q}"))
+                    .output()
+                    .await
+                    .expect("gh must be on PATH");
+                String::from_utf8_lossy(&out.stdout).to_string()
+            }
+        };
+        let count = |body: &str| {
+            body.split(&format!(r#""date":"{day_str}","contributionCount":"#))
+                .nth(1)
+                .and_then(|t| t.split('}').next())
+                .map(str::to_string)
+        };
+        for back in [7_i64, 8, 9] {
+            let from = today - chrono::Duration::days(back);
+            let body = ask(from).await;
+            println!(
+                "from {} (today - {back}) -> today = {:?}",
+                from,
+                count(&body)
+            );
+        }
+        println!(
+            "If these disagree, the per-`from` cache is still there and the \
+             rotation is earning its keep. If they always agree even right \
+             after a push, re-read contributions.rs::ROTATION_SPAN."
+        );
+    }
+
+    /// The rotation has to reach the query, not just exist. GitHub caches a
+    /// `contributionsCollection` against its `from` date, so two polls that
+    /// build the same `from` get the same cached answer however much has
+    /// happened in between.
+    #[test]
+    fn the_rotation_changes_the_from_the_query_asks_for() {
+        let today = day("2026-08-18");
+        let extract = |q: &str| {
+            let at = q.find("recent: contributionsCollection").unwrap();
+            let from = q[at..].find("from: \"").unwrap() + at + 7;
+            q[from..from + 10].to_string()
+        };
+        let a = extract(&build_query(50, today, 7));
+        let b = extract(&build_query(50, today, 8));
+        assert_ne!(a, b, "consecutive holds asked GitHub the same question");
+        // `to` is not in GitHub's cache key, so it must not move: today is
+        // what the window is for.
+        for tick in [7, 8, 300] {
+            assert!(
+                build_query(50, today, tick).contains(r#"to: "2026-08-18T23:59:59Z""#),
+                "tick {tick} stopped reaching today"
+            );
+        }
+    }
+
+    /// A payload off the disk cache was written under whatever rotation was in
+    /// force then, which the parser cannot recover. The merged range is
+    /// therefore fixed rather than derived from the window, and any rotation's
+    /// payload has to merge identically.
+    #[test]
+    fn a_payload_from_any_rotation_merges_the_same_days() {
+        let today = day("2026-08-18");
+        let json = r#"{"data":{"viewer":{
+            "repositories":{"nodes":[]},
+            "y0":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[{"date":"2026-08-18","contributionCount":0}]}
+            ]}},
+            "recent":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[
+                {"date":"2026-08-18","contributionCount":11},
+                {"date":"2026-01-01","contributionCount":99}
+              ]}
+            ]}}
+        }}}"#;
+        let viewer = serde_json::from_str::<GraphQlResponse>(json)
+            .unwrap()
+            .data
+            .unwrap()
+            .viewer;
+        let cal = parse_calendar(viewer.contribution_years, viewer.recent, today).unwrap();
+        // Today comes from the fresh window, beating the stale year one.
+        assert_eq!(
+            cal.total(),
+            11,
+            "the fresh value did not win, or the far day leaked in"
+        );
+    }
+
     /// The alias has to be in the query at all, and has to reach today: a
     /// window that stops short of it re-asks for nothing that was lagging.
     #[test]
     fn the_query_asks_for_the_recent_window_too() {
         let today = day("2026-08-18");
-        let q = build_query(50, today);
+        let q = build_query(50, today, 0);
         assert!(
             q.contains("recent: contributionsCollection"),
             "no recent alias"
@@ -1363,7 +1480,7 @@ mod tests {
     /// limit ran out; at cost 3 it spends 360.
     #[test]
     fn the_org_fallback_is_billed_at_its_own_page_size() {
-        let q = build_query(50, day("2026-08-18"));
+        let q = build_query(50, day("2026-08-18"), 0);
         assert!(
             q.contains(&format!("organizations(first: {MAX_ORGS})")),
             "org page not wired to MAX_ORGS"
@@ -1389,7 +1506,7 @@ mod tests {
     /// smaller page buys nothing and loses PRs.
     #[test]
     fn the_pr_page_is_not_shrunk_for_cost() {
-        let q = build_query(50, day("2026-08-18"));
+        let q = build_query(50, day("2026-08-18"), 0);
         assert!(q.contains("pullRequests(states: OPEN, first: 5,"));
     }
 }
