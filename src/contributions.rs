@@ -95,6 +95,32 @@ pub fn year_windows(today: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {
     windows
 }
 
+/// Days the `recent` window re-asks for, today included.
+///
+/// GitHub answers a year-long `contributionsCollection` from a precomputed
+/// index that lags behind the live one. Probed on 2026-08-24 at 12:19 CEST,
+/// three commits pushed at 12:03 that day were already on the profile graph
+/// and already visible to a one-day window (`totalContributions: 3`), while
+/// the 2025-08-25..2026-08-24 window the grid is built from still reported
+/// that day as 0. The green strip drew the zero it was handed, so a day's
+/// work went missing until GitHub's own index caught up.
+///
+/// Seven rather than one because the lag has no documented bound, and a week
+/// is still free: an alias with no `first:` connection adds no cost to the
+/// query.
+const RECENT_DAYS: i64 = 7;
+
+/// The `[from, to]` window re-asked for at full freshness, laid over the year
+/// windows. A subset of the newest one from `year_windows`, deliberately: the
+/// point is to ask the same days a second way, not to reach days the year
+/// windows miss.
+pub fn recent_window(today: NaiveDate) -> (NaiveDate, NaiveDate) {
+    (
+        (today - Duration::days(RECENT_DAYS - 1)).max(grid_start(today)),
+        today,
+    )
+}
+
 /// One repo's commits per grid slot. `u16` because no repo gets 65k commits
 /// from one author in one day, and 742 bytes per repo is small enough to
 /// keep on every `RepoStatus`.

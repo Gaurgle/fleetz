@@ -69,6 +69,15 @@ struct Viewer {
     /// `contributionsCollection` key in the same map and still parses.
     #[serde(flatten, default)]
     contribution_years: std::collections::BTreeMap<String, ContributionsCollection>,
+    /// The last few days, re-asked for in a window of their own because
+    /// GitHub's year-range calendar lags. Declared rather than left to the
+    /// flattened map above so the merge order is stated, not inherited from
+    /// how `BTreeMap` happens to sort the aliases: "recent" sorts *before*
+    /// "y0", so a map-ordered merge would let the stale year window overwrite
+    /// the fresh values instead of the other way round. Absent in payloads
+    /// cached before this was added, hence `Option`.
+    #[serde(default)]
+    recent: Option<ContributionsCollection>,
 }
 
 #[derive(Deserialize)]
@@ -108,22 +117,44 @@ struct CalendarDay {
 /// year total with it. Setting costs nothing and cannot.
 fn parse_calendar(
     years: std::collections::BTreeMap<String, ContributionsCollection>,
+    recent: Option<ContributionsCollection>,
     today: chrono::NaiveDate,
 ) -> Option<Calendar> {
-    if years.is_empty() {
+    if years.is_empty() && recent.is_none() {
         return None;
     }
     let mut calendar = Calendar::new(today, Source::Github);
     for collection in years.into_values() {
-        for week in collection.contribution_calendar.weeks {
-            for day in week.contribution_days {
-                if let Ok(date) = chrono::NaiveDate::parse_from_str(&day.date, "%Y-%m-%d") {
-                    calendar.set(date, day.contribution_count);
+        fill(&mut calendar, collection, None);
+    }
+    // Last, so the fresh numbers win over the lagging year windows for the
+    // days both cover. Clamped to its own `from`: the year windows are the
+    // only source for everything older, and a padded week reaching back past
+    // the window would `set` those days to the zero it pads with.
+    if let Some(collection) = recent {
+        let (from, _) = crate::contributions::recent_window(today);
+        fill(&mut calendar, collection, Some(from));
+    }
+    Some(calendar)
+}
+
+/// Fold one window's week/day nesting into the grid, skipping days before
+/// `floor` when the caller has one.
+fn fill(
+    calendar: &mut Calendar,
+    collection: ContributionsCollection,
+    floor: Option<chrono::NaiveDate>,
+) {
+    for week in collection.contribution_calendar.weeks {
+        for day in week.contribution_days {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(&day.date, "%Y-%m-%d") {
+                if floor.is_some_and(|f| date < f) {
+                    continue;
                 }
+                calendar.set(date, day.contribution_count);
             }
         }
     }
-    Some(calendar)
 }
 
 #[derive(Deserialize)]
@@ -301,9 +332,25 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate) -> String {
             )
         })
         .collect();
+    // The newest days again, in a window of their own. GitHub answers a
+    // year-long range from an index that lags the live one, so the day you
+    // just worked can come back as 0 from `y0` while a short window on the
+    // same date reports it correctly. Another alias, so still no request and
+    // still no `first:` connection to pay for.
+    let (recent_from, recent_to) = crate::contributions::recent_window(today);
+    let recent_field = format!(
+        r#"  recent: contributionsCollection(from: "{}T00:00:00Z", to: "{}T23:59:59Z") {{
+    contributionCalendar {{
+      weeks {{ contributionDays {{ date, contributionCount }} }}
+    }}
+  }}
+"#,
+        recent_from.format("%Y-%m-%d"),
+        recent_to.format("%Y-%m-%d")
+    );
     format!(
         r#"{{ viewer {{
-{calendar_fields}  repositories(first: {repo_limit}, orderBy: {{field: PUSHED_AT, direction: DESC}},
+{calendar_fields}{recent_field}  repositories(first: {repo_limit}, orderBy: {{field: PUSHED_AT, direction: DESC}},
     affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {{
     {repo_fields}
   }}
@@ -349,18 +396,20 @@ fn split_viewer(viewer: Viewer, today: chrono::NaiveDate) -> GithubFetch {
         repositories,
         organizations,
         contribution_years,
+        recent,
     } = viewer;
     let nodes = merge_sources(Viewer {
         repositories,
         organizations,
         contribution_years: Default::default(),
+        recent: None,
     });
     // An empty fleet carries no evidence either way, so it must not be read
     // as a stale payload -- that would make every poll a cache miss forever.
     let has_pr_counts = nodes.is_empty() || nodes.iter().any(|n| n.pull_requests.is_some());
     GithubFetch {
         repos: parse_repos(nodes),
-        calendar: parse_calendar(contribution_years, today).map(Box::new),
+        calendar: parse_calendar(contribution_years, recent, today).map(Box::new),
         has_pr_counts,
     }
 }
@@ -922,7 +971,9 @@ mod tests {
         let json = r#"{"data":{"viewer":{"repositories":{"nodes":[]}}}}"#;
         let response: GraphQlResponse = serde_json::from_str(json).unwrap();
         let viewer = response.data.unwrap().viewer;
-        assert!(parse_calendar(viewer.contribution_years, day("2026-08-18")).is_none());
+        assert!(
+            parse_calendar(viewer.contribution_years, viewer.recent, day("2026-08-18")).is_none()
+        );
     }
 
     /// A payload carrying the single un-aliased `contributionsCollection` key
@@ -943,7 +994,8 @@ mod tests {
         }}}"#;
         let response: GraphQlResponse = serde_json::from_str(json).unwrap();
         let viewer = response.data.unwrap().viewer;
-        let cal = parse_calendar(viewer.contribution_years, day("2026-08-18")).unwrap();
+        let cal =
+            parse_calendar(viewer.contribution_years, viewer.recent, day("2026-08-18")).unwrap();
         assert_eq!(cal.total(), 9);
         // The three-year grid opens on 2023-08-20, so 2025-08-17 is no longer
         // slot 0: it is the Sunday of week 104.
@@ -970,11 +1022,9 @@ mod tests {
             ]}}
         }}}"#;
         let response: GraphQlResponse = serde_json::from_str(json).unwrap();
-        let cal = parse_calendar(
-            response.data.unwrap().viewer.contribution_years,
-            day("2026-08-18"),
-        )
-        .unwrap();
+        let viewer = response.data.unwrap().viewer;
+        let cal =
+            parse_calendar(viewer.contribution_years, viewer.recent, day("2026-08-18")).unwrap();
         assert_eq!(cal.total(), 7, "the shared day was counted twice");
     }
 
@@ -1014,7 +1064,8 @@ mod tests {
         }}}"#;
         let response: GraphQlResponse = serde_json::from_str(json).unwrap();
         let viewer = response.data.unwrap().viewer;
-        let cal = parse_calendar(viewer.contribution_years, day("2026-08-18")).unwrap();
+        let cal =
+            parse_calendar(viewer.contribution_years, viewer.recent, day("2026-08-18")).unwrap();
         assert_eq!(cal.total(), 3);
     }
 
@@ -1117,6 +1168,7 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
     /// A GraphQL error arrives with HTTP 200 and an `errors` key, so nothing
     /// about the transport marks it as junk. It used to be written to disk
     /// the moment it arrived: one rate-limited poll replaced a 73KB payload
@@ -1164,5 +1216,99 @@ mod tests {
         assert!(accept_response(good, &cache, day("2026-08-18")).is_ok());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), good);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bug this window exists for. GitHub's year-range calendar is served
+    /// from an index that lags: on 2026-08-24 the year window reported that
+    /// day as 0 while a one-day window on the same date reported 3, so a
+    /// morning's work was missing from the green strip. The short window has
+    /// to win for the days both cover.
+    #[test]
+    fn the_recent_window_overrides_a_stale_year_window() {
+        let json = r#"{"data":{"viewer":{
+            "repositories":{"nodes":[]},
+            "y0":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[{"date":"2026-08-18","contributionCount":0}]}
+            ]}},
+            "recent":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[{"date":"2026-08-18","contributionCount":3}]}
+            ]}}
+        }}}"#;
+        let viewer = serde_json::from_str::<GraphQlResponse>(json)
+            .unwrap()
+            .data
+            .unwrap()
+            .viewer;
+        assert!(
+            !viewer.contribution_years.contains_key("recent"),
+            "the recent window must not also land in the flattened map, or its \
+             merge position is decided by BTreeMap ordering again"
+        );
+        let cal =
+            parse_calendar(viewer.contribution_years, viewer.recent, day("2026-08-18")).unwrap();
+        assert_eq!(
+            cal.total(),
+            3,
+            "the lagging year window overwrote the fresh one"
+        );
+    }
+
+    /// `recent` is merged last, so anything it reports for a day wins. A week
+    /// padded back past its own `from` would therefore `set` days that only
+    /// the year windows can know about to the zero it pads with, blanking the
+    /// left edge of the strip one day per launch.
+    #[test]
+    fn a_recent_week_padded_past_its_start_cannot_blank_older_days() {
+        let today = day("2026-08-18");
+        let (from, _) = crate::contributions::recent_window(today);
+        let before = (from - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        let json = format!(
+            r#"{{"data":{{"viewer":{{
+            "repositories":{{"nodes":[]}},
+            "y0":{{"contributionCalendar":{{"weeks":[
+              {{"contributionDays":[{{"date":"{before}","contributionCount":5}}]}}
+            ]}}}},
+            "recent":{{"contributionCalendar":{{"weeks":[
+              {{"contributionDays":[{{"date":"{before}","contributionCount":0}}]}}
+            ]}}}}
+        }}}}}}"#
+        );
+        let viewer = serde_json::from_str::<GraphQlResponse>(&json)
+            .unwrap()
+            .data
+            .unwrap()
+            .viewer;
+        let cal = parse_calendar(viewer.contribution_years, viewer.recent, today).unwrap();
+        assert_eq!(
+            cal.total(),
+            5,
+            "a padded week zeroed a day outside its window"
+        );
+    }
+
+    /// The alias has to be in the query at all, and has to reach today: a
+    /// window that stops short of it re-asks for nothing that was lagging.
+    #[test]
+    fn the_query_asks_for_the_recent_window_too() {
+        let today = day("2026-08-18");
+        let q = build_query(50, today);
+        assert!(
+            q.contains("recent: contributionsCollection"),
+            "no recent alias"
+        );
+        assert!(
+            q.contains(r#"to: "2026-08-18T23:59:59Z""#),
+            "the recent window must reach today"
+        );
+        // A `first:` on this alias would make it a paid connection rather than
+        // a free field, which is the whole reason it is affordable.
+        let recent = &q[q.find("recent: contributionsCollection").unwrap()..];
+        let recent = &recent[..recent.find("repositories(").unwrap_or(recent.len())];
+        assert!(
+            !recent.contains("first:"),
+            "the recent alias must stay free"
+        );
     }
 }
