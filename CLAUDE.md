@@ -70,9 +70,8 @@ cargo fmt                     # must be clean before committing
 cargo install --path .        # to ~/.cargo/bin (the `fleetz` on PATH)
 ```
 
-Needs a Nerd Font (repo-kind glyphs are Nerd Font codepoints,
-`ui/badges.rs::kind_glyph`, and render as tofu without one) and an
-authenticated `gh` on PATH, since the GitHub fetch shells out to it.
+Needs a Nerd Font (`ui/badges.rs::kind_glyph` uses Nerd Font codepoints, tofu
+without one) and an authenticated `gh` on PATH, which the GitHub fetch uses.
 
 ## Domain invariants - do not violate
 
@@ -91,13 +90,13 @@ lists it (`sort_by_activity`), applied after the pass dedupe below.
 
 **Discovery pass order is load-bearing** (`main.rs::assemble_view`). Pass 1
 scans the configured roots, pass 2 sweeps `$HOME`, pass 3 picks up local-only
-repos, and only then is anything labeled "not cloned". A local clone must win
-over the not-cloned fallback, or a repo under a hidden path reports as absent.
+repos, and only then is anything "not cloned". A local clone must win over that
+fallback, or a repo under a hidden path reports as absent.
 
 **A local clone may be dot-prefixed when its GitHub repo is not** (`dotfiles`
 lives at `~/.dotfiles`). Discovery matches both spellings and reports the
-undotted name: the GitHub match, the glyph lookup and dedupe all key on the
-GitHub name (`discovery::matched_name`, `discovery::repo_name_for_path`).
+undotted name: match, glyph lookup and dedupe all key on the GitHub name
+(`discovery::matched_name`, `discovery::repo_name_for_path`).
 
 **Hidden directories are traversed inside a configured scan root, but not in
 the `$HOME` sweep.** A root you named (`repo_dir`, `extra_dirs`) yields its
@@ -164,16 +163,18 @@ when that clone last fetched, so a remote pushed before then is already in hand
 no `FETCH_HEAD` means never fetched -- or the fleet looks more current than it
 is.
 
-**Launch paints from the cache, however stale.** The repo list derives from the
-GraphQL dataset, so blocking on it cost 6-9s before the first frame. Startup
-passes `CacheMode::AnyCached` and the first tick's poll replaces it. Keyed by
-`repo_limit` alone: never re-add `-p` (see `cache.rs`), which decides whether
-PR data is *drawn*, not whether it is fetched.
+**Launch paints from the cache, however stale.** Blocking on the GraphQL
+dataset cost 6-9s before the first frame, so startup passes
+`CacheMode::AnyCached` and the first tick's poll replaces it. That only works
+if the poll is due: a cache-served load must leave `last_github_poll` unset
+(`GithubFetch::from_cache`), or launch shows the last session's numbers for a
+whole interval. Keyed by `repo_limit` alone: never re-add `-p` (`cache.rs`),
+which decides whether PR data is *drawn*, not whether it is fetched.
 
 **Never widen the GitHub fetch without checking the cache.** Results are cached
 on disk with a TTL (`cache.rs`, `cache_ttl`); `r` rebuilds from cache, `R`
 bypasses it. A field with no `first:` is free, which is how the contribution
-calendars ride along at zero cost; a field with one is not, and a request
+calendars ride along at no cost; one with a `first:` is not, and a request
 never is.
 
 **GitHub caches `contributionsCollection` against the `from` date alone**, so
@@ -192,8 +193,7 @@ the dashboard went blank until a poll succeeded.
 
 ## Relationship to repoz
 
-Behavioral parity with repoz is a design goal, not an accident. `EXTRA_DIRS`,
-the dot-prefixed name match, the `section_div` list headers, the org/private/
-public glyphs, and the time-slot logic all mirror it. When the two disagree
-about what a repo's state is, repoz has usually been right longer: check its
-implementation at `~/repos/repoz/repoz` before assuming fleetz is correct.
+Behavioral parity with repoz is a design goal, not an accident: `EXTRA_DIRS`,
+the dot-prefixed name match, `section_div` headers, the glyphs, push ordering
+and the time-slot logic all mirror it. When the two disagree, repoz has usually
+been right longer: read `~/repos/repoz/repoz` before assuming fleetz is right.
