@@ -1413,7 +1413,13 @@ fn graph_prefix_spans_raw(prefix: &str) -> Vec<Span<'static>> {
                 // The compact graph has always done this (`Cell::is_node`);
                 // this is the expanded renderer catching up.
                 '*' => colors::TEXT,
-                _ => colors::graph_lane_color(i / 2),
+                _ => {
+                    // git writes two columns per lane: the glyph (|, \, /, _) and
+                    // a horizontal run beside it (space or connector). Palette must
+                    // be indexed by lane, not column, or adjacent lanes land two
+                    // apart and the first six lanes only use three of six colours.
+                    colors::graph_lane_color(i / 2)
+                }
             };
             Span::styled(ch.to_string(), Style::default().fg(color))
         })
@@ -3187,6 +3193,47 @@ mod tests {
             first[0].style.fg.unwrap(),
             fifth[4].style.fg.unwrap(),
             "node colour still depends on the column"
+        );
+    }
+
+    /// git writes two columns per lane (glyph and horizontal run), so the
+    /// palette must be indexed by lane not by column. If this reverts to raw
+    /// column indices, adjacent lanes land two palette entries apart and six
+    /// lanes only use three of six colours. This guards against that regression.
+    #[test]
+    fn pipes_are_coloured_by_lane_not_by_column() {
+        let spans = graph_prefix_spans_raw("| | | | ");
+        let colour_of = |i: usize| spans[i].style.fg.expect("every span is styled");
+
+        // Columns 0, 2, 4, 6 are lanes 0, 1, 2, 3 respectively. Each should
+        // get a different palette entry if indexed by lane (i / 2), or land on
+        // the same entry if mistakenly indexed by raw column (i).
+        assert_eq!(
+            colour_of(0),
+            colors::graph_lane_color(0),
+            "column 0 is lane 0"
+        );
+        assert_eq!(
+            colour_of(2),
+            colors::graph_lane_color(1),
+            "column 2 is lane 1"
+        );
+        assert_eq!(
+            colour_of(4),
+            colors::graph_lane_color(2),
+            "column 4 is lane 2"
+        );
+        assert_eq!(
+            colour_of(6),
+            colors::graph_lane_color(3),
+            "column 6 is lane 3"
+        );
+
+        // Adjacent lanes must use different palette entries.
+        assert_ne!(
+            colour_of(0),
+            colour_of(2),
+            "lanes 0 and 1 must be distinguishable"
         );
     }
 }
