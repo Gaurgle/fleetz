@@ -140,7 +140,16 @@ Optional config at `~/.config/fleetz/config.toml` (a legacy `~/.config/epoz/conf
 work_start = 9
 work_end = 18
 
-# How many repos to fetch from GitHub
+# How many repos to fetch from GitHub, newest push first. Repos reached only
+# through org membership come from a separate fallback query capped at 8 orgs
+# of 12 repos each, independent of this: GraphQL bills node count on the page
+# size asked for, so that branch is sized to what it retrieves rather than to
+# repo_limit.
+#
+# This also bounds how far the time window can be widened before a re-fetch is
+# needed; past it the header says so. Lowering it to match a narrow window
+# saves no API cost (the per-connection floor dominates) and costs that
+# headroom, so leave it generous.
 repo_limit = 50
 
 # Where to look for local clones (~ expanded)

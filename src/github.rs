@@ -260,6 +260,41 @@ struct GraphQlError {
 }
 
 /// Build the GraphQL query string.
+/// How many organizations the fallback branch asks for, and how many repos
+/// inside each.
+///
+/// Node count is billed on the `first:` you ask for, not on what comes back,
+/// and this branch multiplies: orgs x repos x (PR page + check suite). That
+/// makes it the whole cost of the query. Measured against the live fleet on
+/// 2026-08-24, every row returning the identical repo set of 17 org repos
+/// across 4 orgs:
+///
+///   25 x 50 (was `repo_limit`)   cost 26 / nodeCount 9125
+///   10 x 25                      cost  6 / nodeCount 2110
+///    8 x 12                      cost  3 / nodeCount 1030
+///    5 x 10                      cost  2 / nodeCount  705
+///
+/// At 25 x 50 the branch was 83% of the node count, and 26 points every 30
+/// seconds is 3120/hour against a 5000/hour budget: one fleetz idled at 62%
+/// of the account's GraphQL allowance and two could not both run. That is how
+/// the limit came to be exhausted.
+///
+/// 8 x 12 is roughly double the fleet it has to cover, which is the headroom
+/// worth paying one point for: overrunning either page drops repos silently.
+/// Both connections order by PUSHED_AT DESC, so what a too-small page loses
+/// is always the least recently touched.
+///
+/// Trimming the *viewer* branch instead does nothing. At `first: 20`, which
+/// still covers a three-week window twice over, the same query measured cost
+/// 6 / 1900 -- node count down a tenth, cost unmoved, because the connection
+/// floor dominates. `repo_limit` is also what bounds how far the time window
+/// can be widened without re-fetching (`window_exceeds_dataset`), so lowering
+/// it spends real flexibility for no saving.
+const MAX_ORGS: u32 = 8;
+const ORG_REPO_LIMIT: u32 = 12;
+/// Raising either back past what it replaced puts the 26-point query back.
+const _: () = assert!(MAX_ORGS < 25 && ORG_REPO_LIMIT < 50);
+
 fn build_query(repo_limit: u32, today: chrono::NaiveDate) -> String {
     // PR numbers cannot be had cheaply, and half-measures buy nothing.
     // Measured against the live API on the same fleet:
@@ -274,10 +309,13 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate) -> String {
     // A one-PR page costs exactly what a five-PR page carrying every field
     // costs, so asking for less than the full set is pure loss.
     //
-    // 26 points against a 5000/hour limit is about 12 polls an hour at the
-    // default refresh, so this is affordable rather than free -- which is
-    // what "never widen the GitHub fetch without checking the cache" asks:
-    // not that a field be free, but that its price be known before it ships.
+    // Affordable rather than free -- which is what "never widen the GitHub
+    // fetch without checking the cache" asks: not that a field be free, but
+    // that its price be known before it ships. Note the price is paid per
+    // *poll*, on `github_poll_interval` (30s) and not on `refresh_interval`:
+    // at cost 26 that was 3120 points an hour against a 5000/hour limit, and
+    // 6240 while a CI run held the poll at its 15s floor. See `MAX_ORGS` for
+    // where that cost actually came from and what it is now.
     // `-p` now controls how much of this gets *drawn*, not what is fetched.
     let pr_field = r#"pullRequests(states: OPEN, first: 5, orderBy: {field: CREATED_AT, direction: DESC}) {
         totalCount
@@ -310,12 +348,16 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate) -> String {
     // viewer.repositories at any affiliation. Without the second source those
     // repos are invisible to fleetz even though you can push to them. repoz
     // hits the same wall and solves it the same way.
-    // The calendar fields are free. Measured against the live API: this whole
-    // query prices at cost 13 / nodeCount 2625 both with the four aliases and
-    // with them stripped out, because none has a `first:` connection to pay
-    // for. Fields, not requests, which is what the "never widen the GitHub
-    // fetch without checking the cache" invariant permits. One alias per year
-    // because contributionsCollection refuses a range longer than a year.
+    // The calendar fields are free: none has a `first:` connection to pay for,
+    // so adding one moves nodeCount not at all. Fields, not requests, which is
+    // what the "never widen the GitHub fetch without checking the cache"
+    // invariant permits. One alias per year because contributionsCollection
+    // refuses a range longer than a year.
+    //
+    // This block used to claim the whole query priced at cost 13 / nodeCount
+    // 2625. That was measured before the PR page landed and was never
+    // updated; re-measured on 2026-08-24 the same query is cost 26 / 9125,
+    // which is what the `pr_field` comment above has said all along.
     let calendar_fields: String = crate::contributions::year_windows(today)
         .into_iter()
         .enumerate()
@@ -354,9 +396,9 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate) -> String {
     affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {{
     {repo_fields}
   }}
-  organizations(first: 25) {{
+  organizations(first: {MAX_ORGS}) {{
     nodes {{
-      repositories(first: {repo_limit}, orderBy: {{field: PUSHED_AT, direction: DESC}}) {{
+      repositories(first: {ORG_REPO_LIMIT}, orderBy: {{field: PUSHED_AT, direction: DESC}}) {{
         {repo_fields}
       }}
     }}
@@ -1310,5 +1352,44 @@ mod tests {
             !recent.contains("first:"),
             "the recent alias must stay free"
         );
+    }
+
+    /// Node count is billed on the `first:` asked for, not on what comes back,
+    /// and the org fallback multiplies it by the page size inside each org.
+    /// Reusing `repo_limit` there measured at cost 26 / 9125 nodes on
+    /// 2026-08-24, to retrieve 17 repos from 4 orgs; at its own page size the
+    /// identical result set measured cost 3 / 1030. One fleetz polling every
+    /// 30s at cost 26 spends 3120 of a 5000/hour budget, which is how the
+    /// limit ran out; at cost 3 it spends 360.
+    #[test]
+    fn the_org_fallback_is_billed_at_its_own_page_size() {
+        let q = build_query(50, day("2026-08-18"));
+        assert!(
+            q.contains(&format!("organizations(first: {MAX_ORGS})")),
+            "org page not wired to MAX_ORGS"
+        );
+        assert!(
+            q.contains(&format!(
+                "repositories(first: {ORG_REPO_LIMIT}, orderBy: {{field: PUSHED_AT"
+            )),
+            "org repo page not wired to ORG_REPO_LIMIT"
+        );
+        // The viewer branch keeps `repo_limit`; the fallback must not, or the
+        // node count multiplies by it again.
+        assert_eq!(
+            q.matches("repositories(first: 50").count(),
+            1,
+            "the org fallback is reusing repo_limit"
+        );
+    }
+
+    /// The PR page is deliberately *not* shrunk to save cost. Measured on the
+    /// same fleet, dropping it from 5 to 3 moved nodeCount 1198 -> 858 and
+    /// left cost at 4: the connection's per-call floor dominates, so a
+    /// smaller page buys nothing and loses PRs.
+    #[test]
+    fn the_pr_page_is_not_shrunk_for_cost() {
+        let q = build_query(50, day("2026-08-18"));
+        assert!(q.contains("pullRequests(states: OPEN, first: 5,"));
     }
 }
