@@ -34,6 +34,14 @@ pub struct GithubFetch {
     /// upgraded install serves its old cache and reports no PRs anywhere for
     /// a full TTL, silently.
     pub has_pr_counts: bool,
+    /// Whether this came off the disk cache rather than the network.
+    ///
+    /// Startup serves any cached payload however old (`CacheMode::AnyCached`),
+    /// so "the load returned a dataset" does not mean "GitHub was just asked".
+    /// The caller needs the difference: starting the re-poll clock from a
+    /// cached payload leaves the first real poll a whole interval away, and
+    /// the dashboard spends it showing whatever the last session left behind.
+    pub from_cache: bool,
 }
 
 // --- Raw deserialization types (match GraphQL response shape) ---
@@ -428,12 +436,12 @@ fn merge_sources(viewer: Viewer) -> Vec<RepoNode> {
 /// field existed, which is exactly what an upgraded install reads first.
 fn parse_cached(json: Option<String>, today: chrono::NaiveDate) -> Option<GithubFetch> {
     let response: GraphQlResponse = serde_json::from_str(&json?).ok()?;
-    Some(split_viewer(response.data?.viewer, today))
+    Some(split_viewer(response.data?.viewer, today, true))
 }
 
 /// Pull the calendar out of a viewer and flatten the rest into repos. Both
 /// halves consume the viewer, so it is destructured rather than borrowed.
-fn split_viewer(viewer: Viewer, today: chrono::NaiveDate) -> GithubFetch {
+fn split_viewer(viewer: Viewer, today: chrono::NaiveDate, from_cache: bool) -> GithubFetch {
     let Viewer {
         repositories,
         organizations,
@@ -453,6 +461,7 @@ fn split_viewer(viewer: Viewer, today: chrono::NaiveDate) -> GithubFetch {
         repos: parse_repos(nodes),
         calendar: parse_calendar(contribution_years, recent, today).map(Box::new),
         has_pr_counts,
+        from_cache,
     }
 }
 
@@ -564,7 +573,7 @@ fn accept_response(
 
     let data = body.data.ok_or("GitHub response missing data field")?;
     cache.write(body_text);
-    Ok(split_viewer(data.viewer, today))
+    Ok(split_viewer(data.viewer, today, false))
 }
 
 /// Parse raw GraphQL nodes into GithubRepo structs.

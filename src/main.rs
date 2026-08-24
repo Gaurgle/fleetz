@@ -127,6 +127,10 @@ pub struct LoadResult {
     /// WindowApply and for a cached payload predating the field, so the
     /// consumer must not treat None as "the year is empty".
     pub github_calendar: Option<Box<contributions::Calendar>>,
+    /// Whether `dataset` came off the disk cache rather than the network.
+    /// Startup serves any cached payload however old, so this decides whether
+    /// the re-poll clock may start here or the first poll is due immediately.
+    pub dataset_from_cache: bool,
 }
 
 /// True while a child program (lazygit, $EDITOR, a shell) owns the terminal.
@@ -359,13 +363,14 @@ fn spawn_load(
         let mode = args.mode();
         let result = load_repos(&args, &config, &repo_dir, &mode, window, bypass_cache)
             .await
-            .map(|(repos, header, dataset, calendar)| {
+            .map(|(repos, header, dataset, calendar, dataset_from_cache)| {
                 Box::new(LoadResult {
                     kind,
                     repos,
                     header,
                     dataset: Some(dataset),
                     github_calendar: calendar,
+                    dataset_from_cache,
                 })
             });
         let _ = tx.send(AppEvent::Loaded(result));
@@ -409,6 +414,10 @@ fn spawn_window_apply(
                 header,
                 dataset: None,
                 github_calendar: None,
+                // A window apply re-filters what is already in memory and
+                // fetches nothing, so it must not touch the poll clock either
+                // way. `dataset: None` already guards that.
+                dataset_from_cache: false,
             })
         });
         let _ = tx.send(AppEvent::Loaded(result));
@@ -432,9 +441,17 @@ fn apply_load_result(
             app.header = lr.header;
             if let Some(ds) = lr.dataset {
                 app.dataset = ds;
-                // This dataset just came from GitHub, so the watch re-poll
-                // clock starts here rather than firing again immediately.
-                app.last_github_poll = Some(chrono::Local::now());
+                // Only a dataset that actually came from GitHub may start the
+                // re-poll clock. Startup serves any cached payload however old
+                // (`CacheMode::AnyCached`), and starting the clock from that
+                // left the first real poll a full `github_poll_interval` away:
+                // every launch opened on whatever the last session had left on
+                // disk and sat there for thirty seconds, with nothing on
+                // screen to say the numbers were not current. Leaving it None
+                // makes the poll due on the first tick instead.
+                if !lr.dataset_from_cache {
+                    app.last_github_poll = Some(chrono::Local::now());
+                }
             }
             // The calendar rides the same fetch as the dataset. Dropping it
             // here left the strip blank until the first background poll
@@ -610,6 +627,9 @@ async fn run_event_loop(
                             repos: dataset,
                             calendar,
                             has_pr_counts: _,
+                            // The poll always bypasses the cache, so this is
+                            // network data by construction.
+                            from_cache: _,
                         } = *fetch;
                         // The calendar rides the same payload as the repos, so
                         // a poll that updated CI also refreshed the year at no
@@ -1789,6 +1809,7 @@ async fn load_repos(
         String,
         Vec<github::GithubRepo>,
         Option<Box<contributions::Calendar>>,
+        bool,
     ),
     String,
 > {
@@ -1823,19 +1844,20 @@ async fn load_repos(
         }
         results.sort_by_key(|(i, _)| *i);
         let repos: Vec<RepoStatus> = results.into_iter().filter_map(|(_, r)| r).collect();
-        return Ok((repos, header, Vec::new(), None));
+        return Ok((repos, header, Vec::new(), None, false));
     }
 
     // Fetch from GitHub (with caching)
     let api_cache = cache::ApiCache::new(config.cache_ttl, config.repo_limit);
     let fetch = fetch_dataset(config, &api_cache, bypass_cache).await?;
+    let from_cache = fetch.from_cache;
     let (dataset, calendar) = (fetch.repos, fetch.calendar);
 
     let (cutoff, header) = resolve_cutoff(window, mode, config)?;
     let (repos, full_header) =
         assemble_view(&dataset, cutoff, header, args, config, repo_dir, true, None).await?;
 
-    Ok((repos, full_header, dataset, calendar))
+    Ok((repos, full_header, dataset, calendar, from_cache))
 }
 
 /// One repo's full local status for `-d` mode. Returns None for a repo with
@@ -2822,12 +2844,68 @@ mod tests {
                 header: "h".to_string(),
                 dataset: Some(Vec::new()),
                 github_calendar: Some(Box::new(cal)),
+                dataset_from_cache: false,
             })),
         );
         assert_eq!(
             app.github_calendar.as_ref().map(|c| c.total()),
             Some(5),
             "the startup fetch must fill the strip"
+        );
+    }
+
+    /// A cache-served launch must leave the re-poll clock unset, so the first
+    /// tick polls immediately.
+    ///
+    /// Startup passes `CacheMode::AnyCached` and takes any payload however
+    /// old, so "the load returned a dataset" never meant "GitHub was just
+    /// asked". Starting the clock from it put the first real poll a whole
+    /// `github_poll_interval` away, and the dashboard spent it showing what
+    /// the previous session had left on disk. Seen for real: a launch at
+    /// 15:38:11 painted a stale contribution count and did not correct it
+    /// until 15:38:50.
+    #[test]
+    fn a_cache_served_launch_leaves_the_poll_due_immediately() {
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        apply_load_result(
+            &mut app,
+            &config::Config::default(),
+            Ok(Box::new(LoadResult {
+                kind: LoadKind::Initial,
+                repos: Vec::new(),
+                header: "h".to_string(),
+                dataset: Some(Vec::new()),
+                github_calendar: None,
+                dataset_from_cache: true,
+            })),
+        );
+        assert!(
+            app.last_github_poll.is_none(),
+            "a cached payload started the re-poll clock, delaying the first \
+             real poll by a whole interval"
+        );
+    }
+
+    /// The other half: a load that did reach GitHub has just polled, so the
+    /// clock starts here rather than firing again a tick later.
+    #[test]
+    fn a_network_served_launch_starts_the_poll_clock() {
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        apply_load_result(
+            &mut app,
+            &config::Config::default(),
+            Ok(Box::new(LoadResult {
+                kind: LoadKind::Initial,
+                repos: Vec::new(),
+                header: "h".to_string(),
+                dataset: Some(Vec::new()),
+                github_calendar: None,
+                dataset_from_cache: false,
+            })),
+        );
+        assert!(
+            app.last_github_poll.is_some(),
+            "fresh data should not re-poll at once"
         );
     }
 
@@ -2849,6 +2927,7 @@ mod tests {
                 header: "h".to_string(),
                 dataset: None,
                 github_calendar: None,
+                dataset_from_cache: false,
             })),
         );
         assert_eq!(app.github_calendar.as_ref().map(|c| c.total()), Some(9));
