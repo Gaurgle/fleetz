@@ -499,7 +499,13 @@ mod repoz_parity {
         let base = std::env::temp_dir().join(format!("fleetz_parity_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
-        base
+        // Resolved, because on macOS `temp_dir()` hands back `/var/...` while
+        // `/var` is a symlink to `/private/var`. repoz's `find` reports the
+        // resolved path and fleetz reports the one it was given, so the two
+        // agreed about every repo and still failed on the spelling of the
+        // root. Neither tool is wrong; the fixture was handing them different
+        // questions.
+        std::fs::canonicalize(&base).unwrap_or(base)
     }
 
     #[test]
