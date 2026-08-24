@@ -1405,10 +1405,15 @@ fn graph_prefix_spans_raw(prefix: &str) -> Vec<Span<'static>> {
         .chars()
         .enumerate()
         .map(|(i, ch)| {
-            let color = if ch == ' ' {
-                colors::SURFACE
-            } else {
-                colors::graph_lane_color(i)
+            let color = match ch {
+                ' ' => colors::SURFACE,
+                // `git log --graph` marks every commit with `*`. A node is
+                // part of the history, not part of whichever lane it landed
+                // in, so it keeps the plain text colour whatever its column.
+                // The compact graph has always done this (`Cell::is_node`);
+                // this is the expanded renderer catching up.
+                '*' => colors::TEXT,
+                _ => colors::graph_lane_color(i / 2),
             };
             Span::styled(ch.to_string(), Style::default().fg(color))
         })
@@ -3147,5 +3152,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `git log --graph` writes `*` for every commit, and the node used to take
+    /// the lane's hue, so the same commit changed colour depending on which
+    /// column its branch happened to occupy. The compact graph already paints
+    /// nodes in the plain text colour (`graph::Cell::is_node`): a commit belongs
+    /// to the history, not to whichever lane it sits in.
+    #[test]
+    fn graph_nodes_are_not_lane_coloured() {
+        let spans = graph_prefix_spans_raw("| | * |");
+        let colour_of = |i: usize| spans[i].style.fg.expect("every span is styled");
+
+        assert_eq!(colour_of(4), colors::TEXT, "the node took a lane colour");
+        assert_eq!(
+            colour_of(0),
+            colors::graph_lane_color(0),
+            "pipes must keep their lane hue"
+        );
+        assert_ne!(
+            colour_of(0),
+            colour_of(6),
+            "two pipes in different lanes must stay distinguishable"
+        );
+    }
+
+    /// A node is a node in every column, which is the whole point: the old rule
+    /// made column 0 and column 4 different colours for the same kind of thing.
+    #[test]
+    fn a_node_is_the_same_colour_in_every_column() {
+        let first = graph_prefix_spans_raw("* ");
+        let fifth = graph_prefix_spans_raw("| | * ");
+        assert_eq!(
+            first[0].style.fg.unwrap(),
+            fifth[4].style.fg.unwrap(),
+            "node colour still depends on the column"
+        );
     }
 }
