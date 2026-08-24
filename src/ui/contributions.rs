@@ -1066,10 +1066,21 @@ mod tests {
         }
     }
 
-    /// The two ladders must climb at the same rate, or the same amount of
-    /// work looks busier on one source than the other. The blue is derived
-    /// from the green by holding saturation and solving lightness for equal
-    /// luminance, so this is the property that derivation exists to give.
+    /// The two ladders must climb at the same *rate*, or the same amount of
+    /// work looks busier on one source than the other.
+    ///
+    /// This used to demand equal luminance step for step, which is stricter
+    /// than the goal and turned out to be unsatisfiable in blue. Blue carries
+    /// 0.0722 of luminance to green's 0.7152, so matching the green top's
+    /// luminance of 202 forces a colour sRGB cannot make blue: the most
+    /// saturated thing at that luminance is (166, 208, 255), chroma 89, which
+    /// reads as paper. The blue therefore tops out lower and climbs 1.393x to
+    /// the green's 1.490x.
+    ///
+    /// What is still pinned: the shared empty slate, an identical step 1 so a
+    /// quiet day matches on both sources, and climb rates within 10% of each
+    /// other. The ladders are never on screen together, so the reading that
+    /// matters is each against itself.
     #[test]
     fn both_ladders_climb_at_the_same_rate() {
         let github: Vec<f64> = colors::contrib_ladder(Source::Github)
@@ -1080,32 +1091,135 @@ mod tests {
             .iter()
             .map(|c| luminance(*c))
             .collect();
-        for step in 0..5 {
+        for step in 0..2 {
             assert!(
                 (github[step] - local[step]).abs() <= 2.0,
-                "step {step}: github {:.0} vs local {:.0}",
+                "step {step} must match on both sources: github {:.0} vs local {:.0}",
                 github[step],
                 local[step]
             );
         }
+        let rate = |l: &[f64]| (l[4] / l[1]).powf(1.0 / 3.0);
+        let (g, b) = (rate(&github), rate(&local));
+        assert!(
+            (g - b).abs() / g <= 0.10,
+            "climb rates diverge: github {g:.3}x vs local {b:.3}x per step"
+        );
     }
 
-    /// The greens are sampled off github.com's dark-dimmed graph, not chosen.
-    /// Pinning them stops a later tidy-up from drifting away from the thing
-    /// they are supposed to match.
+    /// The ladder is tuned, not sampled, so pinning it is what stops a later
+    /// tidy-up from drifting.
+    ///
+    /// It used to be sampled straight off github.com's dark-dimmed graph and
+    /// this test guarded that correspondence. The sampled ramp decelerated
+    /// (1.51x, 1.42x, 1.34x), so the three busiest levels were the closest
+    /// together and the days worth spotting were the hardest to tell apart.
+    /// Steps 0 and 1 are still GitHub's; steps 2 to 4 are solved for an even
+    /// 1.49x climb. Changing them is a deliberate design decision, which is
+    /// why it has to break a test to happen.
     #[test]
-    fn the_github_ladder_matches_the_sampled_reference() {
+    fn the_github_ladder_is_pinned_to_its_tuned_values() {
         use ratatui::style::Color;
         assert_eq!(
             colors::contrib_ladder(Source::Github),
             [
                 Color::Rgb(43, 49, 59),
                 Color::Rgb(39, 70, 37),
-                Color::Rgb(60, 105, 55),
-                Color::Rgb(91, 147, 83),
-                Color::Rgb(129, 194, 118),
+                Color::Rgb(59, 120, 52),
+                Color::Rgb(75, 176, 60),
+                Color::Rgb(149, 224, 136),
             ]
         );
+        // GitHub's own quiet day, kept: the bottom of the ramp is where the
+        // sampled palette was already right.
+        assert_eq!(
+            colors::contrib_ladder(Source::Github)[1],
+            Color::Rgb(39, 70, 37)
+        );
+    }
+
+    /// CIELAB lightness: how light a colour *looks*, as opposed to how much
+    /// light it emits. Luminance is linear in energy and the eye is not, which
+    /// is the whole reason this function exists alongside `luminance`.
+    fn perceptual_lightness(c: ratatui::style::Color) -> f64 {
+        let ratatui::style::Color::Rgb(r, g, b) = c else {
+            panic!("ladder colours are literal RGB")
+        };
+        let lin = |v: u8| {
+            let v = f64::from(v) / 255.0;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let y = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+        if y > 0.008856 {
+            116.0 * y.cbrt() - 16.0
+        } else {
+            903.3 * y
+        }
+    }
+
+    /// The four intensities must look evenly spaced, which means even in L*,
+    /// not even in luminance.
+    ///
+    /// Both ladders this replaced got that wrong, in opposite directions. The
+    /// original decelerated in luminance, so the busiest levels were the
+    /// closest together. The fix for that made the luminance *ratio* even,
+    /// which still left L* gaps of 13.7, 19.3, 23.0: the middles read as too
+    /// dark and the jump to the top step was nearly twice the jump off the
+    /// bottom. Luminance is linear in energy, the eye is not, and only the
+    /// second of those is what a heatmap gets read by.
+    #[test]
+    fn the_ladders_are_evenly_spaced_to_the_eye() {
+        for source in [Source::Github, Source::Local] {
+            let ladder = colors::contrib_ladder(source);
+            let steps: Vec<f64> = ladder.iter().map(|c| perceptual_lightness(*c)).collect();
+            let gaps: Vec<f64> = (1..4).map(|i| steps[i + 1] - steps[i]).collect();
+            let (lo, hi) = gaps
+                .iter()
+                .fold((f64::MAX, 0.0f64), |(l, h), g| (l.min(*g), h.max(*g)));
+            assert!(
+                hi / lo <= 1.10,
+                "{source:?} is unevenly spaced to the eye: L* gaps {gaps:?}, \
+                 widest/narrowest {:.2}",
+                hi / lo
+            );
+        }
+    }
+
+    /// Distance from the grey axis: how much colour a step actually carries.
+    /// A near-white and a near-grey both collapse to nearly zero here, which
+    /// is what "washed out" means numerically.
+    fn chroma(c: ratatui::style::Color) -> f64 {
+        let ratatui::style::Color::Rgb(r, g, b) = c else {
+            panic!("ladder colours are literal RGB")
+        };
+        f64::from(r.max(g).max(b)) - f64::from(r.min(g).min(b))
+    }
+
+    /// Matching the greens' luminance is only half the job: blue carries 0.072
+    /// of luminance against green's 0.715, so a blue at a green's luminance
+    /// sits far lighter, and at the green's *saturation* the busiest step came
+    /// out (179, 205, 235), a near-white. Equal luminance and equal climb both
+    /// still passed, because neither notices a colour turning into paper.
+    ///
+    /// So the blue must stay about as colourful as the green it mirrors. The
+    /// washed-out step scored 0.64 of its green's chroma; every step now
+    /// scores at least 1.0.
+    #[test]
+    fn the_local_ladder_is_as_colourful_as_the_green_it_mirrors() {
+        let github = colors::contrib_ladder(Source::Github);
+        let local = colors::contrib_ladder(Source::Local);
+        for step in 1..5 {
+            let ratio = chroma(local[step]) / chroma(github[step]);
+            assert!(
+                ratio >= 0.8,
+                "local step {step} carries only {ratio:.2} of the green's colour, \
+                 so it reads as washed out where the green does not"
+            );
+        }
     }
 
     /// An empty day looks the same whichever source is showing: "nothing

@@ -61,18 +61,34 @@ pub const STASH_CLR: Color = Color::Rgb(242, 205, 205);
 
 /// Contribution intensity for the GitHub source, empty through busiest.
 ///
-/// Sampled straight off github.com's dark-dimmed contribution graph rather
-/// than picked by eye or interpolated between two palette colours. The muted
-/// sage greens are the ones anyone who has looked at their own profile is
-/// expecting; the saturated standard-dark set reads as a different product.
-/// Step 0 is GitHub's own empty-square slate, which is a lift above the page
-/// rather than a colour, so an empty day stays structure rather than data.
+/// Grown out of github.com's dark-dimmed graph rather than sampled from it.
+/// The sampled ladder decelerated -- 1.51x, 1.42x, then 1.34x per step -- so
+/// the three busiest levels were the *closest together*, which is the wrong
+/// way round for a heatmap: the days worth spotting were the hardest to tell
+/// apart. This one spans 3.31x from quietest to busiest, against 2.86x before,
+/// and its four steps are evenly spaced in CIELAB L* -- 18.5, 19.0, 18.6 apart
+/// -- which is the spacing the eye actually reads. An even *luminance ratio*
+/// was tried first and looked wrong: it puts L* gaps of 13.7, 19.3, 23.0 on
+/// the ladder, so the middles sat too dark and the jump to the top step was
+/// nearly twice the jump off the bottom.
+///
+/// Step 1 is GitHub's own, unchanged, so a quiet day still looks like a quiet
+/// day. Step 0 is GitHub's empty-square slate, a lift above the page rather
+/// than a colour, so an empty day stays structure rather than data.
+///
+/// The extra range is taken in saturation as well as lightness (0.31 at step
+/// 1 ramping to 0.58 at step 4), because lightness alone cannot deliver it: a
+/// fully saturated green tops out near luma 182 and step 4 was already at
+/// 174.7, so brightening in lightness alone desaturates toward white and the
+/// busiest day arrives as pale mint. Hue is held at GitHub's, which is what
+/// keeps this reading as the same sage family rather than the saturated
+/// standard-dark set, which reads as a different product.
 const CONTRIB_LADDER_GITHUB: [Color; 5] = [
     Color::Rgb(43, 49, 59),
     Color::Rgb(39, 70, 37),
-    Color::Rgb(60, 105, 55),
-    Color::Rgb(91, 147, 83),
-    Color::Rgb(129, 194, 118),
+    Color::Rgb(59, 120, 52),
+    Color::Rgb(75, 176, 60),
+    Color::Rgb(149, 224, 136),
 ];
 
 /// The same ladder for the local source, translated to blue. The two sources
@@ -80,17 +96,34 @@ const CONTRIB_LADDER_GITHUB: [Color; 5] = [
 /// identical: the colour says which one you are reading before the title
 /// does. Blue rather than red because red already means "CI failed".
 ///
-/// Derived by holding each green step's saturation and solving its lightness
-/// for the same relative luminance, so the two ladders climb at identical
-/// rates. A plain hue rotation was tried first and put step 1 within 4% of
-/// the empty slate, which is itself blue-hued: a whole intensity level
-/// vanished. Keep the luminances in step if either ladder changes.
+/// Shares the green's empty slate and its step 1, then climbs evenly to a top
+/// that is still recognisably blue. Saturation ramps 0.31 to a full 1.0.
+///
+/// This ladder deliberately does *not* match the green's luminance step for
+/// step, which it used to. Blue carries 0.0722 of luminance against green's
+/// 0.7152, so reaching a green's luminance drives blue far lighter, and sRGB
+/// has no colour left up there to spend: at the green top's luminance of 202
+/// the bluest colour that exists is (166, 208, 255), chroma 89, which reads as
+/// paper. Two attempts died on this. Taking the green's saturation gave
+/// (179, 205, 235); taking full saturation gave (166, 208, 255). Both are the
+/// best answer to the wrong question.
+///
+/// So the blue tops out at luminance 165, where full saturation still buys
+/// chroma 151, reaching it over the same evenly spaced L* steps (14.5, 14.7,
+/// 14.2) at an average 1.390x luminance per step against the green's 1.490x. That 6.5% is the whole cost, and it is the right thing to spend:
+/// the ladders are never on screen together (`c` toggles the source, and the
+/// legend names it), so what matters is that each reads evenly against itself.
+/// A top step that has turned white has stopped reading as data at all.
+///
+/// Do not "restore" luminance parity without re-checking chroma. A plain hue
+/// rotation, tried before any of this, put step 1 within 4% of the empty
+/// slate, which is itself blue-hued: a whole intensity level vanished.
 const CONTRIB_LADDER_LOCAL: [Color; 5] = [
     Color::Rgb(43, 49, 59),
-    Color::Rgb(45, 64, 85),
-    Color::Rgb(67, 95, 128),
-    Color::Rgb(104, 134, 170),
-    Color::Rgb(151, 178, 209),
+    Color::Rgb(45, 64, 84),
+    Color::Rgb(47, 98, 157),
+    Color::Rgb(54, 134, 229),
+    Color::Rgb(104, 174, 255),
 ];
 
 /// The intensity ladder for a source. One function, so the cells and the

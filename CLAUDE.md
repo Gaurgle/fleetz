@@ -125,19 +125,20 @@ should not be mistaken for each other. They are still reached through a single
 `colors::contrib_ladder(source)`, which the cells and the Less/More legend both
 call, so a source can never leave half the strip on the other palette.
 
-The greens are sampled from github.com's own dark-dimmed graph, not picked or
-interpolated, and a test pins the exact values. The blue is derived by holding
-each step's saturation and solving its lightness for the same luminance, so
-both ladders climb at identical rates. Do not hue-rotate (step 1 lands within
-4% of the blue-hued empty slate, losing a level) and do not interpolate between
-two palette colours (it reads as one flat tone, defeating a heatmap).
+The greens are tuned from github.com's dark-dimmed graph, not sampled: its own
+ramp decelerated, leaving the busiest levels closest together. Steps 0 and 1
+are GitHub's, the rest spaced evenly in CIELAB **L***, in saturation as well as
+lightness. Even *luminance* is the wrong metric and looks it: it leaves the
+middles too dark. The blue shares the slate and step 1 but tops out lower,
+carrying 0.07 of luminance to green's 0.72, so at the green top's luminance the
+bluest colour sRGB has is chroma 89, which reads as paper. Even L*, rate parity
+and chroma are the invariants, not equal luminance. Tests pin all of them.
 
-**The compact history graph is computed, not parsed.** `git::graph` does not
-pass `--graph`; it asks for `%p` and `crate::graph` derives the topology, the
-way lazygit does. Re-adding `--graph` would bring back the filler rows that
-carry no commit -- which is what forced row indices and commit indices apart
-everywhere -- and its single-column diagonals, which cannot be drawn in box
-characters. `%p` not `%P`: a parent hash must be spelled the same way the
+**The compact history graph is computed, not parsed.** `git::graph` asks for
+`%p` and `crate::graph` derives the topology, as lazygit does. Re-adding
+`--graph` brings back filler rows carrying no commit -- which forced row and
+commit indices apart everywhere -- and single-column diagonals, undrawable in
+box characters. `%p` not `%P`: a parent hash must be spelled the same way the
 child's own `%h` is, or every pipe dangles. The expanded view is the one place
 that still reproduces git's own drawing.
 
@@ -170,11 +171,10 @@ already in hand (`stale_remotes`). Unknowns must fetch -- no `pushed_at` means
 no GitHub match, no `FETCH_HEAD` means never fetched -- or the fleet renders as
 more current than it is.
 
-**Launch paints from the cache, however stale.** The repo list is derived from
-the GraphQL dataset, so blocking on it cost 6-9s before the first frame --
-dwarfing discovery (0.1s) and statting the fleet (0.6s). Startup passes
-`CacheMode::AnyCached`; the poll on the first tick replaces it. Only a
-never-run install waits, and it has nothing to show anyway. Keyed by
+**Launch paints from the cache, however stale.** The repo list derives from the
+GraphQL dataset, so blocking on it cost 6-9s before the first frame, dwarfing
+discovery (0.1s) and statting the fleet (0.6s). Startup passes
+`CacheMode::AnyCached` and the first tick's poll replaces it. Keyed by
 `repo_limit` alone: never re-add `-p` (see `cache.rs`), which decides whether
 PR data is *drawn*, not whether it is fetched.
 
