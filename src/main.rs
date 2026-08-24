@@ -1994,6 +1994,39 @@ fn resolve_cutoff(
 /// discovery, optional per-repo git fetch, statting, and header assembly.
 /// `git_fetch: false` makes this purely local (used by the time-window
 /// overlay so applying a window is instant).
+/// Order discovered repos newest-pushed first, the way repoz lists them.
+///
+/// `active` arrives in that order already (the GraphQL `orderBy`, re-applied
+/// by `merge_sources`), but the ordering never reached the screen:
+/// `find_in_primary` reduces the names to a `HashSet` for a membership test,
+/// and the walkers then push repos in `read_dir` order. On APFS that is hash
+/// order, so the "github activity" section was in no order at all, and it
+/// reshuffled whenever a repo was added or removed from the scan root.
+///
+/// Applied here rather than in `App::visible_repos` because the section sort
+/// there is stable and simply carries this through, and *after* the pass-1 /
+/// pass-2 dedupe because that is what makes a local clone beat the not-cloned
+/// fallback -- reordering before it would break the load-bearing pass order.
+///
+/// Repos with no GitHub match sort last and keep discovery order, `sort_by_key`
+/// being stable. In practice they are the local-only rows, which `section_rank`
+/// puts in their own section anyway.
+fn sort_by_activity(
+    targets: &mut [(discovery::FoundRepo, RepoLocation)],
+    active: &[github::GithubRepo],
+) {
+    let rank: HashMap<String, usize> = active
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.name.to_lowercase(), i))
+        .collect();
+    targets.sort_by_key(|(f, _)| {
+        rank.get(&f.name.to_lowercase())
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
+}
+
 #[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 async fn assemble_view(
     dataset: &[github::GithubRepo],
@@ -2068,6 +2101,7 @@ async fn assemble_view(
             targets.push((f.clone(), RepoLocation::Elsewhere));
         }
     }
+    sort_by_activity(&mut targets, &active);
 
     if let Some(tx) = progress {
         let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Discovering));
@@ -2818,5 +2852,95 @@ mod tests {
             })),
         );
         assert_eq!(app.github_calendar.as_ref().map(|c| c.total()), Some(9));
+    }
+
+    /// repoz lists newest-pushed first (`sort_by(.pushedAt) | reverse`, then
+    /// iterated in that order). fleetz drew the same section in `read_dir`
+    /// order, because `find_in_primary` reduces the push-ordered names to a
+    /// HashSet and the walker pushes whatever the filesystem hands back. On
+    /// APFS that is hash order: arbitrary, and it reshuffles when any repo is
+    /// added or removed.
+    #[test]
+    fn discovered_repos_are_ordered_by_push_recency() {
+        let dir = Path::new("/tmp/x");
+        // Deliberately not the order the walker found them in.
+        let mut targets = found_targets(dir, &["oldest", "newest", "middle"]);
+        let active = vec![
+            gh("newest", "2026-08-24T10:00:00Z"),
+            gh("middle", "2026-08-20T10:00:00Z"),
+            gh("oldest", "2026-08-01T10:00:00Z"),
+        ];
+        sort_by_activity(&mut targets, &active);
+        let names: Vec<&str> = targets.iter().map(|(f, _)| f.name.as_str()).collect();
+        assert_eq!(names, ["newest", "middle", "oldest"]);
+    }
+
+    /// A repo the GitHub fetch never matched has no push date to sort by. It
+    /// must fall to the end rather than to the front, and keep the order
+    /// discovery found it in.
+    #[test]
+    fn repos_without_a_github_match_sort_last_in_discovery_order() {
+        let dir = Path::new("/tmp/x");
+        let mut targets = found_targets(dir, &["local-a", "known", "local-b"]);
+        let active = vec![gh("known", "2026-08-24T10:00:00Z")];
+        sort_by_activity(&mut targets, &active);
+        let names: Vec<&str> = targets.iter().map(|(f, _)| f.name.as_str()).collect();
+        assert_eq!(names, ["known", "local-a", "local-b"]);
+    }
+
+    /// The sort runs after the pass-1/pass-2 dedupe, so it must not disturb
+    /// which location won. Discovery pass order is load-bearing: a local clone
+    /// has to beat the not-cloned fallback.
+    #[test]
+    fn sorting_by_activity_does_not_change_where_a_repo_was_found() {
+        let dir = Path::new("/tmp/x");
+        let mut targets = vec![
+            (
+                discovery::FoundRepo {
+                    name: "a".to_string(),
+                    path: dir.join("a"),
+                },
+                RepoLocation::Elsewhere,
+            ),
+            (
+                discovery::FoundRepo {
+                    name: "b".to_string(),
+                    path: dir.join("b"),
+                },
+                RepoLocation::Primary,
+            ),
+        ];
+        let active = vec![
+            gh("b", "2026-08-24T10:00:00Z"),
+            gh("a", "2026-08-01T10:00:00Z"),
+        ];
+        sort_by_activity(&mut targets, &active);
+        assert_eq!(targets[0].0.name, "b");
+        assert_eq!(targets[0].1, RepoLocation::Primary);
+        assert_eq!(
+            targets[1].1,
+            RepoLocation::Elsewhere,
+            "location was rewritten"
+        );
+    }
+
+    /// Case is not a sort key: GitHub reports `Glanze`, the clone on disk may
+    /// be `glanze`, and both sides of the lookup lowercase for exactly that
+    /// reason elsewhere in discovery.
+    #[test]
+    fn activity_order_survives_a_case_mismatch() {
+        let dir = Path::new("/tmp/x");
+        let mut targets = found_targets(dir, &["old", "glanze"]);
+        let active = vec![
+            gh("Glanze", "2026-08-24T10:00:00Z"),
+            gh("old", "2026-08-01T10:00:00Z"),
+        ];
+        sort_by_activity(&mut targets, &active);
+        let names: Vec<&str> = targets.iter().map(|(f, _)| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["glanze", "old"],
+            "case mismatch dropped it to the end"
+        );
     }
 }
