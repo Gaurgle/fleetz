@@ -56,7 +56,7 @@ fleetz [options]
 
 | Flag | Description |
 |------|-------------|
-| *(default)* | Auto: find the latest time slot with activity and show those repos |
+| *(default)* | Show activity since the previous time slot boundary |
 | `--since DATE` | Show all activity since DATE (e.g. `2026-03-15`, `yesterday`, `3d`, `1w`) |
 | `--before DATE` | Only show repos pushed before DATE (same relative formats as `--since`) |
 | `-t, --today` | Show all activity since midnight |
