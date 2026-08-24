@@ -38,22 +38,20 @@ as the code they cover. There is no integration test suite and no CI workflow.
 
 The event loop is channel-driven and async: the TUI opens instantly, GitHub and
 local discovery load in the background (`AppEvent`), a 250ms tick drives spinner
-and blink, and watch mode re-sweeps on an interval.
-
-In `docs/ideas.md`, **Status: shipped** sections are kept for their reasoning
-only; everything else is unbuilt, and its line references drift.
+and blink, watch mode re-sweeps on an interval.
 
 ## Where things are written down
 
 | Path | What it holds |
 |---|---|
 | `README.md` | User-facing: install, flags, keybindings, config keys |
-| `docs/ideas.md` | Design backlog. Problem, options, rejected alternatives, open questions per feature |
+| `docs/ideas.md` | Design backlog: problem, options, rejected alternatives per feature |
 | `docs/superpowers/` | Dated plans and specs, paired, for landed work |
 
 Read the relevant `docs/ideas.md` section before building anything it covers:
-each one records alternatives already rejected and why, which is the expensive
-part to rediscover.
+each records alternatives already rejected and why, the expensive part to
+rediscover. Its **Status: shipped** sections are kept for reasoning only;
+everything else is unbuilt, and its line references drift.
 
 ## Working conventions
 
@@ -61,8 +59,7 @@ part to rediscover.
   suffixes on older commits are history, not current policy.
 - Tests live beside the code in `#[cfg(test)] mod tests`, not in `tests/`.
 - Every behavior change lands with a test that would have caught the old
-  behavior. Several existing tests name the regression they guard in a comment;
-  match that.
+  behavior; many existing tests name the regression they guard. Match that.
 
 ## Build
 
@@ -73,9 +70,9 @@ cargo fmt                     # must be clean before committing
 cargo install --path .        # to ~/.cargo/bin (the `fleetz` on PATH)
 ```
 
-Needs a Nerd Font in the terminal: repo-kind glyphs are Nerd Font codepoints
-(`ui/badges.rs::kind_glyph`) and render as tofu without one. Needs `gh` on PATH
-and authenticated, since the GitHub fetch shells out to it.
+Needs a Nerd Font (repo-kind glyphs are Nerd Font codepoints,
+`ui/badges.rs::kind_glyph`, and render as tofu without one) and an
+authenticated `gh` on PATH, since the GitHub fetch shells out to it.
 
 ## Domain invariants - do not violate
 
@@ -87,9 +84,10 @@ copy of that arithmetic. Drift here misroutes clicks silently, with nothing
 failing.
 
 **`App::visible_repos` order must match the order the repo list draws.** The
-cursor walks the former while the eye walks the latter. When a free-text query
-is active both switch to one ranked list; when it is not, both group by section.
-Both sides key off `App::has_text_query()`.
+cursor walks one while the eye walks the other. A free-text query switches both
+to one ranked list, otherwise both group by section; both key off
+`App::has_text_query()`. Within a section the order is push recency, as repoz
+lists it (`sort_by_activity`), applied after the pass dedupe below.
 
 **Discovery pass order is load-bearing** (`main.rs::assemble_view`). Pass 1
 scans the configured roots, pass 2 sweeps `$HOME`, pass 3 picks up local-only
@@ -104,91 +102,93 @@ GitHub name (`discovery::matched_name`, `discovery::repo_name_for_path`).
 **Hidden directories are traversed inside a configured scan root, but not in
 the `$HOME` sweep.** A root you named (`repo_dir`, `extra_dirs`) yields its
 repos hidden or not, as repoz does; the `$HOME` sweep blanket-skips
-dot-directories, because descending every `~/.local` and `~/.npm` costs far
-more than it finds. `PRUNE_DIRS` applies to both and mirrors repoz's
-`PRUNE_EXPR` -- keep the two lists in step.
+dot-directories, since descending every `~/.local` and `~/.npm` costs far more
+than it finds. `PRUNE_DIRS` applies to both and mirrors repoz's `PRUNE_EXPR`.
 
 **Discovery parity with repoz is enforced by test, not by memory.**
 `discovery::repoz_parity` runs `repoz -d` against a fixture tree and diffs the
-paths against fleetz's own, skipping loudly when repoz is not on PATH. Every
-fixture repo is deliberately dirty so a pure-local repoz run reports the full
-set without touching GitHub.
+paths, skipping loudly when repoz is absent. Fixture repos are deliberately
+dirty so a pure-local repoz run reports them all, and the fixture root is
+canonicalized: repoz resolves `/var` to `/private/var` and fleetz does not.
 
 **One color ladder per concept.** `badges::status_color` is the single source
 for what a sync state looks like; the detail pane calls it rather than keeping
 its own. `ui::filter_color` maps a quick filter to the same color its badge
 already uses. Two ladders always drift.
 
-Contribution intensity is the one place with two ladders, green for the GitHub
-source and blue for the local one, because the two count different things and
-should not be mistaken for each other. They are still reached through a single
-`colors::contrib_ladder(source)`, which the cells and the Less/More legend both
-call, so a source can never leave half the strip on the other palette.
+Contribution intensity is the one place with two ladders, green for GitHub and
+blue for local, because the two count different things. Both are reached
+through one `colors::contrib_ladder(source)`, which the cells and the Less/More
+legend call, so a source cannot leave half the strip on the other palette.
 
-The greens are tuned from github.com's dark-dimmed graph, not sampled: its own
-ramp decelerated, leaving the busiest levels closest together. Steps 0 and 1
-are GitHub's, the rest spaced evenly in CIELAB **L***, in saturation as well as
-lightness. Even *luminance* is the wrong metric and looks it: it leaves the
-middles too dark. The blue shares the slate and step 1 but tops out lower,
-carrying 0.07 of luminance to green's 0.72, so at the green top's luminance the
-bluest colour sRGB has is chroma 89, which reads as paper. Even L*, rate parity
-and chroma are the invariants, not equal luminance. Tests pin all of them.
+Both ladders are spaced evenly in CIELAB **L***, in saturation as well as
+lightness: even *luminance* is the wrong metric and leaves the middles too
+dark. The greens are tuned from github.com's, not sampled. The blue tops out
+lower, carrying 0.07 of luminance to green's 0.72, so at the green's top the
+bluest colour sRGB has reads as paper. Even L*, rate parity and chroma are the
+invariants, not equal luminance; tests pin each, and `colors.rs` has the why.
 
 **The compact history graph is computed, not parsed.** `git::graph` asks for
 `%p` and `crate::graph` derives the topology, as lazygit does. Re-adding
 `--graph` brings back filler rows carrying no commit -- which forced row and
 commit indices apart everywhere -- and single-column diagonals, undrawable in
-box characters. `%p` not `%P`: a parent hash must be spelled the same way the
-child's own `%h` is, or every pipe dangles. The expanded view is the one place
-that still reproduces git's own drawing.
+box characters. `%p` not `%P`, or a parent hash is spelled differently from the
+child's own `%h` and every pipe dangles. The expanded view still reproduces
+git's own drawing.
 
 **Status vocabulary is split by kind.** Counters are numeric (`3↓ 2↑ 4!`),
-categorical states are words (`not cloned`). A repo that is not cloned has all
-counters at zero and must never render as synced: `RepoStatus::is_synced()`
-excludes it deliberately.
+categorical states are words (`not cloned`). A not-cloned repo has all counters
+at zero and must never render as synced: `RepoStatus::is_synced()` excludes it
+deliberately.
 
-**Batch on GraphQL, target on git.** The two have opposite cost shapes and the
-code leans on both. One GraphQL call returns every repo's state, so never split
-it into per-repo queries: the rate limit has a floor of one point per call,
-making fifty small queries cost more than one big one and tell you less.
-`git fetch` is priced per remote, so the reverse holds: use the poll's
-`pushed_at` diff to find which remotes moved (`remotes_that_moved`) and fetch
-only those.
+**Batch on GraphQL, target on git.** Opposite cost shapes, and the code leans
+on both. One GraphQL call returns every repo's state, so never split it into
+per-repo queries: the rate limit has a floor of one point per call, so fifty
+small queries cost more than one big one and tell you less. `git fetch` is
+priced per remote, so use the poll's `pushed_at` diff to find which remotes
+moved (`remotes_that_moved`) and fetch only those.
 
 **GraphQL bills the `first:` you ask for, not what comes back**, and nested
 connections multiply. The org fallback asked 25 orgs x 50 repos to fetch 17
-repos from 4 orgs: 83% of the query's nodes, pricing the poll at 26 points, or
-3120/hour at the 30s interval against a 5000/hour budget. One fleetz idled at
-62% of the account and four exhausted it. Sized to what it retrieves
-(`MAX_ORGS`, `ORG_REPO_LIMIT`) the identical result costs 3. Measure with
-`rateLimit { cost nodeCount }` before and after; two comments in `github.rs`
-disagreed about this for months and the optimistic one was wrong.
+from 4: 83% of the query's nodes, pricing the poll at 26 points, or 3120/hour
+at the 30s interval against a 5000/hour budget. One fleetz idled at 62% of the
+account and four exhausted it; sized to what it retrieves (`MAX_ORGS`,
+`ORG_REPO_LIMIT`) the identical result costs 3. Measure with `rateLimit { cost
+nodeCount }` before and after: two comments in `github.rs` disagreed about this
+for months and the optimistic one was wrong.
 
 The first poll has no previous dataset to diff, and fetching every repo past
-the cutoff cost ~0.8s each. It uses a disk baseline instead: `FETCH_HEAD`'s
-mtime is when that clone last fetched, so a remote pushed before then is
-already in hand (`stale_remotes`). Unknowns must fetch -- no `pushed_at` means
-no GitHub match, no `FETCH_HEAD` means never fetched -- or the fleet renders as
-more current than it is.
+the cutoff cost ~0.8s each. It uses a disk baseline: `FETCH_HEAD`'s mtime is
+when that clone last fetched, so a remote pushed before then is already in hand
+(`stale_remotes`). Unknowns must fetch -- no `pushed_at` means no GitHub match,
+no `FETCH_HEAD` means never fetched -- or the fleet looks more current than it
+is.
 
 **Launch paints from the cache, however stale.** The repo list derives from the
-GraphQL dataset, so blocking on it cost 6-9s before the first frame, dwarfing
-discovery (0.1s) and statting the fleet (0.6s). Startup passes
-`CacheMode::AnyCached` and the first tick's poll replaces it. Keyed by
+GraphQL dataset, so blocking on it cost 6-9s before the first frame. Startup
+passes `CacheMode::AnyCached` and the first tick's poll replaces it. Keyed by
 `repo_limit` alone: never re-add `-p` (see `cache.rs`), which decides whether
 PR data is *drawn*, not whether it is fetched.
 
 **Never widen the GitHub fetch without checking the cache.** Results are cached
-on disk with a TTL (`cache.rs`, `cache_ttl` config key); `r` rebuilds from cache
-and `R` bypasses it. A field with no `first:` is genuinely free -- the four
-contribution calendars ride along at zero cost -- a field with one is not, and
-a request never is.
+on disk with a TTL (`cache.rs`, `cache_ttl`); `r` rebuilds from cache, `R`
+bypasses it. A field with no `first:` is free, which is how the contribution
+calendars ride along at zero cost; a field with one is not, and a request
+never is.
+
+**GitHub caches `contributionsCollection` against the `from` date alone**, so
+the `recent` window rotates its `from` and must keep doing so: a fixed one
+re-reads its own stale answer all day, and the strip drew 3 against
+github.com's 11. The merged range is fixed at seven days, not derived from the
+window, because a cached payload was built under a rotation the parser cannot
+recover. Measurements, and the undocumented behaviour this leans on, are at
+`contributions.rs::ROTATION_HOLD_SECS`.
 
 **Only a response carrying `data` may be cached** (`accept_response`). GraphQL
-errors arrive as HTTP 200, so a rate limit is a plausible-looking 95-byte body.
-Caching it before checking `errors` overwrote the good payload and took the
+errors arrive as HTTP 200, so a rate limit is a plausible 95-byte body. Caching
+it before checking `errors` overwrote the good payload and took the
 `read_stale` fallback with it, which the offline and non-2xx paths both need:
-the dashboard went blank and could not heal until a poll succeeded.
+the dashboard went blank until a poll succeeded.
 
 ## Relationship to repoz
 
