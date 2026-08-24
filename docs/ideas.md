@@ -1010,3 +1010,49 @@ for its whole life without noise. fleetz's skip is the divergence, and the
 - Pass 2 has no dedupe (pass 1 does, first root winning). If two hidden
   candidates ever match one name, which wins is currently walk order. Worth
   settling before widening what pass 2 can see.
+
+---
+
+## Contribution sources beyond GitHub
+
+**Problem.** The strip has two sources, `Source::Github` (green) and
+`Source::Local` (blue). GitLab is the obvious third, and its brand orange is
+free of both existing ladders. The question is whether the data behind it is
+affordable, and what it would actually add.
+
+**What the colour costs: nothing.** An orange ladder is already solved, on the
+same evenly spaced L* steps as the other two and holding more chroma than the
+green at every level:
+
+```
+(80, 58, 43)  (152, 93, 52)  (219, 134, 74)  (247, 196, 159)   hue 25
+```
+
+Hues then sit at 112, 212 and 25, so the widest gap is 87 degrees and the three
+stay separable under red-green deficiency. `Source` reaches 6 files and 39
+sites, all mechanical. None of this is the hard part.
+
+**What the data costs.** GitHub's calendar rides the poll that already runs, as
+aliased fields with no `first:` connection, so it is free (see the "GraphQL
+bills the `first:` you ask for" invariant in CLAUDE.md). Nothing else offers
+that:
+
+- **GitLab** has no contribution-calendar endpoint. The profile calendar is
+  HTML only; the API gives paginated `/users/:id/events` to aggregate yourself.
+  Many requests where GitHub costs zero, plus a second token, second config
+  surface, second rate limit to mismanage.
+- **Bitbucket** has no contribution-graph concept at all; it would have to be
+  synthesised from commits across repos. Its brand blue (#0052CC) also collides
+  head-on with the local ladder, so it could not wear its own colour.
+
+**The question that decides it.** `Source::Local` already counts commits in
+cloned repos *regardless of host*, so GitLab work in a cloned repo is on screen
+already, in blue. The genuinely new information is the non-commit part: merge
+requests, issues, reviews, and activity in repos that were never cloned. That
+may be worth a whole API client and it may not, but "add GitLab support" sounds
+much bigger than what it actually adds.
+
+**Open question.** Bitbucket (Atlassian) or GitBucket (the self-hosted Scala
+GitHub clone)? Not the same thing, and it changes the estimate sharply:
+GitBucket implements a GitHub-compatible API, so it could plausibly reuse the
+existing client behind a base-URL config key rather than needing a new one.
