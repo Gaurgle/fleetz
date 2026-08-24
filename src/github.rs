@@ -438,11 +438,29 @@ pub async fn fetch_repos(
         .await
         .map_err(|e| format!("failed to read response: {e}"))?;
 
-    // Cache the raw response
-    cache.write(&body_text);
+    accept_response(&body_text, cache, today)
+}
 
+/// Parse a fresh response body, and cache it only if it carried data.
+///
+/// The write used to happen the moment the body arrived, before anything had
+/// looked at it. A GraphQL error is served with HTTP 200 and an `errors` key,
+/// so a rate limit -- 95 bytes of `{"errors":[{"type":"RATE_LIMITED"...}]}` --
+/// overwrote the last good payload and took the stale fallback down with it:
+/// the offline and non-2xx paths above both read `read_stale`, and after one
+/// rate-limited poll there was nothing left for them to read. Every poll after
+/// that rewrote the same 95 bytes, so the cache could not heal until a poll
+/// succeeded, which is exactly when it was least likely to.
+///
+/// Split out of `fetch_repos` so the rule is reachable without a network:
+/// everything above it is transport, everything here is the payload.
+fn accept_response(
+    body_text: &str,
+    cache: &crate::cache::ApiCache,
+    today: chrono::NaiveDate,
+) -> Result<GithubFetch, String> {
     let body: GraphQlResponse =
-        serde_json::from_str(&body_text).map_err(|e| format!("failed to parse response: {e}"))?;
+        serde_json::from_str(body_text).map_err(|e| format!("failed to parse response: {e}"))?;
 
     if let Some(errors) = body.errors {
         let msgs: Vec<_> = errors.iter().map(|e| e.message.as_str()).collect();
@@ -450,6 +468,7 @@ pub async fn fetch_repos(
     }
 
     let data = body.data.ok_or("GitHub response missing data field")?;
+    cache.write(body_text);
     Ok(split_viewer(data.viewer, today))
 }
 
@@ -1096,6 +1115,54 @@ mod tests {
             fetch_repos(50, &cache, CacheMode::AnyCached).await.is_ok(),
             "AnyCached should have taken the fixture"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// A GraphQL error arrives with HTTP 200 and an `errors` key, so nothing
+    /// about the transport marks it as junk. It used to be written to disk
+    /// the moment it arrived: one rate-limited poll replaced a 73KB payload
+    /// with 95 bytes, and because the offline and non-2xx paths both fall back
+    /// to `read_stale`, that took the last good data with it.
+    #[test]
+    fn a_rate_limited_body_does_not_overwrite_the_cache() {
+        let dir = std::env::temp_dir().join(format!("fleetz_errbody_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("github-50.json");
+        let good = r#"{"data":{"viewer":{"repositories":{"nodes":[]},
+            "contributionsCollection":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[{"date":"2026-08-18","contributionCount":7}]}]}}}}}"#;
+        std::fs::write(&path, good).unwrap();
+        let cache = crate::cache::ApiCache::at(path.clone(), 86_400);
+
+        let rate_limited =
+            r#"{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}"#;
+        let result = accept_response(rate_limited, &cache, day("2026-08-18"));
+
+        assert!(result.is_err(), "an errors-only body is not a fetch");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            good,
+            "the error body overwrote the last good payload"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half of the same rule: a body that did carry data still has
+    /// to land, or the cache never fills and every launch blocks on
+    /// the network.
+    #[test]
+    fn a_payload_with_data_is_cached() {
+        let dir = std::env::temp_dir().join(format!("fleetz_okbody_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("github-50.json");
+        let cache = crate::cache::ApiCache::at(path.clone(), 86_400);
+
+        let good = r#"{"data":{"viewer":{"repositories":{"nodes":[]},
+            "contributionsCollection":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[{"date":"2026-08-18","contributionCount":7}]}]}}}}}"#;
+        assert!(accept_response(good, &cache, day("2026-08-18")).is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), good);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
