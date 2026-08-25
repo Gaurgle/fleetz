@@ -602,7 +602,12 @@ pub async fn graph_expanded(repo_path: &Path, branches: &[String], limit: u32) -
         "--color=never".to_string(),
         "--decorate".to_string(),
         "--abbrev-commit".to_string(),
-        "--date=relative".to_string(),
+        // Absolute, not `--date=relative`: git renders a relative date once,
+        // at fetch time, and this output is only refetched when the repo's
+        // WorkKey moves. An idle repo therefore sat on "3 minutes ago" all
+        // night while the commit list beside it correctly said "16h ago".
+        // The renderer turns this back into an age on every frame.
+        "--date=iso-strict".to_string(),
         "-n".to_string(),
         limit.to_string(),
     ];
@@ -1605,6 +1610,28 @@ mod real_repo_tests {
         assert_eq!(
             branches[0].ahead, 0,
             "no remote means nothing to be ahead of"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The expanded graph must carry an absolute timestamp, not the relative
+    /// one git renders once and freezes. The renderer turns it back into an
+    /// age per frame; with `--date=relative` an idle repo showed "3 minutes
+    /// ago" for as long as it stayed idle.
+    #[tokio::test]
+    async fn expanded_graph_dates_are_absolute_and_parseable() {
+        let dir = temp_repo("expdate");
+
+        let lines = graph_expanded(&dir, &["main".to_string()], 5).await;
+        let date = lines
+            .iter()
+            .find_map(|l| l.split_once("Date:"))
+            .map(|(_, rest)| rest.trim().to_string())
+            .expect("the block has a Date row");
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&date).is_ok(),
+            "not an absolute timestamp the renderer can re-age: {date:?}"
         );
 
         std::fs::remove_dir_all(&dir).ok();

@@ -1562,6 +1562,27 @@ fn wrap_text(text: &str, budget: usize) -> Vec<String> {
     out
 }
 
+/// Rewrite git's `Date:` row as an age measured now, or `None` for any other
+/// row.
+///
+/// `git::graph_expanded` asks for `--date=iso-strict` so this can: a relative
+/// date is frozen at the moment git rendered it, and that output is only
+/// refetched when the repo's WorkKey moves. An idle repo sat on "3 minutes
+/// ago" all night while `commits` and `reflog` beside it correctly said "16h
+/// ago", because those two carry a timestamp and format it per frame. This is
+/// the same trade `format_age` documents, applied to the one surface that
+/// still had git do the formatting.
+fn refresh_date_line(rest: &str) -> Option<String> {
+    let stamp = rest.strip_prefix("Date:")?.trim();
+    let parsed = chrono::DateTime::parse_from_rfc3339(stamp).ok()?;
+    // Git's own column: `Date:` and three spaces, so the value stays under
+    // the one on the `Author:` row above it.
+    Some(format!(
+        "Date:   {}",
+        format_age(parsed.with_timezone(&chrono::Utc))
+    ))
+}
+
 /// One raw `git log --graph` line, as the rows it occupies at this width.
 ///
 /// Returns a `Vec` because a wrapped line is several rows and the caller
@@ -1582,6 +1603,9 @@ fn expanded_graph_lines(
         .find(|(_, c)| !GRAPH_CHARS.contains(c))
         .map_or(raw.len(), |(i, _)| i);
     let (prefix, rest) = raw.split_at(split);
+    // Git's `Date:` row, recomputed as of now. See `refresh_date_line`.
+    let refreshed = refresh_date_line(rest);
+    let rest = refreshed.as_deref().unwrap_or(rest);
 
     let style = if let Some(hash) = rest.strip_prefix("commit ") {
         // "commit 1c51c6e (tag: v0.3.0)" -- the hash is the first word.
@@ -3454,5 +3478,47 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The staleness bug: git rendered "3 minutes ago" once, the expanded
+    /// graph was only refetched when the repo moved, and an idle repo kept
+    /// showing it for hours while the commit list beside it said "16h ago".
+    #[test]
+    fn the_graph_block_date_is_aged_at_draw_time() {
+        let then = chrono::Utc::now() - chrono::Duration::hours(16);
+        let line = format!("Date:   {}", then.to_rfc3339());
+        assert_eq!(
+            refresh_date_line(&line).as_deref(),
+            Some("Date:   16h ago"),
+            "the frozen relative date survived to the screen"
+        );
+    }
+
+    /// Only the `Date:` row is rewritten. Everything else is git's output and
+    /// is reproduced verbatim, which is the whole point of this view.
+    #[test]
+    fn other_graph_rows_are_left_exactly_as_git_wrote_them() {
+        assert_eq!(refresh_date_line("Author: someone <a@b.c>"), None);
+        assert_eq!(refresh_date_line("commit 1c51c6e"), None);
+        assert_eq!(refresh_date_line("    a subject line"), None);
+        assert_eq!(
+            refresh_date_line("Date:   Mon Aug 25 09:12:33 2026 +0200"),
+            None,
+            "an unparseable stamp must pass through, not vanish"
+        );
+    }
+
+    /// End to end: the rewritten row reaches the drawn line.
+    #[test]
+    fn the_drawn_graph_block_shows_a_current_age() {
+        let then = chrono::Utc::now() - chrono::Duration::days(3);
+        let raw = format!("| | Date:   {}", then.to_rfc3339());
+        let rows = expanded_graph_lines(&raw, "", false, 80);
+        let text: String = rows[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert!(text.contains("3d ago"), "drew {text:?}");
     }
 }
