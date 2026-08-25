@@ -24,7 +24,11 @@ where the session runs.
   `cleanup:`), first line under 72 characters. Body is for the why, not the what.
 - **No `Co-Authored-By` lines.** Ever.
 - **Present the full `git commit -m "..."` command for review; do not commit.**
-  The human commits and pushes.
+  The human commits and pushes. The one exception is **"ship it"**: commit and
+  push, plus a PR where this repo's flow calls for one. It never merges, tags,
+  releases or deploys, and never ships a red build. The **Ship policy** line
+  below says what it does here; with no such line, push the current branch and
+  never `main`.
 - **Never edit, delete or disable a test to make code pass.** Fix the code. If a
   test looks wrong, stop and say so rather than changing it.
 - **Ask before** adding or removing dependencies, changing schema or API
@@ -57,6 +61,8 @@ everything else is unbuilt, and its line references drift.
 
 - **Commit straight to `main`.** No feature branches, no PRs. The `(#10)`
   suffixes on older commits are history, not current policy.
+- **Ship policy:** commit and push to `main`. No PR, and there is no merge
+  step to withhold.
 - Tests live beside the code in `#[cfg(test)] mod tests`, not in `tests/`.
 - Every behavior change lands with a test that would have caught the old
   behavior; many existing tests name the regression they guard. Match that.
