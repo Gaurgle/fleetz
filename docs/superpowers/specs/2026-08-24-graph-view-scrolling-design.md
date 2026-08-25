@@ -70,6 +70,44 @@ Settled in discussion:
 - **The view and the selection are independent** (editor model). Scrolling
   does not move the selection; the selection may sit off screen; `j`/`k` bring
   it back into view and step.
+  **Amended 2026-08-25, Graph view only:** the graph's cursor is a **row**,
+  not a commit, and `Shift+J/K`, the wheel and `PgUp/PgDn` move it rather than
+  scrolling raw. The highlight walks down the pane a line at a time and parks
+  `GRAPH_SCROLLOFF` (4) rows from the edge, from where the text scrolls under
+  it -- vim's `scrolloff`, less's default. `App::move_graph_cursor` and
+  `keep_graph_cursor_in_view` own the arithmetic; `graph_cursor` is the row and
+  `graph_block_tops`, recorded per frame by the renderer, maps it back to the
+  commit it is inside (`sync_graph_selection`). `j`/`k` still step commit to
+  commit and put the block four rows down the pane
+  (`show_graph_cursor_from_top`): the minimal nudge would leave a stepped-to
+  block in the *bottom* margin, four rows of it on screen and the rest below.
+
+  Two earlier attempts got this wrong and are recorded so they are not retried.
+  A commit-granular marker cannot express it: blocks run past twenty rows, so
+  the highlight stood still through a whole commit and then jumped. Anchoring
+  that marker to the block owning the top visible row is worse still -- the
+  commit row of the block you are inside leaves the top immediately and does
+  not come back, so the marker was off screen at every offset but the one where
+  a block began exactly at the top row, which read as no cursor at all.
+
+  None of it may set `follow_selection`: bring-into-view puts the row hard
+  against an edge, and the next scroll pulls the scrolloff margin back, so the
+  two fight.
+
+  **The margin is not graph-only.** `bring_into_view` applies `scrolloff_for`
+  in every view, so stepping `j`/`k` anywhere walks the selection down the pane
+  and scrolls only once it nears an edge. The other views keep an entry cursor
+  rather than a row cursor -- their lists are one row per entry -- so there a
+  scroll moves the view and `keep_selection_on_screen` drags the selection to
+  the nearest entry that still clears the margin. `detail_row_tops` carries the
+  rows for whichever view is drawn, the graph's blocks included.
+
+  Two exemptions, both deliberate. The margin collapses at the ends of the
+  content, or the first and last entries could never be selected. And a view
+  with no entry left inside the pane keeps its selection where it is: `info`
+  draws branches, worktrees and stashes below its commit list, and scrolling
+  past the last commit to read them is the point.
+
 - **No inspector at all in Graph view.** The changed-file list remains
   reachable from `info` and `commits`.
 - **The wheel scrolls the Detail pane in every history view**, not only Graph.

@@ -727,6 +727,10 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // into view means bringing a range into view, not a row. The compact
     // graph and the reflog report a one-row range and behave as before.
     let mut selected_block: Option<(usize, usize)> = None;
+    // Where every selectable entry begins, in list order. Handed to the app so
+    // a scroll can keep the cursor on screen; only this pass knows the rows,
+    // since they sit under however many sections this repo drew.
+    let mut block_tops: Vec<usize> = Vec::new();
     if matches!(view, HistoryView::Info | HistoryView::Commits) && !repo.graph.is_empty() {
         let limit = (view == HistoryView::Info).then_some(RECENT_COMMIT_COUNT);
         // `info` still labels this section, because it is one of several it
@@ -735,13 +739,28 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         if view == HistoryView::Info {
             lines.push(Line::from(section_label("recent commits")));
         }
+        // One line per commit, in list order, so the rows are the run this
+        // section occupies.
+        let base = lines.len();
+        let mut list_block: Option<(usize, usize)> = None;
         lines.extend(graph_list_lines(
             repo,
             width,
             app.detail_selected(),
             limit,
-            &mut selected_block,
+            &mut list_block,
         ));
+        block_tops.extend(base..lines.len());
+        // Offset, because `graph_list_lines` counts from its own first row and
+        // the pane counts from the top of the body. Unoffset, the follow step
+        // scrolled to a row `base` above the selection -- so the highlight sat
+        // that far below the pane's bottom edge -- and for a commit whose
+        // index fell inside the pinned header the subtraction below nulled the
+        // block out and the pane did not follow at all. The reflog reported
+        // `lines.len()` and was right, which is why only the lists drifted.
+        if let Some((top, bottom)) = list_block {
+            selected_block = Some((base + top, base + bottom));
+        }
         lines.push(Line::from(""));
     }
 
@@ -756,20 +775,22 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             // A block runs from the line naming its commit to the line before
             // the next one names another, so the end is found by watching for
             // the next `commit ` line rather than by counting rows.
-            if commit_hash_at(raw).is_some()
-                && let Some(start) = open.take()
-            {
-                selected_block = Some((start, lines.len().saturating_sub(1)));
+            if commit_hash_at(raw).is_some() {
+                if let Some(start) = open.take() {
+                    selected_block = Some((start, lines.len().saturating_sub(1)));
+                }
+                // One predicate for the tops, the block ends and the marker,
+                // so they cannot disagree about where a commit starts.
+                block_tops.push(lines.len());
             }
             // The block the selection names starts here, so scrolling to it
             // puts the whole commit on screen rather than its last line, and
             // so the marker lands on the row that names the commit rather
             // than on some line of its message.
-            let is_sel = opens_commit(raw, &selected_hash);
-            if is_sel {
+            if opens_commit(raw, &selected_hash) {
                 open = Some(lines.len());
             }
-            lines.extend(expanded_graph_lines(raw, &selected_hash, is_sel, width));
+            lines.extend(expanded_graph_lines(raw, &selected_hash, width));
         }
         // The selected block was the last one, so it runs to the end.
         if let Some(start) = open {
@@ -794,6 +815,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             if is_sel {
                 selected_block = Some((lines.len(), lines.len()));
             }
+            block_tops.push(lines.len());
             // The same caret and wash the commit lists use. A bolded hash was
             // all this had, which marks one token and leaves the eye to find
             // which -- the work the marker exists to save.
@@ -952,7 +974,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         }
         false => (None, area),
     };
-    let lines = match pin_header {
+    let mut lines = match pin_header {
         true => {
             let body = lines.split_off(header_rows);
             frame.render_widget(Paragraph::new(lines), header_area.expect("split"));
@@ -969,9 +991,23 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             .and_then(|(t, b)| Some((t.checked_sub(header_rows)?, b.saturating_sub(header_rows)))),
         false => selected_block,
     };
+    // Written every frame, empty list included: a stale set of rows from the
+    // view or the repo you just left would drag the cursor to the wrong entry.
+    //
+    // Rows above the split left the scrolling body with the header, so the
+    // tops come down by the same amount the selection did -- and only when the
+    // header was actually split off.
+    let shed = if pin_header { header_rows } else { 0 };
+    *app.detail_row_tops.borrow_mut() = block_tops
+        .into_iter()
+        .map(|t| t.saturating_sub(shed) as u16)
+        .collect();
 
     let max_scroll = wrapped_row_count(&lines, area.width).saturating_sub(area.height);
     app.detail_max_scroll.set(max_scroll);
+    // The scrolloff arithmetic needs the body's height, and this is the only
+    // place the pane's height and the pinned header's are both known.
+    app.detail_view_height.set(area.height);
     let mut scroll = app.detail_scroll().min(max_scroll);
 
     // Follow the cursor. This is the only place that knows which row the
@@ -990,10 +1026,46 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         app.follow_selection.set(false);
     }
 
+    // The graph's cursor is a row, so the wash goes on after the block layout
+    // is settled: a source line can wrap into several rows, and the cursor
+    // names one of those rows rather than one of the lines that made them.
+    if view == HistoryView::Graph {
+        mark_cursor_row(&mut lines, app.graph_cursor, area.width as usize);
+    }
+
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
+}
+
+/// Put the caret and the selection wash on one row of the graph, clamped to
+/// the rows there are: the cursor outlives the repo it was chosen against, and
+/// a shorter history must move it rather than lose it.
+fn mark_cursor_row(lines: &mut [Line<'static>], cursor: u16, width: usize) {
+    let Some(row) = lines
+        .len()
+        .checked_sub(1)
+        .map(|last| (cursor as usize).min(last))
+    else {
+        return;
+    };
+    let spans = std::mem::take(&mut lines[row].spans);
+    let mut spans = match spans.split_first() {
+        // Replace the caret column rather than prepending one, so the row
+        // keeps the width every other row has.
+        Some((_, rest)) => {
+            let mut v = vec![Span::styled(
+                "\u{25b8} ".to_string(),
+                Style::default().fg(colors::SAPPHIRE),
+            )];
+            v.extend(rest.iter().cloned());
+            v
+        }
+        None => Vec::new(),
+    };
+    spans = wash(pad_to(spans, width));
+    lines[row] = Line::from(spans);
 }
 
 /// Render the `[3] inspector` pane: the full details of the commit the detail
@@ -1167,12 +1239,21 @@ fn file_stat_line(f: &crate::model::FileStat) -> Line<'static> {
 /// says nothing about whose message it is.
 fn bring_into_view(block: (u16, u16), scroll: u16, height: u16) -> u16 {
     let (top, bottom) = block;
-    if top < scroll {
-        return top;
+    // The same margin the cursor keeps when it walks: a block brought to the
+    // very edge is a block you cannot see the next one past.
+    let pad = crate::app::scrolloff_for(height);
+    // scroll must be at most this for the top to clear the upper margin,
+    // and at least this for the bottom to clear the lower one.
+    let highest = top.saturating_sub(pad);
+    let lowest = (bottom + 1 + pad).saturating_sub(height);
+    if scroll > highest {
+        return highest;
     }
-    if bottom >= scroll + height {
-        // `min(top)` keeps the header on screen when the block cannot fit.
-        return top.min(bottom + 1 - height);
+    if scroll < lowest {
+        // A block taller than the pane cannot clear both margins, so its top
+        // wins: scrolling to the bottom of an oversized block leaves you
+        // looking at the tail of a message with nothing to say whose it is.
+        return lowest.min(highest);
     }
     scroll
 }
@@ -1282,6 +1363,8 @@ fn graph_list_lines(
         }
         let is_sel = row == selected;
         if is_sel {
+            // Relative to this function's own output, which the caller offsets
+            // to the pane: these lines are a slice of the body, not the body.
             *selected_block = Some((row, row));
         }
 
@@ -1593,6 +1676,27 @@ fn wrap_text(text: &str, budget: usize) -> Vec<String> {
     out
 }
 
+/// Rewrite git's `Date:` row as an age measured now, or `None` for any other
+/// row.
+///
+/// `git::graph_expanded` asks for `--date=iso-strict` so this can: a relative
+/// date is frozen at the moment git rendered it, and that output is only
+/// refetched when the repo's WorkKey moves. An idle repo sat on "3 minutes
+/// ago" all night while `commits` and `reflog` beside it correctly said "16h
+/// ago", because those two carry a timestamp and format it per frame. This is
+/// the same trade `format_age` documents, applied to the one surface that
+/// still had git do the formatting.
+fn refresh_date_line(rest: &str) -> Option<String> {
+    let stamp = rest.strip_prefix("Date:")?.trim();
+    let parsed = chrono::DateTime::parse_from_rfc3339(stamp).ok()?;
+    // Git's own column: `Date:` and three spaces, so the value stays under
+    // the one on the `Author:` row above it.
+    Some(format!(
+        "Date:   {}",
+        format_age(parsed.with_timezone(&chrono::Utc))
+    ))
+}
+
 /// Re-flow one line's spans to `width`, keeping each chunk's styling.
 ///
 /// The same word-aware break `wrap_text` gives the graph, applied to a line
@@ -1634,27 +1738,6 @@ fn wrap_line<'a>(line: &Line<'a>, width: usize) -> Vec<Line<'a>> {
     out
 }
 
-/// Rewrite git's `Date:` row as an age measured now, or `None` for any other
-/// row.
-///
-/// `git::graph_expanded` asks for `--date=iso-strict` so this can: a relative
-/// date is frozen at the moment git rendered it, and that output is only
-/// refetched when the repo's WorkKey moves. An idle repo sat on "3 minutes
-/// ago" all night while `commits` and `reflog` beside it correctly said "16h
-/// ago", because those two carry a timestamp and format it per frame. This is
-/// the same trade `format_age` documents, applied to the one surface that
-/// still had git do the formatting.
-fn refresh_date_line(rest: &str) -> Option<String> {
-    let stamp = rest.strip_prefix("Date:")?.trim();
-    let parsed = chrono::DateTime::parse_from_rfc3339(stamp).ok()?;
-    // Git's own column: `Date:` and three spaces, so the value stays under
-    // the one on the `Author:` row above it.
-    Some(format!(
-        "Date:   {}",
-        format_age(parsed.with_timezone(&chrono::Utc))
-    ))
-}
-
 /// One raw `git log --graph` line, as the rows it occupies at this width.
 ///
 /// Returns a `Vec` because a wrapped line is several rows and the caller
@@ -1663,12 +1746,7 @@ fn refresh_date_line(rest: &str) -> Option<String> {
 /// instead would split row index from line index, which is exactly the split
 /// the computed graph exists to avoid. Wrapping earlier avoids the problem
 /// that wrapping later creates.
-fn expanded_graph_lines(
-    raw: &str,
-    selected_hash: &str,
-    is_selected: bool,
-    width: usize,
-) -> Vec<Line<'static>> {
+fn expanded_graph_lines(raw: &str, selected_hash: &str, width: usize) -> Vec<Line<'static>> {
     let (prefix, rest) = split_graph_prefix(raw);
     // Git's `Date:` row, recomputed as of now. See `refresh_date_line`.
     let refreshed = refresh_date_line(rest);
@@ -1694,23 +1772,16 @@ fn expanded_graph_lines(
     let budget = width.saturating_sub(2 + prefix.chars().count());
     wrap_text(rest, budget)
         .into_iter()
-        .enumerate()
-        .map(|(i, chunk)| {
-            // The caret marks the block, not every row of it.
-            let marker = if is_selected && i == 0 {
-                "\u{25b8} "
-            } else {
-                "  "
-            };
+        .map(|chunk| {
+            // The caret column is held open on every row: `mark_cursor_row`
+            // fills it in on the one row the cursor is on, and a column that
+            // appeared only there would shift the whole drawing sideways.
             let mut spans = vec![Span::styled(
-                marker.to_string(),
+                "  ".to_string(),
                 Style::default().fg(colors::SAPPHIRE),
             )];
             spans.extend(graph_prefix_spans_raw(prefix));
             spans.push(Span::styled(chunk, style));
-            if is_selected {
-                spans = wash(pad_to(spans, width));
-            }
             Line::from(spans)
         })
         .collect()
@@ -2212,7 +2283,7 @@ mod tests {
     /// the glyph would only stop it looking like the thing it is copying.
     #[test]
     fn the_expanded_graph_keeps_gits_own_node() {
-        let text: String = expanded_graph_lines("* commit a1b2c3d", "", false, 80)
+        let text: String = expanded_graph_lines("* commit a1b2c3d", "", 80)
             .iter()
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
@@ -3426,7 +3497,7 @@ mod tests {
     #[test]
     fn a_long_graph_line_wraps_instead_of_truncating() {
         let raw = "|     feat: rotate the contribution window's from date past GitHub's cache";
-        let rows = expanded_graph_lines(raw, "", false, 40);
+        let rows = expanded_graph_lines(raw, "", 40);
         assert!(rows.len() > 1, "the line was truncated, not wrapped");
         for row in &rows {
             let w: usize = row.spans.iter().map(|s| s.content.chars().count()).sum();
@@ -3439,7 +3510,7 @@ mod tests {
     #[test]
     fn wrapped_rows_repeat_the_lane_prefix() {
         let raw = "| | |     a subject long enough to need more than one row here";
-        let rows = expanded_graph_lines(raw, "", false, 30);
+        let rows = expanded_graph_lines(raw, "", 30);
         assert!(rows.len() > 1, "fixture did not wrap");
         for (i, row) in rows.iter().enumerate() {
             let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
@@ -3455,8 +3526,8 @@ mod tests {
     #[test]
     fn a_narrower_pane_produces_more_rows() {
         let raw = "|     a subject long enough to wrap at several different widths";
-        let wide = expanded_graph_lines(raw, "", false, 60).len();
-        let narrow = expanded_graph_lines(raw, "", false, 30).len();
+        let wide = expanded_graph_lines(raw, "", 60).len();
+        let narrow = expanded_graph_lines(raw, "", 30).len();
         assert!(
             narrow > wide,
             "wrapping did not follow the width: {narrow} vs {wide}"
@@ -3485,66 +3556,54 @@ mod tests {
 
     /// The graph view pinned the selected commit to the top of the pane on
     /// every selection change, so stepping one commit moved the whole view.
-    /// A block already fully on screen must not move it at all.
+    /// A block already clear of both margins must not move it at all.
+    ///
+    /// All four cases below run at height 20, where `scrolloff_for` is 4.
     #[test]
     fn a_visible_block_does_not_move_the_view() {
-        assert_eq!(bring_into_view((12, 17), 10, 20), 10);
+        assert_eq!(bring_into_view((16, 21), 10, 20), 10);
     }
 
-    /// A block above the viewport scrolls up to sit at the top.
+    /// A block above the viewport scrolls up until it clears the top margin,
+    /// not until it touches the top edge: an entry brought hard against the
+    /// edge is one you cannot see what precedes.
     #[test]
-    fn a_block_above_the_viewport_scrolls_to_its_top() {
-        assert_eq!(bring_into_view((4, 9), 10, 20), 4);
+    fn a_block_above_the_viewport_stops_at_the_margin() {
+        assert_eq!(bring_into_view((14, 19), 20, 20), 10);
     }
 
-    /// A block below the viewport scrolls down by the least that reveals it.
+    /// A block just inside the margin still moves. This is the case that made
+    /// the margin worth having: the old rule called it visible and left the
+    /// selection pinned to the pane's first row.
+    #[test]
+    fn a_block_inside_the_top_margin_still_scrolls() {
+        assert_eq!(bring_into_view((12, 17), 10, 20), 8);
+    }
+
+    /// A block below the viewport scrolls down by the least that clears the
+    /// bottom margin.
     #[test]
     fn a_block_below_the_viewport_scrolls_the_minimum() {
-        assert_eq!(bring_into_view((30, 34), 10, 20), 15);
+        assert_eq!(bring_into_view((30, 34), 10, 20), 19);
     }
 
-    /// A block taller than the pane cannot be shown whole, so its top wins:
-    /// scrolling to the bottom of an oversized block leaves you looking at
-    /// the tail of a message with nothing to say whose it is. This is the one
-    /// thing the old top-pinning got right.
+    /// A block taller than the pane cannot clear both margins, so its top
+    /// wins: scrolling to the bottom of an oversized block leaves you looking
+    /// at the tail of a message with nothing to say whose it is. This is the
+    /// one thing the old top-pinning got right.
     #[test]
     fn an_oversized_block_shows_its_top() {
-        assert_eq!(bring_into_view((30, 60), 10, 20), 30);
+        assert_eq!(bring_into_view((30, 60), 10, 20), 26);
     }
 
-    /// Scrolling the graph view must not panic at any pane size or offset.
-    /// The wrap and the bring-into-view arithmetic both do width and height
-    /// subtraction, and a deep lane prefix in a narrow pane is where those
-    /// run out of room.
+    /// The margin never eats more than half a short pane, or the two overlap
+    /// and the cursor is pinned to the middle instead of walking.
     #[test]
-    fn the_graph_view_survives_every_scroll_offset() {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        let mut repo = busy_repo();
-        repo.graph_expanded = (0..40)
-            .map(|i| format!("| | | | * commit {i:030} a very long trailing subject line indeed"))
-            .collect();
-
-        for (w, h) in [(40u16, 10u16), (80, 30), (24, 6), (200, 50), (16, 5)] {
-            for view in crate::app::HistoryView::ALL {
-                for focus in [
-                    crate::app::FocusedPanel::Detail,
-                    crate::app::FocusedPanel::Inspector,
-                ] {
-                    let mut app = crate::app::App::new(vec![repo.clone()], "h".to_string(), w, h);
-                    app.view = crate::app::View::Detail;
-                    app.history_view = view;
-                    app.focused_panel = focus;
-                    for off in [0i32, 1, 5, 50, 500, 5000, -5000] {
-                        app.scroll_detail(off);
-                        app.detail_nav_down();
-                        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-                        term.draw(|f| crate::ui::render(f, &app)).unwrap();
-                    }
-                }
-            }
-        }
+    fn a_short_pane_shrinks_the_margin_rather_than_seizing_up() {
+        // height 5 -> pad 2, so a block at row 10 sits two rows down.
+        assert_eq!(bring_into_view((10, 10), 0, 5), 8);
+        // height 1 -> pad 0, and the row simply becomes the pane.
+        assert_eq!(bring_into_view((10, 10), 0, 1), 10);
     }
 
     /// The staleness bug: git rendered "3 minutes ago" once, the expanded
@@ -3580,7 +3639,7 @@ mod tests {
     fn the_drawn_graph_block_shows_a_current_age() {
         let then = chrono::Utc::now() - chrono::Duration::days(3);
         let raw = format!("| | Date:   {}", then.to_rfc3339());
-        let rows = expanded_graph_lines(&raw, "", false, 80);
+        let rows = expanded_graph_lines(&raw, "", 80);
         let text: String = rows[0]
             .spans
             .iter()
@@ -3589,43 +3648,109 @@ mod tests {
         assert!(text.contains("3d ago"), "drew {text:?}");
     }
 
-    /// A repo whose every history view has a list long enough to scroll.
-    fn list_repo(n: usize) -> RepoStatus {
+    /// Phantom blocks: a substring test for "commit " matched message bodies,
+    /// so this repo's own log reported thirty block starts for twenty-five
+    /// commits and the marker indexed past the commit it was on.
+    #[test]
+    fn only_gits_commit_row_opens_a_block() {
+        assert_eq!(commit_hash_at("* commit 7b1f067"), Some("7b1f067"));
+        assert_eq!(
+            commit_hash_at("| | commit 7b1f067 (HEAD -> main, origin/main)"),
+            Some("7b1f067")
+        );
+        assert_eq!(
+            commit_hash_at("|     notch jumped a whole commit block, which is"),
+            None,
+            "a message body opened a phantom block"
+        );
+        assert_eq!(
+            commit_hash_at("|     is the same symptom. That commit had the mechanism"),
+            None
+        );
+        assert_eq!(
+            commit_hash_at("|     commit blocks are tall"),
+            None,
+            "a body starting with the word is still not a commit row"
+        );
+        assert_eq!(commit_hash_at("| Author: Gaurgle <a@b.c>"), None);
+    }
+
+    /// The highlight is a row, and it must be a *drawn* row at every offset:
+    /// a commit-granular marker could only sit on a `commit <hash>` row, so it
+    /// spent whole blocks off screen and the graph looked like it had no
+    /// cursor at all.
+    #[test]
+    fn the_graph_highlight_is_a_drawn_row_at_every_offset() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (w, h) = (120u16, 40u16);
         let mut repo = busy_repo();
-        repo.commits = (0..n)
-            .map(|i| crate::model::Commit {
-                hash: format!("c0ffee{i:02}"),
-                author: "Gaurgle".to_string(),
-                date: Some(chrono::Utc::now()),
-                message: format!("feat: thing {i}"),
-                body: String::new(),
-                insertions: 1,
-                deletions: 0,
-                files: vec![],
+        let hashes: Vec<String> = (0..12).map(|i| format!("a1b2c{i:02x}")).collect();
+        repo.graph_expanded = hashes
+            .iter()
+            .flat_map(|hash| {
+                let mut block = vec![
+                    format!("* commit {hash}"),
+                    "| Author: Gaurgle <a@b.c>".to_string(),
+                    "| Date:   2026-08-24T16:52:11+02:00".to_string(),
+                    "|".to_string(),
+                ];
+                // A tall body, which is the case that broke: the commit row
+                // leaves the top of the pane and does not come back.
+                block.extend((0..16).map(|n| format!("|     body line {n}")));
+                block.push("|".to_string());
+                block
             })
             .collect();
-        repo.graph = repo
-            .commits
+        repo.graph = hashes
             .iter()
-            .map(|c| crate::model::GraphLine {
-                hash: c.hash.clone(),
+            .map(|hash| crate::model::GraphLine {
+                hash: hash.clone(),
                 refs: vec![],
-                author: c.author.clone(),
-                message: c.message.clone(),
+                author: "Gaurgle".to_string(),
+                message: "m".to_string(),
                 lanes: vec![],
                 is_merge: false,
             })
             .collect();
-        repo.reflog = repo
-            .commits
-            .iter()
-            .map(|c| crate::model::ReflogEntry {
-                hash: c.hash.clone(),
-                action: "commit".to_string(),
-                description: c.message.clone(),
-            })
-            .collect();
-        repo
+
+        let mut app = crate::app::App::new(vec![repo], "h".to_string(), w, h);
+        app.view = crate::app::View::Detail;
+        app.history_view = crate::app::HistoryView::Graph;
+        app.focused_panel = crate::app::FocusedPanel::Detail;
+
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| crate::ui::render(f, &app)).unwrap();
+        assert!(app.detail_max_scroll.get() > 0, "nothing to scroll");
+        let pane = crate::ui::panel_rects(term.get_frame().area(), &app)
+            .detail
+            .expect("the graph view draws a detail pane");
+
+        let mut rows_seen = std::collections::BTreeSet::new();
+        for _ in 0..app.detail_max_scroll.get() {
+            app.scroll_detail(1);
+            term.draw(|f| crate::ui::render(f, &app)).unwrap();
+            let buf = term.backend().buffer().clone();
+            // Only inside the detail pane: the repo list draws a caret too.
+            let marked: Vec<u16> = (pane.y..pane.y + pane.height)
+                .filter(|y| {
+                    (pane.x..pane.x + pane.width).any(|x| buf[(x, *y)].symbol() == "\u{25b8}")
+                })
+                .collect();
+            assert_eq!(
+                marked.len(),
+                1,
+                "expected one highlighted row at offset {}, got {marked:?}",
+                app.detail_scroll()
+            );
+            rows_seen.insert(marked[0]);
+        }
+        assert!(
+            rows_seen.len() > 10,
+            "the highlight only ever sat on {} rows, so it is not walking",
+            rows_seen.len()
+        );
     }
 
     /// The wrap breaks at spaces and keeps every span's styling, so a wrapped
@@ -3724,30 +3849,234 @@ mod tests {
         );
     }
 
-    /// Phantom blocks: a substring test for "commit " matched message bodies,
-    /// so this repo's own log reported thirty block starts for twenty-five
-    /// commits and the marker indexed past the commit it was on.
+    /// Stepping the cursor with `j` must keep it on the pane in every view.
+    ///
+    /// `graph_list_lines` reported the selected row in its own coordinates
+    /// while the reflog reported the pane's, so the follow step scrolled to a
+    /// row `base` above the selection and the highlight sat that far below the
+    /// bottom edge -- and a commit whose index fell inside the pinned header
+    /// had its block nulled out by the header subtraction, so the pane did not
+    /// follow at all. Only the lists drifted, which is why the reflog looked
+    /// fine.
     #[test]
-    fn only_gits_commit_row_opens_a_block() {
-        assert_eq!(commit_hash_at("* commit 7b1f067"), Some("7b1f067"));
+    fn stepping_the_cursor_never_pushes_it_off_the_pane() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (w, h) = (120u16, 30u16);
+        let repo = list_repo(40);
+
+        for view in crate::app::HistoryView::ALL {
+            let mut app = crate::app::App::new(vec![repo.clone()], "h".to_string(), w, h);
+            app.view = crate::app::View::Detail;
+            app.history_view = view;
+            app.focused_panel = crate::app::FocusedPanel::Detail;
+
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            term.draw(|f| crate::ui::render(f, &app)).unwrap();
+            let pane = crate::ui::panel_rects(term.get_frame().area(), &app)
+                .detail
+                .expect("a detail pane");
+            let caret_row = |term: &Terminal<TestBackend>| {
+                let buf = term.backend().buffer().clone();
+                (pane.y..pane.y + pane.height).find(|y| {
+                    (pane.x..pane.x + pane.width).any(|x| buf[(x, *y)].symbol() == "\u{25b8}")
+                })
+            };
+
+            for step in 0..app.selected_commit_count() {
+                app.detail_nav_down();
+                term.draw(|f| crate::ui::render(f, &app)).unwrap();
+                assert!(
+                    caret_row(&term).is_some(),
+                    "{} pushed its cursor off the pane stepping down to {step}",
+                    view.label()
+                );
+            }
+            for step in 0..app.selected_commit_count() {
+                app.detail_nav_up();
+                term.draw(|f| crate::ui::render(f, &app)).unwrap();
+                assert!(
+                    caret_row(&term).is_some(),
+                    "{} pushed its cursor off the pane stepping up to {step}",
+                    view.label()
+                );
+            }
+        }
+    }
+
+    /// The other views step commit to commit, so scrolling moves the view out
+    /// from under their cursor rather than moving the cursor. It used to leave
+    /// the highlight off the pane entirely, and `j` then stepped a commit you
+    /// could not see. Asserted end to end, at the pane, in every view that
+    /// draws a list.
+    /// A repo whose every history view has a list long enough to scroll.
+    fn list_repo(n: usize) -> RepoStatus {
+        let mut repo = busy_repo();
+        repo.commits = (0..n)
+            .map(|i| crate::model::Commit {
+                hash: format!("c0ffee{i:02}"),
+                author: "Gaurgle".to_string(),
+                date: Some(chrono::Utc::now()),
+                message: format!("feat: thing {i}"),
+                body: String::new(),
+                insertions: 1,
+                deletions: 0,
+                files: vec![],
+            })
+            .collect();
+        repo.graph = repo
+            .commits
+            .iter()
+            .map(|c| crate::model::GraphLine {
+                hash: c.hash.clone(),
+                refs: vec![],
+                author: c.author.clone(),
+                message: c.message.clone(),
+                lanes: vec![],
+                is_merge: false,
+            })
+            .collect();
+        repo.reflog = repo
+            .commits
+            .iter()
+            .map(|c| crate::model::ReflogEntry {
+                hash: c.hash.clone(),
+                action: "commit".to_string(),
+                description: c.message.clone(),
+            })
+            .collect();
+        repo
+    }
+
+    #[test]
+    fn scrolling_never_leaves_the_selection_off_the_pane() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (w, h) = (120u16, 30u16);
+        let repo = list_repo(40);
+
+        // `info` is excluded: its commit list is one section among several, and
+        // scrolling past it into the branches and stashes below is the point.
+        for view in [
+            crate::app::HistoryView::Commits,
+            crate::app::HistoryView::Reflog,
+        ] {
+            let mut app = crate::app::App::new(vec![repo.clone()], "h".to_string(), w, h);
+            app.view = crate::app::View::Detail;
+            app.history_view = view;
+            app.focused_panel = crate::app::FocusedPanel::Detail;
+
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            term.draw(|f| crate::ui::render(f, &app)).unwrap();
+            assert!(
+                app.detail_max_scroll.get() > 0,
+                "{} has nothing to scroll",
+                view.label()
+            );
+            let pane = crate::ui::panel_rects(term.get_frame().area(), &app)
+                .detail
+                .expect("a detail pane");
+
+            let mut seen = std::collections::BTreeSet::new();
+            for step in 0..app.detail_max_scroll.get() {
+                app.scroll_detail(1);
+                term.draw(|f| crate::ui::render(f, &app)).unwrap();
+                let buf = term.backend().buffer().clone();
+                let marked = (pane.y..pane.y + pane.height).any(|y| {
+                    (pane.x..pane.x + pane.width).any(|x| buf[(x, y)].symbol() == "\u{25b8}")
+                });
+                assert!(
+                    marked,
+                    "{} lost its selection off the pane at step {step}",
+                    view.label()
+                );
+                seen.insert(app.detail_selected());
+            }
+            assert!(
+                seen.len() > 3,
+                "{} never dragged its selection at all",
+                view.label()
+            );
+        }
+    }
+
+    /// The end-to-end version of the marker drag: render the graph view, then
+    /// scroll past the second block's first row and check the selection
+    /// followed. The app-side tests hand-feed the block tops; this one proves
+    /// the renderer actually reports them, which is the half that cannot be
+    /// faked.
+    #[test]
+    fn rendering_the_graph_view_reports_where_each_block_starts() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut repo = busy_repo();
+        repo.graph_expanded = (0..20)
+            .flat_map(|i| {
+                [
+                    format!("* commit {i:07}"),
+                    "| Author: someone <a@b.c>".to_string(),
+                    "|".to_string(),
+                    format!("|     subject {i}"),
+                    "|".to_string(),
+                ]
+            })
+            .collect();
+
+        let mut app = crate::app::App::new(vec![repo], "h".to_string(), 100, 40);
+        app.view = crate::app::View::Detail;
+        app.history_view = crate::app::HistoryView::Graph;
+        let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        term.draw(|f| crate::ui::render(f, &app)).unwrap();
+
+        let tops = app.detail_row_tops.borrow().clone();
+        assert_eq!(tops.len(), 20, "one top per commit block");
+        assert!(tops.windows(2).all(|w| w[0] < w[1]), "tops must ascend");
+
+        // Walk the cursor onto the second block's first row.
+        app.scroll_detail(tops[1] as i32);
+        assert_eq!(app.graph_cursor, tops[1]);
         assert_eq!(
-            commit_hash_at("| | commit 7b1f067 (HEAD -> main, origin/main)"),
-            Some("7b1f067")
+            app.detail_selected(),
+            1,
+            "the selection did not follow the cursor"
         );
-        assert_eq!(
-            commit_hash_at("|     notch jumped a whole commit block, which is"),
-            None,
-            "a message body opened a phantom block"
-        );
-        assert_eq!(
-            commit_hash_at("|     is the same symptom. That commit had the mechanism"),
-            None
-        );
-        assert_eq!(
-            commit_hash_at("|     commit blocks are tall"),
-            None,
-            "a body starting with the word is still not a commit row"
-        );
-        assert_eq!(commit_hash_at("| Author: Gaurgle <a@b.c>"), None);
+    }
+
+    /// Scrolling the graph view must not panic at any pane size or offset.
+    /// The wrap and the bring-into-view arithmetic both do width and height
+    /// subtraction, and a deep lane prefix in a narrow pane is where those
+    /// run out of room.
+    #[test]
+    fn the_graph_view_survives_every_scroll_offset() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut repo = busy_repo();
+        repo.graph_expanded = (0..40)
+            .map(|i| format!("| | | | * commit {i:030} a very long trailing subject line indeed"))
+            .collect();
+
+        for (w, h) in [(40u16, 10u16), (80, 30), (24, 6), (200, 50), (16, 5)] {
+            for view in crate::app::HistoryView::ALL {
+                for focus in [
+                    crate::app::FocusedPanel::Detail,
+                    crate::app::FocusedPanel::Inspector,
+                ] {
+                    let mut app = crate::app::App::new(vec![repo.clone()], "h".to_string(), w, h);
+                    app.view = crate::app::View::Detail;
+                    app.history_view = view;
+                    app.focused_panel = focus;
+                    for off in [0i32, 1, 5, 50, 500, 5000, -5000] {
+                        app.scroll_detail(off);
+                        app.detail_nav_down();
+                        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+                        term.draw(|f| crate::ui::render(f, &app)).unwrap();
+                    }
+                }
+            }
+        }
     }
 }

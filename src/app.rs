@@ -360,6 +360,24 @@ const RESIZE_STEP: u16 = 5;
 /// rate changes to speed up the spinner. Keep this at `500ms / TICK_INTERVAL`.
 pub const BLINK_TICKS: usize = 5;
 
+/// Rows of context the detail pane keeps past its cursor at either edge.
+///
+/// The cursor walks freely through the middle of the pane and parks this far
+/// from the edge, from where the text scrolls under it instead. Four is what
+/// vim's `scrolloff` and less's default both settle near: enough to see where
+/// you are going, little enough that the cursor still travels.
+///
+/// Applied in every history view, not only the graph. The margin collapses at
+/// the ends of the content, where there is nothing left to keep in reserve.
+pub const SCROLLOFF: u16 = 4;
+
+/// The scrolloff margin for a pane of `height` rows: never more than half of
+/// it, or the two margins overlap and the cursor is pinned to the middle of a
+/// short pane instead of walking it.
+pub fn scrolloff_for(height: u16) -> u16 {
+    SCROLLOFF.min(height.saturating_sub(1) / 2)
+}
+
 /// Bounds for `refresh_interval`, in seconds. The floor keeps a stray keypress
 /// from turning the dashboard into a fetch loop.
 const INTERVAL_MIN: u64 = 5;
@@ -923,6 +941,26 @@ pub struct App {
     /// pane should chase the cursor when the cursor moves, and otherwise go
     /// where it is told.
     pub follow_selection: std::cell::Cell<bool>,
+    /// Body row of every selectable entry in the *active* history view, in
+    /// list order, recorded by the renderer.
+    ///
+    /// The graph's entries are its commit blocks, whose height depends on the
+    /// message, the pane width and the wrap; the other views' are their list
+    /// rows, which sit under however many sections the repo happened to draw.
+    /// Either way the render pass is the only place that knows, which is why
+    /// this is a `RefCell` for the same reason the scroll offsets are `Cell`s:
+    /// the renderer reporting a measurement back, not state the input layer
+    /// owns. Only the active view is drawn, so only its rows are held.
+    pub detail_row_tops: std::cell::RefCell<Vec<u16>>,
+    /// Body row the graph view highlights. The graph's cursor is a *row*, not
+    /// a commit: its blocks run twenty rows and more, so a commit-granular
+    /// cursor could only jump a whole block at a time and left the highlight
+    /// nowhere while you read through one.
+    pub graph_cursor: u16,
+    /// Height of the detail pane's scrolling body, measured by the renderer.
+    /// The scrolloff arithmetic needs it, and the renderer is the only place
+    /// the pane's height and the header's are both known.
+    pub detail_view_height: std::cell::Cell<u16>,
     pub inspector_max_scroll: std::cell::Cell<u16>,
     /// Repaint on the next loop pass. Set by every state change; ticks also
     /// force a paint every 4th frame so the clock and spinner stay live.
@@ -1085,6 +1123,9 @@ impl App {
             inspector_scroll: 0,
             detail_max_scroll: std::cell::Cell::new(0),
             follow_selection: std::cell::Cell::new(false),
+            detail_row_tops: std::cell::RefCell::new(Vec::new()),
+            graph_cursor: 0,
+            detail_view_height: std::cell::Cell::new(0),
             inspector_max_scroll: std::cell::Cell::new(0),
             needs_redraw: true,
             spinner_frame: 0,
@@ -1337,6 +1378,8 @@ impl App {
     /// with the first commit selected rather than inheriting stale offsets.
     fn reset_detail_view(&mut self) {
         self.set_detail_scroll(0);
+        // Before the selection, which in the graph view reads it back.
+        self.graph_cursor = 0;
         self.set_detail_selected(0);
         self.inspector_scroll = 0;
     }
@@ -1681,9 +1724,148 @@ impl App {
     /// no-op keypress for every step of overshoot before anything moved --
     /// which read as the pane being stuck.
     pub fn scroll_detail(&mut self, delta: i32) {
+        // The graph view scrolls by moving its row cursor and letting the view
+        // follow, so every gesture that scrolls it also moves the highlight.
+        if self.history_view == HistoryView::Graph {
+            return self.move_graph_cursor(delta);
+        }
         let max = self.detail_max_scroll.get() as i32;
         let current = self.detail_scroll() as i32;
         self.set_detail_scroll((current + delta).clamp(0, max) as u16);
+        self.keep_selection_on_screen();
+    }
+
+    /// Drag the selection back inside the pane after a scroll moved the view
+    /// out from under it.
+    ///
+    /// The other views step commit to commit, so their cursor is a list entry
+    /// rather than a row and scrolling moves the view rather than the cursor.
+    /// Without this the highlight simply left the pane and `j` then stepped a
+    /// commit you could not see. The selection lands on the nearest entry that
+    /// clears the margin, and stays put when there is no such entry: `info`
+    /// draws branches, stashes and worktrees below its commit list, and those
+    /// rows must stay reachable by scrolling past the last commit.
+    ///
+    /// Deliberately does not set `follow_selection`: that would ask the next
+    /// frame to scroll the entry into view, undoing the scroll that chose it.
+    fn keep_selection_on_screen(&mut self) {
+        let height = self.detail_view_height.get();
+        if height == 0 {
+            return;
+        }
+        let scroll = self.detail_scroll();
+        let pad = scrolloff_for(height);
+        // The margin collapses at the ends of the content: there is nothing
+        // beyond them to keep in reserve, and holding it there would make the
+        // first and last entries unreachable.
+        let first = scroll + if scroll > 0 { pad } else { 0 };
+        let last = scroll + height
+            - 1
+            - if scroll < self.detail_max_scroll.get() {
+                pad
+            } else {
+                0
+            };
+
+        let tops = self.detail_row_tops.borrow();
+        let Some(&row) = tops.get(self.detail_selected()) else {
+            return;
+        };
+        let next = if row < first {
+            tops.iter().position(|&t| t >= first)
+        } else if row > last {
+            tops.iter().rposition(|&t| t <= last)
+        } else {
+            None
+        };
+        drop(tops);
+        if let Some(i) = next {
+            self.detail_selections[self.history_view.index()] = i;
+            self.inspector_scroll = 0;
+        }
+    }
+
+    /// Move the graph view's row cursor by `delta` rows and let the view
+    /// follow it, keeping `SCROLLOFF` rows of context past the cursor at
+    /// whichever edge it is heading for.
+    ///
+    /// The highlight therefore walks down the pane until it is that far from
+    /// the bottom, and from there stays put while the text runs under it --
+    /// the way a pager or an editor moves. A commit-granular marker could not
+    /// do this: blocks run past twenty rows, so it stood still through a whole
+    /// commit and then jumped.
+    pub fn move_graph_cursor(&mut self, delta: i32) {
+        let last = self.graph_body_rows().saturating_sub(1) as i32;
+        self.graph_cursor = (self.graph_cursor as i32 + delta).clamp(0, last) as u16;
+        self.keep_graph_cursor_in_view();
+        self.sync_graph_selection();
+    }
+
+    /// Rows in the detail pane's scrolling body, as the last frame measured
+    /// it: the largest useful offset plus the height it leaves on screen.
+    fn graph_body_rows(&self) -> u16 {
+        self.detail_max_scroll.get() + self.detail_view_height.get()
+    }
+
+    /// Nudge the scroll offset so the cursor sits at least `SCROLLOFF`
+    /// rows inside the pane, and otherwise leave it exactly where it is --
+    /// that "otherwise" is what makes the highlight, not the text, move
+    /// through the middle of the pane.
+    fn keep_graph_cursor_in_view(&mut self) {
+        let height = self.detail_view_height.get();
+        if height == 0 {
+            return;
+        }
+        // Never more than half the pane, or the two margins overlap and the
+        // cursor is pinned to the middle of a short one.
+        let pad = scrolloff_for(height);
+        let cursor = self.graph_cursor;
+        // cursor - scroll must land in [pad, height - 1 - pad].
+        let lowest = cursor.saturating_sub(height - 1 - pad);
+        let highest = cursor.saturating_sub(pad);
+        let scroll = self
+            .detail_scroll()
+            .clamp(lowest, highest)
+            .min(self.detail_max_scroll.get());
+        self.set_detail_scroll(scroll);
+    }
+
+    /// Bring the cursor's row into view for a commit step, from the top.
+    ///
+    /// A commit step lands on a block's first row, and the minimal nudge
+    /// `keep_graph_cursor_in_view` makes would leave that row in the *bottom*
+    /// margin: four rows of the commit you just stepped to, and the rest of it
+    /// below the fold. A row already comfortably on screen is left alone, so
+    /// stepping through commits that share a screen does not jerk the view.
+    fn show_graph_cursor_from_top(&mut self) {
+        let height = self.detail_view_height.get();
+        if height == 0 {
+            return;
+        }
+        let pad = scrolloff_for(height);
+        let scroll = self.detail_scroll();
+        let cursor = self.graph_cursor;
+        if cursor < scroll + pad || cursor > scroll + height - 1 - pad {
+            let top = cursor.saturating_sub(pad).min(self.detail_max_scroll.get());
+            self.set_detail_scroll(top);
+        }
+    }
+
+    /// The commit the row cursor is inside, which is what the hash emphasis
+    /// and `inspected_hash` key off.
+    ///
+    /// Deliberately does not set `follow_selection`: that would ask the next
+    /// frame to scroll the block into view, undoing the scroll that chose it.
+    fn sync_graph_selection(&mut self) {
+        let cursor = self.graph_cursor;
+        let block = self
+            .detail_row_tops
+            .borrow()
+            .iter()
+            .rposition(|&top| top <= cursor);
+        if let Some(i) = block {
+            self.detail_selections[HistoryView::Graph.index()] = i;
+        }
     }
 
     pub fn toggle_help(&mut self) {
@@ -1768,6 +1950,19 @@ impl App {
 
     pub fn set_detail_selected(&mut self, value: usize) {
         self.detail_selections[self.history_view.index()] = value;
+        // Stepping a commit in the graph view moves the row cursor to that
+        // commit's own row, and the view is nudged around it here rather than
+        // by `follow_selection`: bring-into-view puts the row hard against an
+        // edge, which the very next scroll would undo by pulling the scrolloff
+        // margin back.
+        if self.history_view == HistoryView::Graph {
+            let top = self.detail_row_tops.borrow().get(value).copied();
+            if let Some(top) = top {
+                self.graph_cursor = top;
+                self.show_graph_cursor_from_top();
+                return;
+            }
+        }
         // Any cursor move asks the pane to follow. Scrolling does not, which
         // is what keeps the two from fighting each other to a standstill.
         self.follow_selection.set(true);
@@ -3147,10 +3342,15 @@ mod tests {
     /// Scrolling and the cursor are independent: the wheel used to call
     /// `detail_nav_down`, so it moved the selection instead of the view and
     /// the pane could only jump from commit to commit.
+    ///
+    /// Asserted against `commits` rather than `graph`: the graph view now
+    /// drags its marker with the view deliberately (see below), and it is the
+    /// only view that does.
     #[test]
     fn scrolling_the_detail_pane_leaves_the_selection_alone() {
         let mut app = make_app(3);
-        app.history_view = HistoryView::Graph;
+        app.history_view = HistoryView::Commits;
+        app.detail_max_scroll.set(20);
         app.set_detail_selected(2);
         let before = app.detail_selected();
         app.scroll_detail(5);
@@ -3158,17 +3358,195 @@ mod tests {
         assert_eq!(app.detail_selected(), before, "scrolling moved the cursor");
     }
 
-    /// The other half: a scroll must not ask the pane to chase the selection,
-    /// or the next frame would undo it.
+    /// The graph view is the exception, and its cursor is a *row*. Blocks run
+    /// past twenty rows, so a commit-granular marker stood still through a
+    /// whole commit and then jumped -- the highlight was nowhere while you
+    /// read one. The cursor walks the pane a row at a time instead.
+    fn graph_app() -> App {
+        let mut app = make_app(1);
+        app.history_view = HistoryView::Graph;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+        *app.detail_row_tops.borrow_mut() = vec![0, 10, 25, 60];
+        app
+    }
+
+    /// Scrolloff: the highlight travels down the pane while the text holds
+    /// still, and once it is `SCROLLOFF` from the bottom the text starts
+    /// moving under it instead.
     #[test]
-    fn scrolling_does_not_request_follow() {
-        let mut app = make_app(3);
+    fn the_graph_cursor_walks_the_pane_before_the_pane_moves() {
+        let mut app = graph_app();
+
+        for _ in 0..15 {
+            app.scroll_detail(1);
+        }
+        assert_eq!(app.graph_cursor, 15, "one row per press");
+        assert_eq!(
+            app.detail_scroll(),
+            0,
+            "the text moved while the highlight still had room"
+        );
+
+        app.scroll_detail(1);
+        assert_eq!(app.graph_cursor, 16);
+        assert_eq!(app.detail_scroll(), 1, "now the text moves under it");
+
+        for _ in 0..5 {
+            app.scroll_detail(1);
+        }
+        assert_eq!((app.graph_cursor, app.detail_scroll()), (21, 6));
+        assert_eq!(
+            app.graph_cursor - app.detail_scroll(),
+            15,
+            "the highlight is parked four rows off the bottom"
+        );
+    }
+
+    /// The same margin at the other edge, walking back up.
+    #[test]
+    fn the_graph_cursor_keeps_its_margin_going_up() {
+        let mut app = graph_app();
+        for _ in 0..21 {
+            app.scroll_detail(1);
+        }
+        assert_eq!((app.graph_cursor, app.detail_scroll()), (21, 6));
+
+        for _ in 0..11 {
+            app.scroll_detail(-1);
+        }
+        assert_eq!(app.graph_cursor, 10);
+        assert_eq!(
+            app.detail_scroll(),
+            6,
+            "the highlight came up, not the text"
+        );
+
+        app.scroll_detail(-1);
+        assert_eq!((app.graph_cursor, app.detail_scroll()), (9, 5));
+    }
+
+    /// The cursor cannot walk off the end of the content, and does not bank
+    /// phantom offset there either -- one press back must move it.
+    #[test]
+    fn the_graph_cursor_stops_at_the_last_row() {
+        let mut app = graph_app();
+        app.scroll_detail(10_000);
+        // max_scroll + height - 1: the last row the pane can show.
+        assert_eq!(app.graph_cursor, 119);
+        app.scroll_detail(-1);
+        assert_eq!(app.graph_cursor, 118, "moves again immediately");
+    }
+
+    /// The commit the cursor is inside is what the view calls selected, so the
+    /// hash emphasis and `inspected_hash` follow the highlight through a block
+    /// rather than waiting for its last row.
+    #[test]
+    fn the_cursor_selects_the_commit_it_is_inside() {
+        let mut app = graph_app();
+        app.scroll_detail(9);
+        assert_eq!(app.detail_selected(), 0);
+        app.scroll_detail(1);
+        assert_eq!(app.detail_selected(), 1, "row 10 opens the second commit");
+        app.scroll_detail(20);
+        assert_eq!(app.detail_selected(), 2);
+    }
+
+    /// Stepping a commit shows its block from the top. Bringing the row into
+    /// view by the smallest nudge would leave it in the *bottom* margin: four
+    /// rows of the commit you stepped to, and the rest of it below the fold.
+    #[test]
+    fn stepping_a_commit_shows_its_block_from_the_top() {
+        let mut app = graph_app();
+
+        app.set_detail_selected(2);
+        assert_eq!(app.graph_cursor, 25, "the cursor moved to the commit's row");
+        assert_eq!(
+            app.detail_scroll(),
+            21,
+            "which sits four rows down the pane"
+        );
+
+        // Already comfortably on screen: stepping must not jerk the view.
+        let before = app.detail_scroll();
+        app.set_detail_selected(2);
+        assert_eq!(app.detail_scroll(), before);
+    }
+
+    /// Moving the cursor must not ask the pane to follow it: the next frame
+    /// would bring the whole block into view and undo the scrolloff the cursor
+    /// just established.
+    #[test]
+    fn moving_the_graph_cursor_does_not_request_follow() {
+        let mut app = graph_app();
         app.follow_selection.set(false);
-        app.scroll_detail(5);
+        app.scroll_detail(12);
+        assert_eq!(app.detail_selected(), 1);
         assert!(
             !app.follow_selection.get(),
-            "a scroll asked the renderer to follow, which would undo it"
+            "the cursor asked the renderer to follow, which would undo it"
         );
+    }
+
+    /// The commit-to-commit views scroll the view rather than the cursor, so
+    /// the scroll has to bring the cursor along or the highlight leaves the
+    /// pane and `j` steps a commit you cannot see.
+    #[test]
+    fn scrolling_drags_the_selection_to_the_nearest_visible_entry() {
+        let mut app = make_app(1);
+        app.history_view = HistoryView::Commits;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+        // One row per commit, as the list draws them.
+        *app.detail_row_tops.borrow_mut() = (0..40).collect();
+
+        app.scroll_detail(10);
+        assert_eq!(
+            app.detail_selected(),
+            14,
+            "the highlight was left above the pane"
+        );
+
+        app.scroll_detail(20);
+        assert_eq!(app.detail_selected(), 34);
+    }
+
+    /// The margin collapses at the ends of the content: held there, the first
+    /// and last entries could never be selected.
+    #[test]
+    fn the_first_entry_is_reachable_at_the_top_of_the_content() {
+        let mut app = make_app(1);
+        app.history_view = HistoryView::Commits;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+        *app.detail_row_tops.borrow_mut() = (0..40).collect();
+
+        app.set_detail_selected(0);
+        app.scroll_detail(0);
+        assert_eq!(app.detail_selected(), 0, "row 0 was pushed off its own row");
+    }
+
+    /// `info` draws branches, worktrees and stashes below its commit list, and
+    /// scrolling past the last commit to read them is the point. With no entry
+    /// left inside the pane the selection stays where it is rather than being
+    /// dragged to an edge.
+    #[test]
+    fn scrolling_past_a_list_leaves_its_selection_alone() {
+        let mut app = make_app(1);
+        app.history_view = HistoryView::Info;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+        // Six commits at the top, then sections that own no commit.
+        *app.detail_row_tops.borrow_mut() = (0..6).collect();
+        app.set_detail_selected(5);
+
+        app.scroll_detail(60);
+        assert_eq!(
+            app.detail_scroll(),
+            60,
+            "the sections below stayed reachable"
+        );
+        assert_eq!(app.detail_selected(), 5, "and the cursor was not dragged");
     }
 
     /// The graph block already carries hash, author, date and message, so an
