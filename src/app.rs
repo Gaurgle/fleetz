@@ -1498,13 +1498,27 @@ impl App {
         self.inspector_scroll = (current + delta).clamp(0, max) as u16;
     }
 
-    /// Scroll the focused pane's content by `delta` lines (Shift+scroll)
-    /// without moving the selection cursor. From the repo list it drives the
-    /// detail pane (window 2), so you can skim the selected repo's history
-    /// while browsing the list; from the inspector it scrolls the inspector.
+    /// Shift+scroll on the focused pane.
+    ///
+    /// From the detail pane it scrolls that pane, leaving the cursor to be
+    /// dragged along only as far as keeping it on screen requires. From the
+    /// repo list it *steps the detail pane's cursor* instead: `j`/`k` there
+    /// belong to the repo list, so this is the only way to drive window 2
+    /// without leaving window 1, and stepping the cursor is what makes the
+    /// inspector read out each commit in turn. Past the last commit
+    /// `detail_nav_*` falls through to scrolling, so the sections below a
+    /// short list stay reachable. From the inspector it scrolls the inspector.
     pub fn scroll_focused(&mut self, delta: i32) {
         match self.focused_panel {
-            FocusedPanel::RepoList | FocusedPanel::Detail => self.scroll_detail(delta),
+            FocusedPanel::RepoList => {
+                for _ in 0..delta.unsigned_abs() {
+                    match delta > 0 {
+                        true => self.detail_nav_down(),
+                        false => self.detail_nav_up(),
+                    }
+                }
+            }
+            FocusedPanel::Detail => self.scroll_detail(delta),
             FocusedPanel::Inspector => self.scroll_inspector(delta),
             // The strip is a fixed-height picture with nothing below the
             // fold, so there is nothing to scroll.
@@ -3486,6 +3500,75 @@ mod tests {
             !app.follow_selection.get(),
             "the cursor asked the renderer to follow, which would undo it"
         );
+    }
+
+    /// From the repo list, Shift+J/K drives window 2's cursor rather than its
+    /// scroll offset: `j`/`k` there belong to the repo list, so this is the
+    /// only way to step commits without leaving window 1, and stepping the
+    /// cursor is what makes the inspector read each one out. It used to scroll
+    /// the pane, which moved the text past a cursor that stayed put and told
+    /// the inspector nothing.
+    #[test]
+    fn shift_scroll_from_the_repo_list_steps_the_detail_cursor() {
+        let mut app = make_app(1);
+        app.repos[0].commits = (0..6)
+            .map(|i| crate::model::Commit {
+                hash: format!("c0ffee{i}"),
+                author: "Gaurgle".to_string(),
+                date: None,
+                message: format!("feat: thing {i}"),
+                body: String::new(),
+                insertions: 0,
+                deletions: 0,
+                files: vec![],
+            })
+            .collect();
+        app.focused_panel = FocusedPanel::RepoList;
+        app.history_view = HistoryView::Info;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+        // Six commits, as `info` shows.
+        *app.detail_row_tops.borrow_mut() = (0..6).collect();
+
+        app.scroll_focused(1);
+        assert_eq!(app.detail_selected(), 1, "the inspector was told nothing");
+        app.scroll_focused(1);
+        assert_eq!(app.detail_selected(), 2);
+        app.scroll_focused(-1);
+        assert_eq!(app.detail_selected(), 1);
+    }
+
+    /// Past the last commit it falls through to scrolling, so the branches and
+    /// stashes below a short list stay reachable from the repo list too.
+    #[test]
+    fn shift_scroll_past_the_last_commit_scrolls_instead() {
+        let mut app = make_app(1);
+        app.focused_panel = FocusedPanel::RepoList;
+        app.history_view = HistoryView::Info;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+        *app.detail_row_tops.borrow_mut() = (0..6).collect();
+
+        // `make_app` builds repos with no commits, so the cursor is already at
+        // the end of the list and every step is a scroll.
+        assert_eq!(app.selected_commit_count(), 0);
+        app.scroll_focused(1);
+        assert_eq!(app.detail_scroll(), 1);
+    }
+
+    /// The detail pane keeps scrolling on Shift+scroll: its own `j`/`k` step
+    /// the cursor, so binding both to the same thing would waste the gesture.
+    #[test]
+    fn shift_scroll_on_the_detail_pane_still_scrolls_it() {
+        let mut app = make_app(1);
+        app.focused_panel = FocusedPanel::Detail;
+        app.history_view = HistoryView::Commits;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+        *app.detail_row_tops.borrow_mut() = (0..40).collect();
+
+        app.scroll_focused(1);
+        assert_eq!(app.detail_scroll(), 1);
     }
 
     /// The commit-to-commit views scroll the view rather than the cursor, so

@@ -28,7 +28,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ),
         (
             "⇧ J/K ↑/↓",
-            "Scroll the detail pane (works from the repo list too)",
+            "Repo list: step window 2's commits · Detail: scroll it",
         ),
         ("PgUp/PgDn", "Scroll focused pane by a page"),
         ("v", "Toggle detail ↔ compact view"),
