@@ -1107,13 +1107,17 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     // the real end.
     // Recorded back so `App::scroll_inspector` clamps against it, rather than
     // letting the offset run past the end and stall the way back.
-    let max_scroll = wrapped_row_count(&lines, inner.width).saturating_sub(inner.height);
+    // Wrapped here rather than by the `Paragraph`, so one line is one rendered
+    // row and the offset below is an exact row index. See `wrap_line`.
+    let lines: Vec<Line> = lines
+        .iter()
+        .flat_map(|l| wrap_line(l, inner.width as usize))
+        .collect();
+
+    let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
     app.inspector_max_scroll.set(max_scroll);
     let scroll = app.inspector_scroll.min(max_scroll);
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll, 0))
-        .block(block);
+    let paragraph = Paragraph::new(lines).scroll((scroll, 0)).block(block);
     frame.render_widget(paragraph, area);
 }
 
@@ -1559,6 +1563,47 @@ fn wrap_text(text: &str, budget: usize) -> Vec<String> {
         }
     }
     out.push(line);
+    out
+}
+
+/// Re-flow one line's spans to `width`, keeping each chunk's styling.
+///
+/// The same word-aware break `wrap_text` gives the graph, applied to a line
+/// that is already several spans. Wrapping in the builder rather than leaving
+/// it to `Paragraph` makes one line one rendered row, which is what lets the
+/// scroll offset be an exact row index: `wrapped_row_count` counts
+/// `ceil(len / width)` while `Paragraph` breaks at spaces, so it under-reports
+/// every wrapped paragraph and the tail of a long commit body could not be
+/// scrolled to.
+fn wrap_line<'a>(line: &Line<'a>, width: usize) -> Vec<Line<'a>> {
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    if width == 0 || text.chars().count() <= width {
+        return vec![line.clone()];
+    }
+    // One entry per character, so a chunk can be cut back into styled spans.
+    // `wrap_text` neither adds nor drops characters, so the offsets line up.
+    let styled: Vec<(char, Style)> = line
+        .spans
+        .iter()
+        .flat_map(|s| s.content.chars().map(|c| (c, s.style)))
+        .collect();
+
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    for chunk in wrap_text(&text, width) {
+        let n = chunk.chars().count();
+        let mut spans: Vec<Span<'a>> = Vec::new();
+        for &(ch, style) in &styled[at.min(styled.len())..(at + n).min(styled.len())] {
+            match spans.last_mut() {
+                // Runs of one style stay one span, so a wrapped line does not
+                // become one span per character.
+                Some(last) if last.style == style => last.content.to_mut().push(ch),
+                _ => spans.push(Span::styled(ch.to_string(), style)),
+            }
+        }
+        at += n;
+        out.push(Line::from(spans));
+    }
     out
 }
 
@@ -3520,5 +3565,140 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect::<String>();
         assert!(text.contains("3d ago"), "drew {text:?}");
+    }
+
+    /// A repo whose every history view has a list long enough to scroll.
+    fn list_repo(n: usize) -> RepoStatus {
+        let mut repo = busy_repo();
+        repo.commits = (0..n)
+            .map(|i| crate::model::Commit {
+                hash: format!("c0ffee{i:02}"),
+                author: "Gaurgle".to_string(),
+                date: Some(chrono::Utc::now()),
+                message: format!("feat: thing {i}"),
+                body: String::new(),
+                insertions: 1,
+                deletions: 0,
+                files: vec![],
+            })
+            .collect();
+        repo.graph = repo
+            .commits
+            .iter()
+            .map(|c| crate::model::GraphLine {
+                hash: c.hash.clone(),
+                refs: vec![],
+                author: c.author.clone(),
+                message: c.message.clone(),
+                lanes: vec![],
+                is_merge: false,
+            })
+            .collect();
+        repo.reflog = repo
+            .commits
+            .iter()
+            .map(|c| crate::model::ReflogEntry {
+                hash: c.hash.clone(),
+                action: "commit".to_string(),
+                description: c.message.clone(),
+            })
+            .collect();
+        repo
+    }
+
+    /// The wrap breaks at spaces and keeps every span's styling, so a wrapped
+    /// paragraph is not one span per character and no word is cut in half.
+    #[test]
+    fn wrapping_a_line_keeps_its_words_and_its_styling() {
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let plain = Style::default().fg(colors::TEXT);
+        let line = Line::from(vec![
+            Span::styled("hash1234 ".to_string(), bold),
+            Span::styled("the quick brown fox jumps".to_string(), plain),
+        ]);
+
+        let rows = wrap_line(&line, 14);
+        assert!(rows.len() > 1, "nothing wrapped");
+        for row in &rows {
+            let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                text.chars().count() <= 14,
+                "row ran past the pane: {text:?}"
+            );
+            assert!(
+                row.spans.len() <= 2,
+                "one span per character: {:?}",
+                row.spans.len()
+            );
+        }
+        let rejoined: String = rows
+            .iter()
+            .flat_map(|r| r.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(rejoined, "hash1234 the quick brown fox jumps");
+        assert_eq!(rows[0].spans[0].style, bold, "the hash lost its weight");
+    }
+
+    /// A word wider than the pane still renders rather than looping, and its
+    /// characters are not lost.
+    #[test]
+    fn wrapping_a_line_survives_a_word_wider_than_the_pane() {
+        let line = Line::from(Span::raw("a".repeat(30)));
+        let rows = wrap_line(&line, 8);
+        assert_eq!(rows.len(), 4);
+        let rejoined: String = rows
+            .iter()
+            .flat_map(|r| r.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(rejoined.chars().count(), 30);
+    }
+
+    /// The inspector's scroll must reach the last row of a long body.
+    ///
+    /// It clamped against `wrapped_row_count`, which counts `ceil(len/width)`
+    /// while `Paragraph` broke at spaces: every wrapped paragraph reported
+    /// fewer rows than it drew, so the tail of a commit message was
+    /// unreachable. The lines are wrapped in the builder now, so the count is
+    /// the count.
+    #[test]
+    fn the_inspector_scrolls_to_the_end_of_a_long_body() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (w, h) = (120u16, 30u16);
+        let mut repo = list_repo(3);
+        // One long paragraph of long words. Broken at spaces every word takes a
+        // row of its own and most of that row's width goes unused, so a
+        // `ceil(len / width)` count reports far fewer rows than are drawn --
+        // and it is that shortfall that stranded the tail.
+        let mut body = "z".repeat(50);
+        for _ in 0..40 {
+            body.push(' ');
+            body.push_str(&"z".repeat(50));
+        }
+        body.push_str(" TAILMARKER");
+        repo.commits[0].body = body;
+
+        let mut app = crate::app::App::new(vec![repo], "h".to_string(), w, h);
+        app.view = crate::app::View::Detail;
+        app.history_view = crate::app::HistoryView::Commits;
+
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| crate::ui::render(f, &app)).unwrap();
+        let max = app.inspector_max_scroll.get();
+        assert!(max > 0, "the body did not overflow the inspector");
+
+        app.scroll_inspector(max as i32);
+        term.draw(|f| crate::ui::render(f, &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let screen: String = (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect();
+        assert!(
+            screen.contains("TAILMARKER"),
+            "the end of the body was past the end of the scroll"
+        );
     }
 }
