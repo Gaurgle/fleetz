@@ -756,7 +756,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             // A block runs from the line naming its commit to the line before
             // the next one names another, so the end is found by watching for
             // the next `commit ` line rather than by counting rows.
-            if raw.contains("commit ")
+            if commit_hash_at(raw).is_some()
                 && let Some(start) = open.take()
             {
                 selected_block = Some((start, lines.len().saturating_sub(1)));
@@ -1509,12 +1509,39 @@ fn hash_style(selected: bool) -> Style {
 /// Whether this line of `git log --graph`'s expanded output is the `commit
 /// <hash>` line that opens `hash`'s block.
 fn opens_commit(raw: &str, hash: &str) -> bool {
-    !hash.is_empty()
-        && raw
-            .split_whitespace()
-            .skip_while(|w| *w != "commit")
-            .nth(1)
-            .is_some_and(|h| h.trim_end_matches(|c: char| !c.is_alphanumeric()) == hash)
+    !hash.is_empty() && commit_hash_at(raw) == Some(hash)
+}
+
+/// The characters git draws the lanes with. Space is one of them, so the
+/// split below also eats a message body's indentation.
+const GRAPH_CHARS: [char; 6] = ['*', '|', '\\', '/', '_', ' '];
+
+/// Split a raw `git log --graph` row into its lane prefix and the text after
+/// it. One function so the marker, the block bounds and the renderer cannot
+/// disagree about where the drawing stops and the text starts.
+fn split_graph_prefix(raw: &str) -> (&str, &str) {
+    let split = raw
+        .char_indices()
+        .find(|(_, c)| !GRAPH_CHARS.contains(c))
+        .map_or(raw.len(), |(i, _)| i);
+    raw.split_at(split)
+}
+
+/// The hash of the commit this row opens, or `None` for every other row.
+///
+/// The hash is validated, not just located: a substring test for "commit "
+/// matched message bodies, and this repo's own log says "that commit had the
+/// mechanism" and "one wheel notch jumped a whole commit block". Every one of
+/// those opened a phantom block, so the graph reported thirty block starts for
+/// twenty-five commits and the marker indexed past the commit it was on.
+fn commit_hash_at(raw: &str) -> Option<&str> {
+    let word = split_graph_prefix(raw)
+        .1
+        .strip_prefix("commit ")?
+        .split_whitespace()
+        .next()?;
+    // Decorations follow after a space, so the first word is the bare hash.
+    (word.len() >= 4 && word.chars().all(|c| c.is_ascii_hexdigit())).then_some(word)
 }
 
 /// Hold a row open to `width` so a selection wash covers the line rather than
@@ -1642,12 +1669,7 @@ fn expanded_graph_lines(
     is_selected: bool,
     width: usize,
 ) -> Vec<Line<'static>> {
-    const GRAPH_CHARS: [char; 6] = ['*', '|', '\\', '/', '_', ' '];
-    let split = raw
-        .char_indices()
-        .find(|(_, c)| !GRAPH_CHARS.contains(c))
-        .map_or(raw.len(), |(i, _)| i);
-    let (prefix, rest) = raw.split_at(split);
+    let (prefix, rest) = split_graph_prefix(raw);
     // Git's `Date:` row, recomputed as of now. See `refresh_date_line`.
     let refreshed = refresh_date_line(rest);
     let rest = refreshed.as_deref().unwrap_or(rest);
@@ -3700,5 +3722,32 @@ mod tests {
             screen.contains("TAILMARKER"),
             "the end of the body was past the end of the scroll"
         );
+    }
+
+    /// Phantom blocks: a substring test for "commit " matched message bodies,
+    /// so this repo's own log reported thirty block starts for twenty-five
+    /// commits and the marker indexed past the commit it was on.
+    #[test]
+    fn only_gits_commit_row_opens_a_block() {
+        assert_eq!(commit_hash_at("* commit 7b1f067"), Some("7b1f067"));
+        assert_eq!(
+            commit_hash_at("| | commit 7b1f067 (HEAD -> main, origin/main)"),
+            Some("7b1f067")
+        );
+        assert_eq!(
+            commit_hash_at("|     notch jumped a whole commit block, which is"),
+            None,
+            "a message body opened a phantom block"
+        );
+        assert_eq!(
+            commit_hash_at("|     is the same symptom. That commit had the mechanism"),
+            None
+        );
+        assert_eq!(
+            commit_hash_at("|     commit blocks are tall"),
+            None,
+            "a body starting with the word is still not a commit row"
+        );
+        assert_eq!(commit_hash_at("| Author: Gaurgle <a@b.c>"), None);
     }
 }
