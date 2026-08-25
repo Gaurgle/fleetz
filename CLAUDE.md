@@ -83,7 +83,7 @@ without one) and an authenticated `gh` on PATH, which the GitHub fetch uses.
 
 **`ui::panel_rects` must produce the same rectangles `render` draws.** It exists
 so mouse clicks can be hit-tested against what is on screen. Shared geometry
-lives in one function called by both (`detail::split_right_column`, and
+lives in one function called by both (`detail::split_inspector`, and
 `ui::contributions::split_main_area` for the strip); never reintroduce a second
 copy of that arithmetic. Drift here misroutes clicks silently, with nothing
 failing.

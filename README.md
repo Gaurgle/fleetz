@@ -92,6 +92,11 @@ fleetz --watch                        # live dashboard, auto-refreshes
 
 ## Keybindings
 
+The footer hints the global keys. A key whose action has an "on" state lights
+up green while it is on (`r` and `R` in flight, `v` in the compact view, `?`
+with help open); `c` lights in the strip's own colour. Watch shows its state
+in the header instead.
+
 | Key | Action |
 |-----|--------|
 | `1` / `2` / `3` / `4` | Focus repo list / detail / inspector / contributions |
@@ -102,7 +107,7 @@ fleetz --watch                        # live dashboard, auto-refreshes
 | `PgUp` / `PgDn` | Scroll focused pane by a page |
 | `v` | Toggle detail vs compact view. The compact grid packs as many columns as the terminal has room for |
 | `[` / `]` | Repo pane: step its body between four views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`, wrapped to the pane and given the whole column (its blocks already carry what the inspector would repeat, so no inspector is docked there). Each keeps its own scroll position and selection, and the inspector follows whichever is active. The active view is named in the pane's top border in its own colour, and the repo header below it stays pinned, so both survive scrolling |
-| `c` | Toggle the contributions strip: three years of activity, GitHub-style. Each day is a half-block square with its own padding, so the grid fits in 11 rows; it scrolls rather than shrinking, with the newest week pinned to the right edge, and no day is marked until you move the cursor |
+| `c` | Toggle the contributions strip (the footer's `[c]` lights up in the strip's colour while it is open): three years of activity, GitHub-style. Each day is a half-block square with its own padding, so the grid fits in 11 rows; it scrolls rather than shrinking, with the newest week pinned to the right edge, and no day is marked until you move the cursor |
 | `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
 | `4` | Focus the contributions strip (only while it is open) |
 | `h` / `l`, `←` / `→` | Contributions: move the day cursor back/forward a week. The grid scrolls with it, oldest weeks hiding off to the left |

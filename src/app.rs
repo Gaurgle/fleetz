@@ -1205,7 +1205,7 @@ impl App {
     /// The graph view's blocks already carry the hash, author, date and full
     /// message, so an inspector there repeats the block while taking the rows
     /// the block needs. Read by both `ui::panel_rects` and `ui::render`
-    /// through `detail::split_right_column`, so the two cannot disagree about
+    /// through `detail::split_inspector`, so the two cannot disagree about
     /// whether the pane exists.
     pub fn shows_inspector(&self) -> bool {
         self.history_view != HistoryView::Graph

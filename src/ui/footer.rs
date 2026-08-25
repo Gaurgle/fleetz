@@ -4,7 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Padding, Paragraph};
 
-use crate::app::{App, View};
+use crate::app::{App, ContributionsMode, Overlay, View};
 use crate::model::{NOT_CLONED, Summary};
 use crate::ui::colors;
 
@@ -55,8 +55,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         None => summary_spans(&summary),
     };
 
-    let full_hints = keybind_hints(app.view, true);
-    let compact_hints = keybind_hints(app.view, false);
+    let full_hints = keybind_hints(app, true);
+    let compact_hints = keybind_hints(app, false);
 
     let (mut spans, hints) = if fits(width, &left, &full_hints) {
         (left, full_hints)
@@ -144,29 +144,44 @@ fn summary_spans(summary: &Summary) -> Vec<Span<'static>> {
 
 /// Keybind hints. `with_desc` shows the trailing word ("lazygit", "pull", ...);
 /// set false to fall back to keys only when space is tight.
-fn keybind_hints(view: View, with_desc: bool) -> Vec<Span<'static>> {
+///
+/// A key whose action has an "on" state lights up while it is on, so the row
+/// doubles as a bank of switches: `r` and `R` while their work is in flight,
+/// `v` in the compact view, `?` while help is open, and `c` in the strip's
+/// own ladder colour. Watch is the exception: its state lives in the header,
+/// where a blinking glyph says it is a process and not just a setting. `f`
+/// stays plain because a single fetch records nothing about being in flight.
+fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
     let key_style = Style::default()
         .fg(colors::TEXT)
         .add_modifier(Modifier::BOLD);
+    let lit = |on: bool| {
+        if on {
+            key_style.fg(colors::GREEN)
+        } else {
+            key_style
+        }
+    };
     let desc_style = Style::default().fg(colors::OVERLAY);
     let gap = Span::raw(if with_desc { "  " } else { " " });
 
-    let view_hint = match view {
+    let view_hint = match app.view {
         View::Detail => "compact",
         View::Compact => "detail",
     };
+    let refreshing = app.sweep_started.is_some() && app.sweep_manual;
 
     let mut hints = vec![Span::styled("[enter]", key_style)];
     if with_desc {
         hints.push(Span::styled(" lazygit", desc_style));
     }
     hints.push(gap.clone());
-    hints.push(Span::styled("[r]", key_style));
+    hints.push(Span::styled("[r]", lit(refreshing)));
     if with_desc {
         hints.push(Span::styled(" refresh", desc_style));
     }
     hints.push(gap.clone());
-    hints.push(Span::styled("[R]", key_style));
+    hints.push(Span::styled("[R]", lit(app.loading)));
     if with_desc {
         hints.push(Span::styled(" reload", desc_style));
     }
@@ -181,12 +196,17 @@ fn keybind_hints(view: View, with_desc: bool) -> Vec<Span<'static>> {
         hints.push(Span::styled(" watch", desc_style));
     }
     hints.push(gap.clone());
+    hints.push(Span::styled("[c]", contrib_key_style(app.contributions)));
+    if with_desc {
+        hints.push(Span::styled(" contrib", desc_style));
+    }
+    hints.push(gap.clone());
     hints.push(Span::styled("[s]", key_style));
     if with_desc {
         hints.push(Span::styled(" switch", desc_style));
     }
     hints.push(gap.clone());
-    hints.push(Span::styled("[v]", key_style));
+    hints.push(Span::styled("[v]", lit(app.view == View::Compact)));
     if with_desc {
         hints.push(Span::styled(format!(" {view_hint}"), desc_style));
     }
@@ -195,7 +215,10 @@ fn keybind_hints(view: View, with_desc: bool) -> Vec<Span<'static>> {
     // in normal use, but it is also the one that must never be dropped, since
     // it is how every other binding is discovered. The keys-only fallback
     // keeps `[?]` visible even when the descriptions go.
-    hints.push(Span::styled("[?]", key_style));
+    hints.push(Span::styled(
+        "[?]",
+        lit(matches!(app.overlay, Overlay::Help)),
+    ));
     if with_desc {
         hints.push(Span::styled(" help", desc_style));
     }
@@ -205,6 +228,23 @@ fn keybind_hints(view: View, with_desc: bool) -> Vec<Span<'static>> {
         hints.push(Span::styled(" quit", desc_style));
     }
     hints
+}
+
+/// The `[c]` hint's style: the brightest rung of the open strip's ladder, or
+/// the ordinary key colour while the strip is closed.
+fn contrib_key_style(mode: ContributionsMode) -> Style {
+    let source = match mode {
+        ContributionsMode::Off => {
+            return Style::default()
+                .fg(colors::TEXT)
+                .add_modifier(Modifier::BOLD);
+        }
+        ContributionsMode::Github => crate::contributions::Source::Github,
+        ContributionsMode::Local => crate::contributions::Source::Local,
+    };
+    Style::default()
+        .fg(colors::contrib_ladder(source)[4])
+        .add_modifier(Modifier::BOLD)
 }
 
 fn line_width(spans: &[Span]) -> usize {
@@ -223,6 +263,22 @@ mod tests {
 
     fn text(spans: &[Span]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn app_in(view: View) -> App {
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.view = view;
+        app
+    }
+
+    /// The foreground of one `[key]` span in the full hint row.
+    fn key_color(app: &App, key: &str) -> Option<ratatui::style::Color> {
+        keybind_hints(app, true)
+            .into_iter()
+            .find(|s| s.content == key)
+            .unwrap_or_else(|| panic!("{key} not hinted"))
+            .style
+            .fg
     }
 
     /// The footer used to call this state "not local", the only place in the
@@ -248,28 +304,107 @@ mod tests {
     fn help_is_hinted_in_the_footer_with_the_other_global_actions() {
         // It used to live in the header while every other action key was down
         // here, which is the inconsistency this guards.
-        assert!(text(&keybind_hints(View::Detail, true)).contains("[?] help"));
+        assert!(text(&keybind_hints(&app_in(View::Detail), true)).contains("[?] help"));
     }
 
     #[test]
     fn help_survives_the_keys_only_fallback() {
         // Help is how every other binding is discovered, so it is the one hint
         // that must stay visible when the descriptions are dropped for width.
-        let compact = text(&keybind_hints(View::Detail, false));
+        let compact = text(&keybind_hints(&app_in(View::Detail), false));
         assert!(compact.contains("[?]"), "got {compact:?}");
         assert!(!compact.contains("help"), "descriptions should be gone");
     }
 
     #[test]
     fn the_view_hint_names_the_view_it_switches_to() {
-        assert!(text(&keybind_hints(View::Detail, true)).contains("[v] compact"));
-        assert!(text(&keybind_hints(View::Compact, true)).contains("[v] detail"));
+        assert!(text(&keybind_hints(&app_in(View::Detail), true)).contains("[v] compact"));
+        assert!(text(&keybind_hints(&app_in(View::Compact), true)).contains("[v] detail"));
+    }
+
+    /// The strip is a toggle like watch, and the footer is where every other
+    /// action key is discovered, so `c` is hinted there too.
+    #[test]
+    fn contributions_are_hinted_beside_watch() {
+        let hints = text(&keybind_hints(&app_in(View::Detail), true));
+        assert!(hints.contains("[w] watch  [c] contrib"), "got {hints:?}");
+        let keys = text(&keybind_hints(&app_in(View::Detail), false));
+        assert!(keys.contains("[w] [c]"), "got {keys:?}");
+    }
+
+    /// The `c` key shows the toggle's state: neutral while the strip is
+    /// closed, and the strip's own ladder colour while it is open, so the
+    /// hint and the cells above it can never disagree about which source is
+    /// drawn.
+    #[test]
+    fn the_contributions_key_lights_up_in_the_strips_colour_when_open() {
+        let mut app = app_in(View::Detail);
+        assert_eq!(key_color(&app, "[c]"), Some(colors::TEXT));
+        app.contributions = ContributionsMode::Github;
+        assert_eq!(
+            key_color(&app, "[c]"),
+            Some(colors::contrib_ladder(crate::contributions::Source::Github)[4])
+        );
+        app.contributions = ContributionsMode::Local;
+        assert_eq!(
+            key_color(&app, "[c]"),
+            Some(colors::contrib_ladder(crate::contributions::Source::Local)[4])
+        );
+    }
+
+    /// Every other hint with an "on" state lights up the same way, so the
+    /// footer reads as one row of switches rather than one odd key.
+    #[test]
+    fn a_manual_refresh_lights_the_r_key_while_it_runs() {
+        let mut app = app_in(View::Detail);
+        assert_eq!(key_color(&app, "[r]"), Some(colors::TEXT));
+        app.sweep_started = Some(std::time::Instant::now());
+        app.sweep_manual = true;
+        assert_eq!(key_color(&app, "[r]"), Some(colors::GREEN));
+        // A watch-timer sweep is not something the user switched on.
+        app.sweep_manual = false;
+        assert_eq!(key_color(&app, "[r]"), Some(colors::TEXT));
+    }
+
+    #[test]
+    fn a_reload_lights_the_shift_r_key_while_it_runs() {
+        let mut app = app_in(View::Detail);
+        assert_eq!(key_color(&app, "[R]"), Some(colors::TEXT));
+        app.loading = true;
+        assert_eq!(key_color(&app, "[R]"), Some(colors::GREEN));
+    }
+
+    #[test]
+    fn the_compact_view_lights_the_v_key() {
+        assert_eq!(key_color(&app_in(View::Detail), "[v]"), Some(colors::TEXT));
+        assert_eq!(
+            key_color(&app_in(View::Compact), "[v]"),
+            Some(colors::GREEN)
+        );
+    }
+
+    #[test]
+    fn an_open_help_overlay_lights_the_question_mark() {
+        let mut app = app_in(View::Detail);
+        assert_eq!(key_color(&app, "[?]"), Some(colors::TEXT));
+        app.overlay = crate::app::Overlay::Help;
+        assert_eq!(key_color(&app, "[?]"), Some(colors::GREEN));
+    }
+
+    /// Watch keeps its state in the header, where the blinking glyph says it
+    /// is a running process; the footer key stays plain so the two do not
+    /// compete.
+    #[test]
+    fn the_watch_key_never_lights_up() {
+        let mut app = app_in(View::Detail);
+        app.watch_mode = true;
+        assert_eq!(key_color(&app, "[w]"), Some(colors::TEXT));
     }
 
     #[test]
     fn quit_stays_last() {
         // Muscle memory: the rightmost hint should not move as hints are added.
-        assert!(text(&keybind_hints(View::Detail, true)).ends_with(" quit"));
-        assert!(text(&keybind_hints(View::Detail, false)).ends_with("[q]"));
+        assert!(text(&keybind_hints(&app_in(View::Detail), true)).ends_with(" quit"));
+        assert!(text(&keybind_hints(&app_in(View::Detail), false)).ends_with("[q]"));
     }
 }

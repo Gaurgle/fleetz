@@ -80,7 +80,7 @@ const MAIN_MIN_HEIGHT: u16 = 10;
 /// Carve the strip off the bottom of the main area.
 ///
 /// Single source of truth for that geometry, in the same sense as
-/// `detail::split_main` and `detail::split_right_column`: `ui::render` draws
+/// `detail::split_main` and `detail::split_inspector`: `ui::render` draws
 /// from it and `ui::panel_rects` hit-tests against it. It lives here rather
 /// than in `detail.rs` because the strip exists in Compact view too.
 pub fn split_main_area(main: Rect, open: bool) -> (Rect, Option<Rect>) {
@@ -142,24 +142,6 @@ pub fn weeks_dragged(cols: i32) -> i32 {
 /// exactly the distance that was turned into scrolling.
 pub fn cols_for_weeks(weeks: i32) -> i32 {
     weeks * WEEK_COLS as i32
-}
-
-/// Weeks the strip must still fit for it to be worth docking under the right
-/// column alone, leaving the repo list at full height.
-///
-/// One year. Below that the strip stops being a span you take in at a glance
-/// and becomes a keyhole you scroll, and the rows the list gains are not
-/// worth what the grid gives up for them.
-const DOCK_FLOOR_WEEKS: usize = 52;
-
-/// Whether a right column this wide can hold a strip worth docking under it.
-///
-/// The whole point of the full-height repo list is that the list gets rows it
-/// can always use while the strip gives up only its oldest weeks. That trade
-/// stops paying on a narrow terminal, where the column cannot show even a
-/// year, so below this the strip goes back to spanning the full width.
-pub fn worth_docking_in_column(right: Rect) -> bool {
-    visible_weeks(right) >= DOCK_FLOOR_WEEKS
 }
 
 /// The leftmost week to draw: whatever the app asked for, clamped so the

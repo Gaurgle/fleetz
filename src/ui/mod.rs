@@ -184,11 +184,6 @@ pub struct PanelRects {
     /// The whole area the panels are laid out in, so a drag can be converted
     /// back into a percentage of it.
     pub main: Rect,
-    /// The area the detail/inspector split was performed on. Separate from
-    /// `main` because in Detail view the strip is carved off this column
-    /// alone, so it is shorter than `main` and the inspector's percentage
-    /// must be measured against it rather than against the full height.
-    pub right_column: Rect,
     pub repo_list: Rect,
     pub detail: Option<Rect>,
     pub inspector: Option<Rect>,
@@ -261,16 +256,16 @@ impl PanelRects {
     }
 
     /// The inspector height the given row would produce, as a percentage of
-    /// the right column. Measured from the bottom, since the inspector is
+    /// the main area. Measured from the bottom, since the inspector is
     /// docked there and the divider is its top edge.
     pub fn inspector_pct_at(&self, row: u16) -> u16 {
-        let column_height = self.right_column.height;
-        if column_height == 0 {
+        let main_height = self.main.height;
+        if main_height == 0 {
             return 0;
         }
-        let bottom = self.right_column.y + column_height;
+        let bottom = self.main.y + main_height;
         let height = bottom.saturating_sub(row);
-        ((height as u32 * 100) / column_height as u32).min(100) as u16
+        ((height as u32 * 100) / main_height as u32).min(100) as u16
     }
 }
 
@@ -293,59 +288,31 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
             let (body, contributions) = contributions::split_main_area(main, open);
             PanelRects {
                 main: body,
-                right_column: body,
                 repo_list: body,
                 detail: None,
                 inspector: None,
                 contributions,
             }
         }
-        // Detail has a choice, and it turns on width.
+        // Detail stacks from the bottom: the strip comes off the whole area,
+        // the inspector docks across the full width above it, and the repo
+        // list and detail pane share the row that is left.
         //
-        // Wide: split horizontally FIRST, so the repo list runs the full
-        // height and only the right column pays for the strip. The list is a
-        // single column of names, so vertical room is the one thing it can
-        // always use, and the strip is right-aligned and gives up only its
-        // oldest weeks by being narrower.
-        //
-        // Narrow: that trade stops paying. A right column too thin to show
-        // even a year turns the strip into a keyhole, which costs more than
-        // the rows the list gains, so the strip spans the full width and the
-        // panes above shrink for it as they used to.
+        // The strip used to dock under the right column alone on a wide
+        // terminal, buying the list a few rows. With the inspector spanning
+        // the width there is no column for it to dock under, and the list
+        // scrolls anyway, so the trade is gone.
         View::Detail => {
-            let (wide_list, wide_right) = detail::split_main(main, app.repo_list_pct);
-            if contributions::worth_docking_in_column(wide_right) {
-                let (right_column, contributions) =
-                    contributions::split_main_area(wide_right, open);
-                let (detail, inspector) = detail::split_right_column(
-                    right_column,
-                    app.inspector_pct,
-                    app.shows_inspector(),
-                );
-                PanelRects {
-                    main,
-                    right_column,
-                    repo_list: wide_list,
-                    detail: Some(detail),
-                    inspector,
-                    contributions,
-                }
-            } else {
-                let (body, contributions) = contributions::split_main_area(main, open);
-                let (repo_list, right_column) = detail::split_main(body, app.repo_list_pct);
-                let (detail, inspector) = detail::split_right_column(
-                    right_column,
-                    app.inspector_pct,
-                    app.shows_inspector(),
-                );
-                PanelRects {
-                    main: body,
-                    right_column,
-                    repo_list,
-                    detail: Some(detail),
-                    inspector,
-                    contributions,
-                }
+            let (body, contributions) = contributions::split_main_area(main, open);
+            let (top, inspector) =
+                detail::split_inspector(body, app.inspector_pct, app.shows_inspector());
+            let (repo_list, detail) = detail::split_main(top, app.repo_list_pct);
+            PanelRects {
+                main,
+                repo_list,
+                detail: Some(detail),
+                inspector,
+                contributions,
             }
         }
     }
@@ -817,16 +784,15 @@ mod tests {
     use super::*;
 
     fn rects() -> PanelRects {
-        // 100x40 main area, repo list 35 wide, inspector 16 tall at the bottom.
+        // 100x40 main area, repo list 35 wide, inspector 16 tall across the
+        // full width at the bottom; the list and the detail pane share the
+        // 24 rows above it.
         let main = Rect::new(0, 1, 100, 40);
         PanelRects {
             main,
-            // No strip in this fixture, so the right column is the full
-            // height and the inspector percentage is measured against it.
-            right_column: Rect::new(36, 1, 64, 40),
-            repo_list: Rect::new(0, 1, 35, 40),
+            repo_list: Rect::new(0, 1, 35, 24),
             detail: Some(Rect::new(36, 1, 64, 24)),
-            inspector: Some(Rect::new(36, 25, 64, 16)),
+            inspector: Some(Rect::new(0, 25, 100, 16)),
             contributions: None,
         }
     }
@@ -1061,11 +1027,13 @@ mod tests {
     }
 
     #[test]
-    fn horizontal_divider_only_grabs_over_the_right_column() {
+    fn horizontal_divider_is_grabbable_across_the_full_width() {
         let r = rects();
         assert_eq!(r.divider_at(60, 25), Some(Divider::Horizontal));
-        // Same row, but over the repo list, which has no horizontal divider.
-        assert_eq!(r.divider_at(10, 25), None);
+        // The inspector spans under the repo list too, so its top edge is
+        // grabbable there as well.
+        assert_eq!(r.divider_at(10, 25), Some(Divider::Horizontal));
+        assert_eq!(r.divider_at(10, 12), None, "well inside the repo list");
     }
 
     #[test]
@@ -1082,9 +1050,9 @@ mod tests {
         assert_eq!(r.repo_list_pct_at(25), 25);
         assert_eq!(r.repo_list_pct_at(0), 0, "clamping is the caller's job");
 
-        // The inspector is docked at the bottom, so its size is measured from
-        // there: dragging its top edge upward makes it bigger.
-        assert_eq!(r.inspector_pct_at(21), 50, "half the 40-row column");
+        // The inspector is docked at the bottom of the main area, so its size
+        // is measured from there: dragging its top edge upward makes it bigger.
+        assert_eq!(r.inspector_pct_at(21), 50, "half the 40-row main area");
         assert_eq!(r.inspector_pct_at(31), 25);
     }
 
@@ -1092,7 +1060,6 @@ mod tests {
     fn a_zero_sized_area_does_not_divide_by_zero() {
         let empty = PanelRects {
             main: Rect::new(0, 0, 0, 0),
-            right_column: Rect::new(0, 0, 0, 0),
             repo_list: Rect::new(0, 0, 0, 0),
             detail: None,
             inspector: None,
@@ -1144,8 +1111,6 @@ mod tests {
     /// on a pane that is not where the eye sees it.
     #[test]
     fn panel_rects_reports_the_strip_only_when_it_is_drawn() {
-        // Wide enough that the right column can still hold a year, which is
-        // what buys the full-height repo list.
         let area = Rect::new(0, 0, 200, 44);
         let mut app = layout_app();
         app.view = crate::app::View::Detail;
@@ -1162,68 +1127,36 @@ mod tests {
             Some(FocusedPanel::Contributions),
             "a click in the strip lands on the strip"
         );
-
-        // In Detail the strip is carved out of the right column alone, so the
-        // repo list runs the full height either way and only the right column
-        // pays for it. It used to come off the bottom of everything, which
-        // wasted the one dimension a single column of names can always use.
-        assert_eq!(
-            open.repo_list.height, closed.repo_list.height,
-            "the repo list should not give up rows to the strip"
-        );
-        assert!(
-            open.right_column.height < closed.right_column.height,
-            "the right column is what shrinks"
-        );
-        // The strip must sit under the right column, not under the list.
-        assert_eq!(strip.x, open.right_column.x);
-        assert_eq!(strip.width, open.right_column.width);
-        assert!(strip.x >= open.repo_list.x + open.repo_list.width);
+        // The strip comes off the bottom of everything, under the inspector,
+        // so the panes above all give up rows for it.
+        assert!(open.repo_list.height < closed.repo_list.height);
+        assert!(open.detail.unwrap().height < closed.detail.unwrap().height);
     }
 
-    /// The repo list reaching past the strip only helps if a click down there
-    /// still selects a repo. `at` walks the same rects the renderer drew, so
-    /// this catches the strip's rows being claimed by the wrong pane.
+    /// The strip spans the full width at the very bottom whatever the
+    /// terminal size: the inspector sits directly above it and the list and
+    /// detail pane above that.
     #[test]
-    fn a_click_beside_the_strip_still_lands_on_the_repo_list() {
-        let area = Rect::new(0, 0, 200, 44);
+    fn the_strip_spans_the_bottom_under_the_inspector() {
         let mut app = layout_app();
         app.view = crate::app::View::Detail;
         app.contributions = crate::app::ContributionsMode::Github;
-        let rects = panel_rects(area, &app);
-        let strip = rects.contributions.expect("strip present");
-
-        // Same rows as the strip, but over on the list's side.
-        assert_eq!(
-            rects.at(rects.repo_list.x + 2, strip.y + 2),
-            Some(FocusedPanel::RepoList),
-        );
-    }
-
-    /// The full-height list only pays while the right column can still show a
-    /// useful strip. Squeeze the terminal and the strip must go back to
-    /// spanning the whole width, with the panes above giving up the rows,
-    /// rather than becoming a keyhole in a narrow column.
-    #[test]
-    fn a_narrow_terminal_gives_the_strip_the_full_width_back() {
-        let mut app = layout_app();
-        app.view = crate::app::View::Detail;
-        app.contributions = crate::app::ContributionsMode::Github;
-
-        let narrow = panel_rects(Rect::new(0, 0, 120, 44), &app);
-        let strip = narrow.contributions.expect("strip present");
-        assert_eq!(strip.x, narrow.main.x, "strip starts at the left edge");
-        assert_eq!(strip.width, narrow.main.width, "strip spans the width");
-        assert!(
-            narrow.repo_list.height < 44 - contributions::CONTRIB_HEIGHT,
-            "the list gives its rows back"
-        );
-
-        // The same app on a wide terminal takes the docked layout instead.
-        let wide = panel_rects(Rect::new(0, 0, 200, 44), &app);
-        let wide_strip = wide.contributions.expect("strip present");
-        assert!(wide_strip.x > wide.main.x, "docked under the right column");
-        assert_eq!(wide.repo_list.height, wide.main.height);
+        for width in [120u16, 200] {
+            let rects = panel_rects(Rect::new(0, 0, width, 44), &app);
+            let strip = rects.contributions.expect("strip present");
+            let inspector = rects.inspector.expect("inspector present");
+            assert_eq!(strip.x, rects.main.x, "strip starts at the left edge");
+            assert_eq!(strip.width, rects.main.width, "strip spans the width");
+            assert_eq!(
+                strip.y + strip.height,
+                rects.main.y + rects.main.height,
+                "strip is the bottom of the main area"
+            );
+            // `split_main_area` keeps one blank row between the strip and
+            // whatever is above it.
+            assert_eq!(inspector.y + inspector.height + 1, strip.y);
+            assert_eq!(inspector.width, rects.main.width);
+        }
     }
 
     /// Compact has no detail or inspector, but it does have the strip.
@@ -1247,6 +1180,35 @@ mod tests {
         let rects = panel_rects(Rect::new(0, 0, 120, 18), &app);
         assert!(rects.contributions.is_none());
         assert!(rects.repo_list.height > 0, "the panes survive");
+    }
+
+    /// The inspector is docked under both panes, not under the detail pane
+    /// alone: the repo list is rarely tall and scrolls when it must, while a
+    /// commit's files and message both want width. The list and the detail
+    /// pane share the row above it.
+    #[test]
+    fn the_inspector_spans_the_full_width_under_both_panes() {
+        let mut app = layout_app();
+        app.view = crate::app::View::Detail;
+        let rects = panel_rects(Rect::new(0, 0, 200, 44), &app);
+        let inspector = rects.inspector.expect("inspector present");
+        let detail = rects.detail.expect("detail present");
+        assert_eq!(inspector.x, rects.main.x, "starts at the left edge");
+        assert_eq!(inspector.width, rects.main.width, "spans the width");
+        assert_eq!(
+            rects.repo_list.height, detail.height,
+            "the list and the detail pane share the row above"
+        );
+        assert_eq!(
+            rects.repo_list.y + rects.repo_list.height,
+            inspector.y,
+            "the list stops where the inspector starts"
+        );
+        assert_eq!(
+            rects.at(rects.repo_list.x + 2, inspector.y + 2),
+            Some(FocusedPanel::Inspector),
+            "a click under the list lands on the inspector"
+        );
     }
 
     /// A GitHub poll that failed has to leave a mark that a keypress cannot
@@ -1344,7 +1306,7 @@ mod tests {
     }
 
     /// `panel_rects` must report exactly what `render` draws, or clicks land
-    /// on the wrong pane silently. Both call `split_right_column`, so
+    /// on the wrong pane silently. Both call `split_inspector`, so
     /// suppressing the inspector in one suppresses it in the other.
     #[test]
     fn panel_rects_reports_no_inspector_in_the_graph_view() {

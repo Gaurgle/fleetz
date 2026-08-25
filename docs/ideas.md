@@ -399,13 +399,26 @@ that geometry, called by both `render` and `panel_rects`. The height is
 so the detail pane always keeps `DETAIL_MIN_HEIGHT` = 8 rows. Below 16 rows
 total the inspector is dropped, as before, rather than shown as a sliver.
 
+**Full width shipped later** (`detail::split_inspector`, which replaced
+`split_right_column`). The inspector now docks under the repo list *and* the
+detail pane, so the percentage is of the whole main area and the two panes
+share the row above. The list is rarely tall and already scrolls, so giving
+its lower rows to the inspector costs little; the inspector wants width more
+than anything, and at an interior of `INSPECTOR_TWO_LANE_WIDTH` (100) columns
+or more it splits into a message lane on the left and a changed-files lane on
+the right, one scroll offset driving both and clamped to the taller. The
+contribution strip comes off the bottom of the whole area, under the
+inspector, at full width; the wide-terminal rule that docked it under the
+right column alone (`worth_docking_in_column`) went with the column it
+docked under.
+
 Net effect: on a 40-row terminal the inspector grows from 10 rows to ~15, and
 on a 60-row one to its 24-row ceiling, instead of staying at 10 either way.
 
 **Interactive resize shipped too.** `<`/`>` move the vertical divider, `+`/`-`
 the horizontal one, `=` resets both. Both are percentages on `App`
 (`repo_list_pct`, `inspector_pct`) clamped to ranges that keep either pane from
-collapsing, and `split_main` joined `split_right_column` as shared geometry.
+collapsing, and `split_main` joined the inspector split as shared geometry.
 
 Sizes reset to their defaults on every launch. Persisting them is opt-in via
 `persist_pane_sizes` in the `,` menu, which writes both percentages back on
@@ -443,7 +456,7 @@ every later mouse event in the drag branch.
   right-align them, with a fit ladder that drops pieces, so nothing knows which
   column `◉ watch` landed on. Hovering anything up there means giving the header
   the `PanelRects` treatment, with the same duplicate-layout-math risk that
-  `split_right_column` exists to avoid.
+  `split_inspector` exists to avoid.
 
   Worth remembering that hover is mouse-only. In a tool with this many
   keybindings, a fact reachable only by hovering is a fact keyboard users

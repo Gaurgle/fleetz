@@ -22,22 +22,26 @@ const INSPECTOR_MIN_HEIGHT: u16 = 8;
 /// the extra rows are better spent on the pane above.
 const INSPECTOR_MAX_HEIGHT: u16 = 24;
 
-/// Rows the detail pane keeps for itself before the inspector gets any.
+/// Rows the panes above keep for themselves before the inspector gets any.
 const DETAIL_MIN_HEIGHT: u16 = 8;
 
-/// Split the right column into the detail pane and, when there is room for a
-/// useful one, the inspector docked under it.
+/// Split the main area into the row that holds the repo list and detail pane
+/// and, when there is room for a useful one, the inspector docked under both.
 ///
 /// Single source of truth for that geometry: `render` draws from it and
 /// `ui::panel_rects` hit-tests mouse clicks against it. They used to carry
 /// separate copies of the same arithmetic, kept in sync by hand, where any
 /// drift would land clicks on the wrong pane.
 ///
-/// `pct` is the inspector's requested share of the column, which the resize
-/// keys move. It is a request, not a promise: the min/max clamp and the detail
-/// pane's floor both outrank it, so a short terminal still yields a readable
+/// The inspector spans the full width rather than the right column alone: a
+/// commit's message and its file list both want columns, while the repo list
+/// is rarely tall and scrolls when it has to be.
+///
+/// `pct` is the inspector's requested share of the area, which the resize
+/// keys move. It is a request, not a promise: the min/max clamp and the row
+/// above's floor both outrank it, so a short terminal still yields a readable
 /// split (or drops the inspector entirely) whatever the user asked for.
-pub fn split_right_column(area: Rect, pct: u16, show_inspector: bool) -> (Rect, Option<Rect>) {
+pub fn split_inspector(area: Rect, pct: u16, show_inspector: bool) -> (Rect, Option<Rect>) {
     // The graph view gives the whole column to the history: its blocks
     // already say what an inspector would.
     if !show_inspector || area.height < DETAIL_MIN_HEIGHT + INSPECTOR_MIN_HEIGHT {
@@ -87,6 +91,11 @@ const PR_NUMBERS_SHOWN: usize = 2;
 /// into a "… and N more" line -- keeps a huge commit from turning the pane
 /// into an endless scroll.
 const INSPECTOR_FILE_CAP: usize = 30;
+
+/// Interior width from which the inspector shows the changed files in a lane
+/// beside the message rather than under it. Half of this leaves each lane
+/// about fifty columns, enough for a subject line or a stat plus a path.
+const INSPECTOR_TWO_LANE_WIDTH: u16 = 100;
 
 /// Render the detail view: repo list (left 35%) + a right column (65%) that
 /// stacks the detail pane over the inspector pane.
@@ -1146,8 +1155,8 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     // Changed files, with the commit's totals on the section header. Capped so
     // a sprawling commit can't wall off the pane -- the rest collapse into a
     // trailing "… and N more".
+    let mut file_lines: Vec<Line> = Vec::new();
     if !c.files.is_empty() {
-        lines.push(Line::from(""));
         let mut header = vec![section_label(&format!("changed files ({})", c.files.len()))];
         if c.insertions > 0 {
             header.push(Span::styled(
@@ -1161,18 +1170,35 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(colors::DIFF_DEL),
             ));
         }
-        lines.push(Line::from(header));
+        file_lines.push(Line::from(header));
 
         for f in c.files.iter().take(INSPECTOR_FILE_CAP) {
-            lines.push(file_stat_line(f));
+            file_lines.push(file_stat_line(f));
         }
         if c.files.len() > INSPECTOR_FILE_CAP {
-            lines.push(Line::from(Span::styled(
+            file_lines.push(Line::from(Span::styled(
                 format!("… and {} more", c.files.len() - INSPECTOR_FILE_CAP),
                 Style::default().fg(colors::OVERLAY),
             )));
         }
     }
+
+    // Wide enough, the files get a lane of their own beside the message, so
+    // a long body no longer pushes them below the fold and a long file list
+    // no longer buries the prose. Narrower, they stack as one column.
+    let lanes: Vec<(Rect, Vec<Line>)> =
+        if inner.width >= INSPECTOR_TWO_LANE_WIDTH && !file_lines.is_empty() {
+            let h = Layout::horizontal([Constraint::Percentage(50), Constraint::Min(0)])
+                .spacing(2)
+                .split(inner);
+            vec![(h[0], lines), (h[1], file_lines)]
+        } else {
+            if !file_lines.is_empty() {
+                lines.push(Line::from(""));
+                lines.extend(file_lines);
+            }
+            vec![(inner, lines)]
+        };
 
     // Clamp against the *wrapped* row count, not the raw line count -- long
     // prose wraps to several rows, so a raw count would stop scrolling short of
@@ -1181,16 +1207,30 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     // letting the offset run past the end and stall the way back.
     // Wrapped here rather than by the `Paragraph`, so one line is one rendered
     // row and the offset below is an exact row index. See `wrap_line`.
-    let lines: Vec<Line> = lines
-        .iter()
-        .flat_map(|l| wrap_line(l, inner.width as usize))
+    //
+    // One offset scrolls every lane, clamped to the tallest, so the end of
+    // either lane is always reachable.
+    let wrapped: Vec<(Rect, Vec<Line>)> = lanes
+        .into_iter()
+        .map(|(rect, lines)| {
+            let lines = lines
+                .iter()
+                .flat_map(|l| wrap_line(l, rect.width as usize))
+                .collect();
+            (rect, lines)
+        })
         .collect();
-
-    let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
+    let max_scroll = wrapped
+        .iter()
+        .map(|(rect, lines)| (lines.len() as u16).saturating_sub(rect.height))
+        .max()
+        .unwrap_or(0);
     app.inspector_max_scroll.set(max_scroll);
     let scroll = app.inspector_scroll.min(max_scroll);
-    let paragraph = Paragraph::new(lines).scroll((scroll, 0)).block(block);
-    frame.render_widget(paragraph, area);
+    frame.render_widget(block, area);
+    for (rect, lines) in wrapped {
+        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), rect);
+    }
 }
 
 /// One "changed file" row for the inspector: a fixed-width +A/-B stat column
@@ -3846,6 +3886,66 @@ mod tests {
         assert!(
             screen.contains("TAILMARKER"),
             "the end of the body was past the end of the scroll"
+        );
+    }
+
+    fn inspector_screen(w: u16, h: u16) -> Vec<String> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut repo = list_repo(3);
+        repo.commits[0].body = "why it changed".to_string();
+        repo.commits[0].files = vec![crate::model::FileStat {
+            path: "src/lib.rs".to_string(),
+            added: 3,
+            removed: 1,
+        }];
+        let mut app = crate::app::App::new(vec![repo], "h".to_string(), w, h);
+        app.view = crate::app::View::Detail;
+        app.history_view = crate::app::HistoryView::Commits;
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| crate::ui::render(f, &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    fn row_of(screen: &[String], needle: &str) -> usize {
+        screen
+            .iter()
+            .position(|r| r.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} not on screen:\n{}", screen.join("\n")))
+    }
+
+    /// A wide inspector puts the changed files in a lane of their own to the
+    /// right of the message, so neither has to wait for the other to scroll
+    /// past. The files header lands level with the masthead: the body sits
+    /// five rows under the hash (hash, author, blank, subject, blank), so it
+    /// is the one line only the inspector draws that fixes where that is.
+    #[test]
+    fn a_wide_inspector_lays_the_files_beside_the_message() {
+        let screen = inspector_screen(160, 40);
+        let files_row = row_of(&screen, "changed files");
+        assert_eq!(
+            files_row,
+            row_of(&screen, "why it changed") - 5,
+            "files lane should start level with the masthead"
+        );
+        assert!(
+            screen[files_row].find("changed files").unwrap() > 80,
+            "files on the right half: {:?}",
+            screen[files_row]
+        );
+    }
+
+    /// Below the width threshold the lanes stack as one column, as before.
+    #[test]
+    fn a_narrow_inspector_stacks_the_files_under_the_message() {
+        let screen = inspector_screen(90, 40);
+        assert!(
+            row_of(&screen, "changed files") > row_of(&screen, "why it changed"),
+            "files should follow the body"
         );
     }
 
