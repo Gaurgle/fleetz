@@ -24,11 +24,50 @@ like the `#dirty` / `#behind` quick-filters. It can be instant, no spinner.
 
 ### What it should gate
 
-Only the **github activity** section (repos pushed since the cutoff). The
-**local changes** section is about uncommitted/unpushed work, not push
-recency, so it should stay visible regardless of the window. Otherwise
-narrowing would hide dirty repos you are actively working on, which is the
-opposite of useful!
+The **github activity** section gates on `pushedAt`, the cutoff applied in
+`assemble_view` before discovery runs.
+
+The **local changes** section was originally exempt. The argument was that it
+is about uncommitted/unpushed work rather than push recency, so narrowing
+would hide dirty repos you are actively working on. That held for the repo you
+dirtied this morning and failed for its opposite: `~/Repos/Rust`, `bonsai` and
+`AoC-2025` were each `git init`-ed, filled with untracked files and abandoned,
+so they reported dirty forever and held a row forever with it. Three permanent
+rows in a section that is supposed to be a worklist.
+
+The mistake was reading "dirty" as "being worked on". The section is right to
+ignore *push* time and was wrong to ignore time altogether, so it now gates on
+a local clock instead: `git::last_local_activity`, the newer of the last
+commit on any ref and the newest mtime among the paths `git status
+--porcelain` reports. Both halves are load-bearing. A repo with no commits has
+no commit to date it by, which is exactly these three, and a repo dated by its
+last commit alone reads as stale while you are still editing files in it.
+
+Unpushed commits are exempt from the cutoff (`local_repo_is_current`). Left
+untracked files are noise you chose to ignore; a commit that exists only on
+this machine is one `git push` from being lost with it.
+
+The same timestamp is kept on `RepoStatus::last_local` and drawn by `info` as
+a `last touched` row, so the date on screen is the one the window judged the
+repo by rather than a second measurement that could disagree. Only local-only
+repos carry it: computing it for GitHub-backed repos would cost two git calls
+each per sweep to restate what `pushedAt` already says. `-d` mode builds its
+rows through `dirty_mode_status`, which does not compute it, so that mode
+draws no such row.
+
+Section order is **github activity, local changes, also active**. Both
+`App::section_rank` and `render_repo_list` encode it and
+`drawn_section_order_matches_the_order_the_cursor_walks` holds them together;
+before that test, reordering one and forgetting the other misrouted clicks
+with nothing failing.
+
+Untracked directories arrive from porcelain collapsed (`blue-tui/`, not every
+file beneath it), so the stat reads the directory mtime. That moves when
+entries are added or removed but not when a file's contents change in place,
+so editing deep inside an untracked directory without adding or removing
+anything will not refresh the timestamp. Accepted deliberately: the
+alternative descends `target/` and `node_modules` on exactly the repos being
+cheaply evicted.
 
 ### How to trigger it (two candidates, likely both)
 

@@ -1911,6 +1911,7 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
     Some(RepoStatus {
         // No local calendar until the strip asks for one.
         daily: None,
+        last_local: None,
         name,
         path: Some(display),
         location: RepoLocation::LocalOnly,
@@ -2226,7 +2227,7 @@ async fn assemble_view(
         let sem = sem.clone();
         set.spawn(async move {
             let _permit = sem.acquire().await;
-            (i, local_only_status(&path, name, repo_kind).await)
+            (i, local_only_status(&path, name, repo_kind, cutoff).await)
         });
     }
 
@@ -2257,6 +2258,7 @@ async fn assemble_view(
         repos.push(RepoStatus {
             // No local calendar until the strip asks for one.
             daily: None,
+            last_local: None,
             name: gh_repo.name.clone(),
             path: None,
             location: RepoLocation::NotCloned,
@@ -2310,16 +2312,52 @@ async fn assemble_view(
 /// Probe a local repo that no GitHub match claimed. Returns None when it has
 /// neither uncommitted nor unpushed work, which is the signal that it is not
 /// worth a row: a clean local clone is not news.
+/// Whether a local-only repo still belongs in "local changes" under `cutoff`.
+///
+/// The section cannot be gated on `pushed_at` the way "github activity" is:
+/// its whole point is work the remote has never seen, and a repo that was
+/// never pushed has no such timestamp. So it is gated on the local clock
+/// instead, which is what `git::last_local_activity` reports.
+///
+/// Unpushed commits are exempt. Untracked files left lying around are noise
+/// you chose to ignore, but a commit that exists only on this machine is one
+/// `git push` from being lost with it, and a narrow window is not a reason to
+/// stop saying so.
+///
+/// No cutoff means no filtering, which is how the "all" window and `--all`
+/// keep showing everything the narrower windows evicted.
+fn local_repo_is_current(
+    ahead: u32,
+    last_local: Option<chrono::DateTime<chrono::Utc>>,
+    cutoff: Option<chrono::DateTime<chrono::Utc>>,
+) -> bool {
+    let Some(cutoff) = cutoff else { return true };
+    if ahead > 0 {
+        return true;
+    }
+    last_local.is_some_and(|at| at > cutoff)
+}
+
 async fn local_only_status(
     path: &Path,
     name: String,
     repo_kind: model::RepoKind,
+    cutoff: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Option<RepoStatus> {
     let dirty = git::dirty_count(path).await;
     let branches = git::branch_statuses(path).await;
     let total_ahead: u32 = branches.iter().map(|b| b.ahead).sum();
 
     if dirty == 0 && total_ahead == 0 {
+        return None;
+    }
+
+    // Dirty is not the same as current. A repo `git init`-ed and abandoned
+    // reports dirty forever, and before this it held a row forever with it.
+    // Kept rather than discarded: `info` draws the same value, so the date on
+    // screen is the one the window judged the repo by.
+    let last_local = git::last_local_activity(path).await;
+    if !local_repo_is_current(total_ahead, last_local, cutoff) {
         return None;
     }
 
@@ -2332,6 +2370,7 @@ async fn local_only_status(
     Some(RepoStatus {
         // No local calendar until the strip asks for one.
         daily: None,
+        last_local,
         name,
         path: Some(display),
         location: RepoLocation::LocalOnly,
@@ -2418,6 +2457,7 @@ async fn build_repo_status(
     RepoStatus {
         // No local calendar until the strip asks for one.
         daily: None,
+        last_local: None,
         name: found.name.clone(),
         path: Some(display),
         location,
@@ -2455,6 +2495,7 @@ mod tests {
     fn test_repo() -> RepoStatus {
         RepoStatus {
             daily: None,
+            last_local: None,
             name: "r".to_string(),
             path: None,
             location: model::RepoLocation::Primary,
@@ -2791,6 +2832,99 @@ mod tests {
     fn resolve_cutoff_dirty_mode_is_error() {
         let config = config::Config::default();
         assert!(resolve_cutoff(None, &Mode::Dirty, &config).is_err());
+    }
+
+    fn ago(days: i64) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now() - chrono::Duration::days(days)
+    }
+
+    /// The case that prompted this: `~/Repos/Rust`, `bonsai` and `AoC-2025`
+    /// are dirty with untracked files from months back and sat in "local
+    /// changes" permanently, because the section consulted no clock at all.
+    #[test]
+    fn a_local_repo_stale_past_the_window_drops_out() {
+        assert!(!local_repo_is_current(0, Some(ago(118)), Some(ago(7))));
+    }
+
+    /// The failure `docs/ideas.md` warned about when it argued the section
+    /// should ignore the window: narrowing must never hide a repo you are
+    /// working in right now.
+    #[test]
+    fn a_repo_dirtied_today_survives_the_narrowest_window() {
+        assert!(local_repo_is_current(0, Some(ago(0)), Some(ago(1))));
+    }
+
+    /// An unpushed commit exists on this machine and nowhere else, so it
+    /// outranks the window however old it is.
+    #[test]
+    fn unpushed_commits_survive_any_window() {
+        assert!(local_repo_is_current(2, Some(ago(158)), Some(ago(7))));
+    }
+
+    /// Widening to "all" clears the cutoff, which is the escape hatch for
+    /// everything the window evicted.
+    #[test]
+    fn no_cutoff_keeps_every_local_repo() {
+        assert!(local_repo_is_current(0, Some(ago(158)), None));
+    }
+
+    /// A repo git could date at all is the normal case; one it could not is
+    /// a repo nothing has ever happened in, and it has no claim on a row.
+    #[test]
+    fn a_local_repo_with_no_timestamp_drops_under_a_window() {
+        assert!(!local_repo_is_current(0, None, Some(ago(7))));
+    }
+
+    /// The `~/Repos/Rust` shape end to end: `git init`, untracked files, no
+    /// commit ever, last touched months ago. The predicate is only half the
+    /// fix -- this pins that pass 3 actually consults it, which is the wiring
+    /// a unit test of the predicate alone would happily let rot.
+    #[tokio::test]
+    async fn pass_three_drops_a_repo_stale_past_the_window() {
+        let dir = std::env::temp_dir().join(format!("fleetz_p3_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for args in [
+            vec!["git", "init", "-q", "-b", "main"],
+            vec!["git", "config", "user.email", "t@example.com"],
+            vec!["git", "config", "user.name", "t"],
+        ] {
+            let ok = std::process::Command::new(args[0])
+                .args(&args[1..])
+                .current_dir(&dir)
+                .status()
+                .expect("spawn")
+                .success();
+            assert!(ok, "setup failed: {args:?}");
+        }
+        std::fs::write(dir.join("junk.txt"), "scratch\n").unwrap();
+        // Backdate it the way an abandoned project is backdated: by not
+        // having been touched.
+        let ok = std::process::Command::new("touch")
+            .args(["-t", "202604300000", "junk.txt"])
+            .current_dir(&dir)
+            .status()
+            .expect("spawn")
+            .success();
+        assert!(ok, "touch failed");
+
+        let stale = local_only_status(
+            &dir,
+            "junkrepo".to_string(),
+            model::RepoKind::Unknown,
+            Some(chrono::Utc::now() - chrono::Duration::days(7)),
+        )
+        .await;
+        assert!(stale.is_none(), "months-old untracked work is not current");
+
+        let unfiltered =
+            local_only_status(&dir, "junkrepo".to_string(), model::RepoKind::Unknown, None).await;
+        assert!(
+            unfiltered.is_some(),
+            "the same repo must still be there with no window"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// `c` toggles the strip and ctrl-c quits. Match arms are ordered, so an

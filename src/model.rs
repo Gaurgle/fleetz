@@ -121,6 +121,16 @@ pub enum RepoLocation {
 /// Aggregate status for a single repository.
 #[derive(Debug, Clone)]
 pub struct RepoStatus {
+    /// When anything last moved in the local clone: the newer of the last
+    /// commit on any ref and the newest change in the working tree
+    /// (`git::last_local_activity`).
+    ///
+    /// Only filled for local-only repos, the ones with no `pushedAt` to be
+    /// dated by. It is what the time window tests to decide whether such a
+    /// repo keeps its row, and `info` draws the same value so an eviction is
+    /// legible rather than mysterious. `None` where nothing computed it, or
+    /// in a repo with no commits and a clean tree.
+    pub last_local: Option<chrono::DateTime<chrono::Utc>>,
     pub name: String,
     pub path: Option<String>,
     pub location: RepoLocation,
@@ -523,6 +533,7 @@ mod tests {
 
     fn make_repo(name: &str, behind: u32, ahead: u32, dirty: u32) -> RepoStatus {
         RepoStatus {
+            last_local: None,
             daily: None,
             name: name.to_string(),
             path: Some(format!("~/repos/{name}")),

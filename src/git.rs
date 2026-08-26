@@ -305,6 +305,86 @@ fn parse_track_info(track: &str) -> (u32, u32) {
     (ahead, behind)
 }
 
+/// Paths `git status --porcelain` reports as changed, relative to the repo
+/// root.
+///
+/// Untracked directories arrive collapsed (`blue-tui/` rather than every file
+/// beneath it), which is what keeps `last_local_activity` from descending a
+/// `target/` to date a repo.
+async fn dirty_paths(repo_path: &Path) -> Vec<String> {
+    let Some(output) = run_git(repo_path, &["status", "--porcelain"]).await else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_porcelain_path)
+        .collect()
+}
+
+/// The path out of one `git status --porcelain` line: two status columns, a
+/// space, then the path. A rename reads `R  old -> new`, and only the
+/// destination exists to be stat'd.
+fn parse_porcelain_path(line: &str) -> Option<String> {
+    let rest = line.get(3..)?.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    let path = match rest.split_once(" -> ") {
+        Some((_, dest)) => dest,
+        None => rest,
+    };
+    // Paths with spaces or non-ASCII arrive quoted; the quotes are not part
+    // of the name and a stat through them finds nothing.
+    Some(path.trim_matches('"').to_string())
+}
+
+/// The newest moment anything in this repo moved locally: the last commit on
+/// any ref, or the newest mtime among the paths git reports as changed,
+/// whichever is later.
+///
+/// Both halves are needed. A repo that was `git init`-ed and never committed
+/// has no commit to date it by, and dating a repo by its last commit alone
+/// calls it stale while you are still editing files in it. `None` means
+/// nothing has ever happened here: no commits and a clean tree.
+pub async fn last_local_activity(repo_path: &Path) -> Option<DateTime<chrono::Utc>> {
+    let committed = last_commit_time(repo_path).await;
+
+    let touched = {
+        let mut newest = None;
+        for rel in dirty_paths(repo_path).await {
+            let Ok(meta) = std::fs::metadata(repo_path.join(&rel)) else {
+                continue;
+            };
+            let Ok(mtime) = meta.modified() else { continue };
+            let at: DateTime<chrono::Utc> = mtime.into();
+            newest = Some(newest.map_or(at, |n: DateTime<chrono::Utc>| n.max(at)));
+        }
+        newest
+    };
+
+    match (committed, touched) {
+        (Some(c), Some(t)) => Some(c.max(t)),
+        (c, t) => c.or(t),
+    }
+}
+
+/// Commit time of the newest commit on any ref, or None in a repo with no
+/// commits at all -- where `git log` exits non-zero rather than empty.
+async fn last_commit_time(repo_path: &Path) -> Option<DateTime<chrono::Utc>> {
+    let output = run_git(repo_path, &["log", "-1", "--all", "--format=%ct"]).await?;
+    if !output.status.success() {
+        return None;
+    }
+    let secs: i64 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .ok()?;
+    DateTime::from_timestamp(secs, 0)
+}
+
 /// Count uncommitted/untracked changes (like `git status --porcelain | wc -l`).
 pub async fn dirty_count(repo_path: &Path) -> u32 {
     let output = run_git(repo_path, &["status", "--porcelain"]).await;
@@ -1655,6 +1735,95 @@ mod real_repo_tests {
         sh(&dir, &["git", "stash", "-q"]);
         let k4 = work_key(&dir).await.expect("key");
         assert_ne!(k3.stash_size, k4.stash_size, "stash must change the key");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Commit at a fixed old date so the assertion is exact rather than
+    /// "somewhere near now".
+    fn sh_at(dir: &Path, iso: &str, args: &[&str]) {
+        let status = StdCommand::new(args[0])
+            .args(&args[1..])
+            .current_dir(dir)
+            .env("GIT_AUTHOR_DATE", iso)
+            .env("GIT_COMMITTER_DATE", iso)
+            .status()
+            .expect("spawn");
+        assert!(status.success(), "command failed: {args:?}");
+    }
+
+    /// A bare `git init` with nothing in it, which is where the three repos
+    /// that prompted this all started.
+    fn empty_repo(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fleetz_lla_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        sh(&dir, &["git", "init", "-q", "-b", "main"]);
+        sh(&dir, &["git", "config", "user.email", "t@example.com"]);
+        sh(&dir, &["git", "config", "user.name", "t"]);
+        dir
+    }
+
+    #[tokio::test]
+    async fn last_local_activity_reports_the_last_commit() {
+        let dir = empty_repo("commit");
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh_at(
+            &dir,
+            "2026-03-21T19:12:00+00:00",
+            &["git", "commit", "-q", "-m", "init"],
+        );
+
+        let at = last_local_activity(&dir).await.expect("repo has a commit");
+        assert_eq!(at.to_rfc3339(), "2026-03-21T19:12:00+00:00");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `~/Repos/Rust`, `bonsai` and `AoC-2025` are all `git init` with
+    /// untracked files and zero commits, so `git log` reports nothing at all.
+    /// Falling back to the dirty paths is the only way they get a timestamp,
+    /// and without one the time window can never evict them.
+    #[tokio::test]
+    async fn a_repo_with_no_commits_falls_back_to_its_dirty_files() {
+        let dir = empty_repo("nocommits");
+        std::fs::write(dir.join("junk.txt"), "scratch\n").unwrap();
+
+        let at = last_local_activity(&dir)
+            .await
+            .expect("untracked files are activity");
+        let age = (chrono::Utc::now() - at).num_seconds();
+        assert!(age < 60, "file written just now, got {at} ({age}s ago)");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_clean_repo_with_no_commits_has_no_local_activity() {
+        let dir = empty_repo("clean");
+        assert_eq!(last_local_activity(&dir).await, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The AoC-2025 shape: committed (or staged) long ago, touched since.
+    /// Taking the commit alone would date the repo to March and evict work
+    /// that is actually current.
+    #[tokio::test]
+    async fn a_dirty_file_newer_than_the_last_commit_wins() {
+        let dir = empty_repo("newer");
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh_at(
+            &dir,
+            "2026-03-21T19:12:00+00:00",
+            &["git", "commit", "-q", "-m", "init"],
+        );
+        std::fs::write(dir.join("b.txt"), "touched today\n").unwrap();
+
+        let at = last_local_activity(&dir).await.expect("dirty file");
+        let age = (chrono::Utc::now() - at).num_seconds();
+        assert!(age < 60, "newest change is the untracked file, got {at}");
 
         std::fs::remove_dir_all(&dir).ok();
     }

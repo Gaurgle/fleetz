@@ -180,6 +180,7 @@ mod tests {
     fn repo(name: &str) -> RepoStatus {
         RepoStatus {
             daily: None,
+            last_local: None,
             name: name.to_string(),
             path: Some("~/repos/x".to_string()),
             location: RepoLocation::Primary,

@@ -17,7 +17,11 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 - Repos with recent GitHub activity (commits behind, ahead, divergence). A push
   from another machine shows up as `behind` without waiting for a full sweep:
   the GitHub poll notices the remote moved and fetches that one repo
-- Repos with local uncommitted, untracked, or unpushed changes
+- Repos with local uncommitted, untracked, or unpushed changes. They are listed
+  above the "also active" section, since work sitting only on this machine is a
+  worklist and repos you merely have a copy of are not. `info` dates each one
+  with a `last touched` row: the newer of your last commit and the newest change
+  in the working tree
 - Open pull requests per repo
 - CI status as a `◉` status lamp: green passed, red failed, blinking orange while running. From GitHub's `statusCheckRollup`, kept live in watch mode
 - Active worktrees (`wt` badge) and stashes (archive-glyph badge)
@@ -68,6 +72,15 @@ there is remembered across launches; explicit mode flags override it for that
 session without overwriting it. Applying a window shows a progress bar in the
 footer as repos are re-stat'd. The count field is capped per unit (hours up to
 48, days 31, weeks 52, months 24, years 10).
+
+The window gates both sections, each by the clock that means something to it.
+**github activity** goes by when the remote was last pushed to. **local
+changes** goes by local work: the newer of your last commit and the newest
+change in the working tree, so a repo you dirtied this morning stays put at a
+one-day window while one abandoned dirty months ago drops out. Repos with
+unpushed commits are never hidden by the window, however old, because that
+work exists nowhere but this machine. Widen to `-a` / `all` to see everything
+again.
 
 ### Options (combinable)
 

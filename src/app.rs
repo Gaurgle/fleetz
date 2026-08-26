@@ -232,12 +232,17 @@ fn step_pct(current: u16, delta: i16, min: u16, max: u16) -> u16 {
 }
 
 /// Which section of the repo list a repo belongs to, as a sort key: github
-/// activity, then also active, then local changes.
+/// activity, then local changes, then also active.
+///
+/// "local changes" outranks "also active" because it is a worklist -- work
+/// sitting on this machine and nowhere else -- while "also active" is repos
+/// you happen to have a copy of. `render_repo_list` draws them in this order
+/// too; the two must not disagree.
 fn section_rank(repo: &RepoStatus) -> u8 {
     match repo.location {
         RepoLocation::Primary => 0,
-        RepoLocation::Elsewhere | RepoLocation::NotCloned => 1,
-        RepoLocation::LocalOnly => 2,
+        RepoLocation::LocalOnly => 1,
+        RepoLocation::Elsewhere | RepoLocation::NotCloned => 2,
     }
 }
 
@@ -1238,8 +1243,8 @@ impl App {
 
         if parsed.text.is_empty() {
             // Navigation order must match what the repo list draws, which
-            // groups by location (github activity, then also active, then
-            // local changes). Without this the cursor walks assembly order and
+            // groups by location (github activity, then local changes, then
+            // also active). Without this the cursor walks assembly order and
             // appears to jump between sections. sort_by_key is stable, so
             // order within a section is untouched.
             visible.sort_by_key(|(_, r, _)| section_rank(r));
@@ -2056,6 +2061,7 @@ mod tests {
         let repos: Vec<RepoStatus> = (0..n)
             .map(|i| RepoStatus {
                 daily: None,
+                last_local: None,
                 name: format!("repo-{i}"),
                 path: Some(format!("~/repos/repo-{i}")),
                 location: RepoLocation::Primary,
@@ -2276,9 +2282,9 @@ mod tests {
             vec![
                 RepoLocation::Primary,
                 RepoLocation::Primary,
+                RepoLocation::LocalOnly,
+                RepoLocation::LocalOnly,
                 RepoLocation::NotCloned,
-                RepoLocation::LocalOnly,
-                RepoLocation::LocalOnly,
             ]
         );
 
@@ -2499,6 +2505,50 @@ mod tests {
             visible[0].1.location,
             RepoLocation::Primary,
             "github activity leads when nothing is typed"
+        );
+    }
+
+    /// "local changes" is a worklist -- uncommitted work on this machine --
+    /// while "also active" is other people's repos you happen to have. The
+    /// worklist reads first.
+    #[test]
+    fn local_changes_sorts_above_also_active() {
+        let mut app = make_app(3);
+        app.repos[0].location = RepoLocation::Elsewhere;
+        app.repos[1].location = RepoLocation::LocalOnly;
+        app.repos[2].location = RepoLocation::Primary;
+
+        let order: Vec<RepoLocation> = app
+            .visible_repos()
+            .iter()
+            .map(|(_, r)| r.location.clone())
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                RepoLocation::Primary,
+                RepoLocation::LocalOnly,
+                RepoLocation::Elsewhere,
+            ]
+        );
+    }
+
+    /// A not-cloned repo shares "also active" with `Elsewhere`, so it has to
+    /// move with it. Ranking them apart would split one drawn section in two.
+    #[test]
+    fn not_cloned_stays_with_also_active() {
+        let mut app = make_app(2);
+        app.repos[0].location = RepoLocation::NotCloned;
+        app.repos[1].location = RepoLocation::LocalOnly;
+
+        let order: Vec<RepoLocation> = app
+            .visible_repos()
+            .iter()
+            .map(|(_, r)| r.location.clone())
+            .collect();
+        assert_eq!(
+            order,
+            vec![RepoLocation::LocalOnly, RepoLocation::NotCloned]
         );
     }
 

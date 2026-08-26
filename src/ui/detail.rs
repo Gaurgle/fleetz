@@ -173,26 +173,28 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         }
         push_repos(&mut items, &primary);
 
-        // "also active" section, set off by the same blank row as the section
-        // below it so the three groups are spaced identically.
-        if !elsewhere.is_empty() {
-            if !items.is_empty() {
-                items.push(ListItem::new(Line::from("")));
-            }
-            items.push(section_header_item("also active"));
-            push_repos(&mut items, &elsewhere);
-        }
-
-        // "local changes" section, set off by a blank row from the
-        // github-activity / also-active repos above it so it reads as its own
-        // block rather than butting up against the last entry above (only when
-        // something precedes it).
+        // "local changes" second: work sitting on this machine and nowhere
+        // else is a worklist, and it reads before repos you merely have a
+        // copy of. Set off by a blank row so it is its own block rather than
+        // butting up against the entry above (only when something precedes
+        // it). `App::section_rank` orders the cursor to match; the two must
+        // not disagree.
         if !local_only.is_empty() {
             if !items.is_empty() {
                 items.push(ListItem::new(Line::from("")));
             }
             items.push(section_header_item("local changes"));
             push_repos(&mut items, &local_only);
+        }
+
+        // "also active" last, set off by the same blank row so the three
+        // groups are spaced identically.
+        if !elsewhere.is_empty() {
+            if !items.is_empty() {
+                items.push(ListItem::new(Line::from("")));
+            }
+            items.push(section_header_item("also active"));
+            push_repos(&mut items, &elsewhere);
         }
     }
 
@@ -650,6 +652,28 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
 
     // Branches (worktrees shown inline under the branch they're checked out on)
     let view = app.history_view;
+
+    // How old the local work is. Only local-only repos carry this: they are
+    // the ones with no `pushedAt` to be dated by, which is what put them in
+    // "local changes". The absolute date answers "when", the age answers "how
+    // long", and the age uses `format_age` so it reads like the commit rows
+    // further down rather than inventing a second vocabulary for time.
+    if view == HistoryView::Info
+        && let Some(at) = repo.last_local
+    {
+        lines.push(Line::from(vec![
+            Span::styled("last touched ", Style::default().fg(colors::OVERLAY)),
+            Span::styled(
+                at.format("%Y-%m-%d").to_string(),
+                Style::default().fg(colors::TEXT),
+            ),
+            Span::styled(
+                format!(" ({})", crate::ui::format_age(at)),
+                Style::default().fg(colors::OVERLAY),
+            ),
+        ]));
+        lines.push(Line::from(""));
+    }
     let mut shown_worktrees = std::collections::HashSet::new();
     if view == HistoryView::Info
         && (!repo.branches.is_empty() || !repo.remote_only_branches.is_empty())
@@ -3046,6 +3070,7 @@ mod tests {
     fn repo(name: &str, kind: RepoKind, owner: Option<&str>) -> RepoStatus {
         RepoStatus {
             daily: None,
+            last_local: None,
             name: name.to_string(),
             path: Some("~/repos/x".to_string()),
             location: RepoLocation::Primary,
@@ -4178,5 +4203,106 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The invariant CLAUDE.md names: the cursor walks `App::visible_repos`
+    /// while the eye walks what `render_repo_list` draws. Nothing checked
+    /// that the two agreed about section order, so reordering one and
+    /// forgetting the other misrouted every click below the first section
+    /// with nothing failing. This reads the drawn headers back off the
+    /// buffer and holds them against the order the cursor uses.
+    #[test]
+    fn drawn_section_order_matches_the_order_the_cursor_walks() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut repos = vec![
+            repo("elsewhere-one", RepoKind::Public, None),
+            repo("local-one", RepoKind::Public, None),
+            repo("primary-one", RepoKind::Public, None),
+        ];
+        repos[0].location = RepoLocation::Elsewhere;
+        repos[1].location = RepoLocation::LocalOnly;
+        repos[2].location = RepoLocation::Primary;
+
+        let app = crate::app::App::new(repos, "t".to_string(), 120, 40);
+
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| render_repo_list(f, f.area(), &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let screen: Vec<String> = (0..40u16)
+            .map(|y| (0..120u16).map(|x| buf[(x, y)].symbol()).collect())
+            .collect();
+
+        // Headers as drawn, top to bottom.
+        let drawn: Vec<&str> = screen
+            .iter()
+            .filter_map(|row| {
+                ["github activity", "local changes", "also active"]
+                    .into_iter()
+                    .find(|label| row.contains(label))
+            })
+            .collect();
+        assert_eq!(
+            drawn,
+            vec!["github activity", "local changes", "also active"],
+            "drew: {screen:#?}"
+        );
+
+        // And the same order out of the cursor's own list, so the two cannot
+        // drift apart without this failing.
+        let walked: Vec<&str> = app
+            .visible_repos()
+            .iter()
+            .map(|(_, r)| match r.location {
+                RepoLocation::Primary => "github activity",
+                RepoLocation::LocalOnly => "local changes",
+                RepoLocation::Elsewhere | RepoLocation::NotCloned => "also active",
+            })
+            .collect();
+        assert_eq!(walked, drawn, "cursor order disagrees with drawn order");
+    }
+
+    /// A local-only repo has no `pushedAt` to date it by -- that is what puts
+    /// it in "local changes" in the first place -- so `info` is the only
+    /// place its age is legible. It is also the number the time window uses
+    /// to decide whether the repo keeps its row, so seeing it explains an
+    /// eviction rather than leaving it a mystery.
+    #[test]
+    fn info_dates_a_local_only_repo() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let draw = |last_local: Option<chrono::DateTime<chrono::Utc>>| {
+            let mut r = busy_repo();
+            r.location = RepoLocation::LocalOnly;
+            r.last_local = last_local;
+            let mut app = crate::app::App::new(vec![r], "t".to_string(), 96, 44);
+            app.history_view = HistoryView::Info;
+            let mut term = Terminal::new(TestBackend::new(96, 60)).unwrap();
+            term.draw(|f| render_detail_pane(f, f.area(), &app))
+                .unwrap();
+            let buf = term.backend().buffer().clone();
+            (0..60u16)
+                .map(|y| (0..96u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let at = chrono::Utc::now() - chrono::Duration::days(95);
+        let shown = draw(Some(at));
+        assert!(shown.contains("last touched"), "no row drawn: {shown}");
+        assert!(
+            shown.contains(&at.format("%Y-%m-%d").to_string()),
+            "the date itself must be there, not just an age: {shown}"
+        );
+        assert!(
+            shown.contains("3mo ago"),
+            "and the age beside it, as the commit rows read: {shown}"
+        );
+
+        // A repo git could not date at all says nothing rather than lying
+        // about it with a zero or an epoch.
+        assert!(!draw(None).contains("last touched"));
     }
 }
