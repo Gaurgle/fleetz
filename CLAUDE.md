@@ -38,7 +38,11 @@ where the session runs.
 ## Current state
 
 Used daily. All code is unit-tested in `#[cfg(test)]` modules in the same file
-as the code they cover. There is no integration test suite and no CI workflow.
+as the code they cover. There is no integration test suite. The only CI is
+`.github/workflows/release.yml`, which turns a pushed `v*` tag into a GitHub
+release: it checks the tag against `Cargo.toml`, runs fmt, clippy and tests,
+and writes the notes with `scripts/release-notes.sh` (commit-based, since
+nothing here goes through a PR).
 
 The event loop is channel-driven and async: the TUI opens instantly, GitHub and
 local discovery load in the background (`AppEvent`), a 250ms tick drives spinner
