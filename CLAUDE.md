@@ -38,8 +38,9 @@ where the session runs.
 ## Current state
 
 Used daily. All code is unit-tested in `#[cfg(test)]` modules in the same file
-as the code they cover. There is no integration test suite. The only CI is
-`.github/workflows/release.yml`, which turns a pushed `v*` tag into a GitHub
+as the code they cover. There is no integration test suite. CI is
+`.github/workflows/ci.yml` (fmt, clippy, tests on every push to `main`) and
+`release.yml`, which turns a pushed `v*` tag into a GitHub
 release: it checks the tag against `Cargo.toml`, runs fmt, clippy and tests,
 and writes the notes with `scripts/release-notes.sh` (commit-based, since
 nothing here goes through a PR).
@@ -66,7 +67,13 @@ everything else is unbuilt, and its line references drift.
 - **Commit straight to `main`.** No feature branches, no PRs. The `(#10)`
   suffixes on older commits are history, not current policy.
 - **Ship policy:** commit and push to `main`. No PR, and there is no merge
-  step to withhold.
+  step to withhold. Before pushing, run the gates CI runs (`cargo fmt --check`,
+  `cargo clippy --all-targets -- -D warnings`, `cargo test`); after pushing,
+  watch the workflow the push triggers (`gh run watch`) and report the result.
+- **Release policy:** "release it" bumps the patch version (or the level or
+  version you name), commits `chore: release vX.Y.Z`, pushes, tags and pushes
+  the tag; `release.yml` publishes from there. It shows the What's Changed
+  notes before the tag goes out, and never runs on a dirty tree or a red build.
 - Tests live beside the code in `#[cfg(test)] mod tests`, not in `tests/`.
 - Every behavior change lands with a test that would have caught the old
   behavior; many existing tests name the regression they guard. Match that.
