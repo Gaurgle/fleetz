@@ -1353,6 +1353,25 @@ never paint at all.
 **Not done: bounding the channel.** A bounded channel would drop or block
 instead, and dropping input is worse than deferring a frame.
 
+**Coalescing must not apply to animation frames.** Reported as "the intro lags
+under `fleetz` but not under `cargo run`", which is backwards for anything
+CPU-bound: the installed binary is a release build and `cargo run` is a debug
+one. That rules out the compositor being too slow and points at scheduling.
+
+Coalescing exists for *input*, where a burst of wheel events all describe the
+same final state and only the last one matters. An animation frame is the
+opposite: it is a deadline, and a frame held is a frame not shown. The intro's
+frames were being held behind queued background work -- and a release build
+finishes the repo probes fast enough to flood the channel *during* the wave,
+where a debug build spreads the same work out past the end of it. Hence the
+asymmetry. `should_paint` now takes `animating` and never holds those frames.
+
+The interval behaviour compounded it. `tokio::time::interval` defaults to
+`MissedTickBehavior::Burst`, which fires every tick a stalled loop slept
+through, back to back. For a time-derived animation those catch-up frames all
+paint nearly the same thing, and they flood the channel while doing it: freeze,
+then jump. Both animation timers are `Skip` now.
+
 ### 2. The highlight wandered while scrolling
 
 **Cause.** `scroll_detail` called `keep_selection_on_screen` on every notch, so

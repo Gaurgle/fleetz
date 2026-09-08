@@ -100,8 +100,16 @@ const MAX_COALESCED_FRAMES: u32 = 64;
 
 /// Whether a pending repaint should be drawn now or held for the input that is
 /// already queued behind it. See the paint at the foot of `run_event_loop`.
-fn should_paint(queue_empty: bool, held: u32) -> bool {
-    queue_empty || held >= MAX_COALESCED_FRAMES
+///
+/// `animating` overrides the hold. Coalescing exists for *input*, where a burst
+/// of wheel events all describe the same final state and only the last one
+/// matters. An animation frame is the opposite: it is a deadline, and the frame
+/// held is a frame not shown. Holding them behind queued background work is
+/// what made the intro stutter on a release build and not on a debug one --
+/// release finishes the repo probes fast enough to flood the channel during the
+/// wave, where debug spreads the same work out past the end of it.
+fn should_paint(queue_empty: bool, held: u32, animating: bool) -> bool {
+    animating || queue_empty || held >= MAX_COALESCED_FRAMES
 }
 
 /// Everything the event loop reacts to. Terminal input, the periodic tick,
@@ -213,6 +221,11 @@ fn spawn_loading_task(
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(ui::intro::FRAME_INTERVAL);
+        // A missed frame is gone, not owed. The default `Burst` fires every
+        // tick a stalled loop slept through, back to back, which floods the
+        // channel with frames that all paint nearly the same thing -- progress
+        // comes from the clock, not from a frame counter.
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         while running.load(std::sync::atomic::Ordering::Relaxed) {
             interval.tick().await;
             if tx.send(AppEvent::LoadingFrame).is_err() {
@@ -228,6 +241,8 @@ fn spawn_loading_task(
 fn spawn_intro_task(tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(ui::intro::FRAME_INTERVAL);
+        // See `spawn_loading_task`: catch-up ticks paint the same frame twice.
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let deadline = std::time::Instant::now() + ui::intro::DURATION;
         loop {
             interval.tick().await;
@@ -802,7 +817,8 @@ async fn run_event_loop(
         // next pass through the loop inherits it, so nothing is lost, only
         // deferred.
         if app.needs_redraw {
-            if should_paint(rx.is_empty(), coalesced) {
+            let animating = app.intro.is_some() || app.loading_field.is_some();
+            if should_paint(rx.is_empty(), coalesced, animating) {
                 coalesced = 0;
                 app.needs_redraw = false;
                 // While the wave is running it composes every frame from the
@@ -2686,7 +2702,17 @@ mod tests {
     /// ordinary case and must not be delayed by the coalescing at all.
     #[test]
     fn an_empty_queue_paints_immediately() {
-        assert!(should_paint(true, 0));
+        assert!(should_paint(true, 0, false));
+    }
+
+    /// An animation frame is a deadline, not a data update: it is never held,
+    /// however much background work is queued behind it. Holding them is what
+    /// made the intro stutter under a release build's faster repo probes.
+    #[test]
+    fn an_animation_frame_is_never_held() {
+        assert!(should_paint(false, 0, true));
+        assert!(should_paint(false, MAX_COALESCED_FRAMES - 1, true));
+        assert!(should_paint(true, 0, true));
     }
 
     /// The bug: a trackpad flick delivers wheel events faster than a repaint
@@ -2694,17 +2720,17 @@ mod tests {
     /// scroll froze, then played out the backlog after the gesture had ended.
     #[test]
     fn a_queued_burst_holds_the_paint() {
-        assert!(!should_paint(false, 0));
-        assert!(!should_paint(false, 1));
-        assert!(!should_paint(false, MAX_COALESCED_FRAMES - 1));
+        assert!(!should_paint(false, 0, false));
+        assert!(!should_paint(false, 1, false));
+        assert!(!should_paint(false, MAX_COALESCED_FRAMES - 1, false));
     }
 
     /// The hold is bounded, so a source that never stops arriving still gets
     /// drawn rather than freezing the pane for as long as it lasts.
     #[test]
     fn a_queue_that_never_drains_still_paints_eventually() {
-        assert!(should_paint(false, MAX_COALESCED_FRAMES));
-        assert!(should_paint(false, MAX_COALESCED_FRAMES + 1));
+        assert!(should_paint(false, MAX_COALESCED_FRAMES, false));
+        assert!(should_paint(false, MAX_COALESCED_FRAMES + 1, false));
     }
 
     fn test_repo() -> RepoStatus {
