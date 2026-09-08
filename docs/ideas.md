@@ -1403,6 +1403,68 @@ measurement, and the first two were real bugs that were not this one. In a TUI
 the output bandwidth is a first-class cost, and "how much of the screen changed"
 belongs next to "how long did it take to compute" whenever anything animates.
 
+### Still open: it lags again on a full-screen terminal
+
+Reported after the fix landed: smooth on half a screen, lagging maximised. The
+numbers say exactly that should happen. `CELL_UPDATE` is a fixed divisor, so it
+pins the *ratio* of the screen that changes and not the *rate*, and the rate is
+linear in cell count:
+
+```
+cells x 11% changed x ~20 bytes x 60fps
+
+200x50   =  10,000 cells  ->  1.4 MB/s   (measured 1.34, smooth)
+300x80   =  24,000 cells  ->  3.3 MB/s
+400x100  =  40,000 cells  ->  5.5 MB/s   <- back at the pre-fix volume
+```
+
+So the budget has to scale with area rather than stay a constant fraction of
+it. Candidates, cheapest first:
+
+- **Scale `CELL_UPDATE` with the cell count**, so a big terminal updates each
+  cell less often. One line, and it keeps 60fps everywhere. The risk is that on
+  a very large screen each cell updates so rarely the churn reads as static --
+  worth checking where that threshold actually is rather than assuming.
+- **Cap the frame rate by area.** Halving to 30fps halves the rate and is
+  simpler to reason about, but it slows the wave's motion as well as its churn,
+  which the per-cell stagger deliberately avoided.
+- **Target a byte budget directly**: pick the divisor from
+  `cells x share x bytes x fps` against a ceiling of, say, 1.5 MB/s. Most
+  honest, since that is the quantity that actually binds, and it degrades
+  gracefully on terminals of any size.
+
+`only_a_fraction_of_the_screen_changes_between_frames` measures the ratio at one
+fixed size, so it would not catch this. Whatever lands here should assert
+against the rate at several sizes instead.
+
+**The debug build has been demonstrating the fix by accident all along.** It
+was noticed that `cargo run` never felt laggy while the installed binary did,
+which sounds like nonsense -- the installed one is optimised. Timing the same
+compose both ways explains it:
+
+```
+                 debug (cargo run)          release (installed)
+200x50    6.09 ms/frame -> max  164 fps    0.45 ms -> max 2224 fps
+400x100  23.49 ms/frame -> max   43 fps    1.39 ms -> max  717 fps
+```
+
+On a full screen the debug build physically cannot reach 60fps. It lands around
+25-30fps once ratatui's diff and the terminal write are added, which puts it at
+roughly 2.3 MB/s where release is at 5.5 MB/s. The slow build throttles itself
+to a frame rate the terminal can render; the fast one does not throttle at all.
+
+**So the conclusion is settled, and it is not a bug hunt any more.** The
+animation is running at a fidelity the terminal cannot take at large sizes, and
+it has to come down: on a big screen it must do less per second, not the same
+amount faster. The only open question is which knob, and the honest one is a
+byte budget -- derive the per-cell update divisor from
+`cells x share x bytes x fps` against a ceiling of roughly 1.5 MB/s, so the
+effect degrades on its own wherever it is opened. That lands the release build
+where the debug build already sits, deliberately rather than by luck.
+
+A small terminal keeps the full-rate version, since it is comfortably under the
+ceiling and that is where the effect looks best.
+
 ### 2. The highlight wandered while scrolling
 
 **Cause.** `scroll_detail` called `keep_selection_on_screen` on every notch, so
