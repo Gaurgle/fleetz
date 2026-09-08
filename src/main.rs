@@ -1787,13 +1787,17 @@ async fn rebuild_repo_status(
         }
     };
 
+    // Computed before the struct literal: the literal moves `branches` in, and
+    // this borrows it.
+    let remote_only_branches = git::unfetched_branches(&remote, &branches);
+
     RepoStatus {
         daily,
         branches,
         dirty,
         behind: total_behind,
         ahead: total_ahead,
-        remote_only_branches: git::unfetched_branches(&remote, &branch_names),
+        remote_only_branches,
         stash_count: stash_entries.len() as u32,
         stash_entries,
         commits,
@@ -1920,7 +1924,7 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
     let worktrees = git::worktree_list(path).await;
     let remote_url = git::remote_url(path).await;
     let remote = git::remote_branches(path).await;
-    let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
+    let remote_only_branches = git::unfetched_branches(&remote, &branches);
 
     Some(RepoStatus {
         // No local calendar until the strip asks for one.
@@ -2378,8 +2382,7 @@ async fn local_only_status(
     let display = tilde_display(path);
     let remote_url = git::remote_url(path).await;
     let remote = git::remote_branches(path).await;
-    let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
-    let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
+    let remote_only_branches = git::unfetched_branches(&remote, &branches);
 
     Some(RepoStatus {
         // No local calendar until the strip asks for one.
@@ -2474,7 +2477,7 @@ async fn build_repo_status(
 
     let remote_url = git::remote_url(path).await;
     let remote = git::remote_branches(path).await;
-    let remote_only_branches = git::unfetched_branches(&remote, &branch_names);
+    let remote_only_branches = git::unfetched_branches(&remote, &branches);
 
     RepoStatus {
         // No local calendar until the strip asks for one.

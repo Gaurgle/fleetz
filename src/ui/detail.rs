@@ -649,6 +649,10 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // row history is exactly when that question comes back. Held out of the
     // scrolling body below.
     let header_rows = lines.len();
+    // How far the pinned region reaches once the branches block has been laid
+    // out. Starts at the identity header and grows to take the local branches
+    // in; every view that draws no branches keeps the header's own count.
+    let mut pinned_rows = header_rows;
 
     // Branches (worktrees shown inline under the branch they're checked out on)
     let view = app.history_view;
@@ -696,6 +700,25 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
                 Span::styled(marker, Style::default().fg(head_color)),
                 Span::styled(b.name.clone(), Style::default().fg(name_color)),
             ];
+            // Only when it differs from the branch's own name. A branch is
+            // free to track a ref it is not named after, and with the upstream
+            // left implicit those two shapes drew identically -- so a count
+            // against `origin/wip` looked like a count against a branch of the
+            // same name, and the row could not be reconciled with the remote.
+            // Shown for the odd one out rather than for every row, because
+            // repeating `origin/x` after `x` down the whole list is noise that
+            // would bury exactly the case worth seeing.
+            if let Some(upstream) = &b.upstream
+                && upstream
+                    .split_once('/')
+                    .map_or(upstream.as_str(), |(_, n)| n)
+                    != b.name
+            {
+                branch_spans.push(Span::styled(
+                    format!(" -> {upstream}"),
+                    Style::default().fg(colors::OVERLAY),
+                ));
+            }
             if b.behind > 0 {
                 branch_spans.push(Span::styled(
                     format!(" {} behind", b.behind),
@@ -735,6 +758,13 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
                 )));
             }
         }
+
+        // The pinned region ends here, with the local branches and not the
+        // list below them. What a repo is behind on is bounded by the branches
+        // you actually have; the remote-only list is bounded by what everyone
+        // else has pushed, and on a busy repo it runs to dozens of rows that
+        // would take the whole pane if they were pinned too.
+        pinned_rows = lines.len();
 
         // Remote branches with no local counterpart -- never fetched/checked
         // out, or checked out once and deleted locally after merging. Shown
@@ -996,8 +1026,19 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // history is what you came for, and a header taking half the height to
     // repeat what the frame's own title already says is the worse trade.
     const MIN_BODY_ROWS: u16 = 6;
-    let header_h = header_rows as u16;
-    let pin_header = area.height >= header_h + MIN_BODY_ROWS;
+    // Two rungs, widest first. The branches block is the only thing that
+    // explains the repo's behind count, and it was the first thing to scroll
+    // away: stepping the commit cursor pushed it off the top and left the
+    // "not fetched" list reading like the whole story. Pinning it needs a
+    // fallback rather than a bigger constant, because a repo with many local
+    // branches would otherwise fail the one test and lose the identity header
+    // its pin too -- trading a real regression for the fix.
+    let pinned = [pinned_rows, header_rows]
+        .into_iter()
+        .find(|rows| area.height >= *rows as u16 + MIN_BODY_ROWS)
+        .unwrap_or(0);
+    let pin_header = pinned > 0;
+    let header_h = pinned as u16;
 
     let (header_area, area) = match pin_header {
         true => {
@@ -1009,7 +1050,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     };
     let mut lines = match pin_header {
         true => {
-            let body = lines.split_off(header_rows);
+            let body = lines.split_off(pinned);
             frame.render_widget(Paragraph::new(lines), header_area.expect("split"));
             body
         }
@@ -1021,7 +1062,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         // Both ends come down together, and a block whose top is inside the
         // pinned header is no longer in the scrolling body at all.
         true => selected_block
-            .and_then(|(t, b)| Some((t.checked_sub(header_rows)?, b.saturating_sub(header_rows)))),
+            .and_then(|(t, b)| Some((t.checked_sub(pinned)?, b.saturating_sub(pinned)))),
         false => selected_block,
     };
     // Written every frame, empty list included: a stale set of rows from the
@@ -1030,7 +1071,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // Rows above the split left the scrolling body with the header, so the
     // tops come down by the same amount the selection did -- and only when the
     // header was actually split off.
-    let shed = if pin_header { header_rows } else { 0 };
+    let shed = if pin_header { pinned } else { 0 };
     *app.detail_row_tops.borrow_mut() = block_tops
         .into_iter()
         .map(|t| t.saturating_sub(shed) as u16)
@@ -2121,6 +2162,140 @@ mod tests {
             .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// A repo shaped like the one that exposed this: several local branches
+    /// behind by different amounts, one of them tracking a ref it is not named
+    /// after, a long remote-only list under them, and enough history to scroll.
+    fn spread_repo() -> RepoStatus {
+        let mut r = busy_repo();
+        r.behind = 40;
+        r.branches = vec![
+            crate::model::BranchStatus {
+                name: "main".to_string(),
+                upstream: Some("origin/main".to_string()),
+                behind: 0,
+                ahead: 0,
+                is_head: true,
+            },
+            crate::model::BranchStatus {
+                name: "beta".to_string(),
+                upstream: Some("origin/beta".to_string()),
+                behind: 21,
+                ahead: 0,
+                is_head: false,
+            },
+            crate::model::BranchStatus {
+                name: "feature/who-goes-first".to_string(),
+                upstream: Some("origin/wip".to_string()),
+                behind: 19,
+                ahead: 0,
+                is_head: false,
+            },
+        ];
+        r.remote_only_branches = (0..12)
+            .map(|i| format!("origin/feature/spare-{i}"))
+            .collect();
+        // `info` draws its commit list from the graph rather than from
+        // `commits`, so this is the field that decides whether the pane has
+        // anything to scroll.
+        r.graph = (0..30)
+            .map(|i| crate::model::GraphLine {
+                lanes: vec![crate::graph::commit_cell()],
+                hash: format!("c{i:06}"),
+                is_merge: false,
+                refs: vec![],
+                author: "Gaurgle".to_string(),
+                message: format!("feat: commit {i}"),
+            })
+            .collect();
+        r
+    }
+
+    /// The `info` pane's visible text at a given size, scrolled as far as its
+    /// content allows. The offset is clamped during render, so a large value
+    /// parks it at the bottom whatever the content turns out to measure.
+    fn info_text_at_bottom(repo: RepoStatus, width: u16, height: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = crate::app::App::new(vec![repo], "t".to_string(), width, height);
+        app.history_view = HistoryView::Info;
+        app.set_detail_scroll(u16::MAX);
+        let mut term = Terminal::new(TestBackend::new(width, height)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The branches block is the only thing that explains the repo's behind
+    /// count, so it has to survive the scrolling that reading the history
+    /// requires. Unpinned, stepping the commit cursor pushed it off the top
+    /// and left the "not fetched" list reading like the whole story.
+    #[test]
+    fn the_branches_block_survives_a_scroll_to_the_bottom() {
+        let text = info_text_at_bottom(spread_repo(), 92, 20);
+        assert!(
+            text.contains("branches"),
+            "the branches label scrolled away"
+        );
+        assert!(text.contains("21 behind"), "beta's count scrolled away");
+        assert!(
+            text.contains("19 behind"),
+            "the feature branch's count scrolled away"
+        );
+    }
+
+    /// The remote-only list is bounded by what everyone else has pushed, not
+    /// by what you have, so it stays in the scrolling body. Pinning it too
+    /// would cost the pane its history on exactly the busy repos that need it.
+    #[test]
+    fn the_remote_only_list_is_not_pinned() {
+        let text = info_text_at_bottom(spread_repo(), 92, 20);
+        assert!(
+            text.contains("feat: commit"),
+            "the history is unreachable at the bottom of the scroll"
+        );
+        assert!(
+            !text.contains("spare-0 "),
+            "the first remote-only row is still on screen at the bottom"
+        );
+    }
+
+    /// On a pane too short for both, the header keeps its pin rather than the
+    /// pair losing it together -- the fallback is the whole reason the pinned
+    /// count is chosen from a ladder instead of a single test.
+    #[test]
+    fn a_short_pane_falls_back_to_pinning_the_header_alone() {
+        // 17 rows is the window where the header alone clears MIN_BODY_ROWS
+        // and the header plus the branches block does not.
+        let text = info_text_at_bottom(spread_repo(), 92, 17);
+        assert!(
+            text.contains("~/repos/fleetz"),
+            "the identity header lost its pin along with the branches block"
+        );
+    }
+
+    /// A branch tracking a ref it is not named after says so. Left implicit,
+    /// its row is indistinguishable from one tracking its own name, and the
+    /// count against it cannot be reconciled with the remote.
+    #[test]
+    fn a_branch_names_an_upstream_that_differs_from_its_own_name() {
+        let text = info_text_at_bottom(spread_repo(), 120, 20);
+        assert!(
+            text.contains("feature/who-goes-first -> origin/wip"),
+            "the differing upstream is not shown"
+        );
+        // The ordinary case stays bare: repeating `origin/beta` after `beta`
+        // on every row would bury the one row worth reading.
+        assert!(
+            !text.contains("beta -> origin/beta"),
+            "a same-named upstream is being repeated as noise"
+        );
     }
 
     /// Each view draws its own section and none of the others'. The whole

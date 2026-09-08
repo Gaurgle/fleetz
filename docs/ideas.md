@@ -1108,3 +1108,56 @@ much bigger than what it actually adds.
 GitHub clone)? Not the same thing, and it changes the estimate sharply:
 GitBucket implements a GitHub-compatible API, so it could plausibly reuse the
 existing client behind a base-URL config key rather than needing a new one.
+
+---
+
+## The behind count and the branches that make it up
+
+**Status: shipped.**
+
+**Problem.** A repo row read `40↓` while `git pull`, run in that repo, reported
+nothing to pull. Both were right. `RepoStatus::behind` is folded over every
+local branch (`src/main.rs`), so the 40 was 21 on `beta` plus 19 on
+`feature/who-goes-first`, and `main`, the branch actually checked out, was
+level. Nothing on screen said the number was a sum, so the only reading
+available was the wrong one.
+
+The `info` view already drew the per-branch breakdown that resolves it. Three
+separate things kept it from landing:
+
+1. **It scrolled away.** Only the identity header was pinned. Stepping the
+   commit cursor scrolled the branches block off the top, leaving the
+   remote-only "not fetched" list as the first thing under the header, which
+   reads like the complete branch story and is not.
+2. **`origin/wip` was reported "not fetched" when it was fetched.**
+   `unfetched_branches` matched remote refs to local branches by bare name
+   only. `feature/who-goes-first` tracks `origin/wip`, no local branch is
+   called `wip`, so the ref the repo was 19 commits behind on was labelled as
+   one nobody had ever pulled.
+3. **The summary never admitted it was a sum.** `long_status` said
+   "40 behind" whatever the spread.
+
+**What shipped.**
+
+- `unfetched_branches` takes `&[BranchStatus]` and counts a remote as fetched
+  when a local branch either shares its short name or names it as upstream.
+  The upstream test compares the full `origin/x` form, so a same-named branch
+  on a different remote is not swept up by it.
+- The branch row prints `-> origin/wip` when the upstream differs from the
+  branch's own name, and stays bare when it does not.
+- The pinned region extends through the local branches. The count is chosen
+  from a ladder (`[pinned_rows, header_rows]`, first that clears
+  `MIN_BODY_ROWS`) rather than a single test, so a repo with many local
+  branches falls back to pinning the header alone instead of losing the pin
+  entirely.
+- `long_status` says "40 behind on 2 branches" when more than one branch is
+  behind, and stays unqualified when one is.
+
+**Rejected: pinning the whole branches block.** The remote-only list is bounded
+by what everyone else has pushed, not by what you have. On the repo that
+prompted this it is eleven rows, and pinning it would have taken most of the
+pane on exactly the busy repos whose history you need.
+
+**Not done.** `short_status` still renders a bare `40↓` in the repo list. The
+glyph column has no room for the qualifier, and the row is a glance rather
+than an answer, but it is the surface the confusion started on.

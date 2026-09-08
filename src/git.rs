@@ -903,16 +903,24 @@ fn parse_remote_branch_output(stdout: &str) -> Vec<String> {
         .collect()
 }
 
-/// Remote branches with no local branch of the same name -- never
-/// fetched/checked out locally, or checked out once and deleted locally
-/// after merging. `remote` entries are the "origin/name" short form;
-/// `local` entries are bare branch names.
-pub fn unfetched_branches(remote: &[String], local: &[String]) -> Vec<String> {
+/// Remote branches nothing local corresponds to -- never fetched/checked out
+/// locally, or checked out once and deleted locally after merging. `remote`
+/// entries are the "origin/name" short form.
+///
+/// A remote counts as fetched when a local branch either shares its short name
+/// or names it as upstream. The upstream half matters because a local branch is
+/// free to be called something other than the ref it tracks: with only the name
+/// test, `feature/who-goes-first` tracking `origin/wip` left `origin/wip`
+/// reported as never fetched, which is both false and the opposite of the
+/// truth -- that branch is the reason the repo is behind.
+pub fn unfetched_branches(remote: &[String], local: &[BranchStatus]) -> Vec<String> {
     remote
         .iter()
         .filter(|r| {
             let short = r.split_once('/').map_or(r.as_str(), |(_, name)| name);
-            !local.iter().any(|l| l == short)
+            !local
+                .iter()
+                .any(|l| l.name == short || l.upstream.as_deref() == Some(r.as_str()))
         })
         .cloned()
         .collect()
@@ -1073,10 +1081,22 @@ mod tests {
     use super::*;
     use crate::model::RefKind;
 
+    /// A local branch for the `unfetched_branches` tests. Only the name and
+    /// the upstream take part in that decision.
+    fn local_branch(name: &str, upstream: Option<&str>) -> BranchStatus {
+        BranchStatus {
+            name: name.to_string(),
+            upstream: upstream.map(|u| u.to_string()),
+            behind: 0,
+            ahead: 0,
+            is_head: false,
+        }
+    }
+
     #[test]
     fn unfetched_branches_skips_ones_with_local_counterpart() {
         let remote = vec!["origin/main".to_string(), "origin/feature-x".to_string()];
-        let local = vec!["main".to_string()];
+        let local = vec![local_branch("main", Some("origin/main"))];
         assert_eq!(
             unfetched_branches(&remote, &local),
             vec!["origin/feature-x"]
@@ -1086,7 +1106,7 @@ mod tests {
     #[test]
     fn unfetched_branches_empty_when_all_fetched() {
         let remote = vec!["origin/main".to_string()];
-        let local = vec!["main".to_string()];
+        let local = vec![local_branch("main", Some("origin/main"))];
         assert!(unfetched_branches(&remote, &local).is_empty());
     }
 
@@ -1095,8 +1115,28 @@ mod tests {
         // A remote name with slashes in the branch itself (e.g. "origin/feat/x")
         // should still compare against the bare local branch "feat/x".
         let remote = vec!["origin/feat/x".to_string()];
-        let local = vec!["feat/x".to_string()];
+        let local = vec![local_branch("feat/x", None)];
         assert!(unfetched_branches(&remote, &local).is_empty());
+    }
+
+    #[test]
+    fn unfetched_branches_counts_a_tracked_remote_as_fetched_under_any_name() {
+        // The regression: a local branch may be named nothing like the ref it
+        // tracks. `origin/wip` is fetched and tracked, so it is not unfetched,
+        // even though no local branch is called "wip".
+        let remote = vec!["origin/wip".to_string(), "origin/stale".to_string()];
+        let local = vec![local_branch("feature/who-goes-first", Some("origin/wip"))];
+        assert_eq!(unfetched_branches(&remote, &local), vec!["origin/stale"]);
+    }
+
+    #[test]
+    fn unfetched_branches_matches_upstream_on_the_full_remote_name() {
+        // The upstream test compares against the "origin/x" form, not the bare
+        // branch, so a same-named branch on a *different* remote stays
+        // unfetched rather than being covered by this one.
+        let remote = vec!["upstream/wip".to_string()];
+        let local = vec![local_branch("mine", Some("origin/wip"))];
+        assert_eq!(unfetched_branches(&remote, &local), vec!["upstream/wip"]);
     }
 
     #[test]

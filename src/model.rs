@@ -412,13 +412,27 @@ impl RepoStatus {
     }
 
     /// A longer status string like "3 behind, 2 ahead, 4 uncommitted".
+    ///
+    /// `behind` is summed over every local branch, so on a repo whose branches
+    /// are behind by different amounts the bare number belongs to no single
+    /// one of them. Read as "3 behind" it says a pull away; standing in the
+    /// repo on a current branch, git then says there is nothing to pull and
+    /// the two flatly disagree. Naming the spread is what makes the number
+    /// mean the same thing here and there, and points at the branches block
+    /// for the split. Only when more than one branch is behind: on the
+    /// ordinary single-branch repo the qualifier would be noise.
     pub fn long_status(&self) -> String {
         if self.is_not_cloned() {
             return NOT_CLONED.to_string();
         }
         let mut parts = Vec::new();
         if self.behind > 0 {
-            parts.push(format!("{} behind", self.behind));
+            match self.branches.iter().filter(|b| b.behind > 0).count() {
+                spread if spread > 1 => {
+                    parts.push(format!("{} behind on {spread} branches", self.behind))
+                }
+                _ => parts.push(format!("{} behind", self.behind)),
+            }
         }
         if self.ahead > 0 {
             parts.push(format!("{} ahead", self.ahead));
@@ -529,6 +543,38 @@ mod tests {
     fn owner_display_is_none_without_api_or_remote() {
         let repo = make_repo("orphan", 0, 0, 0);
         assert_eq!(repo.owner_display(), None);
+    }
+
+    /// A repo whose behind count is spread over several branches, as
+    /// `long_status` sees it.
+    fn repo_behind_on(branches: &[(&str, u32)]) -> RepoStatus {
+        let total = branches.iter().map(|(_, n)| n).sum();
+        let mut repo = make_repo("spread", total, 0, 0);
+        repo.branches = branches
+            .iter()
+            .map(|(name, behind)| BranchStatus {
+                name: (*name).to_string(),
+                upstream: Some(format!("origin/{name}")),
+                behind: *behind,
+                ahead: 0,
+                is_head: false,
+            })
+            .collect();
+        repo
+    }
+
+    #[test]
+    fn long_status_names_the_spread_when_several_branches_are_behind() {
+        // The bare "40 behind" reads as one pull away, and on a repo whose
+        // current branch is level git says there is nothing to pull.
+        let r = repo_behind_on(&[("beta", 21), ("feature/who-goes-first", 19)]);
+        assert_eq!(r.long_status(), "40 behind on 2 branches");
+    }
+
+    #[test]
+    fn long_status_leaves_a_single_behind_branch_unqualified() {
+        let r = repo_behind_on(&[("main", 3), ("beta", 0)]);
+        assert_eq!(r.long_status(), "3 behind");
     }
 
     fn make_repo(name: &str, behind: u32, ahead: u32, dirty: u32) -> RepoStatus {
