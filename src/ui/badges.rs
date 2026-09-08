@@ -57,10 +57,18 @@ pub fn kind_color(kind: RepoKind) -> Color {
 /// The glyph, color, and spelled-out name for a CI state, for the detail
 /// pane's named badges ("◉ CI passed"). Single source, so the panel title and
 /// the body line can never disagree about what "failed" looks like.
-pub fn ci_display(status: &CiStatus) -> (&'static str, Color, &'static str) {
+///
+/// `dim_pending` is the off phase of the pending-CI blink, on the same terms
+/// as `badge_spans`: callers pass `app.watch_mode && !app.blink_on`. The two
+/// panes show the same repo's CI, so a lamp that pulses in the list and holds
+/// still in the detail pane would read as two different states rather than one
+/// running job. The glyph is unchanged between phases -- only the colour
+/// moves, so nothing beside it shifts.
+pub fn ci_display(status: &CiStatus, dim_pending: bool) -> (&'static str, Color, &'static str) {
     match status {
         CiStatus::Passed => ("◉", colors::GREEN, "passed"),
         CiStatus::Failed => ("◉", colors::RED, "failed"),
+        CiStatus::Pending if dim_pending => ("◉", colors::SURFACE, "pending"),
         CiStatus::Pending => ("◉", colors::PEACH, "pending"),
         CiStatus::Unknown => ("", colors::OVERLAY, ""),
     }
@@ -333,5 +341,45 @@ mod tests {
         let (text, width) = rendered(&repo("bare"));
         assert_eq!(text, "✓");
         assert_eq!(width, 1);
+    }
+
+    /// The detail pane's lamp pulses on the same phase as the repo list's.
+    /// They show one repo's CI between them, so a lamp that blinks in one pane
+    /// and holds still in the other reads as two states rather than one job.
+    #[test]
+    fn the_detail_pane_ci_lamp_pulses_while_pending() {
+        assert_eq!(ci_display(&CiStatus::Pending, false).1, colors::PEACH);
+        assert_eq!(ci_display(&CiStatus::Pending, true).1, colors::SURFACE);
+    }
+
+    /// Only pending pulses. Passed and failed are results rather than
+    /// activity, and a blinking result reads as something still running.
+    #[test]
+    fn a_settled_ci_lamp_holds_still_through_the_blink() {
+        for status in [CiStatus::Passed, CiStatus::Failed, CiStatus::Unknown] {
+            assert_eq!(
+                ci_display(&status, true).1,
+                ci_display(&status, false).1,
+                "{status:?} changed colour on the blink"
+            );
+        }
+    }
+
+    /// Only the colour moves. The detail pane right-aligns the group this sits
+    /// in, so a phase that measured differently would shift the row beside it
+    /// twice a second.
+    #[test]
+    fn the_ci_lamp_keeps_its_glyph_and_label_through_the_blink() {
+        for status in [
+            CiStatus::Passed,
+            CiStatus::Failed,
+            CiStatus::Pending,
+            CiStatus::Unknown,
+        ] {
+            let (lit_glyph, _, lit_label) = ci_display(&status, false);
+            let (dim_glyph, _, dim_label) = ci_display(&status, true);
+            assert_eq!(lit_glyph, dim_glyph, "{status:?} changed glyph");
+            assert_eq!(lit_label, dim_label, "{status:?} changed label");
+        }
     }
 }

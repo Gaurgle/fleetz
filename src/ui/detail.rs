@@ -585,7 +585,8 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         row3_right.push(Span::styled(text, Style::default().fg(colors::PR_CLR)));
     }
     if repo.ci_status != CiStatus::Unknown {
-        let (ci_sym, ci_color, ci_label) = badges::ci_display(&repo.ci_status);
+        let (ci_sym, ci_color, ci_label) =
+            badges::ci_display(&repo.ci_status, app.watch_mode && !app.blink_on);
         if !row3_right.is_empty() {
             row3_right.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
         }
@@ -636,12 +637,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // The view's own title, in the colour its tab wears up in the frame. The
     // tab is what you aim at; this is what confirms you landed, and saying it
     // twice in two colours would have made the pair read as two things.
-    lines.push(Line::from(Span::styled(
-        app.history_view.label(),
-        Style::default()
-            .fg(colors::history_view_color(app.history_view))
-            .add_modifier(Modifier::BOLD),
-    )));
+    lines.extend(headliner(app.history_view, width));
 
     // Everything above this point identifies the repo -- what state it is in,
     // where it lives, which branch is out, and which of its views you are in.
@@ -913,7 +909,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         && repo.ci_status != CiStatus::Unknown
         && (repo.ci_workflow.is_some() || repo.ci_duration.is_some())
     {
-        let (_, ci_color, _) = badges::ci_display(&repo.ci_status);
+        let (_, ci_color, _) = badges::ci_display(&repo.ci_status, app.watch_mode && !app.blink_on);
         let mut ci_spans = vec![Span::styled("CI ", Style::default().fg(ci_color))];
         let detail: Vec<String> = [repo.ci_workflow.clone(), repo.ci_duration.clone()]
             .into_iter()
@@ -1460,6 +1456,29 @@ fn graph_list_lines(
         .map(|g| g.hash.chars().count())
         .max()
         .unwrap_or(7);
+    // The two churn columns. `+2` and `+338` have to share a right edge, and
+    // so do their deletions. Right-aligning the pair as one blob -- which is
+    // what the tail did -- puts every row's `+` in a different column, so the
+    // one part of the row that is read by scanning down was the one part left
+    // ragged. Same argument as `lane_w` and `hash_w` above, and measured the
+    // same way.
+    //
+    // Over the rows this call will actually draw, not the whole history:
+    // `info` shows six of a hundred and fifty, and measuring all of them would
+    // reserve width for churn that is not on screen.
+    let (add_w, del_w) = repo
+        .graph
+        .iter()
+        .take(limit.unwrap_or(usize::MAX))
+        .filter_map(|g| repo.commits.iter().find(|c| c.hash == g.hash))
+        .fold((0usize, 0usize), |(add, del), c| {
+            (
+                add.max(stat_part_width(c.insertions)),
+                del.max(stat_part_width(c.deletions)),
+            )
+        });
+    let stat_len = stat_tail_width(add_w, del_w);
+
     let mut lines = Vec::new();
 
     // One row per commit, so the row index and the commit index are the same
@@ -1507,13 +1526,12 @@ fn graph_list_lines(
         // The churn, looked up by hash: the graph rows and the commit list are
         // separate probes, so a row deeper than the commit window simply has
         // none rather than showing a wrong one.
-        let stat = repo
-            .commits
-            .iter()
-            .find(|c| c.hash == g.hash)
-            .map(commit_stat_text)
-            .unwrap_or_default();
-        let stat_len = stat.chars().count();
+        //
+        // The width comes from the columns rather than from this row, so a row
+        // with no churn still reserves them. That is what makes the leader dots
+        // stop where the `+` column begins on every row instead of running
+        // under it on the rows that happen to have nothing to show.
+        let churn = repo.commits.iter().find(|c| c.hash == g.hash);
         let right = if stat_len > 0 { 1 + stat_len } else { 0 };
         let used = fixed + refs_len;
         // No floor here. `show_refs` above already guarantees the subject
@@ -1531,6 +1549,18 @@ fn graph_list_lines(
         // has no room for a fill, and forcing one is what pushed the tail
         // onto a line of its own.
         let dot_count = width.saturating_sub(used + msg_len + 2 + right);
+        // The second of the two spaces the budget reserved, between the
+        // subject and whatever follows it. It used to be emitted only
+        // alongside the dots, so a row whose subject filled its whole budget
+        // -- leaving no dots to draw -- came out one column short and slid its
+        // churn tail left by one, breaking the column against the rows that
+        // did have dots. Which rows truncate depends on the pane width, which
+        // is why the tail looked aligned at one size and ragged at another.
+        //
+        // Withheld only when the row is already over budget, the case
+        // `dot_count`'s saturation absorbs: a graph deep enough to overrun the
+        // pane should not be handed another column to overrun it with.
+        let fits = used + msg_len + 2 + right <= width;
 
         // A pointer as well as the wash: the band says which row, the caret
         // survives a terminal that renders backgrounds poorly.
@@ -1554,8 +1584,10 @@ fn graph_list_lines(
         }
         row.push(Span::raw(" "));
         row.push(Span::styled(message, Style::default().fg(colors::TEXT)));
-        if dot_count > 0 {
+        if fits {
             row.push(Span::raw(" "));
+        }
+        if dot_count > 0 {
             row.push(Span::styled(
                 "·".repeat(dot_count),
                 Style::default().fg(colors::SURFACE),
@@ -1563,7 +1595,7 @@ fn graph_list_lines(
         }
         if stat_len > 0 {
             row.push(Span::raw(" "));
-            row.extend(stat_spans(&stat));
+            row.extend(stat_spans(churn, add_w, del_w));
         }
         if is_sel {
             row = wash(row);
@@ -1655,30 +1687,67 @@ fn graph_prefix_spans_raw(prefix: &str) -> Vec<Span<'static>> {
         .collect()
 }
 
-/// `+12 -3` split so additions and deletions keep their own colours.
-fn stat_spans(stat: &str) -> Vec<Span<'static>> {
-    // No trailing space on the last part: the caller measured `stat` and
-    // budgeted the row against exactly that width, so an extra column here
-    // pushes the diffstat onto a line of its own.
-    let parts: Vec<&str> = stat.split_whitespace().collect();
-    let last = parts.len().saturating_sub(1);
-    parts
-        .iter()
-        .enumerate()
-        .map(|(i, part)| {
-            let color = if part.starts_with('+') {
-                colors::DIFF_ADD
-            } else {
-                colors::DIFF_DEL
-            };
-            let text = if i == last {
-                (*part).to_string()
-            } else {
-                format!("{part} ")
-            };
-            Span::styled(text, Style::default().fg(color))
-        })
-        .collect()
+/// `+12 -3` split so additions and deletions keep their own colours, each half
+/// right-aligned in its own column.
+///
+/// A half the row does not have is drawn as blanks rather than skipped: the
+/// blanks are what hold the other half's column when one row has deletions and
+/// the row above it does not. `None` -- a graph row deeper than the commit
+/// window -- is the same case with both halves missing.
+///
+/// No trailing space: the caller budgeted the row against exactly
+/// `stat_tail_width`, so an extra column here pushes the tail onto a line of
+/// its own.
+fn stat_spans(
+    commit: Option<&crate::model::Commit>,
+    add_w: usize,
+    del_w: usize,
+) -> Vec<Span<'static>> {
+    let (insertions, deletions) = commit.map_or((0, 0), |c| (c.insertions, c.deletions));
+    let mut spans = Vec::new();
+    if add_w > 0 {
+        let text = match insertions {
+            0 => String::new(),
+            n => format!("+{n}"),
+        };
+        spans.push(Span::styled(
+            format!("{text:>add_w$}"),
+            Style::default().fg(colors::DIFF_ADD),
+        ));
+    }
+    if del_w > 0 {
+        if add_w > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let text = match deletions {
+            0 => String::new(),
+            n => format!("-{n}"),
+        };
+        spans.push(Span::styled(
+            format!("{text:>del_w$}"),
+            Style::default().fg(colors::DIFF_DEL),
+        ));
+    }
+    spans
+}
+
+/// Columns a `+N` or `-N` token occupies, zero when the count is zero and the
+/// token is not drawn at all.
+fn stat_part_width(n: u32) -> usize {
+    match n {
+        0 => 0,
+        n => 1 + n.to_string().chars().count(),
+    }
+}
+
+/// Columns the churn tail occupies, separator included. Zero when no row in
+/// the list has any churn, so such a list spends no width on it.
+fn stat_tail_width(add_w: usize, del_w: usize) -> usize {
+    match (add_w, del_w) {
+        (0, 0) => 0,
+        (only, 0) | (0, only) => only,
+        (add, del) => add + 1 + del,
+    }
 }
 
 /// The selected row's hash goes bold in every list, so the pane always says
@@ -1896,22 +1965,68 @@ fn expanded_graph_lines(raw: &str, selected_hash: &str, width: usize) -> Vec<Lin
         .collect()
 }
 
-/// Plain-text diffstat like "+12 -3", for width calc as well as display.
-fn commit_stat_text(c: &crate::model::Commit) -> String {
-    if c.insertions == 0 && c.deletions == 0 {
-        return String::new();
-    }
-    let mut s = String::new();
-    if c.insertions > 0 {
-        s.push_str(&format!("+{}", c.insertions));
-    }
-    if c.deletions > 0 {
-        if !s.is_empty() {
-            s.push(' ');
-        }
-        s.push_str(&format!("-{}", c.deletions));
-    }
-    s
+/// The pane's headliner: the view's name boxed, with the box's top and bottom
+/// rules running on to the pane's edge.
+///
+/// Three rows, and pinned ones, so it costs the scrolling body two lines at
+/// every pane height. Worth it because the headliner is the thing the whole
+/// body below it is an answer to, and as a single line of bold text sitting
+/// straight on that body it read as the body's first line rather than as its
+/// title.
+///
+/// The box wears the view's own colour, the same one its tab wears up in the
+/// border, so the two agree about which view you are in. The rule that carries
+/// on past the box is `SURFACE`: past the junction it is a divider rather than
+/// a label, and structure is what that colour is for.
+fn headliner(view: HistoryView, width: usize) -> Vec<Line<'static>> {
+    let title = view_name(view);
+    // The box's interior: the title with one space of padding either side.
+    let inner = title.chars().count() + 2;
+    let boxed = Style::default().fg(colors::history_view_color(view));
+    let rule = Style::default().fg(colors::SURFACE);
+    // The corner, the interior and the junction come before the rule, and the
+    // box sits flush with the body's own left edge -- indenting it would put
+    // the title one column right of every line it heads. Saturating, so a pane
+    // too narrow for the box draws what fits and no rule rather than panicking
+    // on the repeat count.
+    let rest = width.saturating_sub(inner + 2);
+
+    let edge = |corner: &str, junction: &str| {
+        Line::from(vec![
+            Span::styled(format!("{corner}{}", "─".repeat(inner)), boxed),
+            Span::styled(junction.to_string(), boxed),
+            Span::styled("─".repeat(rest), rule),
+        ])
+    };
+
+    vec![
+        edge("╭", "┬"),
+        Line::from(vec![
+            Span::styled("│ ", boxed),
+            Span::styled(
+                title,
+                Style::default()
+                    .fg(colors::history_view_color(view))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" │", boxed),
+        ]),
+        edge("╰", "┴"),
+    ]
+}
+
+/// The view's name as both the tab strip and the pane's headliner draw it:
+/// capitals, one cell per letter.
+///
+/// One form for both, so the tab you aim at and the title that confirms you
+/// landed are the same string as well as the same colour. Capitals cost the
+/// strip nothing -- the label is the same number of cells -- so its fit budget,
+/// which drops the inactive tabs when the labels outgrow the border, is
+/// untouched. Letterspacing was tried and dropped: it read as decoration in a
+/// pane whose every other line is dense, and the box around the headliner
+/// already does the work of setting it apart.
+fn view_name(view: HistoryView) -> String {
+    view.label().to_uppercase()
 }
 
 /// A bold section header inside the detail pane (e.g. "branches", "history").
@@ -1966,7 +2081,7 @@ fn view_switcher(active: HistoryView, focused: bool, budget: usize) -> Line<'sta
     // " [/] " + every label + " · " between each + a trailing space.
     let labels: usize = HistoryView::ALL
         .iter()
-        .map(|v| v.label().chars().count())
+        .map(|v| view_name(*v).chars().count())
         .sum();
     let full = 5 + labels + 3 * (HistoryView::COUNT - 1) + 1;
 
@@ -1976,12 +2091,12 @@ fn view_switcher(active: HistoryView, focused: bool, budget: usize) -> Line<'sta
                 spans.push(Span::styled(" · ", Style::default().fg(dot)));
             }
             spans.push(match *view == active {
-                true => Span::styled(view.label(), bold(on)),
-                false => Span::styled(view.label(), Style::default().fg(off)),
+                true => Span::styled(view_name(*view), bold(on)),
+                false => Span::styled(view_name(*view), Style::default().fg(off)),
             });
         }
     } else {
-        spans.push(Span::styled(active.label(), bold(on)));
+        spans.push(Span::styled(view_name(active), bold(on)));
     }
     spans.push(Span::raw(" "));
     Line::from(spans).right_aligned()
@@ -2164,6 +2279,211 @@ mod tests {
             .join("\n")
     }
 
+    /// The commit rows of the `commits` view, border stripped, for a list with
+    /// the given per-commit churn.
+    fn commit_rows(churn: &[(u32, u32)]) -> Vec<String> {
+        commit_rows_at(churn, 100, |i| format!("chore: an ordinary subject {i}"))
+    }
+
+    /// The same at a chosen width, with the subject under the caller's control
+    /// so a test can force the truncation case.
+    fn commit_rows_at(
+        churn: &[(u32, u32)],
+        width: u16,
+        subject: impl Fn(usize) -> String,
+    ) -> Vec<String> {
+        let mut r = cloned_repo();
+        r.graph = (0..churn.len())
+            .map(|i| crate::model::GraphLine {
+                lanes: vec![crate::graph::commit_cell()],
+                hash: format!("c{i:06}"),
+                is_merge: false,
+                refs: vec![],
+                author: "Gaurgle".to_string(),
+                message: subject(i),
+            })
+            .collect();
+        r.commits = churn
+            .iter()
+            .enumerate()
+            .map(|(i, (insertions, deletions))| crate::model::Commit {
+                hash: format!("c{i:06}"),
+                author: "Gaurgle".to_string(),
+                date: Some(chrono::Utc::now()),
+                message: subject(i),
+                body: String::new(),
+                insertions: *insertions,
+                deletions: *deletions,
+                files: vec![],
+            })
+            .collect();
+
+        let height = 24u16;
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), width, height);
+        app.history_view = HistoryView::Commits;
+        let app = app;
+        let mut term =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .filter(|row| row.contains(" Gau "))
+            .collect()
+    }
+
+    /// Column positions, counted in characters. The pane is full of multibyte
+    /// box-drawing and the leader dot, so `str::find`'s byte offsets do not
+    /// answer "which column", which is the only question these tests ask.
+    fn columns(row: &str) -> Vec<char> {
+        row.chars().collect()
+    }
+
+    /// The column a right-aligned `+N` / `-N` token ends at, which is the edge
+    /// that has to agree between rows. Their *starts* differ by design: that is
+    /// what right-aligning them means.
+    fn token_end(row: &str, sign: char) -> Option<usize> {
+        let cols = columns(row);
+        let start = cols.iter().position(|c| *c == sign)?;
+        let len = cols[start + 1..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        Some(start + 1 + len)
+    }
+
+    /// `+2` and `+338` share a right edge, and so do their deletions. Aligning
+    /// the pair as one right-aligned blob -- which is what it did -- put every
+    /// row's `+` in a different column, leaving the one part of the row that is
+    /// read by scanning down the page the one part left ragged.
+    #[test]
+    fn the_churn_columns_share_a_right_edge() {
+        let rows = commit_rows(&[(2, 2), (338, 21), (104, 8), (7, 3)]);
+        assert_eq!(rows.len(), 4, "fixture did not draw four commit rows");
+
+        let adds: Vec<usize> = rows.iter().filter_map(|r| token_end(r, '+')).collect();
+        let dels: Vec<usize> = rows.iter().filter_map(|r| token_end(r, '-')).collect();
+        assert_eq!(adds.len(), 4, "a row lost its insertions");
+        assert_eq!(dels.len(), 4, "a row lost its deletions");
+        assert!(
+            adds.windows(2).all(|w| w[0] == w[1]),
+            "insertions ragged across rows: {adds:?}"
+        );
+        assert!(
+            dels.windows(2).all(|w| w[0] == w[1]),
+            "deletions ragged across rows: {dels:?}"
+        );
+    }
+
+    /// A row with no churn still spends the columns, so the leader dots stop
+    /// where the `+` column begins rather than running under it on whichever
+    /// rows happen to have nothing to show.
+    #[test]
+    fn a_row_without_churn_still_holds_the_columns() {
+        let rows = commit_rows(&[(338, 21), (0, 0)]);
+        let dots_end = |r: &str| {
+            columns(r)
+                .iter()
+                .rposition(|c| *c == '·')
+                .expect("row drew no leader dots")
+        };
+        assert_eq!(
+            dots_end(&rows[0]),
+            dots_end(&rows[1]),
+            "the churn-less row let its dots run into the columns"
+        );
+    }
+
+    /// One-sided churn keeps the other column's blanks, which is what holds
+    /// the alignment when a delete-only commit sits under an add-only one.
+    #[test]
+    fn one_sided_churn_keeps_the_other_column() {
+        let rows = commit_rows(&[(338, 21), (7, 0), (0, 12)]);
+        let adds: Vec<usize> = rows.iter().filter_map(|r| token_end(r, '+')).collect();
+        let dels: Vec<usize> = rows.iter().filter_map(|r| token_end(r, '-')).collect();
+        assert_eq!(adds.len(), 2, "expected two rows with insertions");
+        assert_eq!(dels.len(), 2, "expected two rows with deletions");
+        assert_eq!(adds[0], adds[1], "insertions moved: {adds:?}");
+        assert_eq!(dels[0], dels[1], "deletions moved: {dels:?}");
+    }
+
+    /// The bug the columns alone did not fix. The row budget reserves a space
+    /// between the subject and what follows it, but it used to be drawn only
+    /// alongside the leader dots -- so a subject that filled its whole budget,
+    /// leaving no dots, came out a column short and slid its churn left by one.
+    /// Whether a subject truncates depends on the pane width, which is why the
+    /// tail looked aligned at one size and ragged at another.
+    #[test]
+    fn a_truncated_subject_keeps_the_churn_columns() {
+        // Long enough to truncate at this width, alternating with short ones
+        // so both shapes sit in the same list.
+        let subject = |i: usize| match i % 2 {
+            0 => format!("chore: release v0.3.{i}"),
+            _ => format!("fix: make the behind count explicable where it is shown {i}"),
+        };
+        let rows = commit_rows_at(&[(2, 2), (338, 21), (2, 2), (104, 8)], 64, subject);
+        assert_eq!(rows.len(), 4, "fixture did not draw four commit rows");
+        assert!(
+            rows.iter().any(|r| r.contains('…')),
+            "no subject truncated, so this width does not exercise the case"
+        );
+
+        let adds: Vec<usize> = rows.iter().filter_map(|r| token_end(r, '+')).collect();
+        let dels: Vec<usize> = rows.iter().filter_map(|r| token_end(r, '-')).collect();
+        assert!(
+            adds.windows(2).all(|w| w[0] == w[1]),
+            "insertions ragged across truncated rows: {adds:?}"
+        );
+        assert!(
+            dels.windows(2).all(|w| w[0] == w[1]),
+            "deletions ragged across truncated rows: {dels:?}"
+        );
+    }
+
+    /// The same thing stated as the invariant underneath it: every commit row
+    /// draws to exactly the pane's width, dots or no dots.
+    #[test]
+    fn every_commit_row_reaches_the_pane_edge() {
+        let subject = |i: usize| match i % 2 {
+            0 => format!("chore: release v0.3.{i}"),
+            _ => format!("fix: make the behind count explicable where it is shown {i}"),
+        };
+        for width in [64u16, 72, 80, 92] {
+            let rows = commit_rows_at(&[(2, 2), (338, 21), (2, 2), (104, 8)], width, subject);
+            let ends: Vec<usize> = rows
+                .iter()
+                .map(|r| {
+                    columns(r)
+                        .iter()
+                        .rposition(|c| !c.is_whitespace() && *c != '│')
+                        .expect("row drew nothing")
+                })
+                .collect();
+            assert!(
+                ends.windows(2).all(|w| w[0] == w[1]),
+                "rows end at different columns at width {width}: {ends:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_zero_count_draws_no_token_at_all() {
+        assert_eq!(stat_part_width(0), 0);
+        assert_eq!(stat_part_width(9), 2);
+        assert_eq!(stat_part_width(338), 4);
+    }
+
+    /// The separator is only spent when both columns exist, so a list with
+    /// nothing but insertions does not reserve a blank for deletions.
+    #[test]
+    fn the_churn_tail_spends_a_separator_only_between_two_columns() {
+        assert_eq!(stat_tail_width(0, 0), 0);
+        assert_eq!(stat_tail_width(4, 0), 4);
+        assert_eq!(stat_tail_width(0, 3), 3);
+        assert_eq!(stat_tail_width(4, 3), 8);
+    }
+
     /// A repo shaped like the one that exposed this: several local branches
     /// behind by different amounts, one of them tracking a ref it is not named
     /// after, a long remote-only list under them, and enough history to scroll.
@@ -2238,7 +2558,12 @@ mod tests {
     /// and left the "not fetched" list reading like the whole story.
     #[test]
     fn the_branches_block_survives_a_scroll_to_the_bottom() {
-        let text = info_text_at_bottom(spread_repo(), 92, 20);
+        // 22 rows: the boxed headliner is three pinned rows rather than one,
+        // so the height at which the branches block still clears
+        // MIN_BODY_ROWS sits two higher than it did when the title was a
+        // single line. `the_boxed_headliner_costs_the_branches_pin_two_rows`
+        // pins that threshold directly.
+        let text = info_text_at_bottom(spread_repo(), 92, 22);
         assert!(
             text.contains("branches"),
             "the branches label scrolled away"
@@ -2255,7 +2580,7 @@ mod tests {
     /// would cost the pane its history on exactly the busy repos that need it.
     #[test]
     fn the_remote_only_list_is_not_pinned() {
-        let text = info_text_at_bottom(spread_repo(), 92, 20);
+        let text = info_text_at_bottom(spread_repo(), 92, 22);
         assert!(
             text.contains("feat: commit"),
             "the history is unreachable at the bottom of the scroll"
@@ -2263,6 +2588,21 @@ mod tests {
         assert!(
             !text.contains("spare-0 "),
             "the first remote-only row is still on screen at the bottom"
+        );
+    }
+
+    /// What the box costs, stated so the next row added to the pinned region
+    /// is a deliberate decision rather than a surprise. Below the threshold
+    /// the ladder still keeps the identity header pinned; it is the branches
+    /// block that goes.
+    #[test]
+    fn the_boxed_headliner_costs_the_branches_pin_two_rows() {
+        let pinned = |height| info_text_at_bottom(spread_repo(), 92, height).contains("21 behind");
+        assert!(!pinned(20), "20 rows should no longer hold the branches");
+        assert!(pinned(21), "21 rows should hold them");
+        assert!(
+            info_text_at_bottom(spread_repo(), 92, 20).contains("~/repos/fleetz"),
+            "the identity header lost its pin too"
         );
     }
 
@@ -2285,7 +2625,7 @@ mod tests {
     /// count against it cannot be reconciled with the remote.
     #[test]
     fn a_branch_names_an_upstream_that_differs_from_its_own_name() {
-        let text = info_text_at_bottom(spread_repo(), 120, 20);
+        let text = info_text_at_bottom(spread_repo(), 120, 22);
         assert!(
             text.contains("feature/who-goes-first -> origin/wip"),
             "the differing upstream is not shown"
@@ -2298,26 +2638,56 @@ mod tests {
         );
     }
 
+    /// The formatting rule itself. The render tests ask the helper what to
+    /// expect, so without this nothing states what it should produce.
+    #[test]
+    fn a_view_name_is_drawn_in_capitals() {
+        assert_eq!(view_name(HistoryView::Info), "INFO");
+        assert_eq!(view_name(HistoryView::Commits), "COMMITS");
+        assert_eq!(view_name(HistoryView::Graph), "GRAPH");
+    }
+
+    /// Capitals cost the strip nothing, which is what lets the tab and the
+    /// headliner share one form: the switcher runs on a fit budget that drops
+    /// the inactive tabs when the labels outgrow the border it shares with the
+    /// pane title, and a wider name would collapse it to the active tab alone
+    /// on panes where all four fit today.
+    #[test]
+    fn capitalising_a_tab_does_not_change_its_width() {
+        for view in HistoryView::ALL {
+            assert_eq!(
+                view_name(view).chars().count(),
+                view.label().chars().count(),
+                "{} changed width in the strip",
+                view.label()
+            );
+        }
+    }
+
     /// Each view draws its own section and none of the others'. The whole
     /// point is that they take turns rather than queueing for one scroll
     /// offset, so a section leaking across views defeats it.
     #[test]
     fn each_view_shows_only_its_own_section() {
+        // `info` draws a named section of its own; the other three are named
+        // by the pane's headliner, matched in its boxed form. The bare name
+        // will not do: the tab strip carries all four in every view, and the
+        // strip and the headliner draw the same string, so `contains("GRAPH")`
+        // is true in every view and would assert nothing.
+        let boxed = |v| format!("│ {} │", view_name(v));
         let sections = [
-            (HistoryView::Info, "recent commits"),
-            (HistoryView::Commits, "commits"),
-            (HistoryView::Reflog, "reflog"),
-            (HistoryView::Graph, "graph"),
+            (HistoryView::Info, "recent commits".to_string()),
+            (HistoryView::Commits, boxed(HistoryView::Commits)),
+            (HistoryView::Reflog, boxed(HistoryView::Reflog)),
+            (HistoryView::Graph, boxed(HistoryView::Graph)),
         ];
-        for (view, own) in sections {
-            let text = pane_text(view, 92);
+        for (view, own) in &sections {
+            let text = pane_text(*view, 92);
             assert!(text.contains(own), "{} missing {own:?}", view.label());
-            for (other_view, other) in sections {
+            for (other_view, other) in &sections {
                 if other_view == view || other == own {
                     continue;
                 }
-                // The tab strip names every view, so match the section label
-                // rather than the word alone.
                 assert!(
                     !text.contains(&format!(" {other}\n")) || other == own,
                     "{} leaked the {other:?} section",
@@ -2549,7 +2919,7 @@ mod tests {
             assert!(text.contains("synced"), "{}", view.label());
             for tab in HistoryView::ALL {
                 assert!(
-                    text.contains(tab.label()),
+                    text.contains(&view_name(tab)),
                     "{} is missing the {} tab",
                     view.label(),
                     tab.label()
@@ -2572,7 +2942,7 @@ mod tests {
                 .to_string();
             for tab in HistoryView::ALL {
                 assert!(
-                    border.contains(tab.label()),
+                    border.contains(&view_name(tab)),
                     "{} view: the border is missing the {} tab: {border:?}",
                     view.label(),
                     tab.label()
@@ -2622,7 +2992,7 @@ mod tests {
             let buf = term.backend().buffer().clone();
             let border: String = (0..92u16).map(|x| buf[(x, 0)].symbol()).collect();
             assert!(
-                border.contains(view.label()),
+                border.contains(&view_name(view)),
                 "{} view: scrolled away: {border:?}",
                 view.label()
             );
@@ -2795,7 +3165,7 @@ mod tests {
             let label = |v: HistoryView| {
                 line.spans
                     .iter()
-                    .find(|s| s.content == v.label())
+                    .find(|s| s.content == view_name(v))
                     .unwrap_or_else(|| panic!("{} tab missing", v.label()))
             };
             assert_eq!(
@@ -2868,7 +3238,10 @@ mod tests {
             .map(|y| (0..92u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("graph"), "the view title scrolled off");
+        assert!(
+            text.contains(&format!("│ {} │", view_name(HistoryView::Graph))),
+            "the view title scrolled off"
+        );
         assert!(
             text.contains("e000000"),
             "the first commit is not on screen"
@@ -2892,17 +3265,22 @@ mod tests {
             let buf = term.backend().buffer().clone();
 
             // The title row is the one inside the pane whose text is exactly
-            // the view's own label -- the frame's tab strip carries all four
+            // the view's headliner -- the frame's tab strip carries all four
             // on row 0, so start below it.
+            let title = view_name(view);
+            let first_letter = title[0..1].to_string();
+            let boxed = format!("│ {title} │");
             let want = colors::history_view_color(view);
             let mut found = false;
             for y in 1..24u16 {
                 let row: String = (0..92u16).map(|x| buf[(x, y)].symbol()).collect();
-                if row.trim().trim_matches('│').trim() != view.label() {
+                // Matched boxed: the strip draws the same string, so the bare
+                // name would find the border row as readily as the headliner.
+                if !row.contains(&boxed) {
                     continue;
                 }
                 let x = (0..92u16)
-                    .find(|x| buf[(*x, y)].symbol() == &view.label()[0..1])
+                    .find(|x| buf[(*x, y)].symbol() == first_letter)
                     .expect("first letter");
                 assert_eq!(
                     buf[(x, y)].fg,

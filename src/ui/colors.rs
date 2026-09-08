@@ -138,6 +138,18 @@ pub fn contrib_ladder(source: crate::contributions::Source) -> [Color; 5] {
 pub const TEXT: Color = Color::Rgb(205, 214, 244); // default text
 pub const RED: Color = Color::Rgb(243, 139, 168); // CI failed
 
+/// The two phases of the watch-mode pulse: Catppuccin `red` and `maroon`, a
+/// half-step apart. Two neighbouring hues rather than a colour and a dimmed
+/// twin, because the indicator's job is to say the dashboard is live, and a
+/// pulse that drops towards the background reads as something failing to
+/// draw rather than as a heartbeat.
+///
+/// `WATCH_ON` is the same value as `RED` and is deliberately not that
+/// constant: `RED` means CI failed, and one name carrying two meanings is how
+/// a palette starts drifting. If either changes it should be free to.
+pub const WATCH_ON: Color = Color::Rgb(243, 139, 168); // Catppuccin red
+pub const WATCH_OFF: Color = Color::Rgb(235, 160, 172); // Catppuccin maroon
+
 /// Muted, low-saturation hues for per-author commit coloring -- distinct
 /// enough to tell people apart at a glance, dull enough not to compete with
 /// the rest of the palette (unlike a flat grey, which reads as "everyone is

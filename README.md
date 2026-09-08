@@ -23,7 +23,7 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
   with a `last touched` row: the newer of your last commit and the newest change
   in the working tree
 - Open pull requests per repo
-- CI status as a `◉` status lamp: green passed, red failed, blinking orange while running. From GitHub's `statusCheckRollup`, kept live in watch mode
+- CI status as a `◉` status lamp: green passed, red failed, blinking orange while running. It pulses on the same phase in the repo row and in the repo pane, since both are reading one repo's CI. From GitHub's `statusCheckRollup`, kept live in watch mode
 - Active worktrees (`wt` badge) and stashes (archive-glyph badge)
 - Open PR count and numbers on the repo row, in the repo pane, and in the footer
 - Repo pane header reads local-to-remote: local path, branch and stashes on the left of each row, remote URL, PRs and CI flush right
@@ -119,7 +119,7 @@ in the header instead.
 | `J` / `K` | From the repo list: step the detail pane's commit cursor without leaving window 1, so the inspector reads out each commit in turn. From the detail pane: scroll it. Either way the highlight travels with the view and parks four rows from the edge, from where the text scrolls under it. In `graph` that cursor is a row, so it walks the block a line at a time; elsewhere it is a list entry, and scrolling drags it along rather than leaving it off the pane |
 | `PgUp` / `PgDn` | Scroll focused pane by a page |
 | `v` | Toggle detail vs compact view. The compact grid packs as many columns as the terminal has room for |
-| `[` / `]` | Repo pane: step its body between four views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`, wrapped to the pane and given the whole column (its blocks already carry what the inspector would repeat, so no inspector is docked there). Each keeps its own scroll position and selection, and the inspector follows whichever is active. The active view is named in the pane's top border in its own colour, and the repo header below it stays pinned, so both survive scrolling. In `info` the local branches pin with it where the pane has the rows to spare, since they are what the repo's behind count is a sum of; the remote-only list below them scrolls, being bounded by what everyone else has pushed rather than by what you have |
+| `[` / `]` | Repo pane: step its body between four views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`, wrapped to the pane and given the whole column (its blocks already carry what the inspector would repeat, so no inspector is docked there). Each keeps its own scroll position and selection, and the inspector follows whichever is active. The active view is named in the pane's top border in its own colour (the tabs are capitalised; the pane's own headliner repeats the same name boxed, with the box's rules running on to the pane's edge), and the repo header below it stays pinned, so both survive scrolling. In `info` the local branches pin with it where the pane has the rows to spare, since they are what the repo's behind count is a sum of; the remote-only list below them scrolls, being bounded by what everyone else has pushed rather than by what you have |
 | `c` | Toggle the contributions strip (the footer's `[c]` lights up in the strip's colour while it is open): three years of activity, GitHub-style. Each day is a half-block square with its own padding, so the grid fits in 11 rows; it scrolls rather than shrinking, with the newest week pinned to the right edge, and no day is marked until you move the cursor |
 | `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
 | `4` | Focus the contributions strip (only while it is open) |
@@ -144,7 +144,7 @@ in the header instead.
 | `=` | Reset both panes to their default sizes |
 | `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates. No rediscovery |
 | `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear |
-| `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub |
+| `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub. While it is on, a red `◉ watch` in the header pulses between two shades so the dashboard says it is live without anything moving |
 | `?` | Toggle help overlay |
 | `Esc` | Close search or help |
 | `q` | Quit |

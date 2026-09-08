@@ -1161,3 +1161,157 @@ pane on exactly the busy repos whose history you need.
 **Not done.** `short_status` still renders a bare `40↓` in the repo list. The
 glyph column has no room for the qualifier, and the row is a glance rather
 than an answer, but it is the surface the confusion started on.
+
+---
+
+## The watch pulse, and where the CI lamp pulses
+
+**Status: shipped.**
+
+**The watch indicator now pulses colour, not shape.** It used to alternate `◉`
+and `●` in one green, on the reasoning recorded in `ui/mod.rs`: a changing
+shape set it apart from the CI lamps, which hold a shape and say what they mean
+by colour. In use that was backwards. The indicator is only ever read at the
+edge of vision, and a one-cell shape swap is the harder of the two changes to
+catch there. It is now a steady `◉` pulsing between Catppuccin `red` and
+`maroon` (`colors::WATCH_ON` / `WATCH_OFF`), a half-step apart.
+
+Two things the new shape has to answer for:
+
+- **Red is CI-failed's colour.** What separates them is the word `watch`
+  printed beside the glyph, which a CI lamp never has. The old design leaned on
+  the glyph for that job; it did not have to.
+- **Two hues rather than a colour and a dimmed twin.** A pulse that drops
+  towards the background reads as something failing to draw. Both phases are
+  fully lit, so it reads as a heartbeat.
+
+Only the lamp pulses. The word `watch` beside it holds a steady `WATCH_ON`, on
+the same terms as `spinner_group`: a label that moves with the glyph makes the
+whole group flicker, which is motion where the eye is trying to read a word
+rather than watch a light.
+
+`WATCH_ON` is the same RGB as `RED` and is deliberately a separate constant.
+`RED` means CI failed. One name carrying two meanings is how a palette starts
+drifting, and either should be free to move without the other.
+
+**The detail pane's CI lamp pulses too.** `ci_display` took no blink phase, so
+pending blinked in the repo list and held still in the pane below it, for one
+repo's one job. It now takes `dim_pending` on the same terms as `badge_spans`
+(`app.watch_mode && !app.blink_on`), gated on watch mode for the same reason:
+a pulse claims something is happening now, and outside watch mode the data is
+as old as the last sweep.
+
+**Rejected: pulsing settled states.** Passed and failed are results, not
+activity. Only pending moves.
+
+---
+
+## Ragged churn columns in the commit list
+
+**Status: shipped.**
+
+**Problem.** The `+N -N` tail was one right-aligned blob. With `+2 -2` above
+`+338 -21`, every row's `+` began in a different column, so the one field on
+the row that is read by scanning down the page was the one field left ragged.
+
+**What shipped.** The two halves get their own right-aligned columns, measured
+across the list the way `hash_w` and `lane_w` above them already were
+(`stat_part_width`, `stat_tail_width`). Rows with churn on one side only draw
+blanks for the other, which is what holds the alignment when a delete-only
+commit sits under an add-only one, and a row with no churn still reserves the
+columns so its leader dots stop where the `+` column begins.
+
+**Measured over the rows the call will draw, not the whole history.** `info`
+draws six of a hundred and fifty; measuring all of them would reserve width for
+churn nobody can see.
+
+**A second bug underneath the first, and the reason it looked width-dependent.**
+The row budget reserves two spaces, one before the subject and one before the
+leader dots, but the second was drawn only inside the `dot_count > 0` branch. A
+subject that filled its whole budget leaves no dots, so that row came out one
+column short and slid its churn tail left by one. Whether a subject truncates
+depends on the pane width, so the tail looked aligned at one size and ragged at
+another, which is how it was reported. The separator is now drawn whenever the
+row fits, dots or no dots, and `every_commit_row_reaches_the_pane_edge` states
+the invariant directly: every commit row draws to exactly the pane's width.
+
+**Rejected: reserving the space unconditionally.** `dot_count` saturates to
+zero on a row already over budget -- a graph deep enough to overrun the pane --
+and handing that row another column to overrun it with makes the wrap it
+already causes worse.
+
+---
+
+## Making the view names read as headings
+
+**Status: shipped.**
+
+**Problem.** The tab strip and the pane's own headliner both drew the view name
+in lower case at body-text size, so the thing that says what you are looking at
+looked like more body text.
+
+**The constraint.** A TUI cannot change font or point size. The terminal owns
+both, and every cell is one grid unit. "Bigger" has to come from how the
+letters are arranged inside that grid, which leaves case, weight, letterspacing,
+double-width glyphs, and multi-row block banners.
+
+**What shipped.** One form from one source (`view_name`): capitals, one cell per
+letter, drawn identically by the tab strip and the headliner. Capitals are the
+same number of cells, so `view_switcher`'s fit budget is untouched and the strip
+still shows all four everywhere it did before.
+
+**Tried and dropped: letterspacing the headliner** (`I N F O`). It read as
+decoration in a pane whose every other line is dense, and once the headliner was
+boxed the box was already doing the work of setting it apart. Letterspacing the
+tabs as well was never on: it roughly doubles a strip that shares a one-row
+border with the pane title, collapsing it to the active tab alone on panes where
+all four fit today.
+
+**Rejected: fullwidth Unicode forms (U+FF21..).** The only option that makes the
+glyphs literally larger, and the only one with a font-coverage risk: a monospace
+font without fullwidth Latin renders them as tofu. Against the grain of the
+width discipline `the_commit_node_occupies_one_column` already sets.
+
+**Rejected: a block-drawn banner.** Three rows of a pane that scrolls, and the
+strip is a one-row border that could not take it at all, so the two would stop
+agreeing about what the view is called.
+
+**The headliner is boxed**, with the box's top and bottom rules carrying on to
+the pane's edge. The box wears the view's colour, the same one its tab wears in
+the border; past the junction the rule drops to `SURFACE`, because there it is
+a divider rather than a label.
+
+```
+╭──────┬─────────────────────────────────────────────
+│ INFO │
+╰──────┴─────────────────────────────────────────────
+branches
+* main ✓
+```
+
+It is flush with the body's own left edge. Indented by a column -- the first
+version of it -- the title sat one column right of every line it heads, which
+is the opposite of what a heading is for.
+
+**What the box costs.** Three pinned rows instead of one, so the scrolling body
+loses two lines at every height, and the threshold at which the branches block
+still clears `MIN_BODY_ROWS` moves from 20 rows to 21. Below it the ladder
+still keeps the identity header pinned and drops only the branches;
+`the_boxed_headliner_costs_the_branches_pin_two_rows` states that directly, so
+the next row added to the pinned region is a decision rather than a surprise.
+
+**Not done: degrading the box on a short pane.** The house pattern would allow
+it -- `pin_header`, `view_switcher` and `show_refs` all shed on the way down --
+and it would buy the branches pin back below 21 rows. Left out because it makes
+the headliner a second thing that changes shape with the window, and the
+fallback the ladder already provides is not bad.
+
+**Note on the tests.** Seven render tests pinned the lowercase literals. They
+now ask `view_name` what to expect, with `a_view_name_is_drawn_in_capitals`
+pinning the rule itself and `capitalising_a_tab_does_not_change_its_width`
+pinning the equal-width property the strip's fit budget depends on.
+
+One consequence worth keeping in mind: because the strip and the headliner draw
+the same string, `contains("GRAPH")` is true in every view and asserts nothing.
+The tests that need to find the headliner match its boxed form,
+`│ GRAPH │`, which only the headliner produces.

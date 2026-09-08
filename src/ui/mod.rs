@@ -707,16 +707,28 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     // Persistent indicator so the `w` toggle's state is visible at a glance,
     // not just in the transient status message when it flips.
     //
-    // Pulses between the ringed and solid disk on the blink, which separates it
-    // from the CI lamps: those hold one shape and say what they mean by color,
-    // this one is the only glyph in the UI that changes shape on its own. Both
-    // frames are one cell wide, so the header never shifts.
+    // Two spans on the same terms as `spinner_group`: only the lamp moves, and
+    // the word beside it holds one steady colour. A label that pulsed along
+    // with the glyph made the whole group flicker, which is motion where the
+    // eye is trying to read a word rather than watch a light.
+    //
+    // The lamp pulses between two neighbouring reds, holding one shape. It
+    // used to do the opposite -- one colour, alternating disks -- on the
+    // reasoning that a changing shape separated it from the CI lamps, which
+    // say what they mean by colour. In use the shape change was the harder of
+    // the two to see at the edge of vision, which is the only place this
+    // indicator is ever read. The word `watch` is what actually distinguishes
+    // it from a CI lamp; the glyph never had to.
     let watch_span = app.watch_mode.then(|| {
-        let glyph = if app.blink_on { "◉" } else { "●" };
-        Span::styled(
-            format!(" {glyph} watch "),
-            Style::default().fg(colors::GREEN),
-        )
+        let lamp = if app.blink_on {
+            colors::WATCH_ON
+        } else {
+            colors::WATCH_OFF
+        };
+        vec![
+            Span::styled(" ◉".to_string(), Style::default().fg(lamp)),
+            Span::styled(" watch ".to_string(), Style::default().fg(colors::WATCH_ON)),
+        ]
     });
     let mut include_version = true;
     let mut include_ts = true;
@@ -746,7 +758,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             right.push(g.clone());
         }
         if let Some(ref w) = watch_span {
-            right.push(w.clone());
+            right.extend(w.iter().cloned());
         }
         if include_ts && let Some(ref t) = ts_span {
             right.extend(t.iter().cloned());
@@ -828,6 +840,113 @@ mod tests {
         (0..width)
             .map(|x| buffer[(x, 0)].symbol())
             .collect::<String>()
+    }
+
+    /// The foreground colour of the `watch` indicator's glyph at a given blink
+    /// phase. With no repos loaded it is the only `◉` in the header.
+    fn watch_glyph_color(blink_on: bool) -> ratatui::style::Color {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let width = 80u16;
+        let mut app = crate::app::App::new(Vec::new(), "t".to_string(), width, 40);
+        app.watch_mode = true;
+        app.blink_on = blink_on;
+        let app = app;
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+        terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let x = (0..width)
+            .find(|x| buffer[(*x, 0)].symbol() == "◉")
+            .expect("watch indicator not drawn");
+        buffer[(x, 0)]
+            .style()
+            .fg
+            .expect("watch glyph has no colour")
+    }
+
+    /// The foreground colour of the `watch` label's first letter, at a given
+    /// blink phase.
+    fn watch_label_color(blink_on: bool) -> ratatui::style::Color {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let width = 80u16;
+        let mut app = crate::app::App::new(Vec::new(), "t".to_string(), width, 40);
+        app.watch_mode = true;
+        app.blink_on = blink_on;
+        let app = app;
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+        terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let lamp = (0..width)
+            .find(|x| buffer[(*x, 0)].symbol() == "◉")
+            .expect("watch indicator not drawn");
+        // The first cell of "watch", one space past the lamp.
+        buffer[(lamp + 2, 0)]
+            .style()
+            .fg
+            .expect("watch label has no colour")
+    }
+
+    /// Only the lamp moves. Same rule as `spinner_group`: a word that pulses
+    /// along with the glyph beside it is motion where the eye is trying to
+    /// read, and the light is what the pulse is meant to draw attention to.
+    #[test]
+    fn only_the_watch_lamp_pulses_not_its_label() {
+        assert_ne!(
+            watch_glyph_color(true),
+            watch_glyph_color(false),
+            "the lamp is not pulsing"
+        );
+        assert_eq!(
+            watch_label_color(true),
+            watch_label_color(false),
+            "the label pulsed along with the lamp"
+        );
+        assert_eq!(watch_label_color(true), colors::WATCH_ON);
+    }
+
+    /// The pulse is two neighbouring reds. It used to be one colour and two
+    /// disk shapes; the shape change was the harder of the two to catch at the
+    /// edge of vision, which is the only place this indicator is read.
+    #[test]
+    fn the_watch_indicator_pulses_between_two_reds() {
+        assert_eq!(watch_glyph_color(true), colors::WATCH_ON);
+        assert_eq!(watch_glyph_color(false), colors::WATCH_OFF);
+        assert_ne!(
+            colors::WATCH_ON,
+            colors::WATCH_OFF,
+            "a pulse needs two phases"
+        );
+    }
+
+    /// Both phases have to still read as red, or the indicator changes hue
+    /// rather than pulsing.
+    #[test]
+    fn both_watch_phases_are_red_dominant() {
+        for (phase, color) in [("on", colors::WATCH_ON), ("off", colors::WATCH_OFF)] {
+            let ratatui::style::Color::Rgb(r, g, b) = color else {
+                panic!("{phase} phase is not an RGB colour");
+            };
+            assert!(r > g && r > b, "{phase} phase is not red-dominant");
+        }
+    }
+
+    /// Colour only: the header's fit loop lays out spans by width, so a phase
+    /// that drew a different glyph could shift what sits beside it.
+    #[test]
+    fn both_watch_phases_draw_the_same_text() {
+        let lit = header_row_with("t", 80, |a| {
+            a.watch_mode = true;
+            a.blink_on = true;
+        });
+        let dim = header_row_with("t", 80, |a| {
+            a.watch_mode = true;
+            a.blink_on = false;
+        });
+        assert_eq!(lit, dim, "the phases differ in colour, not in text");
+        assert!(lit.contains("◉ watch"), "got {lit:?}");
     }
 
     #[test]
