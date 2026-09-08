@@ -152,6 +152,15 @@ box characters. `%p` not `%P`, or a parent hash is spelled differently from the
 child's own `%h` and every pipe dangles. The expanded view still reproduces
 git's own drawing.
 
+**The commit list and the graph must walk the same refs.** `git::commits` and
+`git::graph` are two `git log` runs and the detail pane joins them by hash: the
+churn beside a subject, and everything the inspector draws, is a graph row
+looked up in the commit list. Reading HEAD in one and the union of the local
+branches in the other left a side-branch commit drawn but unfindable, and the
+views that indexed rather than resolved it named the row below the caret. `-n`
+caps the union, not each ref, so the wider read returns the same 200 commits
+for the same cost.
+
 **Status vocabulary is split by kind.** Counters are numeric (`3↓ 2↑ 4!`),
 categorical states are words (`not cloned`). A not-cloned repo has all counters
 at zero and must never render as synced: `RepoStatus::is_synced()` excludes it

@@ -1749,7 +1749,14 @@ async fn rebuild_repo_status(
         )
     } else {
         (
-            git::commits(path, &format!("-{HISTORY_COUNT}"), true, author).await,
+            git::commits(
+                path,
+                &format!("-{HISTORY_COUNT}"),
+                true,
+                author,
+                &branch_names,
+            )
+            .await,
             git::reflog(path, HISTORY_COUNT).await,
             git::graph(path, &branch_names, HISTORY_COUNT).await,
             git::graph_expanded(path, &branch_names, HISTORY_COUNT).await,
@@ -1896,9 +1903,16 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
 
     // Always fetch the diffstat for recent commits so every commit
     // (not just those in a dirty repo) shows its +/- and file list.
-    let commits = git::commits(path, &format!("-{HISTORY_COUNT}"), true, author).await;
-    let reflog = git::reflog(path, HISTORY_COUNT).await;
     let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
+    let commits = git::commits(
+        path,
+        &format!("-{HISTORY_COUNT}"),
+        true,
+        author,
+        &branch_names,
+    )
+    .await;
+    let reflog = git::reflog(path, HISTORY_COUNT).await;
     let graph = git::graph(path, &branch_names, HISTORY_COUNT).await;
     let graph_expanded = git::graph_expanded(path, &branch_names, HISTORY_COUNT).await;
     let stash_entries = git::stash_list(path).await;
@@ -2421,13 +2435,21 @@ async fn build_repo_status(
 
     let author = args.author.as_deref();
 
-    // Recent history on HEAD, not just the divergent commits -- a glance at
-    // "what's been happening here" shouldn't depend on being ahead/behind.
+    // Recent history across the local branches, not just the divergent commits
+    // -- a glance at "what's been happening here" shouldn't depend on being
+    // ahead/behind, and the graph beside it draws the same refs.
     // Always with the diffstat so every commit shows its +/- and file list.
-    let commits = git::commits(path, &format!("-{HISTORY_COUNT}"), true, author).await;
+    let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
+    let commits = git::commits(
+        path,
+        &format!("-{HISTORY_COUNT}"),
+        true,
+        author,
+        &branch_names,
+    )
+    .await;
     let reflog = git::reflog(path, HISTORY_COUNT).await;
 
-    let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
     let graph = git::graph(path, &branch_names, HISTORY_COUNT).await;
     let graph_expanded = git::graph_expanded(path, &branch_names, HISTORY_COUNT).await;
 

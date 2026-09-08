@@ -418,12 +418,22 @@ pub async fn branch_commits(repo_path: &Path, branch: &str, limit: u32) -> Vec<C
     }
 }
 
-/// Get recent commits for a range (e.g. "main..origin/main" or "-5").
+/// Get recent commits for a range (e.g. "main..origin/main" or "-5"), read
+/// from `branches` -- the same refs `graph` walks -- or from HEAD when that
+/// list is empty.
+///
+/// The refs are not decoration. The detail pane looks a graph row up in this
+/// list by hash, for the inspector's body and file list and for the churn
+/// column beside the subject, and this list used to be HEAD's alone while the
+/// graph was the union of the local branches. A commit reachable only from a
+/// side branch was therefore drawn and then not found: no `+N -M` on its row,
+/// and "outside the loaded commit range" in the pane below.
 pub async fn commits(
     repo_path: &Path,
     range: &str,
     with_stat: bool,
     author_filter: Option<&str>,
+    branches: &[String],
 ) -> Vec<Commit> {
     // Record-separated so the (possibly multi-line) body can't be confused
     // with field boundaries: each commit starts with RS (0x1e), fields are
@@ -444,6 +454,11 @@ pub async fn commits(
         args.push(format!("--author={author}"));
     }
     args.push(range.to_string());
+    // `-n` caps the union, not each ref, so widening from HEAD to every local
+    // branch returns the same number of commits and costs about the same.
+    // Empty means the repo has no local branches to name -- a detached HEAD,
+    // a clone caught mid-checkout -- where git's own default of HEAD is right.
+    args.extend(branches.iter().cloned());
 
     let output = run_git(
         repo_path,
@@ -1712,6 +1727,56 @@ mod real_repo_tests {
         assert!(
             chrono::DateTime::parse_from_rfc3339(&date).is_ok(),
             "not an absolute timestamp the renderer can re-age: {date:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The regression: the detail pane draws the graph, which is the union of
+    /// the local branches, and then looks each row up in this list by hash for
+    /// its churn and for the inspector's body. Reading HEAD alone here left a
+    /// side-branch commit drawn but unfindable -- no `+N -M` on the row, and
+    /// "outside the loaded commit range" in the pane below it.
+    #[tokio::test]
+    async fn commits_cover_every_branch_the_graph_draws() {
+        let dir = temp_repo("branchunion");
+        sh(&dir, &["git", "checkout", "-q", "-b", "side"]);
+        std::fs::write(dir.join("b.txt"), "on the side\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh(
+            &dir,
+            &["git", "commit", "-q", "-m", "only on the side branch"],
+        );
+        sh(&dir, &["git", "checkout", "-q", "main"]);
+
+        let branches = vec!["main".to_string(), "side".to_string()];
+        let commits = commits(&dir, "-20", true, None, &branches).await;
+        let graph = graph(&dir, &branches, 20).await;
+
+        assert!(
+            commits
+                .iter()
+                .any(|c| c.message == "only on the side branch"),
+            "the side branch commit is missing: {:?}",
+            commits.iter().map(|c| &c.message).collect::<Vec<_>>()
+        );
+        // Every drawn row is findable, which is the property the pane needs.
+        for row in &graph {
+            assert!(
+                commits.iter().any(|c| c.hash == row.hash),
+                "graph draws {} but the commit list has no such hash",
+                row.hash
+            );
+        }
+
+        // HEAD alone does not, which is what makes the assertion above worth
+        // making: the two lists really do differ on this repo.
+        let head_only = super::commits(&dir, "-20", true, None, &[]).await;
+        assert!(
+            !head_only
+                .iter()
+                .any(|c| c.message == "only on the side branch"),
+            "the side branch is not reachable from HEAD, so this is not a test"
         );
 
         std::fs::remove_dir_all(&dir).ok();
