@@ -1,6 +1,6 @@
 [package]
 name = "fleetz"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2024"
 description = "Multi-repo dashboard TUI: see what changed across your repos"
 license = "MIT"
