@@ -89,6 +89,21 @@ const INPUT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 /// How long the input thread sleeps between checks while input is paused.
 const INPUT_PAUSE_BACKOFF: std::time::Duration = std::time::Duration::from_millis(20);
 
+/// How many repaints may be held in a row while input is still queued.
+///
+/// Coalescing a burst is the point, but a source that never stops arriving
+/// would then never paint at all, so the hold is bounded: past this many the
+/// loop draws whatever it has and starts counting again. Sized so the bound is
+/// effectively unreachable by a human gesture -- a trackpad flick is tens of
+/// events, not hundreds -- and only trips on something pathological.
+const MAX_COALESCED_FRAMES: u32 = 64;
+
+/// Whether a pending repaint should be drawn now or held for the input that is
+/// already queued behind it. See the paint at the foot of `run_event_loop`.
+fn should_paint(queue_empty: bool, held: u32) -> bool {
+    queue_empty || held >= MAX_COALESCED_FRAMES
+}
+
 /// Everything the event loop reacts to. Terminal input, the periodic tick,
 /// and the results of background work all arrive on one channel, so the loop
 /// never blocks on any single source.
@@ -516,6 +531,10 @@ async fn run_event_loop(
         .draw(|frame| ui::render(frame, app))
         .map_err(|e| e.to_string())?;
 
+    // How many held paints have accumulated, so a stream that never drains
+    // still gets drawn. See the paint at the foot of the loop.
+    let mut coalesced: u32 = 0;
+
     while let Some(ev) = rx.recv().await {
         match ev {
             AppEvent::Tick => {
@@ -688,11 +707,29 @@ async fn run_event_loop(
         if app.should_quit {
             return Ok(());
         }
+        // Paint once per *burst* of events, not once per event.
+        //
+        // A trackpad flick delivers wheel events far faster than a full
+        // repaint takes, and the channel is unbounded, so painting each one
+        // let the queue run away: the scroll appeared to freeze, then played
+        // out the whole backlog at once after the fingers had stopped. The
+        // events themselves are cheap -- it is the repaint that is not -- so
+        // holding the paint while more input is already waiting collapses the
+        // burst into a single frame and the queue drains as fast as it fills.
+        //
+        // `needs_redraw` is deliberately left set when the paint is held: the
+        // next pass through the loop inherits it, so nothing is lost, only
+        // deferred.
         if app.needs_redraw {
-            app.needs_redraw = false;
-            terminal
-                .draw(|frame| ui::render(frame, app))
-                .map_err(|e| e.to_string())?;
+            if should_paint(rx.is_empty(), coalesced) {
+                coalesced = 0;
+                app.needs_redraw = false;
+                terminal
+                    .draw(|frame| ui::render(frame, app))
+                    .map_err(|e| e.to_string())?;
+            } else {
+                coalesced += 1;
+            }
         }
     }
     Ok(())
@@ -1154,16 +1191,18 @@ async fn handle_normal_input(
         // cleared by Esc -- matching the strip's "esc to clear" hint.
         KeyCode::Esc if !app.search_query.is_empty() => app.clear_search(),
         KeyCode::Tab | KeyCode::BackTab => app.toggle_panel_focus(),
-        // Shift+scroll: scroll the focused pane's *content* without moving the
-        // selection cursor -- so you can hold one commit in the inspector while
-        // scrolling the detail pane down into the history/reflog below. Plain
-        // ↓/j (below) still drive the cursor; these are pure scroll. Shift+j/k
+        // Shift+scroll: scroll the *next* pane, so you can stand in one pane
+        // and pull more into view in the one beside it without leaving where
+        // you are. Plain ↓/j (below) drive whatever is focused; these reach
+        // past it into the pane after it. Shift+j/k
         // arrive as uppercase `J`/`K` (no modifier needed), Shift+arrow as an
-        // arrow carrying the SHIFT modifier.
-        KeyCode::Char('J') => app.scroll_focused(1),
-        KeyCode::Char('K') => app.scroll_focused(-1),
-        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_focused(1),
-        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_focused(-1),
+        // arrow carrying the SHIFT modifier. `PageUp`/`PageDown` still scroll
+        // the focused detail pane itself, which is the gesture this used to
+        // be. See `App::shift_scroll_target`.
+        KeyCode::Char('J') => app.scroll_next_panel(1),
+        KeyCode::Char('K') => app.scroll_next_panel(-1),
+        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(1),
+        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(-1),
         // Must be matched before the plain `c` arm below, or ctrl-c toggles
         // the contributions strip instead of quitting.
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -2516,6 +2555,31 @@ async fn build_repo_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An idle loop paints as soon as it has something to paint. This is the
+    /// ordinary case and must not be delayed by the coalescing at all.
+    #[test]
+    fn an_empty_queue_paints_immediately() {
+        assert!(should_paint(true, 0));
+    }
+
+    /// The bug: a trackpad flick delivers wheel events faster than a repaint
+    /// takes, so painting one frame per event let the queue run away and the
+    /// scroll froze, then played out the backlog after the gesture had ended.
+    #[test]
+    fn a_queued_burst_holds_the_paint() {
+        assert!(!should_paint(false, 0));
+        assert!(!should_paint(false, 1));
+        assert!(!should_paint(false, MAX_COALESCED_FRAMES - 1));
+    }
+
+    /// The hold is bounded, so a source that never stops arriving still gets
+    /// drawn rather than freezing the pane for as long as it lasts.
+    #[test]
+    fn a_queue_that_never_drains_still_paints_eventually() {
+        assert!(should_paint(false, MAX_COALESCED_FRAMES));
+        assert!(should_paint(false, MAX_COALESCED_FRAMES + 1));
+    }
 
     fn test_repo() -> RepoStatus {
         RepoStatus {

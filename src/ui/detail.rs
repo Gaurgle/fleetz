@@ -4835,8 +4835,16 @@ mod tests {
         repo
     }
 
+    /// Scrolling leaves the selection where it is, so the marker is free to
+    /// travel off the pane with the content it belongs to -- that is the
+    /// natural behaviour and the whole point of the change. What has to hold
+    /// is that a single step brings it back, at the edge being looked at.
+    ///
+    /// The old contract was the opposite: every wheel notch dragged the
+    /// selection to the nearest visible entry, so the wheel silently
+    /// reassigned which commit the inspector was reading out.
     #[test]
-    fn scrolling_never_leaves_the_selection_off_the_pane() {
+    fn a_step_after_scrolling_brings_the_selection_back_onto_the_pane() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -4864,25 +4872,36 @@ mod tests {
             let pane = crate::ui::panel_rects(term.get_frame().area(), &app)
                 .detail
                 .expect("a detail pane");
-
-            let mut seen = std::collections::BTreeSet::new();
-            for step in 0..app.detail_max_scroll.get() {
-                app.scroll_detail(1);
-                term.draw(|f| crate::ui::render(f, &app)).unwrap();
+            let marker_on_pane = |term: &Terminal<TestBackend>| {
                 let buf = term.backend().buffer().clone();
-                let marked = (pane.y..pane.y + pane.height).any(|y| {
+                (pane.y..pane.y + pane.height).any(|y| {
                     (pane.x..pane.x + pane.width).any(|x| buf[(x, y)].symbol() == "\u{25b8}")
-                });
-                assert!(
-                    marked,
-                    "{} lost its selection off the pane at step {step}",
-                    view.label()
-                );
-                seen.insert(app.detail_selected());
+                })
+            };
+
+            let before = app.detail_selected();
+            for _ in 0..app.detail_max_scroll.get() {
+                app.scroll_detail(1);
             }
+            term.draw(|f| crate::ui::render(f, &app)).unwrap();
+            assert_eq!(
+                app.detail_selected(),
+                before,
+                "{} let the wheel move its selection",
+                view.label()
+            );
+
+            app.detail_nav_down();
+            term.draw(|f| crate::ui::render(f, &app)).unwrap();
             assert!(
-                seen.len() > 3,
-                "{} never dragged its selection at all",
+                marker_on_pane(&term),
+                "{}: one step did not bring the selection back onto the pane",
+                view.label()
+            );
+            assert_ne!(
+                app.detail_selected(),
+                before,
+                "{}: the step did not re-enter at all",
                 view.label()
             );
         }

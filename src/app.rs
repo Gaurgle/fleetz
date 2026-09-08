@@ -1432,6 +1432,11 @@ impl App {
     /// commits, then -- once past the last one -- scroll the pane so the
     /// history/reflog/CI sections below the commits become reachable.
     pub fn detail_nav_down(&mut self) {
+        // Spent on the re-entry when the selection is off screen: see
+        // `reenter_selection`.
+        if self.reenter_selection() {
+            return;
+        }
         if self.detail_selected() + 1 < self.selected_commit_count() {
             self.select_commit_down();
         } else {
@@ -1448,6 +1453,11 @@ impl App {
     /// following the selection the two fought: this decremented the offset
     /// and the next frame restored it, so the pane never moved.
     pub fn detail_nav_up(&mut self) {
+        // Spent on the re-entry when the selection is off screen: see
+        // `reenter_selection`.
+        if self.reenter_selection() {
+            return;
+        }
         if self.detail_selected() > 0 {
             self.select_commit_up();
         } else {
@@ -1501,19 +1511,64 @@ impl App {
         self.inspector_scroll = (current + delta).clamp(0, max) as u16;
     }
 
-    /// Shift+scroll on the focused pane.
+    /// The pane `Shift+J`/`K` (and `Shift+↑`/`↓`) drives: the one *after* the
+    /// focused pane, so you can stand in one pane and pull more into view in
+    /// the next without leaving where you are.
     ///
-    /// From the detail pane it scrolls that pane, leaving the cursor to be
-    /// dragged along only as far as keeping it on screen requires. From the
-    /// repo list it *steps the detail pane's cursor* instead: `j`/`k` there
-    /// belong to the repo list, so this is the only way to drive window 2
-    /// without leaving window 1, and stepping the cursor is what makes the
-    /// inspector read out each commit in turn. Past the last commit
-    /// `detail_nav_*` falls through to scrolling, so the sections below a
-    /// short list stay reachable. From the inspector it scrolls the inspector.
-    pub fn scroll_focused(&mut self, delta: i32) {
-        match self.focused_panel {
+    /// The strip is never a target. It is a fixed-height horizontal timeline
+    /// with nothing below the fold, so scrolling it vertically has no meaning;
+    /// it is skipped rather than left in the cycle as a no-op, which would have
+    /// made the key do nothing at all from whichever pane sat before it.
+    ///
+    /// Compact has one flat grid and no next pane, so there is nothing to aim
+    /// at and `None` is the honest answer.
+    fn shift_scroll_target(&self) -> Option<FocusedPanel> {
+        if self.view != View::Detail {
+            return None;
+        }
+        Some(match self.focused_panel {
+            FocusedPanel::RepoList => FocusedPanel::Detail,
+            FocusedPanel::Detail if self.shows_inspector() => FocusedPanel::Inspector,
+            // The graph docks no inspector, so there is no next pane to reach
+            // into -- and it is the one view whose rows are finer than its
+            // commits, so there is a gesture worth having here instead. The
+            // key stays on this pane and walks its rows one at a time, where
+            // plain `j`/`k` jumps whole commit blocks. Wrapping to the repo
+            // list instead would spend the only line-by-line gesture the graph
+            // has on moving to a different repo.
+            FocusedPanel::Detail => FocusedPanel::Detail,
+            FocusedPanel::Inspector | FocusedPanel::Contributions => FocusedPanel::RepoList,
+        })
+    }
+
+    /// Scroll the pane after the focused one. See `shift_scroll_target`.
+    ///
+    /// Aimed at the detail pane it *steps that pane's cursor* rather than
+    /// scrolling it: stepping is what makes the inspector read out each commit
+    /// in turn, which is the reason to drive window 2 from window 1 at all.
+    /// Past the last commit `detail_nav_*` falls through to scrolling, so the
+    /// sections below a short list stay reachable. Aimed at the repo list it
+    /// walks the selection, which is that list's equivalent.
+    pub fn scroll_next_panel(&mut self, delta: i32) {
+        let Some(target) = self.shift_scroll_target() else {
+            return;
+        };
+        match target {
             FocusedPanel::RepoList => {
+                for _ in 0..delta.unsigned_abs() {
+                    match delta > 0 {
+                        true => self.move_down(),
+                        false => self.move_up(),
+                    }
+                }
+            }
+            // Aimed at the pane it is already in: only the graph does that,
+            // and only to walk its rows. `move_graph_cursor` is a row cursor,
+            // so this is the line-by-line step.
+            FocusedPanel::Detail if self.focused_panel == FocusedPanel::Detail => {
+                self.move_graph_cursor(delta);
+            }
+            FocusedPanel::Detail => {
                 for _ in 0..delta.unsigned_abs() {
                     match delta > 0 {
                         true => self.detail_nav_down(),
@@ -1521,10 +1576,8 @@ impl App {
                     }
                 }
             }
-            FocusedPanel::Detail => self.scroll_detail(delta),
             FocusedPanel::Inspector => self.scroll_inspector(delta),
-            // The strip is a fixed-height picture with nothing below the
-            // fold, so there is nothing to scroll.
+            // Never selected as a target, but the match has to be total.
             FocusedPanel::Contributions => {}
         }
     }
@@ -1749,26 +1802,33 @@ impl App {
         let max = self.detail_max_scroll.get() as i32;
         let current = self.detail_scroll() as i32;
         self.set_detail_scroll((current + delta).clamp(0, max) as u16);
-        self.keep_selection_on_screen();
     }
 
-    /// Drag the selection back inside the pane after a scroll moved the view
-    /// out from under it.
+    /// Bring the selection back inside the pane, and report whether it moved.
     ///
-    /// The other views step commit to commit, so their cursor is a list entry
-    /// rather than a row and scrolling moves the view rather than the cursor.
-    /// Without this the highlight simply left the pane and `j` then stepped a
-    /// commit you could not see. The selection lands on the nearest entry that
-    /// clears the margin, and stays put when there is no such entry: `info`
-    /// draws branches, stashes and worktrees below its commit list, and those
-    /// rows must stay reachable by scrolling past the last commit.
+    /// Called when a step is asked for, **not** while scrolling. Scrolling
+    /// used to drag the selection along on every wheel notch, which meant the
+    /// wheel silently reassigned which commit the inspector was reading out:
+    /// the highlight crept down the pane on its own and the panel below it
+    /// changed under you. Scrolling now leaves the selection with the content
+    /// it is attached to, exactly as it leaves every other row, and it is the
+    /// first `j`/`k` afterwards that re-enters -- from the edge you are
+    /// looking at rather than from a row that is no longer on screen.
+    ///
+    /// That first step is spent on the re-entry and does not also advance, so
+    /// the highlight appears where the eye is before it starts moving again.
+    ///
+    /// The selection lands on the nearest entry that clears the margin, and
+    /// stays put when there is no such entry: `info` draws branches, stashes
+    /// and worktrees below its commit list, and those rows must stay
+    /// reachable by scrolling past the last commit.
     ///
     /// Deliberately does not set `follow_selection`: that would ask the next
     /// frame to scroll the entry into view, undoing the scroll that chose it.
-    fn keep_selection_on_screen(&mut self) {
+    fn reenter_selection(&mut self) -> bool {
         let height = self.detail_view_height.get();
         if height == 0 {
-            return;
+            return false;
         }
         let scroll = self.detail_scroll();
         let pad = scrolloff_for(height);
@@ -1786,7 +1846,7 @@ impl App {
 
         let tops = self.detail_row_tops.borrow();
         let Some(&row) = tops.get(self.detail_selected()) else {
-            return;
+            return false;
         };
         let next = if row < first {
             tops.iter().position(|&t| t >= first)
@@ -1796,9 +1856,13 @@ impl App {
             None
         };
         drop(tops);
-        if let Some(i) = next {
-            self.detail_selections[self.history_view.index()] = i;
-            self.inspector_scroll = 0;
+        match next {
+            Some(i) if i != self.detail_selected() => {
+                self.detail_selections[self.history_view.index()] = i;
+                self.inspector_scroll = 0;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -3574,6 +3638,7 @@ mod tests {
                 message: format!("feat: thing {i}"),
             })
             .collect();
+        app.view = View::Detail;
         app.focused_panel = FocusedPanel::RepoList;
         app.history_view = HistoryView::Info;
         app.detail_view_height.set(20);
@@ -3581,11 +3646,11 @@ mod tests {
         // Six commits, as `info` shows.
         *app.detail_row_tops.borrow_mut() = (0..6).collect();
 
-        app.scroll_focused(1);
+        app.scroll_next_panel(1);
         assert_eq!(app.detail_selected(), 1, "the inspector was told nothing");
-        app.scroll_focused(1);
+        app.scroll_next_panel(1);
         assert_eq!(app.detail_selected(), 2);
-        app.scroll_focused(-1);
+        app.scroll_next_panel(-1);
         assert_eq!(app.detail_selected(), 1);
     }
 
@@ -3594,6 +3659,7 @@ mod tests {
     #[test]
     fn shift_scroll_past_the_last_commit_scrolls_instead() {
         let mut app = make_app(1);
+        app.view = View::Detail;
         app.focused_panel = FocusedPanel::RepoList;
         app.history_view = HistoryView::Info;
         app.detail_view_height.set(20);
@@ -3603,30 +3669,137 @@ mod tests {
         // `make_app` builds repos with no commits, so the cursor is already at
         // the end of the list and every step is a scroll.
         assert_eq!(app.selected_commit_count(), 0);
-        app.scroll_focused(1);
+        app.scroll_next_panel(1);
         assert_eq!(app.detail_scroll(), 1);
     }
 
-    /// The detail pane keeps scrolling on Shift+scroll: its own `j`/`k` step
-    /// the cursor, so binding both to the same thing would waste the gesture.
+    /// From the detail pane Shift+scroll reaches past it into the inspector,
+    /// so the commit under the cursor can be read further down without leaving
+    /// the pane that chose it.
+    ///
+    /// It used to scroll the detail pane itself. `PageUp`/`PageDown` still do
+    /// that, so the gesture was not lost, only moved off a key that now has
+    /// somewhere better to point.
     #[test]
-    fn shift_scroll_on_the_detail_pane_still_scrolls_it() {
+    fn shift_scroll_from_the_detail_pane_drives_the_inspector() {
         let mut app = make_app(1);
+        app.view = View::Detail;
         app.focused_panel = FocusedPanel::Detail;
         app.history_view = HistoryView::Commits;
         app.detail_view_height.set(20);
         app.detail_max_scroll.set(100);
         *app.detail_row_tops.borrow_mut() = (0..40).collect();
+        assert!(app.shows_inspector(), "no inspector to aim at");
+        assert_eq!(
+            app.shift_scroll_target(),
+            Some(FocusedPanel::Inspector),
+            "the detail pane does not aim at the inspector"
+        );
 
-        app.scroll_focused(1);
-        assert_eq!(app.detail_scroll(), 1);
+        // The inspector's own offset is clamped against its content, so give
+        // it something to scroll before asking whether it moved.
+        app.inspector_max_scroll.set(10);
+        let scroll_before = app.detail_scroll();
+        app.scroll_next_panel(1);
+        assert_eq!(app.inspector_scroll, 1, "the inspector did not scroll");
+        assert_eq!(
+            app.detail_scroll(),
+            scroll_before,
+            "the detail pane scrolled itself instead of the pane after it"
+        );
     }
 
-    /// The commit-to-commit views scroll the view rather than the cursor, so
-    /// the scroll has to bring the cursor along or the highlight leaves the
-    /// pane and `j` steps a commit you cannot see.
+    /// In the graph the shifted keys stay on the pane and walk its *rows*,
+    /// one line at a time, where plain `j`/`k` jumps whole commit blocks. The
+    /// graph is the only view whose rows are finer than its commits, so it is
+    /// the only one with a line-by-line step to offer.
     #[test]
-    fn scrolling_drags_the_selection_to_the_nearest_visible_entry() {
+    fn shift_scroll_walks_graph_rows_one_line_at_a_time() {
+        let mut app = make_app(1);
+        app.view = View::Detail;
+        app.focused_panel = FocusedPanel::Detail;
+        app.history_view = HistoryView::Graph;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+
+        assert_eq!(
+            app.shift_scroll_target(),
+            Some(FocusedPanel::Detail),
+            "the graph aimed somewhere other than itself"
+        );
+
+        assert_eq!(app.graph_cursor, 0);
+        app.scroll_next_panel(1);
+        assert_eq!(app.graph_cursor, 1, "did not step a single row");
+        app.scroll_next_panel(1);
+        assert_eq!(app.graph_cursor, 2);
+        app.scroll_next_panel(-1);
+        assert_eq!(app.graph_cursor, 1, "did not step back a single row");
+    }
+
+    /// ...and it does not reach pane 1 to do it. The graph has no inspector to
+    /// pass the gesture on to, and wrapping to the repo list would have spent
+    /// the only line-by-line step the graph has on changing repo.
+    #[test]
+    fn shift_scroll_in_the_graph_leaves_the_repo_list_alone() {
+        let mut app = make_app(3);
+        app.view = View::Detail;
+        app.focused_panel = FocusedPanel::Detail;
+        app.history_view = HistoryView::Graph;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+
+        let repo_before = app.selected;
+        app.scroll_next_panel(1);
+        app.scroll_next_panel(1);
+        assert_eq!(
+            app.selected, repo_before,
+            "the graph's shifted step changed which repo is selected"
+        );
+    }
+
+    /// The strip is never a target: it is a fixed-height horizontal timeline
+    /// with nothing below the fold, so it is skipped rather than left in the
+    /// cycle as a stop where the key would do nothing.
+    #[test]
+    fn shift_scroll_never_aims_at_the_contributions_strip() {
+        let mut app = make_app(1);
+        app.view = View::Detail;
+        app.open_contributions(ContributionsMode::Github);
+        for focused in [
+            FocusedPanel::RepoList,
+            FocusedPanel::Detail,
+            FocusedPanel::Inspector,
+            FocusedPanel::Contributions,
+        ] {
+            app.focused_panel = focused;
+            assert_ne!(
+                app.shift_scroll_target(),
+                Some(FocusedPanel::Contributions),
+                "{focused:?} aimed at the strip"
+            );
+        }
+    }
+
+    /// Compact has one flat grid and no pane after the list, so the key has
+    /// nothing to aim at rather than quietly driving a pane that is not drawn.
+    #[test]
+    fn shift_scroll_has_no_target_in_compact() {
+        let mut app = make_app(1);
+        app.view = View::Compact;
+        app.focused_panel = FocusedPanel::RepoList;
+        assert_eq!(app.shift_scroll_target(), None);
+    }
+
+    /// Scrolling leaves the selection with the content it is attached to.
+    ///
+    /// It used to drag the selection to the nearest visible entry on every
+    /// wheel notch, which meant scrolling silently reassigned which commit the
+    /// inspector was reading out: the highlight crept down the pane on its own
+    /// and the panel below it changed under you. Deliberately reversed --
+    /// scrolling is a view gesture, not a selection one.
+    #[test]
+    fn scrolling_does_not_move_the_selection() {
         let mut app = make_app(1);
         app.history_view = HistoryView::Commits;
         app.detail_view_height.set(20);
@@ -3634,15 +3807,101 @@ mod tests {
         // One row per commit, as the list draws them.
         *app.detail_row_tops.borrow_mut() = (0..40).collect();
 
+        let before = app.detail_selected();
         app.scroll_detail(10);
         assert_eq!(
             app.detail_selected(),
-            14,
-            "the highlight was left above the pane"
+            before,
+            "the wheel moved the selection"
         );
-
         app.scroll_detail(20);
-        assert_eq!(app.detail_selected(), 34);
+        assert_eq!(
+            app.detail_selected(),
+            before,
+            "the wheel moved the selection"
+        );
+        app.scroll_detail(-5);
+        assert_eq!(
+            app.detail_selected(),
+            before,
+            "the wheel moved the selection"
+        );
+    }
+
+    /// ...and the first step afterwards re-enters at the edge you are looking
+    /// at, rather than carrying on from a row that is no longer on screen.
+    /// That step is spent on the re-entry, so the highlight appears where the
+    /// eye already is before it starts moving again.
+    #[test]
+    fn the_first_step_after_a_scroll_re_enters_the_pane() {
+        let mut app = make_app(1);
+        app.history_view = HistoryView::Commits;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+        *app.detail_row_tops.borrow_mut() = (0..40).collect();
+
+        app.scroll_detail(10);
+        assert_eq!(app.detail_selected(), 0, "the wheel moved the selection");
+
+        app.detail_nav_down();
+        assert_eq!(
+            app.detail_selected(),
+            14,
+            "did not re-enter at the top edge of the view"
+        );
+    }
+
+    /// Scrolling back up re-enters from the bottom edge instead, so the
+    /// re-entry always lands on the side the selection went out of.
+    #[test]
+    fn a_step_after_scrolling_up_re_enters_from_the_bottom() {
+        let mut app = make_app(1);
+        app.history_view = HistoryView::Commits;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+        *app.detail_row_tops.borrow_mut() = (0..40).collect();
+
+        app.set_detail_selected(30);
+        app.scroll_detail(0_i32.saturating_sub(0));
+        app.set_detail_scroll(0);
+        app.detail_nav_up();
+        assert_eq!(
+            app.detail_selected(),
+            15,
+            "did not re-enter at the bottom edge of the view"
+        );
+    }
+
+    /// A selection already on screen is left alone, so stepping through
+    /// commits that share a screen does not stutter on a phantom re-entry.
+    #[test]
+    fn a_visible_selection_steps_without_re_entering() {
+        let mut app = make_app(1);
+        app.history_view = HistoryView::Commits;
+        app.detail_view_height.set(20);
+        app.detail_max_scroll.set(100);
+        *app.detail_row_tops.borrow_mut() = (0..40).collect();
+
+        // `Commits` counts graph rows, and a step past the last one falls
+        // through to scrolling, so the list has to be long enough to step in.
+        app.repos[0].graph = (0..40)
+            .map(|i| crate::model::GraphLine {
+                hash: format!("c{i:06}"),
+                refs: vec![],
+                author: "Gaurgle".to_string(),
+                message: format!("feat: thing {i}"),
+                lanes: vec![],
+                is_merge: false,
+            })
+            .collect();
+        app.set_detail_scroll(10);
+        app.set_detail_selected(16);
+        app.detail_nav_down();
+        assert_eq!(
+            app.detail_selected(),
+            17,
+            "a visible selection did not step"
+        );
     }
 
     /// The margin collapses at the ends of the content: held there, the first

@@ -1319,3 +1319,80 @@ One consequence worth keeping in mind: because the strip and the headliner draw
 the same string, `contains("GRAPH")` is true in every view and asserts nothing.
 The tests that need to find the headliner match its boxed form,
 `│ GRAPH │`, which only the headliner produces.
+
+---
+
+## Scroll feel: the lag, the wandering highlight, and Shift+scroll's target
+
+**Status: shipped.** Three separate problems, all reported as "scrolling feels
+wrong".
+
+### 1. The wheel lagged, then ran on
+
+**Cause.** The event loop painted once per event, and the event channel is
+unbounded. A trackpad delivers wheel events far faster than a full repaint
+takes, so a flick queued faster than it drained: the pane appeared to freeze,
+then played out the whole backlog after the fingers had stopped.
+
+**Fix.** Paint once per *burst*. The events are cheap; it is the repaint that is
+not, so a pending paint is held while more input is already queued and
+`needs_redraw` carries to the next pass. `should_paint` is the whole rule, and
+it is a free function so it can be tested without an event loop. The hold is
+bounded by `MAX_COALESCED_FRAMES`, or a source that never stops arriving would
+never paint at all.
+
+**Not done: bounding the channel.** A bounded channel would drop or block
+instead, and dropping input is worse than deferring a frame.
+
+### 2. The highlight wandered while scrolling
+
+**Cause.** `scroll_detail` called `keep_selection_on_screen` on every notch, so
+the wheel dragged the selection to the nearest visible entry. That silently
+reassigned which commit the inspector was reading out: the highlight crept down
+the pane on its own and the panel below it changed under you.
+
+The original reasoning was sound as far as it went -- without it the highlight
+left the pane and `j` then stepped a commit you could not see -- but the fix
+was aimed at the wrong gesture.
+
+**Fix.** Scrolling is a view gesture and now leaves the selection with the
+content it is attached to, exactly as it leaves every other row. The re-entry
+moved to the *step*: the first `j`/`k` after the selection has gone off screen
+lands it at the edge you are looking at and does not also advance, so the
+highlight appears where the eye already is before it starts moving again.
+`reenter_selection` is the old function, returning whether it moved so the step
+can spend itself on it.
+
+**The graph view is deliberately unchanged.** Its cursor *is* its scroll
+mechanism -- the view follows the cursor rather than the other way round -- so
+scrolling moving the highlight is coherent there rather than surprising.
+
+**Two tests were rewritten, not relaxed.** `scrolling_drags_the_selection_to_
+the_nearest_visible_entry` and `scrolling_never_leaves_the_selection_off_the_
+pane` pinned the old contract exactly. They now pin the new one: scrolling does
+not move the selection, and one step brings it back.
+
+### 3. Shift+scroll drove the wrong pane
+
+Shift+J/K scrolled the *focused* pane from the detail pane, and stepped window
+2's cursor from the repo list -- two different ideas on one key. It now
+consistently drives the **next** pane: list → window 2 → inspector → back to
+the list, via `shift_scroll_target`.
+
+**The contributions strip is skipped rather than included as a no-op.** It is a
+fixed-height horizontal timeline with nothing below the fold, so there is no
+vertical scroll to aim at it; leaving it in the cycle would have made the key
+do nothing at all from whichever pane sat before it. Compact has no pane after
+the list, so the target is `None` there rather than a pane that is not drawn.
+
+**The graph aims at itself.** It docks no inspector, so the first version
+wrapped it round to the repo list -- which spent the gesture on changing repo.
+The graph is the only view whose rows are finer than its commits (plain `j`/`k`
+jumps whole commit blocks, because `set_detail_selected` puts the row cursor on
+the next block's top row), so it is the only view with a line-by-line step
+worth having. The shifted keys stay on the pane and walk `graph_cursor` one row
+at a time.
+
+**What moved rather than went.** Scrolling the focused detail pane itself is
+still `PageUp`/`PageDown`, and the mouse wheel over a pane still scrolls that
+pane. Only the shifted keys were repointed.
