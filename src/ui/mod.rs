@@ -164,7 +164,10 @@ fn spinner_group(frame: usize, label: &str) -> Vec<Span<'static>> {
 /// Blend two colors `num`/`den` of the way from `a` to `b`, per channel.
 /// Non-RGB colors have no components to interpolate, so they return `a`
 /// unchanged rather than guessing.
-fn blend(a: Color, b: Color, num: u32, den: u32) -> Color {
+///
+/// `den` must be non-zero. The spinner walks its palette with this over time;
+/// the detail pane's headliner rule fades with it over distance.
+pub(crate) fn blend(a: Color, b: Color, num: u32, den: u32) -> Color {
     let (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) = (a, b) else {
         return a;
     };

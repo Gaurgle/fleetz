@@ -1276,35 +1276,39 @@ width discipline `the_commit_node_occupies_one_column` already sets.
 strip is a one-row border that could not take it at all, so the two would stop
 agreeing about what the view is called.
 
-**The headliner is boxed**, with the box's top and bottom rules carrying on to
-the pane's edge. The box wears the view's colour, the same one its tab wears in
-the border; past the junction the rule drops to `SURFACE`, because there it is
-a divider rather than a label.
+**The headliner is the name over a divider that fades.** The divider starts in
+the view's own colour, the same one its tab wears in the border, and blends into
+`SURFACE` across the pane a cell at a time.
 
 ```
-╭──────┬─────────────────────────────────────────────
-│ INFO │
-╰──────┴─────────────────────────────────────────────
+INFO
+─────────────────────────────────────────────────────
 branches
 * main ✓
 ```
 
-It is flush with the body's own left edge. Indented by a column -- the first
-version of it -- the title sat one column right of every line it heads, which
-is the opposite of what a heading is for.
+The fade goes through `ui::blend`, the same function the spinner walks its
+palette with -- that one interpolates over time and this one over distance, but
+it is the same arithmetic and there was no reason to write a second one. Flat
+`SURFACE` was the first version, on the rule of thumb that structure gets the
+structure colour. Wrong here: it read as a separate dim line that happened to
+sit under the name rather than as the name's own underline running out.
 
-**What the box costs.** Three pinned rows instead of one, so the scrolling body
-loses two lines at every height, and the threshold at which the branches block
-still clears `MIN_BODY_ROWS` moves from 20 rows to 21. Below it the ladder
-still keeps the identity header pinned and drops only the branches;
-`the_boxed_headliner_costs_the_branches_pin_two_rows` states that directly, so
-the next row added to the pinned region is a decision rather than a surprise.
+**Three shapes were tried on the way here, in this order.** A closed box with
+the rules carrying to the pane edge; then the same with the top rule and the
+closing bar dropped, leaving an open bracket; then this. Each step removed
+something that was drawing attention without saying anything: the top rule
+repeated what the foot said, the closing bar boxed in a word nothing was
+crowding, and the leading bar indented the name two columns so the one line
+that heads the body lined up with no line of it.
 
-**Not done: degrading the box on a short pane.** The house pattern would allow
-it -- `pin_header`, `view_switcher` and `show_refs` all shed on the way down --
-and it would buy the branches pin back below 21 rows. Left out because it makes
-the headliner a second thing that changes shape with the window, and the
-fallback the ladder already provides is not bad.
+**What it costs.** Two pinned rows instead of one, so the scrolling body loses
+a line at every height. The threshold at which the branches block still clears
+`MIN_BODY_ROWS` is unmoved at 20 rows -- the extra row landed inside slack that
+was already there. The boxed version, at three rows, did push it to 21.
+`the_branches_pin_holds_down_to_a_twenty_row_pane` states the threshold
+directly, so the next row added to the pinned region is a decision rather than
+a surprise.
 
 **Note on the tests.** Seven render tests pinned the lowercase literals. They
 now ask `view_name` what to expect, with `a_view_name_is_drawn_in_capitals`

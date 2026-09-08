@@ -1965,53 +1965,51 @@ fn expanded_graph_lines(raw: &str, selected_hash: &str, width: usize) -> Vec<Lin
         .collect()
 }
 
-/// The pane's headliner: the view's name boxed, with the box's top and bottom
-/// rules running on to the pane's edge.
+/// The pane's headliner: the view's name, and a divider under it that fades
+/// out of the name's own colour.
 ///
-/// Three rows, and pinned ones, so it costs the scrolling body two lines at
-/// every pane height. Worth it because the headliner is the thing the whole
-/// body below it is an answer to, and as a single line of bold text sitting
-/// straight on that body it read as the body's first line rather than as its
-/// title.
+/// Two rows, and pinned ones, so it costs the scrolling body one line at every
+/// pane height. Worth it because the headliner is the thing the whole body
+/// below it is an answer to, and as a single line of bold text sitting straight
+/// on that body it read as the body's first line rather than as its title.
 ///
-/// The box wears the view's own colour, the same one its tab wears up in the
-/// border, so the two agree about which view you are in. The rule that carries
-/// on past the box is `SURFACE`: past the junction it is a divider rather than
-/// a label, and structure is what that colour is for.
+/// No box and no leading bar. Both were tried. A box drew two lines whose only
+/// job was to meet each other, and cost a third pinned row to do it; a leading
+/// bar then indented the name by two columns, so the one line that heads the
+/// body did not line up with any line of it. The divider alone says the same
+/// thing and leaves the name where the eye already is.
+///
+/// The divider starts in the view's own colour -- the same one its tab wears up
+/// in the border, so the two agree about which view you are in -- and fades
+/// into `SURFACE` across the pane: under the name it is part of the label, by
+/// the far edge it is a divider, and structure is what that colour is for.
 fn headliner(view: HistoryView, width: usize) -> Vec<Line<'static>> {
-    let title = view_name(view);
-    // The box's interior: the title with one space of padding either side.
-    let inner = title.chars().count() + 2;
-    let boxed = Style::default().fg(colors::history_view_color(view));
-    let rule = Style::default().fg(colors::SURFACE);
-    // The corner, the interior and the junction come before the rule, and the
-    // box sits flush with the body's own left edge -- indenting it would put
-    // the title one column right of every line it heads. Saturating, so a pane
-    // too narrow for the box draws what fits and no rule rather than panicking
-    // on the repeat count.
-    let rest = width.saturating_sub(inner + 2);
-
-    let edge = |corner: &str, junction: &str| {
-        Line::from(vec![
-            Span::styled(format!("{corner}{}", "─".repeat(inner)), boxed),
-            Span::styled(junction.to_string(), boxed),
-            Span::styled("─".repeat(rest), rule),
-        ])
-    };
+    let on = colors::history_view_color(view);
+    // Per cell, through the same `blend` the spinner walks its palette with.
+    // That one interpolates over time and this one over distance, but it is the
+    // same arithmetic and there is no reason to have two of it. A cell each is
+    // a couple of hundred spans on a wide pane, which is nothing next to the
+    // commit rows underneath.
+    let divider: Vec<Span<'static>> = (0..width)
+        .map(|i| {
+            Span::styled(
+                "─".to_string(),
+                Style::default().fg(crate::ui::blend(
+                    on,
+                    colors::SURFACE,
+                    i as u32 + 1,
+                    width as u32,
+                )),
+            )
+        })
+        .collect();
 
     vec![
-        edge("╭", "┬"),
-        Line::from(vec![
-            Span::styled("│ ", boxed),
-            Span::styled(
-                title,
-                Style::default()
-                    .fg(colors::history_view_color(view))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" │", boxed),
-        ]),
-        edge("╰", "┴"),
+        Line::from(Span::styled(
+            view_name(view),
+            Style::default().fg(on).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(divider),
     ]
 }
 
@@ -2558,12 +2556,10 @@ mod tests {
     /// and left the "not fetched" list reading like the whole story.
     #[test]
     fn the_branches_block_survives_a_scroll_to_the_bottom() {
-        // 22 rows: the boxed headliner is three pinned rows rather than one,
-        // so the height at which the branches block still clears
-        // MIN_BODY_ROWS sits two higher than it did when the title was a
-        // single line. `the_boxed_headliner_costs_the_branches_pin_two_rows`
-        // pins that threshold directly.
-        let text = info_text_at_bottom(spread_repo(), 92, 22);
+        // 20 rows is the shortest pane that still pins the branches;
+        // `the_branches_pin_holds_down_to_a_twenty_row_pane` pins that
+        // threshold directly.
+        let text = info_text_at_bottom(spread_repo(), 92, 20);
         assert!(
             text.contains("branches"),
             "the branches label scrolled away"
@@ -2580,7 +2576,7 @@ mod tests {
     /// would cost the pane its history on exactly the busy repos that need it.
     #[test]
     fn the_remote_only_list_is_not_pinned() {
-        let text = info_text_at_bottom(spread_repo(), 92, 22);
+        let text = info_text_at_bottom(spread_repo(), 92, 20);
         assert!(
             text.contains("feat: commit"),
             "the history is unreachable at the bottom of the scroll"
@@ -2591,18 +2587,23 @@ mod tests {
         );
     }
 
-    /// What the box costs, stated so the next row added to the pinned region
-    /// is a deliberate decision rather than a surprise. Below the threshold
-    /// the ladder still keeps the identity header pinned; it is the branches
-    /// block that goes.
+    /// Where the branches block stops being pinned, stated so the next row
+    /// added to the pinned region is a deliberate decision rather than a
+    /// surprise. The headliner's divider is one such row and it landed inside
+    /// the slack `MIN_BODY_ROWS` already had, so this threshold is where it was
+    /// before the headliner grew. A boxed version, briefly tried, was three
+    /// rows and did push it to 21.
+    ///
+    /// Below the threshold the ladder still keeps the identity header pinned;
+    /// it is the branches block alone that goes.
     #[test]
-    fn the_boxed_headliner_costs_the_branches_pin_two_rows() {
+    fn the_branches_pin_holds_down_to_a_twenty_row_pane() {
         let pinned = |height| info_text_at_bottom(spread_repo(), 92, height).contains("21 behind");
-        assert!(!pinned(20), "20 rows should no longer hold the branches");
-        assert!(pinned(21), "21 rows should hold them");
+        assert!(pinned(20), "20 rows should hold the branches");
+        assert!(!pinned(19), "19 rows should not");
         assert!(
-            info_text_at_bottom(spread_repo(), 92, 20).contains("~/repos/fleetz"),
-            "the identity header lost its pin too"
+            info_text_at_bottom(spread_repo(), 92, 19).contains("~/repos/fleetz"),
+            "the identity header lost its pin along with the branches block"
         );
     }
 
@@ -2636,6 +2637,109 @@ mod tests {
             !text.contains("beta -> origin/beta"),
             "a same-named upstream is being repeated as noise"
         );
+    }
+
+    /// Whether a rendered pane shows `name` as its headliner. The headliner
+    /// row trims to exactly the view's name; the tab strip in the border
+    /// carries the same string but never trims to it alone, so this is what
+    /// tells the two apart.
+    fn has_headliner(text: &str, name: &str) -> bool {
+        text.lines()
+            .any(|l| l.trim().trim_matches('│').trim() == name)
+    }
+
+    /// The colours of the headliner's divider: its first cell and its last.
+    fn rule_ends(view: HistoryView) -> (ratatui::style::Color, ratatui::style::Color) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let width = 92u16;
+        let mut app = crate::app::App::new(vec![spread_repo()], "t".to_string(), width, 24);
+        app.history_view = view;
+        let app = app;
+        let mut term = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+
+        // The divider is the row directly under the name.
+        let name = view_name(view);
+        let title_y = (1..24u16)
+            .find(|y| {
+                let row: String = (0..width).map(|x| buf[(x, *y)].symbol()).collect();
+                row.trim().trim_matches('│').trim() == name
+            })
+            .expect("no headliner drawn");
+        let y = title_y + 1;
+        let cells: Vec<u16> = (0..width)
+            .filter(|x| buf[(*x, y)].symbol() == "─")
+            .collect();
+        assert!(cells.len() > 2, "no divider under the headliner");
+        (
+            buf[(cells[0], y)].fg,
+            buf[(*cells.last().expect("last cell"), y)].fg,
+        )
+    }
+
+    /// The divider fades out of the name's own colour rather than starting at
+    /// structure-grey. Starting there made it read as a separate dim line that
+    /// happened to sit under the name, instead of as the name's own underline
+    /// running out.
+    #[test]
+    fn the_headliner_divider_fades_from_the_name_colour_into_surface() {
+        for view in HistoryView::ALL {
+            let on = colors::history_view_color(view);
+            let (near, far) = rule_ends(view);
+            assert_ne!(
+                near,
+                colors::SURFACE,
+                "{} divider starts at structure-grey, so it is not fading",
+                view.label()
+            );
+            assert_eq!(
+                far,
+                colors::SURFACE,
+                "{} divider does not arrive at structure-grey",
+                view.label()
+            );
+            assert_ne!(near, on, "{} divider starts un-faded", view.label());
+        }
+    }
+
+    /// The near end is nearer the name's colour than the far end is, in every
+    /// channel
+    /// that separates the two colours. States the direction of the fade, which
+    /// the endpoints alone do not.
+    #[test]
+    fn the_headliner_divider_fades_towards_the_far_end() {
+        let channels = |c| match c {
+            ratatui::style::Color::Rgb(r, g, b) => (r as i32, g as i32, b as i32),
+            other => panic!("expected an RGB colour, got {other:?}"),
+        };
+        for view in HistoryView::ALL {
+            let on = channels(colors::history_view_color(view));
+            let surface = channels(colors::SURFACE);
+            let (near, far) = rule_ends(view);
+            let (near, far) = (channels(near), channels(far));
+            for (i, (o, s)) in [(on.0, surface.0), (on.1, surface.1), (on.2, surface.2)]
+                .into_iter()
+                .enumerate()
+            {
+                if o == s {
+                    continue;
+                }
+                let (n, f) = match i {
+                    0 => (near.0, far.0),
+                    1 => (near.1, far.1),
+                    _ => (near.2, far.2),
+                };
+                assert!(
+                    (n - o).abs() <= (f - o).abs(),
+                    "{} channel {i}: near end is not closer to the name colour",
+                    view.label()
+                );
+            }
+        }
     }
 
     /// The formatting rule itself. The render tests ask the helper what to
@@ -2674,23 +2778,38 @@ mod tests {
         // will not do: the tab strip carries all four in every view, and the
         // strip and the headliner draw the same string, so `contains("GRAPH")`
         // is true in every view and would assert nothing.
-        let boxed = |v| format!("│ {} │", view_name(v));
-        let sections = [
-            (HistoryView::Info, "recent commits".to_string()),
-            (HistoryView::Commits, boxed(HistoryView::Commits)),
-            (HistoryView::Reflog, boxed(HistoryView::Reflog)),
-            (HistoryView::Graph, boxed(HistoryView::Graph)),
-        ];
-        for (view, own) in &sections {
-            let text = pane_text(*view, 92);
-            assert!(text.contains(own), "{} missing {own:?}", view.label());
-            for (other_view, other) in &sections {
-                if other_view == view || other == own {
+        // `info` draws a named section of its own; the other three are named
+        // by the pane's headliner. The bare name will not do for those: the
+        // tab strip carries all four in every view and draws the same string,
+        // so `contains("GRAPH")` is true everywhere and asserts nothing.
+        for view in HistoryView::ALL {
+            let text = pane_text(view, 92);
+            match view {
+                HistoryView::Info => assert!(
+                    text.contains("recent commits"),
+                    "info is missing its own section"
+                ),
+                _ => assert!(
+                    has_headliner(&text, &view_name(view)),
+                    "{} is missing its headliner",
+                    view.label()
+                ),
+            }
+            for other in HistoryView::ALL {
+                if other == view {
                     continue;
                 }
                 assert!(
-                    !text.contains(&format!(" {other}\n")) || other == own,
-                    "{} leaked the {other:?} section",
+                    !has_headliner(&text, &view_name(other)),
+                    "{} leaked the {} headliner",
+                    view.label(),
+                    other.label()
+                );
+            }
+            if view != HistoryView::Info {
+                assert!(
+                    !text.contains("recent commits"),
+                    "{} leaked info's section",
                     view.label()
                 );
             }
@@ -3239,7 +3358,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            text.contains(&format!("│ {} │", view_name(HistoryView::Graph))),
+            has_headliner(&text, &view_name(HistoryView::Graph)),
             "the view title scrolled off"
         );
         assert!(
@@ -3269,14 +3388,14 @@ mod tests {
             // on row 0, so start below it.
             let title = view_name(view);
             let first_letter = title[0..1].to_string();
-            let boxed = format!("│ {title} │");
             let want = colors::history_view_color(view);
             let mut found = false;
             for y in 1..24u16 {
                 let row: String = (0..92u16).map(|x| buf[(x, y)].symbol()).collect();
-                // Matched boxed: the strip draws the same string, so the bare
-                // name would find the border row as readily as the headliner.
-                if !row.contains(&boxed) {
+                // The row has to *be* the name: the strip draws the same
+                // string, so a substring match would find the border row as
+                // readily as the headliner.
+                if row.trim().trim_matches('│').trim() != title {
                     continue;
                 }
                 let x = (0..92u16)
