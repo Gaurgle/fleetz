@@ -901,27 +901,6 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
     }
 
-    // CI's headline moved up to the header's remote row, where it belongs
-    // with the other things GitHub knows. The workflow name and duration stay
-    // here: they are detail rather than state, and the header row has to
-    // leave room for the PR numbers beside them.
-    if view == HistoryView::Info
-        && repo.ci_status != CiStatus::Unknown
-        && (repo.ci_workflow.is_some() || repo.ci_duration.is_some())
-    {
-        let (_, ci_color, _) = badges::ci_display(&repo.ci_status, app.watch_mode && !app.blink_on);
-        let mut ci_spans = vec![Span::styled("CI ", Style::default().fg(ci_color))];
-        let detail: Vec<String> = [repo.ci_workflow.clone(), repo.ci_duration.clone()]
-            .into_iter()
-            .flatten()
-            .collect();
-        ci_spans.push(Span::styled(
-            detail.join(" · "),
-            Style::default().fg(colors::OVERLAY),
-        ));
-        lines.push(Line::from(ci_spans));
-    }
-
     // PRs
     // Gated on `-p`: the header row already names the open PRs by number, so
     // this section is the opt-in detail rather than the news itself.
@@ -2766,6 +2745,46 @@ mod tests {
                 view.label()
             );
         }
+    }
+
+    /// One CI indicator per pane. The repo row carries a lamp and the detail
+    /// header carries another; a third in the pane's body made three of them
+    /// blinking the same fact in step, which reads as three things happening.
+    ///
+    /// The workflow name and duration went with it. They were the only thing
+    /// that line added, and a name and a stopwatch are not worth a third lamp.
+    #[test]
+    fn the_info_body_does_not_repeat_the_ci_state() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut repo = busy_repo();
+        repo.ci_status = crate::model::CiStatus::Passed;
+        repo.ci_workflow = Some("build-and-test".to_string());
+        repo.ci_duration = Some("12s".to_string());
+
+        let (w, h) = (100u16, 30u16);
+        let mut app = crate::app::App::new(vec![repo], "t".to_string(), w, h);
+        app.history_view = HistoryView::Info;
+        let app = app;
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let text: String = (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(
+            text.matches("CI ").count(),
+            1,
+            "the pane draws CI more than once:\n{text}"
+        );
+        assert!(
+            !text.contains("build-and-test"),
+            "the workflow name is still drawn"
+        );
     }
 
     /// Each view draws its own section and none of the others'. The whole

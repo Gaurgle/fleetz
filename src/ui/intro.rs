@@ -59,10 +59,39 @@ const LOCK_SPREAD: f32 = 0.96;
 const SCRAMBLE: &[u8] =
     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/\\|_-+=*<>[]{}()#$%&@?!;:.~^";
 
-/// The dark end of the nuance ladder: where a cell sits before the wave has
-/// reached it. `SURFACE` is the structure colour, dim enough to read as texture
-/// rather than as content.
-const DIM: Color = colors::SURFACE;
+/// What a cell fades toward when it is furthest from the crest: Catppuccin
+/// `base`, the ground the terminal is already drawing on.
+///
+/// The ladder used to run from `SURFACE` -- one shared grey -- up to each
+/// cell's own colour. That made every resting cell the same grey whatever hue
+/// it was meant to be, and since most of the field is at rest most of the time,
+/// the whole thing read as grey static with a coloured line moving through it.
+/// Fading toward the *background* instead, with a floor, keeps every cell on
+/// its own hue the whole way down.
+const BACKDROP: Color = Color::Rgb(30, 30, 46);
+
+/// How far a resting cell is carried from the backdrop toward its own colour,
+/// out of 255, at each end of the wave's opening.
+///
+/// The two exist because the field and the wave want opposite things from the
+/// same cells. The loading field has no crest, so anything held back is just
+/// dullness with nothing to be dull *for*: it sits at `LIT`, fully coloured.
+/// The wave needs its resting cells dark, or the crest has nothing to stand out
+/// from and the whole thing flattens.
+///
+/// So the wave opens at `LIT` -- matching the field exactly, so the handover has
+/// no seam -- and dims to `DARK` over `DIM_IN`. The lights going down is the
+/// wave arriving.
+const REST_MIX_LIT: u32 = 190;
+const REST_MIX_DARK: u32 = 90;
+/// The wave has to be darker than the field it comes out of, or the dim runs
+/// backwards and the crest has nothing to stand out against. Checked at compile
+/// time, since both are constants and a runtime assert would be theatre.
+const _: () = assert!(REST_MIX_DARK < REST_MIX_LIT);
+
+/// How much of the sweep is spent dimming from the field's brightness to the
+/// wave's. Short: it is a transition into the effect, not part of it.
+const DIM_IN: f32 = 0.18;
 
 /// The lit end. A half-step past `TEXT` toward white, so the crest reads as
 /// brighter than anything the real screen contains and the wave is clearly a
@@ -90,7 +119,7 @@ const ACCENTS: [Color; 7] = [
 /// threshold is compared against a fixed per-cell value, so a cell that has
 /// turned colour stays colour: the field gains hues rather than flickering
 /// between them.
-const ACCENT_START: f32 = 0.6;
+const ACCENT_START: f32 = 0.9;
 const ACCENT_END: f32 = 1.0;
 
 /// How far a cell's brightness may stray from the crest curve, so the band has
@@ -172,9 +201,15 @@ impl Intro {
                             // Ratatui redraws a cell whose symbol or style
                             // changed, so churning everywhere makes every frame
                             // a full-screen repaint -- fine locally, unkind
-                            // over ssh at 60fps for 175 frames. A still field
-                            // costs nothing to draw and reads better anyway:
-                            // the churn is the wave, not the ground it crosses.
+                            // over ssh at 60fps for the length of the sweep. A
+                            // still field costs nothing to draw and reads
+                            // better anyway: the churn is the wave, not the
+                            // ground it crosses.
+                            //
+                            // The `DIM_IN` opening is the exception, since the
+                            // resting shade is moving for all of it. That is a
+                            // fifth of the sweep rather than all of it, and it
+                            // is the transition, so it is worth the frames.
                             let churn = match self.crest(cx, y, area, t) > 0.0 {
                                 true => frame,
                                 false => 0,
@@ -185,6 +220,7 @@ impl Intro {
                                 churn,
                                 self.intensity(cx, y, area, t),
                                 accent_share(t),
+                                rest_mix(t),
                             )
                         }
                     };
@@ -263,6 +299,13 @@ fn resting_intensity(x: u16, y: u16) -> f32 {
     grain(x, y).clamp(0.0, 1.0)
 }
 
+/// The resting shade at time `t`: the field's brightness at the start of the
+/// sweep, the wave's by `DIM_IN`.
+fn rest_mix(t: f32) -> u32 {
+    let dimmed = (t / DIM_IN).clamp(0.0, 1.0);
+    REST_MIX_LIT - ((REST_MIX_LIT - REST_MIX_DARK) as f32 * dimmed) as u32
+}
+
 /// How much of the noise wears a hue rather than white at time `t`.
 fn accent_share(t: f32) -> f32 {
     ACCENT_START + (ACCENT_END - ACCENT_START) * t.clamp(0.0, 1.0)
@@ -284,7 +327,14 @@ fn diagonal(x: u16, y: u16, area: ratatui::layout::Rect) -> f32 {
 
 /// A noise cell: a character that churns frame to frame, in a colour blended up
 /// the nuance ladder by how close the crest is.
-fn noise_cell(x: u16, y: u16, frame: u32, intensity: f32, accent_share: f32) -> Cell {
+fn noise_cell(
+    x: u16,
+    y: u16,
+    frame: u32,
+    intensity: f32,
+    accent_share: f32,
+    rest_mix: u32,
+) -> Cell {
     let symbol = SCRAMBLE[(hash(x, y, frame) % SCRAMBLE.len() as u32) as usize] as char;
     let lit = match unit(hash(x, y, SALT_ACCENT)) < accent_share {
         true => ACCENTS[(hash(x, y, SALT_HUE) % ACCENTS.len() as u32) as usize],
@@ -292,7 +342,10 @@ fn noise_cell(x: u16, y: u16, frame: u32, intensity: f32, accent_share: f32) -> 
     };
     let mut cell = Cell::default();
     cell.set_symbol(&symbol.to_string());
-    cell.set_fg(crate::ui::blend(DIM, lit, (intensity * 255.0) as u32, 255));
+    // From this cell's resting shade up to its full hue, rather than from a
+    // shared grey: see `BACKDROP`.
+    let mix = rest_mix + ((255 - rest_mix) as f32 * intensity) as u32;
+    cell.set_fg(crate::ui::blend(BACKDROP, lit, mix.min(255), 255));
     cell
 }
 
@@ -400,9 +453,11 @@ impl Loading {
                     y,
                     churn_step(x, y, frame),
                     resting_intensity(x, y),
-                    // The share the wave will open on, so the handover does not
-                    // change the field's colour as well as its motion.
+                    // The share and the shade the wave opens on, so the
+                    // handover changes nothing but the churn. The wave dims
+                    // away from here of its own accord.
                     accent_share(0.0),
+                    rest_mix(0.0),
                 );
             }
         }
@@ -491,14 +546,16 @@ mod tests {
         let it = intro();
         let mut a = Buffer::empty(area());
         let mut b = Buffer::empty(area());
-        assert!(it.compose(&mut a, 0.10));
-        assert!(it.compose(&mut b, 0.12));
+        // Sampled after `DIM_IN`: the whole field is deliberately changing
+        // colour before that, as the lights go down for the wave.
+        assert!(it.compose(&mut a, 0.25));
+        assert!(it.compose(&mut b, 0.27));
 
-        // The top-right corner is the last place the wave reaches, so at a
-        // tenth of the way through it is far outside the band.
+        // The top-right corner is the last place the wave reaches, so a
+        // quarter of the way through it is far outside the band.
         let (x, y) = (39u16, 0u16);
         assert!(
-            it.crest(x, y, area(), 0.10) == 0.0,
+            it.crest(x, y, area(), 0.25) == 0.0,
             "the corner is inside the band, so this proves nothing"
         );
         assert_eq!(a[(x, y)].symbol(), b[(x, y)].symbol(), "the field churned");
@@ -564,6 +621,26 @@ mod tests {
     fn banner_rows(area: Rect) -> std::ops::Range<u16> {
         let (top, _, _, height) = label_span(area).expect("a banner");
         top..top + height
+    }
+
+    /// The wave opens at the loading field's brightness and dims into its own.
+    ///
+    /// The field and the wave want opposite things from the same cells: the
+    /// field has no crest, so holding its colour back is dullness for nothing;
+    /// the wave needs a dark ground or the crest has nothing to stand out
+    /// against. Opening lit and dimming gives both, and puts the change where
+    /// it reads as the lights going down rather than as a seam.
+    #[test]
+    fn the_wave_opens_lit_and_dims_into_its_own_depth() {
+        assert_eq!(rest_mix(0.0), REST_MIX_LIT, "the wave does not open lit");
+        assert_eq!(rest_mix(DIM_IN), REST_MIX_DARK, "the wave never gets dark");
+        assert_eq!(rest_mix(1.0), REST_MIX_DARK, "the dim does not hold");
+
+        let midway = rest_mix(DIM_IN / 2.0);
+        assert!(
+            (REST_MIX_DARK..REST_MIX_LIT).contains(&midway),
+            "the dim is a step, not a fade: {midway}"
+        );
     }
 
     /// The loading field fills the screen around its banner. That is its whole
@@ -887,8 +964,8 @@ mod tests {
     /// what lets any of this be tested at all.
     #[test]
     fn the_noise_is_deterministic() {
-        let a = noise_cell(5, 6, 3, 0.5, 0.5);
-        let b = noise_cell(5, 6, 3, 0.5, 0.5);
+        let a = noise_cell(5, 6, 3, 0.5, 0.5, REST_MIX_DARK);
+        let b = noise_cell(5, 6, 3, 0.5, 0.5, REST_MIX_DARK);
         assert_eq!(a.symbol(), b.symbol());
         assert_eq!(a.fg, b.fg);
     }
@@ -899,7 +976,8 @@ mod tests {
     fn the_noise_churns_between_frames() {
         let changed = (0..40u16)
             .filter(|x| {
-                noise_cell(*x, 4, 1, 0.5, 0.5).symbol() != noise_cell(*x, 4, 2, 0.5, 0.5).symbol()
+                noise_cell(*x, 4, 1, 0.5, 0.5, REST_MIX_DARK).symbol()
+                    != noise_cell(*x, 4, 2, 0.5, 0.5, REST_MIX_DARK).symbol()
             })
             .count();
         assert!(
@@ -928,7 +1006,7 @@ mod tests {
             "the field did not gain colour: {early} -> {late}"
         );
         assert!(
-            (0.5..0.75).contains(&early),
+            (0.85..0.95).contains(&early),
             "the first frames are {:.0}% colour",
             early * 100.0
         );

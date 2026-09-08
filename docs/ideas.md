@@ -1204,6 +1204,15 @@ as old as the last sweep.
 **Rejected: pulsing settled states.** Passed and failed are results, not
 activity. Only pending moves.
 
+**And then one of the three lamps went.** With the detail pane pulsing in step
+with the repo row, a repo drew CI three times at once: the row's badge, the
+detail header's `CI ◉ passed`, and a third line at the foot of `info` carrying
+the workflow name and duration. Three lamps blinking the same fact in step read
+as three things happening. The body line went; the workflow name and duration
+went with it, which is the whole cost, and a name and a stopwatch are not worth
+a third lamp. `the_info_body_does_not_repeat_the_ci_state` counts the
+occurrences so it cannot creep back.
+
 ---
 
 ## Ragged churn columns in the commit list
@@ -1437,17 +1446,39 @@ bottom-left corner and 1 at the top-right, with both axes normalised so the
 front crosses at the same visual angle on any terminal shape. The front sweeps
 from `-BAND` to `1 + BAND`, so at `t = 0` every cell is ahead of it (the full
 screen of noise) and at `t = 1` every cell is behind it. A cell's brightness is
-its distance from the crest, blended up a nuance ladder from `SURFACE` to a
-half-step past `TEXT`, with per-cell grain so the band is textured rather than a
-clean gradient.
+its distance from the crest, with per-cell grain so the band is textured rather
+than a clean gradient.
 
-**And it gains colour as it goes.** The share of noise wearing a Catppuccin hue
-rather than white climbs across the sweep, from three fifths at the start to all
-of it at the end -- so the field is mostly white when the wave
-arrives and mostly colour by the time the last of it is washed away. The rising
-threshold is compared against a fixed per-cell value, so a cell that has turned
-colour stays colour: the field *gains* hues rather than flickering between
-them.
+**Every cell keeps its own hue all the way down.** The ladder used to run from
+`SURFACE` -- one shared grey -- up to the cell's colour, so every resting cell
+was that same grey whatever hue it was meant to be. Most of the field is at rest
+most of the time, so the whole thing read as grey static with a coloured line
+moving through it. It now fades toward the *background* (Catppuccin `base`) with
+a floor partway up, so a resting cell is a muted version of its own colour and
+only the brightness moves. Measured on the real frames that took the near-grey
+share of the field from effectively all of it to under a fifth; the rest is
+muted mauve, sapphire, green and maroon.
+
+**The field and the wave want opposite things from that shade.** The loading
+field has no crest, so anything held back there is dullness with nothing to be
+dull *for*. The wave needs its resting cells dark, or the crest has nothing to
+stand out against and the whole thing flattens. So the wave opens at the field's
+brightness -- matching it exactly, so the handover still has no seam -- and dims
+to its own over the first fifth of the sweep. The lights going down *is* the
+wave arriving. Mean brightness across the real frames: field 167, wave 159 at
+`t = 0`, 101 by `t = 0.18`, back up to 140 at the halfway mark as the crest
+lights what it crosses.
+
+That opening is the one exception to "only the wave churns": while the resting
+shade is moving, every cell is. A fifth of the sweep rather than all of it, and
+it is the transition, so it is worth the frames.
+
+**And it gains colour as it goes.** The share of noise wearing a hue rather than
+white climbs across the sweep, from nine tenths at the start to all of it at the
+end, so what white is left reads as a sparkle rather than as the field's colour.
+The rising threshold is compared against a fixed per-cell value, so a cell that
+has turned colour stays colour: the field *gains* hues rather than flickering
+between them.
 
 **Characters lock one by one, not band by band.** Each cell draws its own
 threshold for where in the band it stops churning and shows its real character.
