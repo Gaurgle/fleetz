@@ -1372,6 +1372,37 @@ through, back to back. For a time-derived animation those catch-up frames all
 paint nearly the same thing, and they flood the channel while doing it: freeze,
 then jump. Both animation timers are `Skip` now.
 
+**And that still was not it.** The wave was smoother and still lagged, so the
+next step was to measure rather than reason a third time. Composing a frame
+costs 0.3ms; the compositor was never the constraint. *Writing* one was. With
+every cell recomputed every frame, a third of the screen changed between
+consecutive frames and the whole screen changed during the opening dim -- about
+4.7 MB/s of escape sequences to a 200x50 terminal at 60fps. No emulator renders
+that, and the two fixes above had made it push harder into that wall by
+delivering more frames.
+
+Each cell now recomputes on its own slot, one frame in `CELL_UPDATE`, staggered
+by a per-cell phase, so its whole appearance holds still between slots and the
+terminal has nothing to redraw. The frame rate is untouched and the wave still
+advances every frame, because different cells move on different frames; the
+stagger reads as texture, which suits it.
+
+|  | before | after |
+|---|---|---|
+| mean change per frame | 38% of the screen | 11% |
+| worst frame | 100% | 26% |
+| 200x50 at 60fps | 4.7 MB/s | 1.34 MB/s |
+
+`only_a_fraction_of_the_screen_changes_between_frames` pins that ceiling, and it
+earns its place: this failure is invisible to every other test in the file.
+They all examine a single frame, and every individual frame was correct. The
+bug lived *between* frames.
+
+**The lesson worth keeping.** Three plausible causes were fixed before the
+measurement, and the first two were real bugs that were not this one. In a TUI
+the output bandwidth is a first-class cost, and "how much of the screen changed"
+belongs next to "how long did it take to compute" whenever anything animates.
+
 ### 2. The highlight wandered while scrolling
 
 **Cause.** `scroll_detail` called `keep_selection_on_screen` on every notch, so

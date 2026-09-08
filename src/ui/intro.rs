@@ -176,8 +176,6 @@ impl Intro {
         if area.width == 0 || area.height == 0 {
             return false;
         }
-        let frame = (t * (DURATION.as_secs_f32() / FRAME_INTERVAL.as_secs_f32())) as u32;
-
         for y in area.top()..area.bottom() {
             let mut x = area.left();
             while x < area.right() {
@@ -186,7 +184,12 @@ impl Intro {
                 // they would leave a narrow character sitting in a continuation
                 // cell, which shifts everything to its right.
                 let span = self.glyph_span(x, y, area.right());
-                let settled = self.locked(x, y, area, t);
+                // One time for the whole glyph, from its leading cell: a wide
+                // glyph and its continuation must agree about everything, the
+                // slot included.
+                let ct = self.cell_time(x, y, t);
+                let frame = (ct * (DURATION.as_secs_f32() / FRAME_INTERVAL.as_secs_f32())) as u32;
+                let settled = self.locked(x, y, area, ct);
                 for i in 0..span {
                     let cx = x + i;
                     buf[(cx, y)] = match settled {
@@ -210,7 +213,7 @@ impl Intro {
                             // resting shade is moving for all of it. That is a
                             // fifth of the sweep rather than all of it, and it
                             // is the transition, so it is worth the frames.
-                            let churn = match self.crest(cx, y, area, t) > 0.0 {
+                            let churn = match self.crest(cx, y, area, ct) > 0.0 {
                                 true => frame,
                                 false => 0,
                             };
@@ -218,9 +221,9 @@ impl Intro {
                                 cx,
                                 y,
                                 churn,
-                                self.intensity(cx, y, area, t),
-                                accent_share(t),
-                                rest_mix(t),
+                                self.intensity(cx, y, area, ct),
+                                accent_share(ct),
+                                rest_mix(ct),
                             )
                         }
                     };
@@ -246,6 +249,26 @@ impl Intro {
     /// at the crest, positive behind.
     fn phase(&self, x: u16, y: u16, area: ratatui::layout::Rect, t: f32) -> f32 {
         front(t) - diagonal(x, y, area)
+    }
+
+    /// The point in the sweep this cell is drawn at.
+    ///
+    /// Quantised to the cell's own slot, so its whole appearance -- character,
+    /// brightness, hue, whether it has locked -- holds still between slots and
+    /// the terminal has nothing to redraw. Staggered by a per-cell phase so the
+    /// slots do not all land on the same frame, which would just move the
+    /// full-screen repaint rather than remove it.
+    ///
+    /// Monotonic, so a locked cell stays locked, and pinned to exactly 1.0 at
+    /// the end so the last frame is the content and not a slot short of it.
+    fn cell_time(&self, x: u16, y: u16, t: f32) -> f32 {
+        if t >= 1.0 {
+            return 1.0;
+        }
+        let frames = DURATION.as_secs_f32() / FRAME_INTERVAL.as_secs_f32();
+        let phase = (hash(x, y, SALT_PHASE) % CELL_UPDATE) as f32;
+        let slot = ((t * frames + phase) / CELL_UPDATE as f32).floor() * CELL_UPDATE as f32;
+        ((slot - phase) / frames).clamp(0.0, 1.0)
     }
 
     /// Whether this cell has stopped churning and shows its real character.
@@ -380,6 +403,21 @@ fn hash(x: u16, y: u16, salt: u32) -> u32 {
 fn unit(h: u32) -> f32 {
     h as f32 / u32::MAX as f32
 }
+
+/// Frames between one cell of the *wave* recomputing its appearance.
+///
+/// The wave is limited by the terminal, not by the compositor. Composing a
+/// frame costs a third of a millisecond; writing one costs whatever the
+/// emulator takes to render the escape sequences for every cell that changed,
+/// and at 60fps with a third of the screen changing that measured at 4.7 MB/s
+/// on a 200x50 terminal. Nothing renders that.
+///
+/// So each cell recomputes on its own slot rather than every frame, staggered
+/// by a per-cell phase, which puts a hard ceiling of one in `CELL_UPDATE` cells
+/// redrawn per frame. The wave still advances every frame -- different cells
+/// move on different frames -- and the stagger reads as texture, which suits
+/// it. The frame rate is untouched.
+const CELL_UPDATE: u32 = 4;
 
 /// Frames between one loading cell re-rolling its character.
 ///
@@ -621,6 +659,63 @@ mod tests {
     fn banner_rows(area: Rect) -> std::ops::Range<u16> {
         let (top, _, _, height) = label_span(area).expect("a banner");
         top..top + height
+    }
+
+    /// How much of the screen changes between two consecutive frames, as a
+    /// mean and a worst case over the sweep, on a realistically sized terminal.
+    fn churn_per_frame() -> (usize, usize, usize) {
+        let (w, h) = (200u16, 50u16);
+        let rect = Rect::new(0, 0, w, h);
+        let it = Intro::new(Buffer::empty(rect));
+        let frames = DURATION.as_secs_f32() / FRAME_INTERVAL.as_secs_f32();
+
+        let mut worst = 0usize;
+        let mut total = 0usize;
+        let samples = 40;
+        for step in 0..samples {
+            let t0 = step as f32 / samples as f32;
+            let t1 = (t0 + 1.0 / frames).min(1.0);
+            let mut a = Buffer::empty(rect);
+            let mut b = Buffer::empty(rect);
+            assert!(it.compose(&mut a, t0));
+            assert!(it.compose(&mut b, t1));
+            let changed = (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x, y)))
+                .filter(|(x, y)| {
+                    a[(*x, *y)].symbol() != b[(*x, *y)].symbol() || a[(*x, *y)].fg != b[(*x, *y)].fg
+                })
+                .count();
+            worst = worst.max(changed);
+            total += changed;
+        }
+        (total / samples, worst, w as usize * h as usize)
+    }
+
+    /// The wave is limited by the terminal, not by the compositor.
+    ///
+    /// Composing a frame costs a third of a millisecond; *writing* one costs
+    /// whatever the emulator takes to render escape sequences for every cell
+    /// that changed. With every cell recomputed every frame that measured at a
+    /// third of the screen changing per frame and the whole screen during the
+    /// opening dim -- about 4.7 MB/s to a 200x50 terminal at 60fps, which
+    /// nothing renders. It read as the wave lagging.
+    ///
+    /// Per-cell update slots put a ceiling on it. This test is the ceiling: the
+    /// failure is invisible to every other test here, because they all look at
+    /// one frame at a time and each frame is individually correct.
+    #[test]
+    fn only_a_fraction_of_the_screen_changes_between_frames() {
+        let (mean, worst, cells) = churn_per_frame();
+        assert!(
+            mean * 5 < cells,
+            "{mean} of {cells} cells change on an average frame ({:.0}%)",
+            100.0 * mean as f64 / cells as f64
+        );
+        assert!(
+            worst * 2 < cells,
+            "{worst} of {cells} cells change on the worst frame ({:.0}%)",
+            100.0 * worst as f64 / cells as f64
+        );
     }
 
     /// The wave opens at the loading field's brightness and dims into its own.
