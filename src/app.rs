@@ -42,10 +42,6 @@ pub enum HistoryView {
     Graph,
 }
 
-/// Commits the `info` view lists. Mirrors `ui::detail::RECENT_COMMIT_COUNT`;
-/// the cursor has to stop where the list does.
-const RECENT_COMMITS_IN_INFO: usize = 6;
-
 impl HistoryView {
     /// Every view, in the order the tab strip draws them and `V` cycles them.
     pub const ALL: [Self; 4] = [Self::Info, Self::Commits, Self::Reflog, Self::Graph];
@@ -1389,13 +1385,11 @@ impl App {
         self.inspector_scroll = 0;
     }
 
-    /// Number of commits in the recent-commits list of the selected repo --
-    /// the range the inspector's commit cursor moves over.
     /// Rows the cursor can walk in the *active* history view.
     ///
-    /// Not `commits.len()` any more: the cursor walks whichever list is on
-    /// screen, and an index valid against the commit list is meaningless
-    /// against the reflog. `Info` draws no list, so it has no cursor.
+    /// Not `commits.len()`: the cursor walks whichever list is on screen, and
+    /// an index valid against the commit list is meaningless against the
+    /// reflog -- or against the graph, which `info` and `commits` both draw.
     pub fn selected_commit_count(&self) -> usize {
         let Some(repo) = self.selected_repo() else {
             return 0;
@@ -1405,8 +1399,13 @@ impl App {
         // to skip past. See `crate::graph`.
         let graph_commits = || repo.graph.len();
         match self.history_view {
-            // Info shows the newest few with their diffstats.
-            HistoryView::Info => repo.commits.len().min(RECENT_COMMITS_IN_INFO),
+            // Info draws the newest few *graph* rows, not the newest few of
+            // `commits`. The two are different `git log` runs: `commits` walks
+            // HEAD, the graph walks the union of the local branches, so a
+            // commit living only on a side branch sits in one and not the
+            // other. Counting the wrong one put the cursor's ordinal and the
+            // hash it resolved on different rows.
+            HistoryView::Info => graph_commits().min(crate::ui::detail::RECENT_COMMIT_COUNT),
             HistoryView::Commits => graph_commits(),
             HistoryView::Reflog => repo.reflog.len(),
             HistoryView::Graph => graph_commits(),
@@ -1461,8 +1460,8 @@ impl App {
     /// The hash the active history view has selected.
     ///
     /// Every view draws a list of its own, and they are lists of different
-    /// things: `info` the newest commits, `commits` and `graph` the graph
-    /// rows, `reflog` the HEAD movements. Which is why this returns a hash
+    /// things: `info` the newest graph rows, `commits` and `graph` all of
+    /// them, `reflog` the HEAD movements. Which is why this returns a hash
     /// rather than an index -- an index into one means nothing in another.
     pub fn inspected_hash(&self) -> Option<&str> {
         let repo = self.selected_repo()?;
@@ -1475,8 +1474,7 @@ impl App {
             .min(self.selected_commit_count().saturating_sub(1));
         let graph_nth = |n: usize| repo.graph.get(n).map(|g| g.hash.as_str());
         match self.history_view {
-            HistoryView::Info => repo.commits.get(i).map(|c| c.hash.as_str()),
-            HistoryView::Commits | HistoryView::Graph => graph_nth(i),
+            HistoryView::Info | HistoryView::Commits | HistoryView::Graph => graph_nth(i),
             HistoryView::Reflog => repo.reflog.get(i).map(|e| e.hash.as_str()),
         }
     }
@@ -2197,7 +2195,8 @@ mod tests {
     }
 
     /// The cursor walks whichever list is on screen, so its bound is that
-    /// list's length. Info draws none, so it has no cursor at all.
+    /// list's length. `info` and `commits` both draw the graph; only the cap
+    /// differs.
     #[test]
     fn the_cursor_is_bounded_by_the_active_views_list() {
         let mut app = make_app(1);
@@ -2220,10 +2219,9 @@ mod tests {
             },
         ];
 
-        app.history_view = HistoryView::Info;
-        assert_eq!(app.selected_commit_count(), 2, "info lists the newest few");
-
-        // `commits` walks the graph rows, not the diffstat list.
+        // Both history lists walk the graph rows, not the diffstat list: the
+        // diffstat list is `git log HEAD` and the graph is the union of the
+        // local branches, so they are not the same commits in the same order.
         app.repos[0].graph = vec![crate::model::GraphLine {
             lanes: vec![crate::graph::commit_cell()],
             hash: "aaa".to_string(),
@@ -2232,6 +2230,9 @@ mod tests {
             author: "Gaurgle".to_string(),
             message: "one".to_string(),
         }];
+        app.history_view = HistoryView::Info;
+        assert_eq!(app.selected_commit_count(), 1, "graph rows, not commits");
+
         app.history_view = HistoryView::Commits;
         assert_eq!(app.selected_commit_count(), 1, "graph rows, not commits");
 
@@ -3561,16 +3562,16 @@ mod tests {
     #[test]
     fn shift_scroll_from_the_repo_list_steps_the_detail_cursor() {
         let mut app = make_app(1);
-        app.repos[0].commits = (0..6)
-            .map(|i| crate::model::Commit {
+        // The graph, because that is the list `info` draws and therefore the
+        // one its cursor is bounded by.
+        app.repos[0].graph = (0..6)
+            .map(|i| crate::model::GraphLine {
+                lanes: vec![crate::graph::commit_cell()],
                 hash: format!("c0ffee{i}"),
+                is_merge: false,
+                refs: vec![],
                 author: "Gaurgle".to_string(),
-                date: None,
                 message: format!("feat: thing {i}"),
-                body: String::new(),
-                insertions: 0,
-                deletions: 0,
-                files: vec![],
             })
             .collect();
         app.focused_panel = FocusedPanel::RepoList;

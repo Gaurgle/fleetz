@@ -1371,7 +1371,11 @@ fn ref_spans(refs: &[crate::model::GitRef]) -> Vec<Span<'static>> {
 
 /// Commits shown in the `info` view: a glance, not a history. `commits`
 /// carries the complete list.
-const RECENT_COMMIT_COUNT: usize = 6;
+///
+/// Shared with `App::selected_commit_count`, which bounds the cursor: a
+/// second copy of this number let the cursor stop one row short of the list
+/// -- or one row past it -- depending on which of the two was edited.
+pub(crate) const RECENT_COMMIT_COUNT: usize = 6;
 
 /// The compact graph list, shared by `info` and `commits` so the two cannot
 /// drift into rendering the same rows differently.
@@ -3186,7 +3190,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let app = crate::app::App::new(vec![repo], "test".to_string(), width, 40);
-        let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
         terminal
             .draw(|f| {
                 let area = f.area();
@@ -3256,7 +3260,7 @@ mod tests {
 
         let mut app = crate::app::App::new(vec![repo], "test".to_string(), width, 40);
         app.set_detail_selected(selected);
-        let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
         terminal
             .draw(|f| render_detail_pane(f, f.area(), &app))
             .unwrap();
@@ -3269,6 +3273,11 @@ mod tests {
             .to_string()
     }
 
+    /// A repo whose two history lists agree, which is the ordinary case: every
+    /// local branch is merged into HEAD, so `git log HEAD` and `git log
+    /// <every branch>` return the same commits in the same order. The readout
+    /// tests below are about the row's contents, not about the lists
+    /// diverging; `readout_names_the_row_the_cursor_is_on` covers that.
     fn repo_with_commits(n: usize) -> RepoStatus {
         let mut r = cloned_repo();
         r.commits = (0..n)
@@ -3281,6 +3290,18 @@ mod tests {
                 insertions: 0,
                 deletions: 0,
                 files: vec![],
+            })
+            .collect();
+        r.graph = r
+            .commits
+            .iter()
+            .map(|c| crate::model::GraphLine {
+                lanes: vec![crate::graph::commit_cell()],
+                hash: c.hash.clone(),
+                is_merge: false,
+                refs: vec![],
+                author: c.author.clone(),
+                message: c.message.clone(),
             })
             .collect();
         r
@@ -3313,7 +3334,10 @@ mod tests {
         let mut app =
             crate::app::App::new(vec![repo_with_commits(4)], "test".to_string(), width, 40);
         app.set_detail_selected(1);
-        let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+        // Tall enough that the commit list fits without the pane scrolling to
+        // follow the cursor: a scrolled body slides the header rows this test
+        // measures off the top, and it is their columns that are under test.
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
         terminal
             .draw(|f| render_detail_pane(f, f.area(), &app))
             .unwrap();
@@ -3330,6 +3354,71 @@ mod tests {
         let name = end_col(4).expect("name row is drawn");
         assert_eq!(readout, owner, "readout does not align with the owner");
         assert_eq!(owner, name, "owner does not align with the repo name");
+    }
+
+    /// The regression: `info` draws the graph but the readout and the
+    /// inspector used to index `commits`, and the two are different `git log`
+    /// runs -- `commits` walks HEAD, the graph walks the union of the local
+    /// branches. One commit living only on a side branch therefore sat in the
+    /// drawn list and not in the indexed one, and every row below it reported
+    /// its neighbour's hash: the caret was on `36fc171d` while the readout and
+    /// the inspector below both said `0a7d35e6`.
+    #[test]
+    fn readout_names_the_row_the_cursor_is_on() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let width = 72;
+        let mut r = repo_with_commits(4);
+        // Reachable from a side branch but not from HEAD, so it is in the
+        // graph and not in `commits`, exactly as `git log` reports the two.
+        r.graph.insert(
+            1,
+            crate::model::GraphLine {
+                lanes: vec![crate::graph::commit_cell()],
+                hash: "sidebr1".to_string(),
+                is_merge: false,
+                refs: vec![],
+                author: "Gaurgle".to_string(),
+                message: "docs: on a branch".to_string(),
+            },
+        );
+
+        let mut app = crate::app::App::new(vec![r], "test".to_string(), width, 40);
+        app.history_view = HistoryView::Info;
+        app.set_detail_selected(2);
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        terminal
+            .draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..24u16)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+
+        let caret_row = rows
+            .iter()
+            .find(|row| row.contains("\u{25b8} "))
+            .expect("the cursor row is drawn");
+        // Row 2: the readout sits directly under the pinned panel title, as
+        // `readout_ends_in_the_same_column_as_the_owner_and_name_rows` pins.
+        let readout = &rows[2];
+        // Which hash the caret is on, taken from the drawn row rather than
+        // from the model: the whole failure was the two disagreeing.
+        let hash = caret_row
+            .split('\u{25b8}')
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .expect("the cursor row names a hash");
+        // Third graph row: the side-branch commit displaced it by one, which
+        // is precisely what `commits` does not know about.
+        assert_eq!(hash, "1abc123", "the caret sits on the third graph row");
+        // 5 rows, not 4: the readout counts the list it draws, side branch
+        // included, so the ordinal and the total come from the same place.
+        assert!(
+            readout.contains(&format!("3/5 \u{b7} {hash}")),
+            "readout {readout:?} names a different commit than the caret row {caret_row:?}"
+        );
     }
 
     #[test]
