@@ -22,13 +22,17 @@ commits="$(git log --no-merges --format='%s%x09%h' "$range" \
 
 section() {
   local title="$1"; shift
-  local lines=""
+  local lines="" group
   for type in "$@"; do
-    lines+="$(printf '%s\n' "$commits" | awk -F'\t' -v t="$type" -v r="$repo" \
+    # Re-terminated per group: command substitution eats the trailing newline,
+    # so a section listing several types ran the last bullet of one group into
+    # the first of the next -- "...))* run the gates" on one line.
+    group="$(printf '%s\n' "$commits" | awk -F'\t' -v t="$type" -v r="$repo" \
       '$1 == t { printf "* %s ([%s](https://github.com/%s/commit/%s))\n", $2, $3, r, $3 }')"
+    [ -n "$group" ] && lines+="$group"$'\n'
   done
   [ -n "$lines" ] || return 0
-  printf '### %s\n%s\n\n' "$title" "$lines"
+  printf '### %s\n%s\n' "$title" "$lines"
 }
 
 echo "## What's Changed"
