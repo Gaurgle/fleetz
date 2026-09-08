@@ -117,6 +117,11 @@ pub enum AppEvent {
     },
     Github(Result<Box<github::GithubFetch>, String>),
     Progress(ApplyProgress),
+    /// One frame of the intro wave. On its own timer: the loop's 100ms tick is
+    /// the spinner rate and far too coarse for an animation. See `ui::intro`.
+    IntroFrame,
+    /// One frame of the noise field shown while the first load runs.
+    LoadingFrame,
     SweepDone {
         at: chrono::DateTime<chrono::Local>,
     },
@@ -195,6 +200,39 @@ fn spawn_input_thread(tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
                 && tx.send(AppEvent::Input(ev)).is_err()
             {
                 break; // loop ended, channel closed
+            }
+        }
+    });
+}
+
+/// Shimmer the loading field until `running` is cleared, which happens when the
+/// first load lands and the wave takes over.
+fn spawn_loading_task(
+    tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(ui::intro::FRAME_INTERVAL);
+        while running.load(std::sync::atomic::Ordering::Relaxed) {
+            interval.tick().await;
+            if tx.send(AppEvent::LoadingFrame).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// Drive the intro wave at its own frame rate for as long as it lasts, then
+/// stop. A one-shot task rather than a faster global tick, because the global
+/// tick *is* the spinner rate and everything else is expressed in it.
+fn spawn_intro_task(tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(ui::intro::FRAME_INTERVAL);
+        let deadline = std::time::Instant::now() + ui::intro::DURATION;
+        loop {
+            interval.tick().await;
+            if tx.send(AppEvent::IntroFrame).is_err() || std::time::Instant::now() >= deadline {
+                break;
             }
         }
     });
@@ -527,8 +565,20 @@ async fn run_event_loop(
     {
         app.view = config.startup_view(size.width, size.height);
     }
+    // The wait is spent on the noise the wave will later wash away, rather
+    // than on an empty frame. Started before the first paint so there is never
+    // a blank one.
+    let loading_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if config.intro && app.loading {
+        app.loading_field = Some(ui::intro::Loading::new());
+        loading_running.store(true, std::sync::atomic::Ordering::Relaxed);
+        spawn_loading_task(tx.clone(), loading_running.clone());
+    }
     terminal
-        .draw(|frame| ui::render(frame, app))
+        .draw(|frame| match app.loading_field.as_ref() {
+            Some(field) => field.paint(frame.buffer_mut()),
+            None => ui::render(frame, app),
+        })
         .map_err(|e| e.to_string())?;
 
     // How many held paints have accumulated, so a stream that never drains
@@ -601,6 +651,17 @@ async fn run_event_loop(
                 }
             }
             AppEvent::Input(Event::Key(key)) => {
+                // Any keypress ends the wave on the spot. Seven tenths of a
+                // second is short, but it is still time someone did not ask
+                // for, and a dashboard that ignores the first keystroke of
+                // every launch would be worse than one that never animated.
+                app.intro = None;
+                // ...and the field with it. Skip means skip: an empty frame is
+                // what there was before any of this, and is at least honest
+                // about how far along the load is.
+                app.loading_field = None;
+                app.intro_pending = false;
+                loading_running.store(false, std::sync::atomic::Ordering::Relaxed);
                 // Any keypress clears a transient status message before it's
                 // handled, so the message shows until the next interaction and
                 // then yields the footer back to the summary. The handler for
@@ -627,7 +688,27 @@ async fn run_event_loop(
             AppEvent::Input(_) => {}
             AppEvent::Loaded(result) => {
                 apply_load_result(app, config, result);
+                // Arm the wave for the paint that follows: that paint is the
+                // first screenful of real content, which is what it resolves
+                // into. Only ever armed here, so it runs once a launch.
+                if config.intro && !app.intro_armed {
+                    app.intro_armed = true;
+                    app.intro_pending = true;
+                }
+                // The field hands over to the wave. Cleared here rather than
+                // when the wave starts, so the two never both want the screen.
+                app.loading_field = None;
+                loading_running.store(false, std::sync::atomic::Ordering::Relaxed);
                 app.needs_redraw = true;
+            }
+            AppEvent::IntroFrame => {
+                if app.intro.as_ref().is_some_and(|i| i.finished()) {
+                    app.intro = None;
+                }
+                app.needs_redraw = true;
+            }
+            AppEvent::LoadingFrame => {
+                app.needs_redraw = app.loading_field.is_some();
             }
             AppEvent::Progress(p) => {
                 app.apply_progress = Some(p);
@@ -724,9 +805,53 @@ async fn run_event_loop(
             if should_paint(rx.is_empty(), coalesced) {
                 coalesced = 0;
                 app.needs_redraw = false;
+                // While the wave is running it composes every frame from the
+                // screen it captured, so the real UI is not re-rendered forty
+                // times in seven tenths of a second. A resize invalidates that
+                // capture, and `paint` says so rather than drawing a stale
+                // layout.
+                let mut wave_ended = false;
+                // The screen the wave will resolve into, captured *inside* the
+                // closure. It has to be: `draw` swaps buffers on the way out,
+                // so by the time it returns the screen just painted is the
+                // previous buffer and `current_buffer_mut` is a freshly reset
+                // blank. Capturing after the call captured that blank, and the
+                // wave dutifully resolved into nothing -- noise, an empty pane,
+                // then the content snapping in when the wave ended, which is
+                // not a reveal at all.
+                let mut captured = None;
                 terminal
-                    .draw(|frame| ui::render(frame, app))
+                    .draw(
+                        |frame| match (app.loading_field.as_ref(), app.intro.as_ref()) {
+                            (Some(field), _) => field.paint(frame.buffer_mut()),
+                            (None, Some(intro)) => wave_ended = !intro.paint(frame.buffer_mut()),
+                            (None, None) => {
+                                ui::render(frame, app);
+                                if app.intro_pending {
+                                    let intro = ui::intro::Intro::new(frame.buffer_mut().clone());
+                                    // Painted over immediately, in this same frame.
+                                    // Presenting the dashboard and only then
+                                    // starting the wave would show a single frame
+                                    // of finished content before it dissolved --
+                                    // a flash on the way in to a reveal.
+                                    intro.paint(frame.buffer_mut());
+                                    captured = Some(intro);
+                                }
+                            }
+                        },
+                    )
                     .map_err(|e| e.to_string())?;
+                if wave_ended {
+                    app.intro = None;
+                    app.needs_redraw = true;
+                }
+                // Started from the first painted screenful of real content, so
+                // a slow load never animates an empty dashboard.
+                if let Some(intro) = captured {
+                    app.intro_pending = false;
+                    app.intro = Some(intro);
+                    spawn_intro_task(tx.clone());
+                }
             } else {
                 coalesced += 1;
             }
@@ -1368,6 +1493,7 @@ async fn handle_normal_input(
                 config.work_end,
                 app.persist_pane_sizes,
                 app.contributions,
+                config.intro,
             ));
         }
         KeyCode::Char('O') => {

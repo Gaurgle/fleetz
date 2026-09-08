@@ -61,9 +61,18 @@ pub struct Config {
     pub repo_list_pct: u16,
     #[serde(default = "default_inspector_pct")]
     pub inspector_pct: u16,
+    /// Whether the first painted screen of a launch arrives as the intro wave.
+    /// On by default, and one key to retire: an animation you meet several
+    /// times a day should be trivial to turn off.
+    #[serde(default = "default_intro")]
+    pub intro: bool,
 }
 
 fn default_watch() -> bool {
+    true
+}
+
+fn default_intro() -> bool {
     true
 }
 
@@ -98,6 +107,7 @@ impl Default for Config {
             persist_pane_sizes: false,
             repo_list_pct: default_repo_list_pct(),
             inspector_pct: default_inspector_pct(),
+            intro: default_intro(),
         }
     }
 }

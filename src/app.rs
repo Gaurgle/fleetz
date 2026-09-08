@@ -274,10 +274,11 @@ pub enum SettingField {
     WorkEnd,
     PersistPanes,
     Contributions,
+    Intro,
 }
 
 /// The settings rows in display order.
-pub const SETTING_FIELDS: [SettingField; 8] = [
+pub const SETTING_FIELDS: [SettingField; 9] = [
     SettingField::RefreshInterval,
     SettingField::GithubPollInterval,
     SettingField::Watch,
@@ -286,6 +287,7 @@ pub const SETTING_FIELDS: [SettingField; 8] = [
     SettingField::WorkEnd,
     SettingField::PersistPanes,
     SettingField::Contributions,
+    SettingField::Intro,
 ];
 
 impl SettingField {
@@ -299,6 +301,7 @@ impl SettingField {
             Self::WorkEnd => "work ends",
             Self::PersistPanes => "remember pane sizes",
             Self::Contributions => "contributions",
+            Self::Intro => "intro animation",
         }
     }
 
@@ -313,6 +316,7 @@ impl SettingField {
             Self::WorkEnd => "work_end",
             Self::PersistPanes => "persist_pane_sizes",
             Self::Contributions => "contributions",
+            Self::Intro => "intro",
         }
     }
 
@@ -325,6 +329,10 @@ impl SettingField {
             | Self::Contributions => Applies::Live,
             // Only read when the app starts; `w` is how you change it now.
             Self::Watch => Applies::Restart,
+            // The wave plays once, on the first screen of a launch. By the
+            // time this row can be reached it has already been and gone, so
+            // there is nothing for a change to take effect on until next time.
+            Self::Intro => Applies::Restart,
             // Both only feed `time::` when the cutoff and header are computed,
             // which happens once per load against the `Config` the main loop
             // owns by reference.
@@ -406,6 +414,7 @@ pub struct SettingsOverlay {
     pub work_end: u8,
     pub persist_panes: bool,
     pub contributions: ContributionsMode,
+    pub intro: bool,
     /// Result of the last save attempt, shown as a footer line.
     pub status: Option<String>,
     /// Rolling buffer of typed digits, so "3" then "0" reads as 30.
@@ -423,6 +432,7 @@ impl SettingsOverlay {
         work_end: u8,
         persist_panes: bool,
         contributions: ContributionsMode,
+        intro: bool,
     ) -> Self {
         Self {
             cursor: 0,
@@ -434,6 +444,7 @@ impl SettingsOverlay {
             work_end,
             persist_panes,
             contributions,
+            intro,
             status: None,
             digits: String::new(),
         }
@@ -487,6 +498,7 @@ impl SettingsOverlay {
                 self.work_end = next.clamp(self.work_start as i32 + 1, 23) as u8;
             }
             SettingField::PersistPanes => self.persist_panes = !self.persist_panes,
+            SettingField::Intro => self.intro = !self.intro,
             // off -> github -> local -> off
             SettingField::Contributions => {
                 self.contributions = match (self.contributions, delta > 0) {
@@ -590,6 +602,10 @@ impl SettingsOverlay {
                 SettingValue::Str(self.contributions.config_value()),
             ),
             (
+                SettingField::Intro.config_key(),
+                SettingValue::Bool(self.intro),
+            ),
+            (
                 SettingField::WorkStart.config_key(),
                 SettingValue::Int(self.work_start as i64),
             ),
@@ -619,7 +635,81 @@ impl SettingsOverlay {
             SettingField::WorkEnd => format!("{:02}:00", self.work_end),
             SettingField::PersistPanes => bool_label(self.persist_panes),
             SettingField::Contributions => self.contributions.label().to_string(),
+            SettingField::Intro => bool_label(self.intro),
         }
+    }
+}
+
+#[cfg(test)]
+mod settings_intro_tests {
+    use super::*;
+
+    fn overlay(intro: bool) -> SettingsOverlay {
+        SettingsOverlay::new(
+            60,
+            30,
+            true,
+            None,
+            9,
+            18,
+            false,
+            ContributionsMode::Off,
+            intro,
+        )
+    }
+
+    /// The row exists, is a toggle, and writes the key the loader reads. A row
+    /// whose `config_key` did not match `Config`'s field would save happily and
+    /// change nothing.
+    #[test]
+    fn the_intro_row_toggles_and_saves_under_the_key_config_reads() {
+        assert!(SETTING_FIELDS.contains(&SettingField::Intro));
+        assert_eq!(SettingField::Intro.config_key(), "intro");
+
+        let mut so = overlay(true);
+        so.cursor = SETTING_FIELDS
+            .iter()
+            .position(|f| *f == SettingField::Intro)
+            .expect("the intro row");
+        assert_eq!(so.value_label(SettingField::Intro), bool_label(true));
+        so.step(1);
+        assert!(!so.intro, "the row did not toggle");
+        assert_eq!(so.value_label(SettingField::Intro), bool_label(false));
+
+        let saved = so
+            .config_updates()
+            .into_iter()
+            .find(|(key, _)| *key == "intro")
+            .expect("intro is not written to the file");
+        assert!(
+            matches!(saved.1, crate::config::SettingValue::Bool(false)),
+            "the saved value is not the toggled one"
+        );
+    }
+
+    /// It is marked restart-only, and honestly so: the wave plays on the first
+    /// screen of a launch, so by the time this row can be reached it has
+    /// already been and gone.
+    #[test]
+    fn the_intro_row_says_it_needs_a_restart() {
+        assert_eq!(SettingField::Intro.applies(), Applies::Restart);
+    }
+
+    /// Every row's key round-trips through a real save and load, which is the
+    /// only thing that proves the overlay and the config agree about names.
+    #[test]
+    fn toggling_the_row_off_survives_a_save_and_load() {
+        let dir = std::env::temp_dir().join(format!("fleetz-intro-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("config.toml");
+
+        let mut so = overlay(true);
+        so.intro = false;
+        crate::config::save_settings(&path, &so.config_updates()).expect("save");
+        let loaded = crate::config::Config::load_from(&path).expect("load");
+        assert!(!loaded.intro, "the toggle did not survive the round trip");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -970,6 +1060,20 @@ pub struct App {
     pub spinner_frame: usize,
     /// Flips every 500ms; drives the pending-CI blink.
     pub blink_on: bool,
+    /// The intro wave, while one is running. See `ui::intro`.
+    pub intro: Option<crate::ui::intro::Intro>,
+    /// The noise field shown while the first load is still running, so the
+    /// wait is spent on the surface the wave will later wash away rather than
+    /// on an empty frame.
+    pub loading_field: Option<crate::ui::intro::Loading>,
+    /// Set when the first screenful of real content is ready, and cleared by
+    /// the paint that captures it. The wave resolves *into* a finished screen,
+    /// so it cannot start until there is one to resolve into.
+    pub intro_pending: bool,
+    /// Whether the wave has already been armed this launch. A sweep delivers
+    /// `Loaded` more than once; without this the dashboard would dissolve into
+    /// noise again every time one landed.
+    pub intro_armed: bool,
     /// True once the user pressed v; stops resize from auto-switching views.
     pub view_overridden: bool,
     /// Width of the repo list as a percentage of the main area, and the
@@ -1131,6 +1235,10 @@ impl App {
             needs_redraw: true,
             spinner_frame: 0,
             blink_on: true,
+            intro: None,
+            loading_field: None,
+            intro_pending: false,
+            intro_armed: false,
             view_overridden: false,
             repo_list_pct: DEFAULT_REPO_LIST_PCT,
             inspector_pct: DEFAULT_INSPECTOR_PCT,
@@ -2630,7 +2738,17 @@ mod tests {
     }
 
     fn settings() -> SettingsOverlay {
-        SettingsOverlay::new(60, 30, true, None, 9, 18, false, ContributionsMode::Off)
+        SettingsOverlay::new(
+            60,
+            30,
+            true,
+            None,
+            9,
+            18,
+            false,
+            ContributionsMode::Off,
+            true,
+        )
     }
 
     /// Put the cursor on a field by name rather than by number, so inserting a
@@ -3407,8 +3525,17 @@ mod tests {
 
     #[test]
     fn the_settings_row_cycles_the_three_modes() {
-        let mut overlay =
-            SettingsOverlay::new(60, 60, true, None, 9, 18, false, ContributionsMode::Off);
+        let mut overlay = SettingsOverlay::new(
+            60,
+            60,
+            true,
+            None,
+            9,
+            18,
+            false,
+            ContributionsMode::Off,
+            true,
+        );
         overlay.cursor = SETTING_FIELDS
             .iter()
             .position(|f| *f == SettingField::Contributions)
@@ -3436,8 +3563,17 @@ mod tests {
     fn the_settings_row_writes_the_contributions_key() {
         assert_eq!(SettingField::Contributions.config_key(), "contributions");
         assert_eq!(SettingField::Contributions.applies(), Applies::Live);
-        let overlay =
-            SettingsOverlay::new(60, 60, true, None, 9, 18, false, ContributionsMode::Local);
+        let overlay = SettingsOverlay::new(
+            60,
+            60,
+            true,
+            None,
+            9,
+            18,
+            false,
+            ContributionsMode::Local,
+            true,
+        );
         let updates = overlay.config_updates();
         assert!(updates.iter().any(|(k, v)| *k == "contributions"
             && matches!(v, crate::config::SettingValue::Str("local"))));

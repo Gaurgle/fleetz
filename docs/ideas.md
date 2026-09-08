@@ -1396,3 +1396,141 @@ at a time.
 **What moved rather than went.** Scrolling the focused detail pane itself is
 still `PageUp`/`PageDown`, and the mouse wheel over a pane still scrolls that
 pane. Only the shifted keys were repointed.
+
+---
+
+## The intro wave
+
+**Status: shipped.**
+
+Once per launch, the first painted screen arrives as a diagonal wave of
+scrambled characters that resolves into the content. The screen starts *full*
+of noise and ends sparse: most cells resolve to blank, and what is left
+standing is the dashboard.
+
+```
+t=0.45                      t=0.70                      t=1.0
+Dbv.cZH~DOwGM&hC]jo%jk      ......kkiQ;vRC^@P()W0
+NFiiWuj/Ec!)+<XoX>7QMV        ....h~xT$im#b%;K4H*W
+?_HBs|yRpcZqO~#:_c.)9N          ..+5xgYFawnk-a@9mk
+N}X@[y!oaU)HL%7j/r#fM-      ..branches  OY^j@VM<H      branches
+4k~kG18l$w0t@x@g[dB|Bu      ..* main      {/H>+dH      * main
+  Ri1us?1Q2@osI:FMtat|                  BrSVvdl}v
+    &fss#rkV}vC3lv<.Dp                    ?_tqDmL
+      SGayph;t8X4G|HXA                      3C<]5
+```
+
+**The shape that makes it affordable.** It is a post-pass over a finished
+buffer, not a change to how anything is drawn. `ui::render` paints once into a
+captured target; every frame after that composes from that clone. None of the
+render functions know it exists, and a frame costs one pass over the cell grid
+rather than a full re-render -- which matters at 60fps.
+
+**Its own timer.** `TICK_INTERVAL` is 100ms, which would give 28 frames over
+the sweep and read as a stutter. It cannot simply be lowered: it *is* the
+spinner rate, and `BLINK_TICKS` and `SLOW_REPAINT_TICKS` are expressed in it.
+So the wave runs a one-shot 16ms task that stops when it is done: 93 frames
+over a second and a half.
+
+**The wave itself.** Each cell has a position along the diagonal, 0 at the
+bottom-left corner and 1 at the top-right, with both axes normalised so the
+front crosses at the same visual angle on any terminal shape. The front sweeps
+from `-BAND` to `1 + BAND`, so at `t = 0` every cell is ahead of it (the full
+screen of noise) and at `t = 1` every cell is behind it. A cell's brightness is
+its distance from the crest, blended up a nuance ladder from `SURFACE` to a
+half-step past `TEXT`, with per-cell grain so the band is textured rather than a
+clean gradient.
+
+**And it gains colour as it goes.** The share of noise wearing a Catppuccin hue
+rather than white climbs across the sweep, from three fifths at the start to all
+of it at the end -- so the field is mostly white when the wave
+arrives and mostly colour by the time the last of it is washed away. The rising
+threshold is compared against a fixed per-cell value, so a cell that has turned
+colour stays colour: the field *gains* hues rather than flickering between
+them.
+
+**Characters lock one by one, not band by band.** Each cell draws its own
+threshold for where in the band it stops churning and shows its real character.
+A single shared threshold would flip the whole band at once and read as an edge
+wiping the screen; scattered thresholds have characters settling one at a time
+across the width of the wave, so the noise *resolves into* the content rather
+than being wiped off it. Monotonic by construction -- the threshold is fixed per
+cell and the resolve fraction only grows -- so nothing that has locked ever
+falls back to noise.
+
+**Only the wave churns.** Ratatui redraws a cell whose symbol or style changed,
+so churning every cell every frame makes each of the 93 frames a full-screen
+repaint: fine locally, unkind over ssh. Ahead of the wave the field holds still.
+The churn is keyed off the crest rather than the lit intensity, because the
+grain lifts resting cells above zero too and would have half the field
+flickering.
+
+**No `rand`.** An FNV-1a hash of the cell's coordinates and a salt answers every
+question about a cell. Nothing here needs to be unpredictable, only unpatterned,
+and determinism is what makes the whole effect testable -- `compose(buf, t)`
+takes `t` as an argument, so frames are inspected rather than raced against a
+clock.
+
+**The bug that made it not a reveal at all.** The target was captured after
+`terminal.draw` returned. `draw` swaps buffers on its way out -- the screen just
+painted becomes the previous buffer and `current_buffer_mut` is a freshly reset
+blank -- so the wave was handed a blank screen and faithfully resolved into
+nothing. What you saw was noise, then an empty pane, then the content snapping
+in when the wave ended: an effect played in front of the dashboard rather than
+one that revealed it. The capture moved inside the closure, and
+`the_screen_just_painted_is_not_the_buffer_draw_leaves_behind` pins the trap so
+it cannot move back out.
+
+**Two things that would corrupt the screen, handled.**
+
+- **Wide glyphs.** A narrow character written into a wide glyph's continuation
+  cell shifts the rest of its row. The noise is all single-width ASCII, and a
+  wide glyph settles together with its continuation, which is found by its empty
+  symbol rather than by measuring character widths.
+- **A resize mid-wave** invalidates the captured screen. `paint` reports that
+  rather than drawing a stale layout, and the caller ends the wave.
+
+**The wait is spent on the same surface.** Before the first load lands there is
+nothing to draw, and what was drawn was an empty frame. `Loading` fills the
+screen with the same noise at the same resting brightness the wave opens on, so
+the two are one continuous surface: the screen fills with noise, the noise sits
+and shimmers while the repos are probed, and then the wave crosses it and leaves
+the dashboard behind. A test compares the field against the wave's own first
+frame cell by cell, because a seam there would be the one place the whole effect
+gives itself away.
+
+`LOADING` sits still in the middle of it, in block capitals. Everything around
+it moves, and one still thing is what makes the rest read as motion rather than
+as static; at banner size it also gives the noise a shape to break around. Its
+block is cleared whole, padding included, so the field does not show through the
+counters of the letters, and a screen too small for it gets the field without it
+rather than a clipped word. The fill is asserted one column wide by ratatui's
+own measurement, the same requirement the graph's commit node has.
+
+**The field shimmers rather than boiling.** Each cell re-rolls its character
+every twelfth frame, with a per-cell phase offset, so a twelfth of the screen
+turns over on any given frame. A field that may sit there for several seconds
+must not be a full-screen repaint sixty times a second -- and the shimmer reads
+better than a boil.
+
+**No flash on the way in.** The wave's target is captured and the first wave
+frame painted over it *within the same draw*. Capturing, presenting, and then
+starting the wave on the next frame would show one frame of finished dashboard
+before it dissolved -- a flash on the way in to a reveal.
+
+**Skippable, once, and optional.** Any keypress ends it on the spot. It is armed
+only on the first `Loaded`, so a watch sweep does not dissolve the dashboard
+into noise every refresh. `intro = true` in `config.toml` turns it off for good:
+an animation met several times a day should be one key to retire.
+
+**Toggleable from inside the app.** `,` carries an `intro animation` row that
+writes `intro` to `config.toml` like every other row, marked restart-only and
+honestly so: the wave plays on the first screen of a launch, so by the time the
+overlay can be reached it has already been and gone.
+
+The row is almost entirely declarative -- the overlay renders whatever is in
+`SETTING_FIELDS` -- so the only things that could go wrong are a `config_key`
+that does not match what `Config` reads, and a value that does not survive being
+written. Both are covered, the second by an actual save and load through a temp
+file, because a row that saves happily and changes nothing is the failure worth
+guarding.

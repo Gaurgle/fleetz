@@ -6,6 +6,7 @@ pub mod contributions;
 pub mod detail;
 pub mod footer;
 pub mod help;
+pub mod intro;
 pub mod settings;
 pub mod timewindow;
 
