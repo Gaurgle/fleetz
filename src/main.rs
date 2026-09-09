@@ -1979,6 +1979,7 @@ async fn rebuild_repo_status(
         behind: total_behind,
         ahead: total_ahead,
         remote_only_branches,
+        remote_branches: remote,
         stash_count: stash_entries.len() as u32,
         stash_entries,
         commits,
@@ -2135,6 +2136,7 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
         owner: None,
         remote_url,
         remote_only_branches,
+        remote_branches: remote,
         work_key: None,
     })
 }
@@ -2482,6 +2484,7 @@ async fn assemble_view(
             owner: gh_repo.owner.clone(),
             remote_url: None,
             remote_only_branches: vec![],
+            remote_branches: vec![],
             work_key: None,
         });
     }
@@ -2595,6 +2598,7 @@ async fn local_only_status(
         owner: None,
         remote_url,
         remote_only_branches,
+        remote_branches: remote,
         work_key: None,
     })
 }
@@ -2688,6 +2692,7 @@ async fn build_repo_status(
         owner,
         remote_url,
         remote_only_branches,
+        remote_branches: remote,
         // Taken last, after every probe above, so the first sweep that finds
         // it unchanged can safely reuse all of them.
         work_key: git::work_key(path).await,
@@ -2761,6 +2766,7 @@ mod tests {
             owner: None,
             remote_url: None,
             remote_only_branches: vec![],
+            remote_branches: vec![],
             work_key: None,
         }
     }

@@ -2256,6 +2256,7 @@ mod tests {
                 owner: None,
                 remote_url: None,
                 remote_only_branches: vec![],
+                remote_branches: vec![],
                 work_key: None,
             })
             .collect();

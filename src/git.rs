@@ -1,4 +1,4 @@
-use crate::model::{BranchStatus, Commit, FileStat, GraphLine, ReflogEntry};
+use crate::model::{BranchStatus, Commit, FileStat, GraphLine, ReflogEntry, RemoteBranch};
 use chrono::DateTime;
 use std::path::Path;
 use std::process::Stdio;
@@ -864,7 +864,7 @@ pub async fn all_branches(repo_path: &Path) -> Vec<String> {
 
 /// Get all remote-tracking branch names (e.g. "origin/feature-x"), excluding
 /// symbolic refs like `origin/HEAD`.
-pub async fn remote_branches(repo_path: &Path) -> Vec<String> {
+pub async fn remote_branches(repo_path: &Path) -> Vec<RemoteBranch> {
     let output = run_git(
         repo_path,
         &[
@@ -872,7 +872,7 @@ pub async fn remote_branches(repo_path: &Path) -> Vec<String> {
             // Both forms: the full refname to filter on, the short one to
             // show. Filtering on the short name alone missed the symref --
             // see `parse_remote_branch_output`.
-            "--format=%(refname)\t%(refname:short)",
+            "--format=%(refname)\t%(refname:short)\t%(objectname:short)",
             "refs/remotes/",
         ],
     )
@@ -895,13 +895,21 @@ pub async fn remote_branches(repo_path: &Path) -> Vec<String> {
 /// was a phantom branch called `origin` sitting in the branches list marked
 /// "not fetched", when it is not a branch at all and points at `origin/main`,
 /// which is fetched.
-fn parse_remote_branch_output(stdout: &str) -> Vec<String> {
+fn parse_remote_branch_output(stdout: &str) -> Vec<RemoteBranch> {
     stdout
         .lines()
-        .filter_map(|line| line.split_once('\t'))
-        .filter(|(full, _)| !full.ends_with("/HEAD"))
-        .map(|(_, short)| short.trim().to_string())
-        .filter(|short| !short.is_empty())
+        .filter_map(|line| {
+            let mut parts = line.split('\t');
+            let full = parts.next()?;
+            let short = parts.next()?.trim();
+            if full.ends_with("/HEAD") || short.is_empty() {
+                return None;
+            }
+            Some(RemoteBranch {
+                name: short.to_string(),
+                tip: parts.next().unwrap_or_default().trim().to_string(),
+            })
+        })
         .collect()
 }
 
@@ -915,16 +923,16 @@ fn parse_remote_branch_output(stdout: &str) -> Vec<String> {
 /// test, `feature/who-goes-first` tracking `origin/wip` left `origin/wip`
 /// reported as never fetched, which is both false and the opposite of the
 /// truth -- that branch is the reason the repo is behind.
-pub fn unfetched_branches(remote: &[String], local: &[BranchStatus]) -> Vec<String> {
+pub fn unfetched_branches(remote: &[RemoteBranch], local: &[BranchStatus]) -> Vec<String> {
     remote
         .iter()
         .filter(|r| {
-            let short = r.split_once('/').map_or(r.as_str(), |(_, name)| name);
+            let short = r.name.split_once('/').map_or(r.name.as_str(), |(_, n)| n);
             !local
                 .iter()
-                .any(|l| l.name == short || l.upstream.as_deref() == Some(r.as_str()))
+                .any(|l| l.name == short || l.upstream.as_deref() == Some(r.name.as_str()))
         })
-        .cloned()
+        .map(|r| r.name.clone())
         .collect()
 }
 
@@ -1119,9 +1127,37 @@ mod tests {
         assert_eq!(parsed[0].tip, "");
     }
 
+    /// Remote branches for the `unfetched_branches` tests. Only the name takes
+    /// part in that decision; the tip rides along for the branches view.
+    fn remotes(names: &[&str]) -> Vec<RemoteBranch> {
+        names
+            .iter()
+            .map(|n| RemoteBranch {
+                name: (*n).to_string(),
+                tip: String::new(),
+            })
+            .collect()
+    }
+
+    /// The failure this closes: only the *unfetched* subset survived the
+    /// sweep, so a branches view had no way to list the remotes that are
+    /// fetched. The full list was already being computed and thrown away.
+    #[test]
+    fn remote_branch_output_carries_names_and_tips() {
+        let out = "refs/remotes/origin/HEAD\torigin\tdeadbee\n\
+                   refs/remotes/origin/main\torigin/main\ta1b2c3d\n\
+                   refs/remotes/origin/wip\torigin/wip\te4f5a6b\n";
+        let parsed = parse_remote_branch_output(out);
+        assert_eq!(parsed.len(), 2, "the HEAD symref must still be dropped");
+        assert_eq!(parsed[0].name, "origin/main");
+        assert_eq!(parsed[0].tip, "a1b2c3d");
+        assert_eq!(parsed[1].name, "origin/wip");
+        assert_eq!(parsed[1].tip, "e4f5a6b");
+    }
+
     #[test]
     fn unfetched_branches_skips_ones_with_local_counterpart() {
-        let remote = vec!["origin/main".to_string(), "origin/feature-x".to_string()];
+        let remote = remotes(&["origin/main", "origin/feature-x"]);
         let local = vec![local_branch("main", Some("origin/main"))];
         assert_eq!(
             unfetched_branches(&remote, &local),
@@ -1131,7 +1167,7 @@ mod tests {
 
     #[test]
     fn unfetched_branches_empty_when_all_fetched() {
-        let remote = vec!["origin/main".to_string()];
+        let remote = remotes(&["origin/main"]);
         let local = vec![local_branch("main", Some("origin/main"))];
         assert!(unfetched_branches(&remote, &local).is_empty());
     }
@@ -1140,7 +1176,7 @@ mod tests {
     fn unfetched_branches_handles_nested_remote_names() {
         // A remote name with slashes in the branch itself (e.g. "origin/feat/x")
         // should still compare against the bare local branch "feat/x".
-        let remote = vec!["origin/feat/x".to_string()];
+        let remote = remotes(&["origin/feat/x"]);
         let local = vec![local_branch("feat/x", None)];
         assert!(unfetched_branches(&remote, &local).is_empty());
     }
@@ -1150,7 +1186,7 @@ mod tests {
         // The regression: a local branch may be named nothing like the ref it
         // tracks. `origin/wip` is fetched and tracked, so it is not unfetched,
         // even though no local branch is called "wip".
-        let remote = vec!["origin/wip".to_string(), "origin/stale".to_string()];
+        let remote = remotes(&["origin/wip", "origin/stale"]);
         let local = vec![local_branch("feature/who-goes-first", Some("origin/wip"))];
         assert_eq!(unfetched_branches(&remote, &local), vec!["origin/stale"]);
     }
@@ -1160,7 +1196,7 @@ mod tests {
         // The upstream test compares against the "origin/x" form, not the bare
         // branch, so a same-named branch on a *different* remote stays
         // unfetched rather than being covered by this one.
-        let remote = vec!["upstream/wip".to_string()];
+        let remote = remotes(&["upstream/wip"]);
         let local = vec![local_branch("mine", Some("origin/wip"))];
         assert_eq!(unfetched_branches(&remote, &local), vec!["upstream/wip"]);
     }
@@ -1236,10 +1272,11 @@ mod tests {
                       refs/remotes/origin/main\torigin/main\n";
         let remotes = parse_remote_branch_output(stdout);
         assert!(
-            !remotes.iter().any(|r| r == "origin"),
+            !remotes.iter().any(|r| r.name == "origin"),
             "the symref leaked: {remotes:?}"
         );
-        assert_eq!(remotes, vec!["origin/main"]);
+        let names: Vec<&str> = remotes.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["origin/main"]);
     }
 
     /// A branch legitimately called `.../HEAD-something` must survive: the

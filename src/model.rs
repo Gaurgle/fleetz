@@ -21,6 +21,19 @@ pub struct BranchStatus {
     pub tip: String,
 }
 
+/// A remote-tracking branch: its short name (`origin/feature-x`) and the tip
+/// it points at.
+///
+/// The tip rides the `for-each-ref` that was already listing these, the same
+/// way `BranchStatus::tip` does. Note that a remote branch fleetz calls "not
+/// fetched" still has a local object behind it: the phrase means no local
+/// *branch* claims it, not that the ref is absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteBranch {
+    pub name: String,
+    pub tip: String,
+}
+
 /// One file touched by a commit, from `git log --numstat`. `added`/`removed`
 /// are line counts (both 0 for a binary file, which numstat reports as `-`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +180,12 @@ pub struct RepoStatus {
     pub owner: Option<String>,
     /// URL of the `origin` remote, if configured.
     pub remote_url: Option<String>,
+    /// Every remote-tracking branch, fetched or not.
+    ///
+    /// Free: `git::remote_branches` was already run during the sweep and its
+    /// result reduced to `remote_only_branches` and discarded. The branches
+    /// view lists all of them, so the whole list is kept instead.
+    pub remote_branches: Vec<RemoteBranch>,
     /// Remote-tracking branches (e.g. "origin/feature-x") with no local
     /// branch of the same name -- never fetched/checked out locally, or
     /// checked out once and deleted locally after merging.
@@ -613,6 +632,7 @@ mod tests {
             owner: None,
             remote_url: None,
             remote_only_branches: vec![],
+            remote_branches: vec![],
             work_key: None,
         }
     }

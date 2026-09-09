@@ -3794,6 +3794,7 @@ mod tests {
             owner: owner.map(|s| s.to_string()),
             remote_url: None,
             remote_only_branches: vec![],
+            remote_branches: vec![],
             work_key: None,
         }
     }
