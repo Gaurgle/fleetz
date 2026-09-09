@@ -414,6 +414,99 @@ fn name_spans(repo: &RepoStatus) -> (Vec<Span<'static>>, usize) {
     (spans, width)
 }
 
+/// One local branch's rows: the branch itself, then any worktrees checked
+/// out on it, indented beneath.
+///
+/// Shared by `info` and `branches` so the two cannot drift into drawing the
+/// same branch differently -- the failure `split_inspector` exists to prevent,
+/// one level up in this same file. The reasons these rows read the way they
+/// do are in the comments below and in `docs/ideas.md`; a second copy would
+/// lose them.
+///
+/// `shown` collects the worktree paths this consumed, so the caller can still
+/// list the orphans afterwards.
+fn branch_row_lines(
+    b: &crate::model::BranchStatus,
+    worktrees: &[crate::model::Worktree],
+    shown: &mut std::collections::HashSet<String>,
+) -> Vec<Line<'static>> {
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    // The checked-out branch gets git's own `*` marker, which keeps
+    // the name column aligned, painted in the colour the history
+    // pane already uses for HEAD so the two agree about what "where
+    // you are" looks like. Nothing marked it before, so a repo with
+    // two level branches drew them identically and the pane could
+    // not answer the first thing anyone asks it.
+    let head_color = colors::ref_color(crate::model::RefKind::Head);
+    let (marker, name_color) = if b.is_head {
+        ("* ", head_color)
+    } else {
+        ("  ", colors::TEXT)
+    };
+    let mut branch_spans = vec![
+        Span::styled(marker, Style::default().fg(head_color)),
+        Span::styled(b.name.clone(), Style::default().fg(name_color)),
+    ];
+    // Only when it differs from the branch's own name. A branch is
+    // free to track a ref it is not named after, and with the upstream
+    // left implicit those two shapes drew identically -- so a count
+    // against `origin/wip` looked like a count against a branch of the
+    // same name, and the row could not be reconciled with the remote.
+    // Shown for the odd one out rather than for every row, because
+    // repeating `origin/x` after `x` down the whole list is noise that
+    // would bury exactly the case worth seeing.
+    if let Some(upstream) = &b.upstream
+        && upstream
+            .split_once('/')
+            .map_or(upstream.as_str(), |(_, n)| n)
+            != b.name
+    {
+        branch_spans.push(Span::styled(
+            format!(" -> {upstream}"),
+            Style::default().fg(colors::OVERLAY),
+        ));
+    }
+    if b.behind > 0 {
+        branch_spans.push(Span::styled(
+            format!(" {} behind", b.behind),
+            Style::default().fg(colors::PEACH),
+        ));
+    }
+    if b.ahead > 0 {
+        branch_spans.push(Span::styled(
+            format!(" {} ahead", b.ahead),
+            Style::default().fg(colors::PEACH),
+        ));
+    }
+    // An untracked branch used to render bare, which reads as "fine"
+    // when it actually means "not on any remote". Same trap as a
+    // not-cloned repo whose counters are all zero: say the state in
+    // words rather than letting silence stand in for health. That
+    // also makes the ✓ mean one thing again -- level with an upstream
+    // that exists -- instead of covering two cases by omission.
+    if b.upstream.is_none() {
+        branch_spans.push(Span::styled(
+            " no upstream",
+            Style::default().fg(colors::OVERLAY),
+        ));
+    } else if b.behind == 0 && b.ahead == 0 {
+        branch_spans.push(Span::styled(" ✓", Style::default().fg(colors::GREEN)));
+    }
+    rows.push(Line::from(branch_spans));
+
+    for wt in worktrees.iter().filter(|wt| wt.branch == b.name) {
+        shown.insert(wt.path.clone());
+        rows.push(Line::from(Span::styled(
+            // The word, not a glyph: `⎇` is the Alt key symbol that
+            // shell prompts use for *branch*, so it read as "branch"
+            // in a list of branches. Categorical things get words.
+            format!("    worktree {}", wt.path),
+            Style::default().fg(colors::OVERLAY),
+        )));
+    }
+    rows
+}
+
 fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focused_panel == FocusedPanel::Detail;
     let border_color = if focused {
@@ -680,79 +773,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     {
         lines.push(Line::from(section_label("branches")));
         for b in &repo.branches {
-            // The checked-out branch gets git's own `*` marker, which keeps
-            // the name column aligned, painted in the colour the history
-            // pane already uses for HEAD so the two agree about what "where
-            // you are" looks like. Nothing marked it before, so a repo with
-            // two level branches drew them identically and the pane could
-            // not answer the first thing anyone asks it.
-            let head_color = colors::ref_color(crate::model::RefKind::Head);
-            let (marker, name_color) = if b.is_head {
-                ("* ", head_color)
-            } else {
-                ("  ", colors::TEXT)
-            };
-            let mut branch_spans = vec![
-                Span::styled(marker, Style::default().fg(head_color)),
-                Span::styled(b.name.clone(), Style::default().fg(name_color)),
-            ];
-            // Only when it differs from the branch's own name. A branch is
-            // free to track a ref it is not named after, and with the upstream
-            // left implicit those two shapes drew identically -- so a count
-            // against `origin/wip` looked like a count against a branch of the
-            // same name, and the row could not be reconciled with the remote.
-            // Shown for the odd one out rather than for every row, because
-            // repeating `origin/x` after `x` down the whole list is noise that
-            // would bury exactly the case worth seeing.
-            if let Some(upstream) = &b.upstream
-                && upstream
-                    .split_once('/')
-                    .map_or(upstream.as_str(), |(_, n)| n)
-                    != b.name
-            {
-                branch_spans.push(Span::styled(
-                    format!(" -> {upstream}"),
-                    Style::default().fg(colors::OVERLAY),
-                ));
-            }
-            if b.behind > 0 {
-                branch_spans.push(Span::styled(
-                    format!(" {} behind", b.behind),
-                    Style::default().fg(colors::PEACH),
-                ));
-            }
-            if b.ahead > 0 {
-                branch_spans.push(Span::styled(
-                    format!(" {} ahead", b.ahead),
-                    Style::default().fg(colors::PEACH),
-                ));
-            }
-            // An untracked branch used to render bare, which reads as "fine"
-            // when it actually means "not on any remote". Same trap as a
-            // not-cloned repo whose counters are all zero: say the state in
-            // words rather than letting silence stand in for health. That
-            // also makes the ✓ mean one thing again -- level with an upstream
-            // that exists -- instead of covering two cases by omission.
-            if b.upstream.is_none() {
-                branch_spans.push(Span::styled(
-                    " no upstream",
-                    Style::default().fg(colors::OVERLAY),
-                ));
-            } else if b.behind == 0 && b.ahead == 0 {
-                branch_spans.push(Span::styled(" ✓", Style::default().fg(colors::GREEN)));
-            }
-            lines.push(Line::from(branch_spans));
-
-            for wt in repo.worktrees.iter().filter(|wt| wt.branch == b.name) {
-                shown_worktrees.insert(&wt.path);
-                lines.push(Line::from(Span::styled(
-                    // The word, not a glyph: `⎇` is the Alt key symbol that
-                    // shell prompts use for *branch*, so it read as "branch"
-                    // in a list of branches. Categorical things get words.
-                    format!("    worktree {}", wt.path),
-                    Style::default().fg(colors::OVERLAY),
-                )));
-            }
+            lines.extend(branch_row_lines(b, &repo.worktrees, &mut shown_worktrees));
         }
 
         // The pinned region ends here, with the local branches and not the
@@ -2195,6 +2216,72 @@ mod tests {
 
     /// A repo carrying something for every view, so a view showing the wrong
     /// section is visible rather than merely absent.
+    /// Flatten a rendered row to its text, so a test can assert on what the
+    /// eye sees rather than on span structure.
+    fn row_text(row: &Line<'static>) -> String {
+        row.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn branch_rows(b: &crate::model::BranchStatus) -> Vec<Line<'static>> {
+        let mut shown = std::collections::HashSet::new();
+        branch_row_lines(b, &[], &mut shown)
+    }
+
+    fn branch_fixture(
+        name: &str,
+        upstream: Option<&str>,
+        behind: u32,
+        is_head: bool,
+    ) -> crate::model::BranchStatus {
+        crate::model::BranchStatus {
+            name: name.to_string(),
+            upstream: upstream.map(|u| u.to_string()),
+            behind,
+            ahead: 0,
+            is_head,
+            tip: "a1b2c3d".to_string(),
+        }
+    }
+
+    /// The failure this closes: `info` and `branches` would each grow their
+    /// own copy of this row, and two copies of a row vocabulary drift exactly
+    /// the way two copies of layout arithmetic do. One function, called by
+    /// both.
+    #[test]
+    fn a_branch_row_says_head_upstream_and_divergence_once() {
+        let b = branch_fixture("feature/who-goes-first", Some("origin/wip"), 19, true);
+        let text = row_text(&branch_rows(&b)[0]);
+        assert!(text.starts_with("* "), "HEAD marker missing: {text:?}");
+        assert!(text.contains("-> origin/wip"), "upstream missing: {text:?}");
+        assert!(text.contains("19 behind"), "divergence missing: {text:?}");
+    }
+
+    /// The arrow is for the odd one out. Repeating `origin/x` after every `x`
+    /// down the whole list is noise that would bury the case worth seeing.
+    #[test]
+    fn a_branch_tracking_its_own_name_stays_bare() {
+        let b = branch_fixture("main", Some("origin/main"), 0, false);
+        let text = row_text(&branch_rows(&b)[0]);
+        assert!(
+            !text.contains("->"),
+            "arrow drawn for a matching upstream: {text:?}"
+        );
+        assert!(text.contains('✓'), "level branch lost its tick: {text:?}");
+    }
+
+    /// An untracked branch rendering bare reads as "fine" when it means "not
+    /// on any remote" -- the same trap as a not-cloned repo whose counters are
+    /// all zero.
+    #[test]
+    fn a_branch_with_no_upstream_says_so() {
+        let b = branch_fixture("beta", None, 0, false);
+        let text = row_text(&branch_rows(&b)[0]);
+        assert!(
+            text.contains("no upstream"),
+            "silence stood in for a state: {text:?}"
+        );
+    }
+
     fn busy_repo() -> RepoStatus {
         let mut r = cloned_repo();
         r.stash_count = 2;
