@@ -187,7 +187,7 @@ pub async fn branch_statuses(repo_path: &Path) -> Vec<BranchStatus> {
             // `%(HEAD)` is `*` on the checked-out branch and a space on every
             // other, so which branch you are on rides the query that was
             // already being made rather than costing a second subprocess.
-            "--format=%(HEAD)\t%(refname:short)\t%(upstream:short)\t%(upstream:track)",
+            "--format=%(HEAD)\t%(refname:short)\t%(upstream:short)\t%(upstream:track)\t%(objectname:short)",
             "refs/heads/",
         ],
     )
@@ -272,6 +272,7 @@ fn parse_branch_output(output: &str) -> Vec<BranchStatus> {
             let track = parts.get(3).unwrap_or(&"");
 
             let (ahead, behind) = parse_track_info(track);
+            let tip = parts.get(4).unwrap_or(&"").trim().to_string();
 
             BranchStatus {
                 name,
@@ -279,6 +280,7 @@ fn parse_branch_output(output: &str) -> Vec<BranchStatus> {
                 behind,
                 ahead,
                 is_head,
+                tip,
             }
         })
         .collect()
@@ -1090,7 +1092,31 @@ mod tests {
             behind: 0,
             ahead: 0,
             is_head: false,
+            tip: String::new(),
         }
+    }
+
+    /// The failure this closes: a branch row had no way to reach its own
+    /// commit, so the branches view could not feed the inspector. The hash
+    /// rides the `for-each-ref` that was already asking for `%(HEAD)` rather
+    /// than costing a second subprocess.
+    #[test]
+    fn branch_output_carries_the_tip_hash() {
+        let out = "*\tmain\torigin/main\t[ahead 2]\ta1b2c3d\n \tbeta\t\t\te4f5a6b\n";
+        let parsed = parse_branch_output(out);
+        assert_eq!(parsed[0].name, "main");
+        assert_eq!(parsed[0].tip, "a1b2c3d");
+        assert_eq!(parsed[1].name, "beta");
+        assert_eq!(parsed[1].tip, "e4f5a6b");
+    }
+
+    /// A repo with no commits yields no object name. The field is empty rather
+    /// than the row being dropped: the branch exists and must still be listed.
+    #[test]
+    fn a_branch_with_no_tip_parses_with_an_empty_hash() {
+        let parsed = parse_branch_output("*\tmain\t\t\t\n");
+        assert_eq!(parsed[0].name, "main");
+        assert_eq!(parsed[0].tip, "");
     }
 
     #[test]

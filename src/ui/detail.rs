@@ -2204,6 +2204,7 @@ mod tests {
             behind: 0,
             ahead: 0,
             is_head: true,
+            tip: "a1b2c3d".to_string(),
         }];
         r.commits = vec![crate::model::Commit {
             hash: "a1b2c3d".to_string(),
@@ -2474,6 +2475,7 @@ mod tests {
                 behind: 0,
                 ahead: 0,
                 is_head: true,
+                tip: String::new(),
             },
             crate::model::BranchStatus {
                 name: "beta".to_string(),
@@ -2481,6 +2483,7 @@ mod tests {
                 behind: 21,
                 ahead: 0,
                 is_head: false,
+                tip: String::new(),
             },
             crate::model::BranchStatus {
                 name: "feature/who-goes-first".to_string(),
@@ -2488,6 +2491,7 @@ mod tests {
                 behind: 19,
                 ahead: 0,
                 is_head: false,
+                tip: String::new(),
             },
         ];
         r.remote_only_branches = (0..12)

@@ -12,6 +12,13 @@ pub struct BranchStatus {
     /// Nothing used to record it, so every local branch drew identically and
     /// the pane could not answer the first question anyone asks it.
     pub is_head: bool,
+    /// The branch's tip commit, short form, from `for-each-ref`'s
+    /// `%(objectname:short)`.
+    ///
+    /// Rides the query that was already being made, the same way `is_head`
+    /// does. It is what lets the branches view hand the inspector a commit.
+    /// Empty in a repo with no commits, where there is no object to name.
+    pub tip: String,
 }
 
 /// One file touched by a commit, from `git log --numstat`. `added`/`removed`
@@ -558,6 +565,7 @@ mod tests {
                 behind: *behind,
                 ahead: 0,
                 is_head: false,
+                tip: String::new(),
             })
             .collect();
         repo
