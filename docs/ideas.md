@@ -1158,6 +1158,43 @@ existing client behind a base-URL config key rather than needing a new one.
 
 ---
 
+## The strip's window on a resize
+
+**Status: shipped.**
+
+**Problem.** Standing on a recent day and shrinking the terminal took the
+newest weeks off the right, the marked day with them, and kept the old weeks
+nobody was looking at.
+
+**Cause.** The window is stored as a *left* edge (`contrib_scroll`), so
+narrowing the pane shortened it from the right: the drawn range went from
+`[101, 157)` to `[101, 132)`, dropping the 25 newest weeks. Growing already
+anchored right, but only by accident of the `min(scroll, WEEKS - visible)`
+clamp, so the two directions disagreed without either being written down.
+
+Compounding it, `render` wrote `contrib_visible_weeks` *before* calling
+`first_week`, so nothing downstream could tell a resize from a pan: by the time
+the decision was made, the record of the previous width was already gone.
+
+**What shipped.** `first_week` compares this frame's width against the last
+one. Same width is a pan and behaves exactly as before. A different width is a
+resize, and holds the *right* edge by shifting the start by the change in
+width. Time runs left to right and the end worth looking at is today's, the
+same reason `grid_pad` pools its surplus on the left.
+
+The cursor outranks even that: holding the right edge would push a cursor
+parked in the oldest weeks off the *left*, the same bug in a mirror, so a
+resize nudges the window to keep the marked day in view. Deliberately only on
+a resize -- on an ordinary frame a pan must be free to travel away from the
+cursor, and yanking the view back would make panning impossible.
+
+**Rejected: storing the right edge instead.** It states the intent directly,
+but `contrib_scroll` is read by the pan handler, the scroll keys and
+`slot_at`'s hit-test, and flipping its meaning would have touched all of them
+for a fix that lives in one function.
+
+---
+
 ## Branches view
 
 **Status: shipped.**

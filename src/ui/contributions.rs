@@ -147,9 +147,42 @@ pub fn cols_for_weeks(weeks: i32) -> i32 {
 /// The leftmost week to draw: whatever the app asked for, clamped so the
 /// grid can never scroll past its own ends. An out-of-range request pins the
 /// newest week to the right edge, which is where the grid opens.
+///
+/// **A resize holds the right edge, not the left.** The window is stored as a
+/// left edge, so a narrower pane used to shorten it from the right: shrinking
+/// the terminal took the newest weeks off the screen -- including the day you
+/// were standing on -- and kept the old ones nobody was looking at. Time runs
+/// left to right here and the end worth looking at is today's, the same reason
+/// `grid_pad` pools its surplus on the left.
+///
+/// Growing already anchored right, by accident of the clamp above. This makes
+/// the two directions agree on purpose rather than by luck.
+///
+/// The cursor outranks even that. Holding the right edge covers the common
+/// case, but it would push a cursor parked in the oldest weeks off the left
+/// instead, which is the same bug seen in a mirror. Applied only on a resize:
+/// on an ordinary frame a pan must be free to travel away from the cursor,
+/// and yanking the view back to it would make panning impossible.
 fn first_week(app: &App, visible: usize) -> usize {
     let max = WEEKS.saturating_sub(visible);
-    app.contrib_scroll.get().min(max)
+    let scroll = app.contrib_scroll.get();
+    let previous = app.contrib_visible_weeks.get();
+    if previous == visible {
+        return scroll.min(max);
+    }
+
+    let shift = previous as isize - visible as isize;
+    let mut first = (scroll as isize + shift).clamp(0, max as isize) as usize;
+    if let Some(slot) = app.contrib_cursor {
+        let week = slot / 7;
+        if week < first {
+            first = week;
+        } else if week >= first + visible {
+            first = week + 1 - visible;
+        }
+        first = first.min(max);
+    }
+    first
 }
 
 /// Group a count with commas, the way the GitHub header does.
@@ -273,8 +306,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // have something real to clamp against. This is the render pass telling
     // the input layer how wide the view turned out, not state it owns.
     let visible = visible_weeks(area);
-    app.contrib_visible_weeks.set(visible.max(1));
+    // Read before the write: `first_week` compares this frame's width against
+    // the last one to tell a resize from a pan, so reporting the new width
+    // first would hide every resize from it.
     let first = first_week(app, visible);
+    app.contrib_visible_weeks.set(visible.max(1));
     app.contrib_scroll.set(first);
 
     let cursor = app.contrib_cursor.map(|c| c.min(calendar.today_slot()));
@@ -752,6 +788,81 @@ mod tests {
             first_week(&app, visible),
             WEEKS - visible,
             "a fresh strip should open on today, not last August"
+        );
+    }
+
+    /// The reported bug: standing on a recent day and shrinking the terminal
+    /// took the newest weeks off the right, including the marked day, and left
+    /// the old weeks nobody was looking at. The window is stored as a left
+    /// edge, so a narrower pane shortened it from the right.
+    #[test]
+    fn shrinking_the_pane_drops_the_oldest_weeks_not_the_newest() {
+        let wide = Rect::new(0, 5, 120, CONTRIB_HEIGHT);
+        let narrow = Rect::new(0, 5, 70, CONTRIB_HEIGHT);
+        let (was, now) = (visible_weeks(wide), visible_weeks(narrow));
+        assert!(now < was, "test premise: {now} should be under {was}");
+
+        let app = App::new(vec![], "test".to_string(), 120, 40);
+        // Settle at the wide size, as a real first frame would.
+        let first = first_week(&app, was);
+        app.contrib_visible_weeks.set(was);
+        app.contrib_scroll.set(first);
+        let right_edge = first + was;
+
+        let after = first_week(&app, now);
+        assert_eq!(
+            after + now,
+            right_edge,
+            "the right edge moved: window was [{first}, {right_edge}), now [{after}, {})",
+            after + now
+        );
+    }
+
+    /// Growing the pane is the same rule seen from the other side: the newest
+    /// week stays put against the right edge and the view reaches further
+    /// back, rather than the grid sliding forward into weeks that do not exist
+    /// yet.
+    #[test]
+    fn growing_the_pane_reaches_further_back_not_forward() {
+        let narrow = Rect::new(0, 5, 70, CONTRIB_HEIGHT);
+        let wide = Rect::new(0, 5, 120, CONTRIB_HEIGHT);
+        let (was, now) = (visible_weeks(narrow), visible_weeks(wide));
+
+        let app = App::new(vec![], "test".to_string(), 70, 40);
+        let first = first_week(&app, was);
+        app.contrib_visible_weeks.set(was);
+        app.contrib_scroll.set(first);
+        let right_edge = first + was;
+
+        let after = first_week(&app, now);
+        assert_eq!(
+            after + now,
+            right_edge,
+            "the right edge moved while growing"
+        );
+    }
+
+    /// A resize must not obscure the day you are standing on. Holding the
+    /// right edge covers the common case, but a cursor parked in the oldest
+    /// weeks would fall off the left instead -- the same bug mirrored.
+    #[test]
+    fn a_resize_keeps_the_marked_day_in_view() {
+        let wide = Rect::new(0, 5, 120, CONTRIB_HEIGHT);
+        let narrow = Rect::new(0, 5, 60, CONTRIB_HEIGHT);
+        let (was, now) = (visible_weeks(wide), visible_weeks(narrow));
+
+        let mut app = App::new(vec![], "test".to_string(), 120, 40);
+        let first = first_week(&app, was);
+        app.contrib_visible_weeks.set(was);
+        app.contrib_scroll.set(first);
+        // Park the cursor on the oldest week currently drawn.
+        app.contrib_cursor = Some(first * 7);
+
+        let after = first_week(&app, now);
+        assert!(
+            first >= after && first < after + now,
+            "the marked week {first} fell outside [{after}, {})",
+            after + now
         );
     }
 
