@@ -1132,6 +1132,13 @@ pub struct App {
     /// any less.
     pub show_pr_detail: bool,
     pub dragging: Option<crate::ui::Divider>,
+
+    /// Whether `info` draws the remote-branch names or just their count.
+    ///
+    /// App-level and session-lived rather than per repo: it is a preference
+    /// about how you want `info` to read, not a fact about one repo. Resets on
+    /// launch, like the pane sizes.
+    pub expand_remote_branches: bool,
     /// Screen column the in-progress contribution-strip pan is measured from,
     /// or None when no drag is underway. Separate from `dragging`, which owns
     /// pane resizing: a pan moves content inside a pane rather than moving
@@ -1263,6 +1270,7 @@ impl App {
             persist_pane_sizes: false,
             show_pr_detail: false,
             dragging: None,
+            expand_remote_branches: false,
             contrib_drag: None,
             loading: false,
             sweep_started: None,

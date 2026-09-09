@@ -784,14 +784,33 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         pinned_rows = lines.len();
 
         // Remote branches with no local counterpart -- never fetched/checked
-        // out, or checked out once and deleted locally after merging. Shown
-        // so "what am I missing locally" is visible at a glance.
+        // out, or checked out once and deleted locally after merging. Shown so
+        // "what am I missing locally" is visible at a glance.
+        //
+        // Collapsed to a count by default. Unlike a PR number or a changed
+        // path, a remote-only branch name is not identifying: three of
+        // twenty-three feature branches a colleague pushed say nothing the
+        // count does not, while costing three rows of the commit list below --
+        // which used to start below the fold, so the selection scrolled this
+        // whole block away the moment the cursor moved. `B` expands it in
+        // place; the `branches` view lists them all with their state.
         if !repo.remote_only_branches.is_empty() {
-            for name in &repo.remote_only_branches {
-                lines.push(Line::from(vec![
-                    Span::styled(format!("  {name}"), Style::default().fg(colors::OVERLAY)),
-                    Span::styled(" not fetched", Style::default().fg(colors::SUBTEXT)),
-                ]));
+            if app.expand_remote_branches {
+                for name in &repo.remote_only_branches {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {name}"), Style::default().fg(colors::OVERLAY)),
+                        Span::styled(" not fetched", Style::default().fg(colors::SUBTEXT)),
+                    ]));
+                }
+            } else {
+                let n = repo.remote_only_branches.len();
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "  {n} remote branch{} not fetched",
+                        if n == 1 { "" } else { "es" }
+                    ),
+                    Style::default().fg(colors::OVERLAY),
+                )));
             }
         }
         lines.push(Line::from(""));
@@ -2802,11 +2821,21 @@ mod tests {
     /// content allows. The offset is clamped during render, so a large value
     /// parks it at the bottom whatever the content turns out to measure.
     fn info_text_at_bottom(repo: RepoStatus, width: u16, height: u16) -> String {
+        info_text_at_bottom_expanded(repo, width, height, false)
+    }
+
+    fn info_text_at_bottom_expanded(
+        repo: RepoStatus,
+        width: u16,
+        height: u16,
+        expand: bool,
+    ) -> String {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
         let mut app = crate::app::App::new(vec![repo], "t".to_string(), width, height);
         app.history_view = HistoryView::Info;
+        app.expand_remote_branches = expand;
         app.set_detail_scroll(u16::MAX);
         let mut term = Terminal::new(TestBackend::new(width, height)).unwrap();
         term.draw(|f| render_detail_pane(f, f.area(), &app))
@@ -2842,9 +2871,12 @@ mod tests {
     /// The remote-only list is bounded by what everyone else has pushed, not
     /// by what you have, so it stays in the scrolling body. Pinning it too
     /// would cost the pane its history on exactly the busy repos that need it.
+    ///
+    /// Tested expanded, because collapsed there are no names for the pin to
+    /// hold and the assertion would pass for the wrong reason.
     #[test]
     fn the_remote_only_list_is_not_pinned() {
-        let text = info_text_at_bottom(spread_repo(), 92, 20);
+        let text = info_text_at_bottom_expanded(spread_repo(), 92, 20, true);
         assert!(
             text.contains("feat: commit"),
             "the history is unreachable at the bottom of the scroll"
@@ -2852,6 +2884,49 @@ mod tests {
         assert!(
             !text.contains("spare-0 "),
             "the first remote-only row is still on screen at the bottom"
+        );
+    }
+
+    /// The reported bug: twenty-plus "not fetched" rows sat between the pinned
+    /// local branches and the commit list, so `recent commits` started below
+    /// the fold and the selection scrolled the whole block away as soon as the
+    /// cursor moved.
+    #[test]
+    fn info_keeps_the_commit_list_on_the_first_screen_with_many_remotes() {
+        let text = info_text_at_bottom_expanded(spread_repo(), 92, 30, false);
+        assert!(
+            text.contains("12 remote branches not fetched"),
+            "the list did not collapse:\n{text}"
+        );
+        assert!(
+            text.contains("recent commits"),
+            "the commit list is still below the fold:\n{text}"
+        );
+    }
+
+    /// Collapsed is not a dead end: the names are still reachable in place.
+    #[test]
+    fn expanding_the_summary_draws_every_remote_name() {
+        let text = info_text_at_bottom_expanded(spread_repo(), 92, 44, true);
+        assert!(
+            !text.contains("remote branches not fetched"),
+            "still collapsed:\n{text}"
+        );
+        assert!(
+            text.contains("spare-11"),
+            "names missing when expanded:\n{text}"
+        );
+    }
+
+    /// One branch is not "1 remote branches".
+    #[test]
+    fn a_single_unfetched_remote_reads_as_one_branch() {
+        let mut r = spread_repo();
+        r.remote_only_branches = vec!["origin/only".to_string()];
+        let text = info_text_at_bottom_expanded(r, 92, 30, false);
+        assert!(
+            text.contains("1 remote branch not fetched"),
+            "plural leaked into the singular:\n{text}"
         );
     }
 

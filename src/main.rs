@@ -1472,6 +1472,13 @@ async fn handle_normal_input(
         // Branches overlay: switch (Enter) or clean up merged branches
         // (space to mark, d to delete). `b` and `s` both open it -- `s` for
         // the "switch" mnemonic the pull-removal left room for.
+        // Expand or collapse `info`'s remote branch summary. The full list
+        // with its state lives in the `branches` view; this is for a quick
+        // look without leaving the glance.
+        KeyCode::Char('B') => {
+            app.expand_remote_branches = !app.expand_remote_branches;
+            app.needs_redraw = true;
+        }
         KeyCode::Char('b') | KeyCode::Char('s') => {
             open_branch_overlay(app).await;
         }
