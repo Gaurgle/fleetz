@@ -1206,6 +1206,28 @@ fn mark_cursor_row(lines: &mut [Line<'static>], cursor: u16, width: usize) {
 /// so you can read a commit in full without leaving the dashboard. The block's
 /// padding insets every line uniformly, so wrapped prose keeps its left edge
 /// instead of falling back to column zero.
+/// What the inspector says when it has a selection it cannot draw.
+///
+/// Three different facts, and none of them may be told as silence: nothing is
+/// selected, the commit is real but was not loaded, or the commit is real and
+/// simply is not reachable from here.
+///
+/// The reflog reaches back further than the commit list does, so an old entry
+/// names a commit that was not loaded -- a range problem. A remote-only branch
+/// tip is a different thing: `git::commits` and `git::graph` walk the union of
+/// the *local* branches, so that commit is not outside the range, it is off
+/// the refs fleetz reads at all. Saying "range" there would send someone
+/// looking for a limit to raise.
+fn inspector_empty_text(app: &App) -> String {
+    let Some(hash) = app.inspected_hash() else {
+        return "no commit selected".to_string();
+    };
+    match app.history_view {
+        HistoryView::Branches => format!("{hash} is not on any local branch"),
+        _ => format!("{hash} is outside the loaded commit range"),
+    }
+}
+
 fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focused_panel == FocusedPanel::Inspector;
     let border_color = if focused {
@@ -1226,10 +1248,7 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
         // cannot show". The reflog reaches back further than the commit list
         // does, so picking an old entry names a real commit that simply was
         // not loaded -- saying "no commit selected" there would be a lie.
-        let text = match app.inspected_hash() {
-            Some(hash) => format!("{hash} is outside the loaded commit range"),
-            None => "no commit selected".to_string(),
-        };
+        let text = inspector_empty_text(app);
         let empty = Paragraph::new(text)
             .style(Style::default().fg(colors::OVERLAY))
             .block(block);
@@ -2404,6 +2423,41 @@ mod tests {
             .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The failure this closes: a remote-only branch's tip is not in the union
+    /// of local branches that `git::commits` walks, so the inspector had
+    /// nothing to draw. Reporting it as a *range* problem would send someone
+    /// looking for a limit to raise; it is a reachability problem.
+    #[test]
+    fn an_unreachable_branch_tip_says_it_is_not_on_a_local_branch() {
+        let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), 92, 44);
+        app.history_view = HistoryView::Branches;
+        app.repos[0].branches = vec![branch_fixture("gone", None, 0, false)];
+        app.repos[0].branches[0].tip = "beefbee".to_string();
+        app.set_detail_selected(0);
+        assert_eq!(
+            inspector_empty_text(&app),
+            "beefbee is not on any local branch"
+        );
+    }
+
+    /// The reflog keeps its own wording: there the commit really is outside a
+    /// range that could be widened.
+    #[test]
+    fn an_unloaded_reflog_commit_still_reports_a_range() {
+        let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), 92, 44);
+        app.history_view = HistoryView::Reflog;
+        app.repos[0].reflog = vec![crate::model::ReflogEntry {
+            hash: "beefbee".to_string(),
+            action: "commit".to_string(),
+            description: "x".to_string(),
+        }];
+        app.set_detail_selected(0);
+        assert_eq!(
+            inspector_empty_text(&app),
+            "beefbee is outside the loaded commit range"
+        );
     }
 
     /// A repo with two local branches and three remotes, one of which nothing
