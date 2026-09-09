@@ -40,11 +40,18 @@ pub enum HistoryView {
     Commits,
     Reflog,
     Graph,
+    Branches,
 }
 
 impl HistoryView {
     /// Every view, in the order the tab strip draws them and `V` cycles them.
-    pub const ALL: [Self; 4] = [Self::Info, Self::Commits, Self::Reflog, Self::Graph];
+    pub const ALL: [Self; 5] = [
+        Self::Info,
+        Self::Commits,
+        Self::Reflog,
+        Self::Graph,
+        Self::Branches,
+    ];
     pub const COUNT: usize = Self::ALL.len();
 
     /// Index into the per-view scroll and selection arrays.
@@ -54,6 +61,7 @@ impl HistoryView {
             Self::Commits => 1,
             Self::Reflog => 2,
             Self::Graph => 3,
+            Self::Branches => 4,
         }
     }
 
@@ -63,6 +71,7 @@ impl HistoryView {
             Self::Commits => "commits",
             Self::Reflog => "reflog",
             Self::Graph => "graph",
+            Self::Branches => "branches",
         }
     }
 }
@@ -1517,6 +1526,8 @@ impl App {
             HistoryView::Commits => graph_commits(),
             HistoryView::Reflog => repo.reflog.len(),
             HistoryView::Graph => graph_commits(),
+            // Local branches then remotes, in the order the view draws them.
+            HistoryView::Branches => repo.branches.len() + repo.remote_branches.len(),
         }
     }
 
@@ -1594,6 +1605,17 @@ impl App {
         match self.history_view {
             HistoryView::Info | HistoryView::Commits | HistoryView::Graph => graph_nth(i),
             HistoryView::Reflog => repo.reflog.get(i).map(|e| e.hash.as_str()),
+            // A branch resolves to its own tip. Locals come first, so an index
+            // past them names a remote. An empty tip is no answer at all: a
+            // repo with no commits has branches but no objects to name.
+            HistoryView::Branches => {
+                let n = repo.branches.len();
+                match i < n {
+                    true => repo.branches.get(i).map(|b| b.tip.as_str()),
+                    false => repo.remote_branches.get(i - n).map(|r| r.tip.as_str()),
+                }
+                .filter(|h| !h.is_empty())
+            }
         }
     }
 
@@ -2336,9 +2358,9 @@ mod tests {
 
         // And backwards, which a shifted letter could not have given us.
         app.cycle_history_view(true);
-        assert_eq!(app.history_view, HistoryView::Graph, "wraps backward");
+        assert_eq!(app.history_view, HistoryView::Branches, "wraps backward");
         app.cycle_history_view(true);
-        assert_eq!(app.history_view, HistoryView::Reflog);
+        assert_eq!(app.history_view, HistoryView::Graph);
     }
 
     /// Scroll and selection are per view. A shared offset is wrong the moment

@@ -922,6 +922,68 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
     }
 
+    // The branches view: every local branch, then every remote. Read-only --
+    // deleting stays in the `b` overlay, which already has the merged/protected
+    // knowledge and the confirm step for it.
+    if view == HistoryView::Branches {
+        lines.push(Line::from(section_label("local branches")));
+        for (bi, b) in repo.branches.iter().enumerate() {
+            let is_sel = bi == app.detail_selected();
+            // The same renderer `info` uses, so the two cannot draw the same
+            // branch differently.
+            let rows = branch_row_lines(b, &repo.worktrees, &mut shown_worktrees);
+            if is_sel {
+                selected_block = Some((lines.len(), lines.len() + rows.len() - 1));
+            }
+            block_tops.push(lines.len());
+            for (i, row) in rows.into_iter().enumerate() {
+                // The caret is a column of its own, beside git's `*`: one says
+                // where the cursor is, the other where HEAD is, and a row can
+                // be both or neither.
+                let mut spans = vec![Span::styled(
+                    if is_sel && i == 0 { "▸ " } else { "  " },
+                    Style::default().fg(colors::SAPPHIRE),
+                )];
+                spans.extend(row.spans);
+                if is_sel && i == 0 {
+                    spans = wash(pad_to(spans, width));
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+        lines.push(Line::from(""));
+
+        lines.push(Line::from(section_label("remotes")));
+        // Every remote, not only the unclaimed ones: "not fetched" is a marker
+        // on a row, not a reason to leave the row out.
+        let local_count = repo.branches.len();
+        for (ri, r) in repo.remote_branches.iter().enumerate() {
+            let is_sel = local_count + ri == app.detail_selected();
+            if is_sel {
+                selected_block = Some((lines.len(), lines.len()));
+            }
+            block_tops.push(lines.len());
+            let mut spans = vec![
+                Span::styled(
+                    if is_sel { "▸ " } else { "  " },
+                    Style::default().fg(colors::SAPPHIRE),
+                ),
+                Span::styled(r.name.clone(), Style::default().fg(colors::TEXT)),
+            ];
+            if repo.remote_only_branches.contains(&r.name) {
+                spans.push(Span::styled(
+                    " not fetched",
+                    Style::default().fg(colors::SUBTEXT),
+                ));
+            }
+            if is_sel {
+                spans = wash(pad_to(spans, width));
+            }
+            lines.push(Line::from(spans));
+        }
+        lines.push(Line::from(""));
+    }
+
     // PRs
     // Gated on `-p`: the header row already names the open PRs by number, so
     // this section is the opt-in detail rather than the news itself.
@@ -2342,6 +2404,88 @@ mod tests {
             .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// A repo with two local branches and three remotes, one of which nothing
+    /// local claims, rendered in the branches view.
+    fn branches_text(selected: usize) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut r = busy_repo();
+        r.branches = vec![
+            branch_fixture("main", Some("origin/main"), 0, true),
+            branch_fixture("beta", None, 0, false),
+        ];
+        r.remote_branches = ["origin/main", "origin/beta", "origin/nobody"]
+            .iter()
+            .map(|n| crate::model::RemoteBranch {
+                name: (*n).to_string(),
+                tip: "a1b2c3d".to_string(),
+            })
+            .collect();
+        r.remote_only_branches = vec!["origin/nobody".to_string()];
+
+        let width = 92u16;
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), width, 44);
+        app.history_view = HistoryView::Branches;
+        app.set_detail_selected(selected);
+        let mut term = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..30u16)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The branches view lists every remote, not only the unfetched ones: that
+    /// distinction is a marker on a row, not a reason to omit the row.
+    #[test]
+    fn the_branches_view_lists_local_and_remote_sections() {
+        let out = branches_text(0);
+        assert!(out.contains("local branches"), "no local section:\n{out}");
+        assert!(out.contains("remotes"), "no remotes section:\n{out}");
+        assert!(out.contains("main"), "a local branch was dropped:\n{out}");
+        assert!(
+            out.contains("origin/beta"),
+            "a fetched remote was dropped:\n{out}"
+        );
+        assert!(
+            out.contains("origin/nobody"),
+            "an unfetched remote was dropped:\n{out}"
+        );
+    }
+
+    /// A remote nothing local claims is marked; one a local branch claims is
+    /// not. Silence must not stand in for either state.
+    #[test]
+    fn only_unclaimed_remotes_are_marked_not_fetched() {
+        let out = branches_text(0);
+        let marked: Vec<&str> = out.lines().filter(|l| l.contains("not fetched")).collect();
+        assert_eq!(
+            marked.len(),
+            1,
+            "expected exactly one marked row: {marked:?}"
+        );
+        assert!(
+            marked[0].contains("origin/nobody"),
+            "a claimed remote was marked not fetched: {marked:?}"
+        );
+    }
+
+    /// The cursor walks past the local branches into the remotes: the two
+    /// sections are one selectable list, in the order they are drawn.
+    #[test]
+    fn the_cursor_walks_from_local_branches_into_remotes() {
+        let out = branches_text(2);
+        let carets: Vec<&str> = out.lines().filter(|l| l.contains("▸ ")).collect();
+        assert_eq!(carets.len(), 1, "expected one caret: {carets:?}");
+        assert!(
+            carets[0].contains("origin/main"),
+            "index 2 should be the first remote: {carets:?}"
+        );
     }
 
     /// The commit rows of the `commits` view, border stripped, for a list with

@@ -236,6 +236,11 @@ pub fn history_view_color(view: crate::app::HistoryView) -> Color {
         HistoryView::Commits => GREEN,
         HistoryView::Reflog => MAUVE,
         HistoryView::Graph => PEACH,
+        // Lavender rather than teal: teal is the HEAD marker and nothing
+        // else, and this view draws HEAD markers. Separated from the mauve
+        // `reflog` tab by peach in the strip order, so the two purples never
+        // sit side by side.
+        HistoryView::Branches => LAVENDER,
     }
 }
 
