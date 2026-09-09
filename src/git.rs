@@ -108,6 +108,49 @@ pub struct WorkKey {
     pub index_size: u64,
     /// Size of the stash reflog (common dir aware); 0 when absent.
     pub stash_size: u64,
+    /// Fingerprint of the refs the graph decorates: the newer mtime of
+    /// `packed-refs` and the loose `refs/tags` directory, that file's size,
+    /// and how many loose tags there are.
+    ///
+    /// Tags are why this exists. Creating one moves no commit, no index and no
+    /// stash, so without this the fingerprint was identical across the sweep
+    /// and all six probes were skipped -- and the tag never reached the pane.
+    /// That is precisely what the release flow does: the `chore: release`
+    /// commit lands first, the tag is created after it, and nothing else
+    /// moves. Every release tag was invisible until something unrelated
+    /// happened to move HEAD.
+    ///
+    /// Three parts because one is not enough on a coarse filesystem: the size
+    /// catches a `packed-refs` rewrite whose mtime did not tick, and the count
+    /// catches a loose tag added or deleted inside the same mtime granule.
+    ///
+    /// Filesystem only, no subprocess: this is paid for every repo on every
+    /// sweep, and the whole point of the key is to be cheaper than what it
+    /// gates.
+    ///
+    /// Known limit: a tag nested under a subdirectory that already exists
+    /// (`refs/tags/rc/2` when `refs/tags/rc/1` is there) moves neither the
+    /// directory mtime nor the top-level count. Flat tag names, which is
+    /// every convention in normal use, are covered.
+    pub refs_mtime: Option<std::time::SystemTime>,
+    pub packed_refs_size: u64,
+    pub loose_tag_count: usize,
+}
+
+/// The ref fingerprint for `WorkKey`. Takes the *common* dir: a linked
+/// worktree keeps its refs with the main checkout, not beside its own HEAD.
+fn refs_fingerprint(common_dir: &Path) -> (Option<std::time::SystemTime>, u64, usize) {
+    let packed = std::fs::metadata(common_dir.join("packed-refs")).ok();
+    let packed_size = packed.as_ref().map(|m| m.len()).unwrap_or(0);
+    let packed_mtime = packed.as_ref().and_then(|m| m.modified().ok());
+
+    let tags_dir = common_dir.join("refs").join("tags");
+    let tags_mtime = std::fs::metadata(&tags_dir)
+        .ok()
+        .and_then(|m| m.modified().ok());
+    let loose_tags = std::fs::read_dir(&tags_dir).map(|d| d.count()).unwrap_or(0);
+
+    (packed_mtime.max(tags_mtime), packed_size, loose_tags)
 }
 
 /// The repo's real git directory: `.git` itself, or the target of a
@@ -161,11 +204,16 @@ pub async fn work_key(repo_path: &Path) -> Option<WorkKey> {
         .map(|m| m.len())
         .unwrap_or(0);
 
+    let (refs_mtime, packed_refs_size, loose_tag_count) = refs_fingerprint(&common_dir);
+
     Some(WorkKey {
         head_sha,
         index_mtime: index_meta.as_ref().and_then(|m| m.modified().ok()),
         index_size: index_meta.map(|m| m.len()).unwrap_or(0),
         stash_size,
+        refs_mtime,
+        packed_refs_size,
+        loose_tag_count,
     })
 }
 
@@ -1695,6 +1743,51 @@ mod real_repo_tests {
         sh(&dir, &["git", "add", "."]);
         sh(&dir, &["git", "commit", "-q", "-m", "init"]);
         dir
+    }
+
+    /// The failure this closes: creating a tag moves no commit, no index and
+    /// no stash, so `WorkKey` was identical across the sweep and fleetz skipped
+    /// the log and graph probes entirely. The tag never reached the pane, which
+    /// is exactly what the release flow produces: the `chore: release` commit
+    /// lands first and the tag is created after it, with nothing else moving.
+    #[tokio::test]
+    async fn a_new_tag_changes_the_work_key() {
+        let dir = temp_repo("tagkey");
+        let before = work_key(&dir).await.expect("a key for a real repo");
+        sh(&dir, &["git", "tag", "v9.9.9"]);
+        let after = work_key(&dir).await.expect("a key after tagging");
+        assert_ne!(
+            before, after,
+            "a new tag left the fingerprint unchanged, so the graph is skipped"
+        );
+    }
+
+    /// The other half: the fingerprint must not churn on its own, or every
+    /// sweep pays for all six probes in every repo and the gate is pointless.
+    #[tokio::test]
+    async fn an_idle_repo_keeps_the_same_work_key() {
+        let dir = temp_repo("idlekey");
+        let first = work_key(&dir).await.expect("a key for a real repo");
+        let second = work_key(&dir).await.expect("a second key");
+        assert_eq!(
+            first, second,
+            "the fingerprint moved with nothing to move it"
+        );
+    }
+
+    /// Deleting a tag has to count too: the decoration has to come off the
+    /// pane as readily as it went on.
+    #[tokio::test]
+    async fn deleting_a_tag_changes_the_work_key() {
+        let dir = temp_repo("untagkey");
+        sh(&dir, &["git", "tag", "v9.9.9"]);
+        let before = work_key(&dir).await.expect("a key");
+        sh(&dir, &["git", "tag", "-d", "v9.9.9"]);
+        let after = work_key(&dir).await.expect("a key");
+        assert_ne!(
+            before, after,
+            "a deleted tag left the fingerprint unchanged"
+        );
     }
 
     #[tokio::test]

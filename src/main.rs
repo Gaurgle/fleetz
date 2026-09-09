@@ -2784,6 +2784,9 @@ mod tests {
             index_mtime: None,
             index_size: 0,
             stash_size: 0,
+            refs_mtime: None,
+            packed_refs_size: 0,
+            loose_tag_count: 0,
         }
     }
 

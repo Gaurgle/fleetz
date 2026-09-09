@@ -1158,6 +1158,49 @@ existing client behind a base-URL config key rather than needing a new one.
 
 ---
 
+## Tags never reached the pane
+
+**Status: shipped.**
+
+**Problem.** Release tags did not decorate their commits in the history views.
+`v0.3.5` through `v0.3.9` drew, `v0.3.10` onward did not, which read as "the
+newer releases were never tagged" -- they were, on GitHub and locally, and
+`git log --decorate=full` returned them correctly when asked by hand.
+
+**Cause.** `WorkKey` (`git.rs`) fingerprints `head_sha`, the index mtime and
+size, and the stash size. **Refs were not in it.** Creating a tag moves none of
+those, so the key was byte-identical across the sweep and `assemble_view` took
+the `unchanged` branch, cloning the previous `commits`, `reflog`, `graph`,
+`graph_expanded`, `stash_entries` and `worktrees` instead of re-probing. The
+graph is what carries `%D`, so the decoration could never arrive.
+
+The release flow produces exactly this shape and no other: the `chore: release
+vX.Y.Z` commit lands first, the graph is recomputed for it *before* the tag
+exists, and then the tag is created with nothing else moving. Every release tag
+was invisible until some unrelated edit happened to move HEAD.
+
+**What shipped.** `refs_fingerprint`: the newer mtime of `packed-refs` and the
+loose `refs/tags` directory, that file's size, and the count of loose tags.
+Three parts because one is not enough on a coarse filesystem -- the size
+catches a `packed-refs` rewrite whose mtime did not tick, the count catches a
+loose tag added or deleted inside one mtime granule. Read from the *common*
+dir, since a linked worktree keeps its refs with the main checkout.
+
+Filesystem only, no subprocess. The key is paid for every repo on every sweep
+and exists to be cheaper than the six probes it gates; buying that with a
+second `git` call per repo would have spent a good part of what it saves.
+
+**Known limit,** stated so it is a decision and not a surprise: a tag nested
+under a subdirectory that already exists (`refs/tags/rc/2` beside
+`refs/tags/rc/1`) moves neither the directory mtime nor the top-level count.
+Flat tag names, which is every convention in normal use, are covered.
+
+**Why not branches too.** `branch_statuses` and `remote_branches` already run
+outside the gate on every sweep, so branch refs were never stale. Tags were the
+only refs nothing observed.
+
+---
+
 ## The strip's window on a resize
 
 **Status: shipped.**
