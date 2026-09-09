@@ -414,8 +414,9 @@ Four smaller faults sat underneath:
 
 ## Inspector and right-column layout
 
-**Status: partly shipped.** Proportional sizing and the deduplicated geometry
-landed; interactive resize did not.
+**Status: shipped.** Proportional sizing, the deduplicated geometry,
+interactive resize by key and by mouse, opt-in persistence, and the grips that
+advertise the dividers have all landed.
 
 **Problem.** The inspector was a hardcoded `INSPECTOR_HEIGHT: u16 = 10` and
 docked only when the right column exceeded `INSPECTOR_HEIGHT + 6` rows. On a
@@ -473,13 +474,59 @@ once a drag starts, any mouse event that is not a drag ends it, since a release
 outside the terminal can swallow the `Up` entirely and would otherwise wedge
 every later mouse event in the drag branch.
 
+**Grips shipped too** (`ui/grips.rs`). Nothing used to mark a divider as
+draggable: you had to know, or read the help. Both boundaries now carry a
+braille handle, `SURFACE` at rest and `LAVENDER` while that divider is being
+dragged, so the mark that invited the drag also confirms it.
+
+Neither the length nor the glyph survives a ninety-degree turn, and both had
+to be turned by hand. A terminal cell is about twice as tall as it is wide, so
+one length in cells drew a horizontal mark less than half the length of the
+vertical one: six columns against three rows. And a braille cell is two dots
+wide by three tall, so `⠿` stacks into a bar two dots thick but lies in a row
+three dots thick; the horizontal bar uses `⠶`, whose middle two dot-rows give
+it the same two-dot thickness, centred in the cell. Tests pin both, since
+neither is recoverable by looking at the constants.
+Braille over dots or a box-drawing rule because a braille cell is a bitmap
+rather than a stroke, so one glyph serves both orientations and the two
+handles read as the same control.
+
+Drawn from the `PanelRects` `render` already painted from, and every grip cell
+is asserted to return `Some` from `divider_at`: a mark one column off the real
+divider is worse than no mark, because it invites a drag at a cell that starts
+nothing. The grips do not narrow the target -- the whole divider keeps its
+`GRAB_SLOP` column either side. Nothing is drawn in Compact, with no inspector,
+or on the contribution strip's gap row, which `split_main_area` leaves looking
+identical to the vertical divider's gap column but which is not draggable.
+
+**The drag mapping was wrong, and the grips are what exposed it.**
+`inspector_pct_at` measured the grabbed row against `PanelRects.main`, while
+`split_inspector` applies the percentage to `body` -- main minus the strip and
+its blank row, eleven rows. With the strip open, which is the default, grabbing
+the horizontal divider and holding still moved it four to five rows before the
+first drag event arrived. Both conversions also floored, so even with the strip
+shut the round-trip lost a point and slid the divider a row.
+
+`PanelRects` now carries `body`, and both `*_pct_at` helpers go through
+`pct_for`, which rounds **up**: the splits floor, so the percentage that lands
+on a given cell count is the smallest one that does not fall short of it. That
+makes pct -> cells -> pct exact for every position a drag can reach.
+
+The one position it cannot reproduce is the capped default. `split_main` caps
+the repo list at `REPO_LIST_MAX_COLS` only at `DEFAULT_REPO_LIST_PCT`, so on a
+wide terminal the drawn width is one no percentage of that terminal produces:
+at 157 columns the list is capped to 52, which sits between the widths 33% and
+34% draw. Grabbing it releases the cap and the divider shifts a column, once.
+That is inherent to integer percentages, not a bug to chase; a test bounds it
+at one column so it can never grow into the jump the horizontal divider had.
+
 ### Not done
 
 - **A settings row for the sizes themselves.** The menu can toggle persistence
   but not set the percentages numerically; the resize keys and the mouse are the
   only ways in.
-- **A visible affordance on the borders.** Nothing marks a divider as draggable;
-  you have to know.
+- **Hover feedback on a divider.** The grips below are static; nothing responds
+  to the pointer until a button goes down.
 
   An earlier version of this note claimed hover tracking was unavailable. That
   was wrong, and worth correcting because it would send the next person down a

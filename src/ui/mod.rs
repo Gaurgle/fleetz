@@ -5,6 +5,7 @@ pub mod compact;
 pub mod contributions;
 pub mod detail;
 pub mod footer;
+pub mod grips;
 pub mod help;
 pub mod intro;
 pub mod settings;
@@ -185,9 +186,17 @@ pub(crate) fn blend(a: Color, b: Color, num: u32, den: u32) -> Color {
 /// hit-tested against them. `detail`/`inspector` are None in Compact view (or
 /// when the column is too short for the inspector).
 pub struct PanelRects {
-    /// The whole area the panels are laid out in, so a drag can be converted
-    /// back into a percentage of it.
+    /// The whole area the panels are laid out in, so a click can be tested
+    /// for being inside it at all.
     pub main: Rect,
+    /// The part of `main` the pane splits are actually computed in: `main`
+    /// minus the contribution strip and the blank row above it.
+    ///
+    /// A drag converts back into a percentage of *this*, not of `main`. The
+    /// two differ by eleven rows whenever the strip is open, and dividing by
+    /// the wrong one sent the horizontal divider four to five rows away from
+    /// the cursor the instant it was grabbed.
+    pub body: Rect,
     pub repo_list: Rect,
     pub detail: Option<Rect>,
     pub inspector: Option<Rect>,
@@ -252,25 +261,32 @@ impl PanelRects {
     /// The repo-list width the given column would produce, as a percentage of
     /// the main area. Unclamped: `App::set_repo_list_pct` owns the bounds.
     pub fn repo_list_pct_at(&self, col: u16) -> u16 {
-        if self.main.width == 0 {
-            return 0;
-        }
-        let offset = col.saturating_sub(self.main.x);
-        ((offset as u32 * 100) / self.main.width as u32).min(100) as u16
+        pct_for(col.saturating_sub(self.body.x), self.body.width)
     }
 
     /// The inspector height the given row would produce, as a percentage of
-    /// the main area. Measured from the bottom, since the inspector is
-    /// docked there and the divider is its top edge.
+    /// the body. Measured from the bottom, since the inspector is docked
+    /// there and the divider is its top edge.
     pub fn inspector_pct_at(&self, row: u16) -> u16 {
-        let main_height = self.main.height;
-        if main_height == 0 {
-            return 0;
-        }
-        let bottom = self.main.y + main_height;
-        let height = bottom.saturating_sub(row);
-        ((height as u32 * 100) / main_height as u32).min(100) as u16
+        let bottom = self.body.y + self.body.height;
+        pct_for(bottom.saturating_sub(row), self.body.height)
     }
+}
+
+/// The percentage that makes a split of `total` come out at `cells`.
+///
+/// Rounded **up**, because the splits floor: `Layout` gives a pane
+/// `total * pct / 100` cells, so the percentage that lands on `cells` is the
+/// smallest one that does not fall short of it. Dividing down instead made
+/// the round-trip lossy in the direction that matters -- a grab converted the
+/// divider's own position into a percentage one point too small, which drew
+/// it a row or column away from the cursor that had not moved yet.
+fn pct_for(cells: u16, total: u16) -> u16 {
+    if total == 0 {
+        return 0;
+    }
+    let (cells, total) = (cells as u32, total as u32);
+    (cells * 100).div_ceil(total).min(100) as u16
 }
 
 /// Recompute the panel layout for `area` -- must mirror `render` +
@@ -292,6 +308,7 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
             let (body, contributions) = contributions::split_main_area(main, open);
             PanelRects {
                 main: body,
+                body,
                 repo_list: body,
                 detail: None,
                 inspector: None,
@@ -313,6 +330,7 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
             let (repo_list, detail) = detail::split_main(top, app.repo_list_pct);
             PanelRects {
                 main,
+                body,
                 repo_list,
                 detail: Some(detail),
                 inspector,
@@ -570,6 +588,10 @@ pub fn render(frame: &mut Frame, app: &App) {
         contributions::render(frame, strip, app);
     }
 
+    // Grab handles, drawn last of the main-area furniture so the horizontal
+    // one lands on the inspector's border rather than under it.
+    grips::render(frame, &rects, app);
+
     // Footer
     footer::render(frame, chunks[2], app);
 
@@ -806,6 +828,8 @@ mod tests {
         let main = Rect::new(0, 1, 100, 40);
         PanelRects {
             main,
+            // No strip in this fixture, so the splits get the whole area.
+            body: main,
             repo_list: Rect::new(0, 1, 35, 24),
             detail: Some(Rect::new(36, 1, 64, 24)),
             inspector: Some(Rect::new(0, 25, 100, 16)),
@@ -1183,6 +1207,7 @@ mod tests {
     fn a_zero_sized_area_does_not_divide_by_zero() {
         let empty = PanelRects {
             main: Rect::new(0, 0, 0, 0),
+            body: Rect::new(0, 0, 0, 0),
             repo_list: Rect::new(0, 0, 0, 0),
             detail: None,
             inspector: None,
@@ -1361,6 +1386,139 @@ mod tests {
             row.contains("⚠ github"),
             "marker dropped by the fit loop: {row:?}"
         );
+    }
+
+    /// Sizes worth checking a divider round-trip at: the strip open and shut,
+    /// since the two give the inspector split different areas to work in.
+    fn drag_cases() -> Vec<(u16, u16, crate::app::ContributionsMode)> {
+        let mut cases = Vec::new();
+        for mode in [
+            crate::app::ContributionsMode::Off,
+            crate::app::ContributionsMode::Github,
+        ] {
+            for (w, h) in [(120u16, 30u16), (120, 40), (120, 50), (133, 44), (157, 60)] {
+                cases.push((w, h, mode));
+            }
+        }
+        cases
+    }
+
+    /// The failure this closes: pressing on the horizontal divider and holding
+    /// still moved it. `inspector_pct_at` measured the row against `main`,
+    /// while `split_inspector` applies the percentage to `body` -- main minus
+    /// the contribution strip -- so with the strip open (the default) a grab
+    /// sent the divider four to five rows away from the cursor before the
+    /// first drag event arrived.
+    #[test]
+    fn grabbing_the_horizontal_divider_leaves_it_where_it_was() {
+        for (w, h, mode) in drag_cases() {
+            let mut app = crate::app::App::new(Vec::new(), String::new(), w, h);
+            app.view = View::Detail;
+            app.contributions = mode;
+            let area = Rect::new(0, 0, w, h);
+            let rects = panel_rects(area, &app);
+            let Some(before) = rects.inspector else {
+                continue;
+            };
+            app.set_inspector_pct(rects.inspector_pct_at(before.y));
+            let after = panel_rects(area, &app).inspector.expect("inspector kept");
+            assert_eq!(
+                after.y, before.y,
+                "divider moved on a grab at {w}x{h}, strip {mode:?}"
+            );
+        }
+    }
+
+    /// The same round-trip for the vertical divider, over every position a
+    /// drag can actually put it in. Both directions used to floor, so a grab
+    /// could quantise the column away even though the mouse had not moved.
+    ///
+    /// Walked over the percentages rather than the columns because only a
+    /// percentage-produced column is representable: see
+    /// `grabbing_the_capped_default_divider_moves_it_at_most_one_column`.
+    #[test]
+    fn grabbing_the_vertical_divider_leaves_it_where_it_was() {
+        for (w, h, mode) in drag_cases() {
+            for pct in crate::app::REPO_LIST_PCT_MIN..=crate::app::REPO_LIST_PCT_MAX {
+                if pct == crate::app::DEFAULT_REPO_LIST_PCT {
+                    continue; // capped, and covered by its own test below
+                }
+                let mut app = crate::app::App::new(Vec::new(), String::new(), w, h);
+                app.view = View::Detail;
+                app.contributions = mode;
+                app.set_repo_list_pct(pct);
+                let area = Rect::new(0, 0, w, h);
+                let rects = panel_rects(area, &app);
+                let before = rects.repo_list.x + rects.repo_list.width;
+                app.set_repo_list_pct(rects.repo_list_pct_at(before));
+                let list = panel_rects(area, &app).repo_list;
+                assert_eq!(
+                    list.x + list.width,
+                    before,
+                    "divider moved on a grab at {w}x{h} pct {pct}, strip {mode:?}"
+                );
+            }
+        }
+    }
+
+    /// The one position a grab cannot reproduce exactly.
+    ///
+    /// `split_main` caps the repo list at `REPO_LIST_MAX_COLS` *only* at the
+    /// default percentage, so on a wide terminal the drawn width is one no
+    /// percentage of that terminal produces: at 157 columns the list is capped
+    /// to 52, and 52 sits between the widths 33% and 34% draw. Grabbing it
+    /// therefore releases the cap and the divider shifts by a column, once.
+    /// Bounded here so the shift can never grow into the multi-row jump the
+    /// horizontal divider had.
+    #[test]
+    fn grabbing_the_capped_default_divider_moves_it_at_most_one_column() {
+        for (w, h, mode) in drag_cases() {
+            let mut app = crate::app::App::new(Vec::new(), String::new(), w, h);
+            app.view = View::Detail;
+            app.contributions = mode;
+            let area = Rect::new(0, 0, w, h);
+            let rects = panel_rects(area, &app);
+            let before = rects.repo_list.x + rects.repo_list.width;
+            app.set_repo_list_pct(rects.repo_list_pct_at(before));
+            let list = panel_rects(area, &app).repo_list;
+            let moved = (list.x + list.width) as i32 - before as i32;
+            assert!(
+                moved.abs() <= 1,
+                "divider jumped {moved} columns on a grab at {w}x{h}, strip {mode:?}"
+            );
+        }
+    }
+
+    /// A drag tracks the pointer: the divider lands on the row grabbed, not
+    /// merely stays put. Outside the range the clamps in `split_inspector`
+    /// allow it parks at the limit, which is deliberate -- so the limits are
+    /// measured first by dragging past them, and exact tracking is asserted
+    /// between.
+    #[test]
+    fn dragging_the_horizontal_divider_lands_on_the_grabbed_row() {
+        let (w, h) = (120u16, 50u16);
+        let mut app = crate::app::App::new(Vec::new(), String::new(), w, h);
+        app.view = View::Detail;
+        app.contributions = crate::app::ContributionsMode::Github;
+        let area = Rect::new(0, 0, w, h);
+        let body = panel_rects(area, &app).body;
+
+        let drag_to = |app: &mut crate::app::App, row: u16| {
+            app.set_inspector_pct(panel_rects(area, app).inspector_pct_at(row));
+            panel_rects(area, app).inspector.expect("inspector kept").y
+        };
+        // Drag hard against each stop to find where the clamps park it.
+        let tallest = drag_to(&mut app, body.y);
+        let shortest = drag_to(&mut app, body.y + body.height);
+
+        for row in body.y..body.y + body.height {
+            let landed = drag_to(&mut app, row);
+            assert_eq!(
+                landed,
+                row.clamp(tallest, shortest),
+                "drag to row {row} landed at {landed} (stops {tallest}..={shortest})"
+            );
+        }
     }
 
     /// The whole screen rendered, so the test sees what the user sees.

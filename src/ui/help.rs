@@ -20,7 +20,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ),
         (
             "mouse",
-            "Click a panel to focus · drag a pane border to resize · wheel scrolls",
+            "Click a panel to focus · drag a ⠿ grip to resize · wheel scrolls",
         ),
         (
             "j/k ↑/↓",
