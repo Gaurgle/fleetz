@@ -1158,6 +1158,90 @@ existing client behind a base-URL config key rather than needing a new one.
 
 ---
 
+## Branches view
+
+**Status: shipped.**
+
+**Problem.** `info` drew every remote-only branch between the pinned local
+branches and the `recent commits` section. On a busy repo that is twenty-plus
+`not fetched` rows, so the commit list started below the fold -- and the
+selection lives in that commit list, so `follow_selection` scrolled the whole
+branches block away the moment the cursor moved. Scrolling back up did not
+settle it: the next `j`/`k` set `follow_selection` again and dragged the view
+back down. Behind that was a larger want, that fleetz had never answered:
+somewhere to see *all* branches, deferred ones as well as active.
+
+### What shipped
+
+A fifth history view, `branches`, on `[`/`]`, with `local branches` and
+`remotes` sections; and `info`'s remote-only list collapsed to a count that
+`B` expands in place.
+
+**Rejected: a new pane, lazygit-style.** lazygit's left column is Status /
+Files / Branches / Commits / Stash, five panels about the one repo you are in.
+fleetz spends that column on the repo list, because fleetz is about the fleet,
+so the transplant does not map: the fleetz equivalent of a lazygit panel is
+pane 2's view cycle. A fifth view also inherits the pinned header, the per-view
+scroll and selection arrays (`[_; HistoryView::COUNT]`), the tab strip and the
+docked inspector, and a view you can park on fixes the reported bug outright.
+
+**Rejected: a full-screen overlay.** It would buy a two-column layout and could
+go fleet-wide ("which repos have branches rotting on them"), which is a
+genuinely interesting tool. But an overlay is something you open and close, not
+something you sit in, which fights "show me branches while I look at this
+repo". The fleet-wide question is a separate feature and should not enter
+through the door marked "fix the info pane".
+
+**Read-only, deliberately.** `b`/`s` already deletes branches, and already
+knows what is merged, current and protected (`open_branch_overlay`). Whether
+you want to delete *from* a reference list, or whether deleting is a separate
+deliberate errand, is a question the built view answers better than a design
+argument can. Folding the two together first would commit to an answer.
+
+**The data was already there.** `git::remote_branches` ran every sweep and its
+result was reduced to `remote_only_branches` and discarded, so keeping the full
+list costs nothing; both tip hashes ride `for-each-ref` calls already being
+made (`%(objectname:short)` beside the `%(HEAD)` that `branch_statuses`
+already asks for). Merged status stays lazily loaded by the overlay: `git
+branch --merged` in the sweep would be a git call per repo per refresh.
+
+**One renderer for a branch row.** `branch_row_lines` is called by both views.
+Two copies of a row vocabulary drift exactly the way two copies of layout
+arithmetic do, which is the failure `split_inspector` exists to prevent one
+level up in the same file, and the reasons those rows read as they do (the `*`
+marker, the conditional `-> origin/wip`, `no upstream` rather than a bare row)
+are recorded above and would be lost by a second implementation.
+
+**A bare count, not a sample.** The house pattern is a sample plus a count
+(`PR_NUMBERS_SHOWN` = 2, `INSPECTOR_FILE_CAP` = 30) and this departs from it on
+purpose. Those samples are *identifying*: you recognise PR #412, and a changed
+path says what a commit touched. A remote-only branch name is not.
+`origin/feature/loading-questions` is one of twenty-three a colleague pushed,
+and three arbitrary ones say nothing the count does not while costing three
+rows of the commit list. The toggle is app-level and session-lived: it is a
+preference about how `info` reads, not a fact about one repo.
+
+**Known limitation: the inspector is usually empty on the remotes section.**
+It resolves a hash against `repo.commits` / `repo.graph`, which walk the union
+of the *local* branches capped at 200, so a remote-only tip is not merely
+outside a range, it is off the refs fleetz reads. `inspector_empty_text` says
+"not on any local branch" rather than "outside the loaded commit range",
+because reporting it as a range would send someone looking for a limit to
+raise. Fixing it properly means widening what `git::commits` and `git::graph`
+walk, and they must be widened *together* or the "same refs" invariant breaks,
+which changes the `commits` and `graph` views for every repo in the fleet.
+
+### Not done
+
+- Merged / unmerged annotations in the view. The data exists in the overlay's
+  lazy load and would want the same treatment here.
+- Sorting or grouping by age. `for-each-ref --sort=-committerdate` would give
+  it in one call per repo, but only for refs that have been fetched.
+- Anything fleet-wide.
+- Any mutation from the view.
+
+---
+
 ## The behind count and the branches that make it up
 
 **Status: shipped.**

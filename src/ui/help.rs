@@ -34,8 +34,9 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ("v", "Toggle detail ↔ compact view"),
         (
             "[ ]",
-            "Repo pane: previous / next view (info, commits, reflog, graph)",
+            "Repo pane: previous / next view (info, commits, reflog, graph, branches)",
         ),
+        ("B", "info: expand the remote branch summary"),
         ("c", "Toggle the contributions strip (a year of activity)"),
         (
             "h/l \u{2190}/\u{2192}",
