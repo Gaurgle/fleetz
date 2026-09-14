@@ -73,30 +73,51 @@ const BACKDROP: Color = Color::Rgb(30, 30, 46);
 /// How far a resting cell is carried from the backdrop toward its own colour,
 /// out of 255, at each end of the wave's opening.
 ///
-/// The two exist because the field and the wave want opposite things from the
-/// same cells. The loading field has no crest, so anything held back is just
-/// dullness with nothing to be dull *for*: it sits at `LIT`, fully coloured.
-/// The wave needs its resting cells dark, or the crest has nothing to stand out
-/// from and the whole thing flattens.
+/// The loading field sits at `LIT`, slightly muted. Once the wave is under way
+/// the field is at `CLEAR`, every cell in its full colour, and the wave stands
+/// out by being lighter and darker than that (`FOAM`, `SHADOW_DEPTH`) rather
+/// than by dimming the field around it.
 ///
 /// So the wave opens at `LIT` -- matching the field exactly, so the handover has
-/// no seam -- and dims to `DARK` over `DIM_IN`. The lights going down is the
-/// wave arriving.
+/// no seam -- and clears to `CLEAR` over `CLEAR_IN`.
 const REST_MIX_LIT: u32 = 190;
-const REST_MIX_DARK: u32 = 90;
-/// The wave has to be darker than the field it comes out of, or the dim runs
-/// backwards and the crest has nothing to stand out against. Checked at compile
-/// time, since both are constants and a runtime assert would be theatre.
-const _: () = assert!(REST_MIX_DARK < REST_MIX_LIT);
+const REST_MIX_CLEAR: u32 = 255;
+/// The wave has to be clearer than the field it comes out of, or the opening
+/// runs backwards into a dim. Checked at compile time, since both are constants
+/// and a runtime assert would be theatre.
+const _: () = assert!(REST_MIX_LIT < REST_MIX_CLEAR);
 
-/// How much of the sweep is spent dimming from the field's brightness to the
-/// wave's. Short: it is a transition into the effect, not part of it.
-const DIM_IN: f32 = 0.18;
+/// How much of the sweep is spent clearing from the field's shade to full
+/// colour. Short: it is a transition into the effect, not part of it.
+const CLEAR_IN: f32 = 0.18;
 
-/// The lit end. A half-step past `TEXT` toward white, so the crest reads as
-/// brighter than anything the real screen contains and the wave is clearly a
-/// thing passing over the content rather than part of it.
-const CREST: Color = Color::Rgb(232, 238, 255);
+/// What the white share of the noise wears. A half-step past `TEXT` toward
+/// white, and deliberately short of `FOAM`, so white noise never reads as a
+/// piece of the crest.
+const NOISE_WHITE: Color = Color::Rgb(232, 238, 255);
+
+/// The foam on top of the breaking crest: pure white, and bold, which is the
+/// terminal's own "brighter". Solid across the whole crest rather than a fade
+/// into it, so the crest reads as foam rather than as a glow, and it is past
+/// every colour the field holds, white noise included.
+const FOAM: Color = Color::Rgb(255, 255, 255);
+
+/// Half-width of the crest, in diagonal units.
+///
+/// Narrow next to `BAND`, so it reads as a line breaking rather than a flood.
+/// It cannot go much narrower: a cell recomputes only every `CELL_UPDATE`
+/// frames, and the front covers about 0.07 of the diagonal in that time, so a
+/// crest thinner than that would skip cells and break into dashes. At this
+/// width every cell the crest crosses is sampled on it at least twice.
+const CREST_WIDTH: f32 = 0.08;
+
+/// How far toward the backdrop the noise under the wave is shaded, at its
+/// deepest: from the crest back to a `CREST_WIDTH` behind it, lifting to
+/// nothing by the end of `BAND`, where the last of the noise has locked.
+///
+/// Only noise is shaded. A locked cell shows the content exactly as it will be
+/// drawn, so the dashboard never flickers dark on its way in.
+const SHADOW_DEPTH: f32 = 0.65;
 
 /// The hues a noise cell can wear, the Catppuccin palette the rest of the
 /// dashboard is drawn from. White is the *other* option, and increasingly the
@@ -122,8 +143,9 @@ const ACCENTS: [Color; 7] = [
 const ACCENT_START: f32 = 0.9;
 const ACCENT_END: f32 = 1.0;
 
-/// How far a cell's brightness may stray from the crest curve, so the band has
-/// grain rather than being a clean gradient.
+/// How far a cell's resting brightness may stray, so the loading field has
+/// grain rather than one flat shade. At `CLEAR` there is no headroom left for
+/// it, which is the point: the wave's field is every cell's full colour.
 const JITTER: f32 = 0.18;
 
 /// A running intro wave over the screen it was started from.
@@ -209,7 +231,7 @@ impl Intro {
                             // better anyway: the churn is the wave, not the
                             // ground it crosses.
                             //
-                            // The `DIM_IN` opening is the exception, since the
+                            // The `CLEAR_IN` opening is the exception, since the
                             // resting shade is moving for all of it. That is a
                             // fifth of the sweep rather than all of it, and it
                             // is the transition, so it is worth the frames.
@@ -217,14 +239,20 @@ impl Intro {
                                 true => frame,
                                 false => 0,
                             };
-                            noise_cell(
+                            let mut cell = noise_cell(
                                 cx,
                                 y,
                                 churn,
-                                self.intensity(cx, y, area, ct),
+                                resting_intensity(cx, y),
                                 accent_share(ct),
                                 rest_mix(ct),
-                            )
+                            );
+                            let (fg, bold) = light(cell.fg, self.phase(cx, y, area, ct));
+                            cell.set_fg(fg);
+                            if bold {
+                                cell.modifier.insert(Modifier::BOLD);
+                            }
+                            cell
                         }
                     };
                 }
@@ -283,18 +311,10 @@ impl Intro {
     }
 
     /// How close the crest is, 1 directly on it and 0 once the cell is a full
-    /// band away in either direction. This is the wave itself, before the
-    /// per-cell grain is mixed in.
+    /// band away in either direction. This bounds where the wave churns; how a
+    /// cell is lit is `light`.
     fn crest(&self, x: u16, y: u16, area: ratatui::layout::Rect, t: f32) -> f32 {
         1.0 - (self.phase(x, y, area, t).abs() / BAND).min(1.0)
-    }
-
-    /// How lit this cell is: the crest, plus per-cell grain so the band has
-    /// texture rather than being a clean gradient. The grain is deliberately
-    /// applied outside the band too -- it is what gives the resting field its
-    /// darker and lighter nuances instead of one flat wash of `SURFACE`.
-    fn intensity(&self, x: u16, y: u16, area: ratatui::layout::Rect, t: f32) -> f32 {
-        (self.crest(x, y, area, t) + grain(x, y)).clamp(0.0, 1.0)
     }
 }
 
@@ -313,20 +333,47 @@ fn grain(x: u16, y: u16) -> f32 {
     (unit(hash(x, y, SALT_GRAIN)) * 2.0 - 1.0) * JITTER
 }
 
-/// What a cell looks like before the wave has reached it: grain alone.
+/// A noise cell's resting brightness: grain alone.
 ///
-/// Shared with the loading field on purpose. It is the wave's own `t = 0`
-/// value, so when the wave takes over from the field nothing jumps: the same
-/// cells are the same brightness, and only the churn changes hands.
+/// Shared with the loading field on purpose. The wave draws with it too and
+/// lights the result in `light`, so when the wave takes over from the field
+/// nothing jumps: the same cells are the same brightness, and only the churn
+/// changes hands.
 fn resting_intensity(x: u16, y: u16) -> f32 {
     grain(x, y).clamp(0.0, 1.0)
 }
 
-/// The resting shade at time `t`: the field's brightness at the start of the
-/// sweep, the wave's by `DIM_IN`.
+/// The resting shade at time `t`: the field's at the start of the sweep, full
+/// colour by `CLEAR_IN`.
 fn rest_mix(t: f32) -> u32 {
-    let dimmed = (t / DIM_IN).clamp(0.0, 1.0);
-    REST_MIX_LIT - ((REST_MIX_LIT - REST_MIX_DARK) as f32 * dimmed) as u32
+    let cleared = (t / CLEAR_IN).clamp(0.0, 1.0);
+    REST_MIX_LIT + ((REST_MIX_CLEAR - REST_MIX_LIT) as f32 * cleared) as u32
+}
+
+/// Whether a noise cell is on the crest, within a `CREST_WIDTH` of it either
+/// side. `phase` is `Intro::phase`.
+fn on_crest(phase: f32) -> bool {
+    phase.abs() < CREST_WIDTH
+}
+
+/// How deeply the wave shades a noise cell. Nothing ahead of the crest: the
+/// shade is under the wave, not in front of it. `phase` is `Intro::phase`.
+fn shadow(phase: f32) -> f32 {
+    if phase <= 0.0 {
+        return 0.0;
+    }
+    let lift = ((phase - CREST_WIDTH).max(0.0) / (BAND - CREST_WIDTH)).min(1.0);
+    SHADOW_DEPTH * (1.0 - lift)
+}
+
+/// A noise cell's colour on the wave, and whether it is drawn bold: `FOAM` on
+/// the crest, otherwise its resting colour, shaded if the wave is over it.
+fn light(rest: Color, phase: f32) -> (Color, bool) {
+    if on_crest(phase) {
+        return (FOAM, true);
+    }
+    let shaded = crate::ui::blend(rest, BACKDROP, (shadow(phase) * 255.0) as u32, 255);
+    (shaded, false)
 }
 
 /// How much of the noise wears a hue rather than white at time `t`.
@@ -348,8 +395,8 @@ fn diagonal(x: u16, y: u16, area: ratatui::layout::Rect) -> f32 {
     (across + up) / 2.0
 }
 
-/// A noise cell: a character that churns frame to frame, in a colour blended up
-/// the nuance ladder by how close the crest is.
+/// A noise cell: a character that churns frame to frame, in its own colour
+/// carried up from the backdrop by the resting shade and its brightness.
 fn noise_cell(
     x: u16,
     y: u16,
@@ -361,7 +408,7 @@ fn noise_cell(
     let symbol = SCRAMBLE[(hash(x, y, frame) % SCRAMBLE.len() as u32) as usize] as char;
     let lit = match unit(hash(x, y, SALT_ACCENT)) < accent_share {
         true => ACCENTS[(hash(x, y, SALT_HUE) % ACCENTS.len() as u32) as usize],
-        false => CREST,
+        false => NOISE_WHITE,
     };
     let mut cell = Cell::default();
     cell.set_symbol(&symbol.to_string());
@@ -492,8 +539,8 @@ impl Loading {
                     churn_step(x, y, frame),
                     resting_intensity(x, y),
                     // The share and the shade the wave opens on, so the
-                    // handover changes nothing but the churn. The wave dims
-                    // away from here of its own accord.
+                    // handover changes nothing but the churn. The wave clears
+                    // to full colour from here of its own accord.
                     accent_share(0.0),
                     rest_mix(0.0),
                 );
@@ -584,8 +631,8 @@ mod tests {
         let it = intro();
         let mut a = Buffer::empty(area());
         let mut b = Buffer::empty(area());
-        // Sampled after `DIM_IN`: the whole field is deliberately changing
-        // colour before that, as the lights go down for the wave.
+        // Sampled after `CLEAR_IN`: the whole field is deliberately changing
+        // colour before that, as it clears to full colour for the wave.
         assert!(it.compose(&mut a, 0.25));
         assert!(it.compose(&mut b, 0.27));
 
@@ -697,7 +744,7 @@ mod tests {
     /// whatever the emulator takes to render escape sequences for every cell
     /// that changed. With every cell recomputed every frame that measured at a
     /// third of the screen changing per frame and the whole screen during the
-    /// opening dim -- about 4.7 MB/s to a 200x50 terminal at 60fps, which
+    /// opening -- about 4.7 MB/s to a 200x50 terminal at 60fps, which
     /// nothing renders. It read as the wave lagging.
     ///
     /// Per-cell update slots put a ceiling on it. This test is the ceiling: the
@@ -718,23 +765,26 @@ mod tests {
         );
     }
 
-    /// The wave opens at the loading field's brightness and dims into its own.
-    ///
-    /// The field and the wave want opposite things from the same cells: the
-    /// field has no crest, so holding its colour back is dullness for nothing;
-    /// the wave needs a dark ground or the crest has nothing to stand out
-    /// against. Opening lit and dimming gives both, and puts the change where
-    /// it reads as the lights going down rather than as a seam.
+    /// The wave opens at the loading field's muted shade and clears to full
+    /// colour, rather than dimming the field around it: the crest stands out by
+    /// being whiter and the wave by the shade it throws, so the letters it has
+    /// not reached stay clear. Opening at the field's shade keeps the handover
+    /// seamless.
     #[test]
-    fn the_wave_opens_lit_and_dims_into_its_own_depth() {
-        assert_eq!(rest_mix(0.0), REST_MIX_LIT, "the wave does not open lit");
-        assert_eq!(rest_mix(DIM_IN), REST_MIX_DARK, "the wave never gets dark");
-        assert_eq!(rest_mix(1.0), REST_MIX_DARK, "the dim does not hold");
+    fn the_wave_opens_at_the_fields_shade_and_clears_to_full_colour() {
+        assert_eq!(
+            rest_mix(0.0),
+            REST_MIX_LIT,
+            "the wave does not open at the field's shade"
+        );
+        assert_eq!(rest_mix(CLEAR_IN), REST_MIX_CLEAR, "the wave never clears");
+        assert_eq!(rest_mix(1.0), REST_MIX_CLEAR, "the field dims again");
+        assert_eq!(REST_MIX_CLEAR, 255, "full colour is not full");
 
-        let midway = rest_mix(DIM_IN / 2.0);
+        let midway = rest_mix(CLEAR_IN / 2.0);
         assert!(
-            (REST_MIX_DARK..REST_MIX_LIT).contains(&midway),
-            "the dim is a step, not a fade: {midway}"
+            (REST_MIX_LIT + 1..REST_MIX_CLEAR).contains(&midway),
+            "the opening is a step, not a fade: {midway}"
         );
     }
 
@@ -999,22 +1049,77 @@ mod tests {
         assert!((bottom_right - top_left).abs() < f32::EPSILON);
     }
 
-    /// Brightest on the crest, dimmest far from it. The nuance is the effect;
-    /// a flat band would just be a block of text sliding across.
+    /// Perceived brightness of an RGB colour, for comparing shades.
+    fn luma(c: Color) -> f32 {
+        let Color::Rgb(r, g, b) = c else {
+            panic!("{c:?} is not RGB");
+        };
+        0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32
+    }
+
+    /// Brightest on the crest: it foams solid white and bold across its whole
+    /// width, past any colour in the field, rather than fading in from the
+    /// edges. Ahead of the wave and once it has gone, a cell is its own clear
+    /// colour, untouched.
     #[test]
     fn a_cell_is_brightest_as_the_crest_passes_it() {
-        let it = intro();
-        let (x, y) = (20u16, 10u16);
-        // The t at which the crest sits exactly on this cell.
-        let d = diagonal(x, y, area());
-        let crest_t = (d + BAND) / (1.0 + 2.0 * BAND);
+        for rest in ACCENTS.into_iter().chain([NOISE_WHITE]) {
+            for phase in [0.0, CREST_WIDTH * 0.9, -CREST_WIDTH * 0.9] {
+                assert_eq!(
+                    light(rest, phase),
+                    (FOAM, true),
+                    "{rest:?} at {phase} on the crest"
+                );
+            }
+            assert_eq!(
+                light(rest, -BAND),
+                (rest, false),
+                "{rest:?} ahead of the wave"
+            );
+            assert_eq!(light(rest, BAND), (rest, false), "{rest:?} after the wave");
+            assert!(luma(FOAM) > luma(rest), "{rest:?} outshines the crest");
+        }
+    }
 
-        let on_crest = it.intensity(x, y, area(), crest_t);
-        let ahead = it.intensity(x, y, area(), (crest_t - 0.35).max(0.0));
+    /// The letters under the wave are shadowed: darker than their clear colour
+    /// just behind the crest, lifting as the content comes through, and never
+    /// ahead of the crest, where the wave has not reached.
+    #[test]
+    fn the_letters_under_the_wave_are_shadowed() {
+        let rest = colors::SAPPHIRE;
+        let under = light(rest, CREST_WIDTH).0;
+        let lifting = light(rest, (CREST_WIDTH + BAND) / 2.0).0;
         assert!(
-            on_crest > ahead,
-            "the crest ({on_crest}) was not brighter than the run-up ({ahead})"
+            luma(under) < luma(lifting),
+            "the shade does not lift behind the crest"
         );
+        assert!(
+            luma(lifting) < luma(rest),
+            "the shade is gone before the wave is"
+        );
+        assert_eq!(
+            light(rest, -CREST_WIDTH).0,
+            rest,
+            "the shade runs ahead of the wave"
+        );
+    }
+
+    /// Every cell the crest crosses is drawn as foam at least once. A cell
+    /// recomputes only on its own slot, so a crest narrower than the ground the
+    /// front covers between slots would skip cells and break into dashes.
+    #[test]
+    fn every_cell_is_foam_as_the_crest_passes() {
+        let it = intro();
+        let frames = (DURATION.as_secs_f32() / FRAME_INTERVAL.as_secs_f32()) as u32;
+        for y in 0..20u16 {
+            for x in 0..40u16 {
+                let foamed = (0..=frames).any(|f| {
+                    let ct = it.cell_time(x, y, f as f32 / frames as f32);
+                    on_crest(it.phase(x, y, area(), ct))
+                });
+                assert!(foamed, "the crest skipped cell ({x},{y})");
+            }
+        }
     }
 
     /// Noise is single-width ASCII, always. The buffer underneath holds wide
@@ -1059,8 +1164,8 @@ mod tests {
     /// what lets any of this be tested at all.
     #[test]
     fn the_noise_is_deterministic() {
-        let a = noise_cell(5, 6, 3, 0.5, 0.5, REST_MIX_DARK);
-        let b = noise_cell(5, 6, 3, 0.5, 0.5, REST_MIX_DARK);
+        let a = noise_cell(5, 6, 3, 0.5, 0.5, REST_MIX_CLEAR);
+        let b = noise_cell(5, 6, 3, 0.5, 0.5, REST_MIX_CLEAR);
         assert_eq!(a.symbol(), b.symbol());
         assert_eq!(a.fg, b.fg);
     }
@@ -1071,8 +1176,8 @@ mod tests {
     fn the_noise_churns_between_frames() {
         let changed = (0..40u16)
             .filter(|x| {
-                noise_cell(*x, 4, 1, 0.5, 0.5, REST_MIX_DARK).symbol()
-                    != noise_cell(*x, 4, 2, 0.5, 0.5, REST_MIX_DARK).symbol()
+                noise_cell(*x, 4, 1, 0.5, 0.5, REST_MIX_CLEAR).symbol()
+                    != noise_cell(*x, 4, 2, 0.5, 0.5, REST_MIX_CLEAR).symbol()
             })
             .count();
         assert!(

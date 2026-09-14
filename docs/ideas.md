@@ -1768,9 +1768,9 @@ over a second and a half.
 bottom-left corner and 1 at the top-right, with both axes normalised so the
 front crosses at the same visual angle on any terminal shape. The front sweeps
 from `-BAND` to `1 + BAND`, so at `t = 0` every cell is ahead of it (the full
-screen of noise) and at `t = 1` every cell is behind it. A cell's brightness is
-its distance from the crest, with per-cell grain so the band is textured rather
-than a clean gradient.
+screen of noise) and at `t = 1` every cell is behind it. A cell's light is its
+distance from the crest: white on it, shaded just behind it, its own clear
+colour everywhere else.
 
 **Every cell keeps its own hue all the way down.** The ladder used to run from
 `SURFACE` -- one shared grey -- up to the cell's colour, so every resting cell
@@ -1782,15 +1782,24 @@ only the brightness moves. Measured on the real frames that took the near-grey
 share of the field from effectively all of it to under a fifth; the rest is
 muted mauve, sapphire, green and maroon.
 
-**The field and the wave want opposite things from that shade.** The loading
-field has no crest, so anything held back there is dullness with nothing to be
-dull *for*. The wave needs its resting cells dark, or the crest has nothing to
-stand out against and the whole thing flattens. So the wave opens at the field's
-brightness -- matching it exactly, so the handover still has no seam -- and dims
-to its own over the first fifth of the sweep. The lights going down *is* the
-wave arriving. Mean brightness across the real frames: field 167, wave 159 at
-`t = 0`, 101 by `t = 0.18`, back up to 140 at the halfway mark as the crest
-lights what it crosses.
+**The wave clears the field rather than dimming it.** The loading field sits
+slightly muted. The wave opens at that shade -- matching it exactly, so the
+handover still has no seam -- and clears to every cell's full colour over the
+first fifth of the sweep. It then stands out by light and shade: a narrow crest
+foams solid white and bold across its whole width, with no fade into it and
+past any colour the field holds, and the noise just behind it is shaded toward the backdrop, deepest under the crest and lifting as
+the content comes through. Only noise is shaded, so the dashboard never
+flickers dark on its way in.
+
+It used to go the other way: the field dimmed to about a third of its colour so
+a crest that only ever reached each cell's own hue had something to stand out
+against. That flattened the colour for the whole sweep to buy contrast on one
+line. A white crest over a shadow gets its contrast from the wave itself.
+
+The crest cannot be much narrower than it is. A cell recomputes only every
+`CELL_UPDATE` frames and the front covers about 0.07 of the diagonal in that
+time, so a thinner crest would skip cells and break into dashes;
+`every_cell_is_foam_as_the_crest_passes` holds the width to that.
 
 That opening is the one exception to "only the wave churns": while the resting
 shade is moving, every cell is. A fifth of the sweep rather than all of it, and
