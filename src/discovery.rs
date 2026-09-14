@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Result of discovering a local clone of a GitHub repo.
@@ -6,6 +6,73 @@ use std::path::{Path, PathBuf};
 pub struct FoundRepo {
     pub name: String,
     pub path: PathBuf,
+}
+
+/// The GitHub repos discovery is looking for, indexed both ways a local clone
+/// can be recognized: by its `origin` remote, and by its folder name.
+#[derive(Debug, Default)]
+pub struct Wanted {
+    /// Lowercased `owner/name` to the GitHub name. Only repos the fetch
+    /// reported an owner for; the rest can still match by folder name.
+    by_remote: HashMap<String, String>,
+    /// Lowercased GitHub names.
+    names: HashSet<String>,
+}
+
+impl Wanted {
+    /// Built from `(owner, name)` pairs as the GitHub fetch reports them.
+    pub fn new<'a>(repos: impl IntoIterator<Item = (Option<&'a str>, &'a str)>) -> Self {
+        let mut wanted = Self::default();
+        for (owner, name) in repos {
+            if let Some(owner) = owner {
+                wanted
+                    .by_remote
+                    .insert(format!("{owner}/{name}").to_lowercase(), name.to_string());
+            }
+            wanted.names.insert(name.to_lowercase());
+        }
+        wanted
+    }
+
+    /// The repos not in `found`, which holds lowercased GitHub names.
+    fn without(&self, found: &HashSet<String>) -> Self {
+        Self {
+            by_remote: self
+                .by_remote
+                .iter()
+                .filter(|(_, name)| !found.contains(&name.to_lowercase()))
+                .map(|(slug, name)| (slug.clone(), name.clone()))
+                .collect(),
+            names: self.names.difference(found).cloned().collect(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    /// The GitHub repo name the clone at `path` stands for, or None when it is
+    /// none of these.
+    ///
+    /// The remote is tried first because a folder name is only a convention: a
+    /// clone of `portfolio-site` can sit in `DevOps_Portfolio`. The folder name
+    /// stays as the fallback for a clone with no `origin`, a remote naming a
+    /// repo the fetch has no owner for, and a linked worktree (see
+    /// `origin_slug`).
+    ///
+    /// A repo renamed on GitHub is not covered by the remote either: the old
+    /// URL keeps working through GitHub's redirect, so the clone's config still
+    /// names the old repo until `git remote set-url` updates it.
+    fn match_clone(&self, path: &Path) -> Option<String> {
+        if let Some(name) = origin_slug(path).and_then(|slug| self.by_remote.get(&slug)) {
+            return Some(name.clone());
+        }
+        let dir_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        matched_name(dir_name, &self.names)
+    }
 }
 
 /// Pass 1: Find repos under the configured scan roots (the primary repo_dir
@@ -20,19 +87,13 @@ pub struct FoundRepo {
 ///
 /// De-duplicated by name, first root winning, so overlapping roots can't
 /// produce two rows for one repo.
-pub fn find_in_primary(roots: &[PathBuf], names: &[String]) -> Vec<FoundRepo> {
-    let names_lower: HashSet<String> = names.iter().map(|n| n.to_lowercase()).collect();
+pub fn find_in_primary(roots: &[PathBuf], wanted: &Wanted) -> Vec<FoundRepo> {
     let mut found = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
     for root in roots {
         scan_for_git_repos(root, 3, false, &mut |path| {
-            let dir_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default();
-
-            let Some(name) = matched_name(dir_name, &names_lower) else {
+            let Some(name) = wanted.match_clone(path) else {
                 return;
             };
             if seen.insert(name.to_lowercase()) {
@@ -54,14 +115,10 @@ pub fn find_in_primary(roots: &[PathBuf], names: &[String]) -> Vec<FoundRepo> {
 pub fn find_elsewhere(
     home: &Path,
     roots: &[PathBuf],
-    names: &[String],
+    wanted: &Wanted,
     already_found: &HashSet<String>,
 ) -> Vec<FoundRepo> {
-    let remaining: HashSet<String> = names
-        .iter()
-        .filter(|n| !already_found.contains(&n.to_lowercase()))
-        .map(|n| n.to_lowercase())
-        .collect();
+    let remaining = wanted.without(already_found);
 
     if remaining.is_empty() {
         return Vec::new();
@@ -75,12 +132,7 @@ pub fn find_elsewhere(
             return;
         }
 
-        let dir_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-
-        if let Some(name) = matched_name(dir_name, &remaining) {
+        if let Some(name) = remaining.match_clone(path) {
             found.push(FoundRepo {
                 name,
                 path: path.to_path_buf(),
@@ -107,6 +159,39 @@ fn matched_name(dir_name: &str, names_lower: &HashSet<String>) -> Option<String>
     names_lower
         .contains(&undotted.to_lowercase())
         .then(|| undotted.to_string())
+}
+
+/// The lowercased `owner/name` the clone's `origin` remote points at.
+///
+/// Read straight from `.git/config` rather than through `git remote get-url`:
+/// this runs for every candidate in both sweeps, and a process spawn each would
+/// dwarf the walk itself. The cost is that `url.<base>.insteadOf` rewrites are
+/// not applied.
+///
+/// Only a `.git` *directory* has a config to read. A `.git` file marks a linked
+/// worktree or submodule; a worktree shares its main clone's remote, so
+/// matching it that way would let it race the real clone for the row. Those
+/// keep the folder-name match.
+fn origin_slug(repo: &Path) -> Option<String> {
+    let config = std::fs::read_to_string(repo.join(".git").join("config")).ok()?;
+    let (owner, name) = crate::model::repo_from_remote_url(origin_url(&config)?)?;
+    Some(format!("{owner}/{name}").to_lowercase())
+}
+
+/// The `url` of `[remote "origin"]` in the text of a git config file.
+fn origin_url(config: &str) -> Option<&str> {
+    let mut in_origin = false;
+    for line in config.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_origin = line == r#"[remote "origin"]"#;
+        } else if in_origin
+            && let Some((key, value)) = line.split_once('=')
+            && key.trim().eq_ignore_ascii_case("url")
+        {
+            return Some(value.trim().trim_matches('"'));
+        }
+    }
+    None
 }
 
 /// The name a local-only repo reports as: its directory basename with a
@@ -248,6 +333,109 @@ mod tests {
         vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()]
     }
 
+    fn by_name(names: &[String]) -> Wanted {
+        Wanted::new(names.iter().map(|n| (None, n.as_str())))
+    }
+
+    /// A `.git/config` with `origin` pointing at `url`, the way `git clone`
+    /// leaves it.
+    fn clone_with_origin(path: &Path, url: &str) {
+        fs::create_dir_all(path.join(".git")).unwrap();
+        fs::write(
+            path.join(".git").join("config"),
+            format!(
+                "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = {url}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn find_in_primary_matches_a_clone_by_its_remote_whatever_the_folder_is_called() {
+        // The regression: `~/repos/DevOps_Portfolio` is a clone of
+        // `Gaurgle/portfolio-site`, and matching on the folder name alone
+        // reported the repo as not cloned. The row takes the GitHub name, since
+        // everything downstream keys on it.
+        let dir = std::env::temp_dir().join("fleetz_test_remote_match");
+        let _ = fs::remove_dir_all(&dir);
+        let clone = dir.join("DevOps_Portfolio");
+        clone_with_origin(&clone, "git@github.com:Gaurgle/portfolio-site.git");
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "portfolio-site")]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &wanted);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "portfolio-site");
+        assert_eq!(found[0].path, clone);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_remote_under_another_owner_does_not_match() {
+        // The owner is part of the key, so a clone of someone else's `fleetz`
+        // can't claim yours through its remote.
+        let dir = std::env::temp_dir().join("fleetz_test_remote_owner");
+        let _ = fs::remove_dir_all(&dir);
+        clone_with_origin(&dir.join("their-fork"), "git@github.com:someone/fleetz.git");
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "fleetz")]);
+        assert!(find_in_primary(std::slice::from_ref(&dir), &wanted).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_linked_worktree_does_not_match_through_its_main_clones_remote() {
+        // A worktree shares its main clone's remote. Matched that way it would
+        // race the real clone for the row, so only the clone may match.
+        let dir = std::env::temp_dir().join("fleetz_test_remote_worktree");
+        let _ = fs::remove_dir_all(&dir);
+        let main = dir.join("site");
+        clone_with_origin(&main, "git@github.com:Gaurgle/portfolio-site.git");
+        let wt = dir.join("site-feature");
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(
+            wt.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                main.join(".git/worktrees/site-feature").display()
+            ),
+        )
+        .unwrap();
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "portfolio-site")]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &wanted);
+        let paths: Vec<_> = found.iter().map(|f| f.path.clone()).collect();
+        assert_eq!(paths, vec![main]);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn find_elsewhere_matches_by_remote_too() {
+        let home = std::env::temp_dir().join("fleetz_test_remote_elsewhere");
+        let _ = fs::remove_dir_all(&home);
+        let clone = home.join("code").join("website");
+        clone_with_origin(&clone, "https://github.com/Gaurgle/portfolio-site.git");
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "portfolio-site")]);
+        let found = find_elsewhere(&home, &[], &wanted, &HashSet::new());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "portfolio-site");
+        assert_eq!(found[0].path, clone);
+
+        fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn origin_url_reads_only_the_origin_remote() {
+        let config = "[remote \"upstream\"]\n\turl = git@github.com:acme/tool.git\n\
+                      [remote \"origin\"]\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n\
+                      \turl = git@github.com:me/tool.git\n[branch \"main\"]\n\tremote = origin\n";
+        assert_eq!(origin_url(config), Some("git@github.com:me/tool.git"));
+        assert_eq!(origin_url("[core]\n\tbare = false\n"), None);
+    }
+
     #[test]
     fn find_in_primary_finds_matching_repos() {
         let dir = std::env::temp_dir().join("fleetz_test_primary");
@@ -255,7 +443,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let names = setup_test_repos(&dir);
 
-        let found = find_in_primary(std::slice::from_ref(&dir), &names);
+        let found = find_in_primary(std::slice::from_ref(&dir), &by_name(&names));
         let found_names: HashSet<_> = found.iter().map(|f| f.name.clone()).collect();
         assert!(found_names.contains("alpha"));
         assert!(found_names.contains("beta"));
@@ -270,7 +458,10 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("MyRepo").join(".git")).unwrap();
 
-        let found = find_in_primary(std::slice::from_ref(&dir), &["myrepo".to_string()]);
+        let found = find_in_primary(
+            std::slice::from_ref(&dir),
+            &by_name(&["myrepo".to_string()]),
+        );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].name, "MyRepo");
 
@@ -283,7 +474,10 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("other").join(".git")).unwrap();
 
-        let found = find_in_primary(std::slice::from_ref(&dir), &["nothere".to_string()]);
+        let found = find_in_primary(
+            std::slice::from_ref(&dir),
+            &by_name(&["nothere".to_string()]),
+        );
         assert!(found.is_empty());
 
         fs::remove_dir_all(dir).ok();
@@ -303,7 +497,7 @@ mod tests {
 
         let found = find_in_primary(
             &[primary, extra],
-            &["alpha".to_string(), "beta".to_string()],
+            &by_name(&["alpha".to_string(), "beta".to_string()]),
         );
         let names: HashSet<_> = found.iter().map(|f| f.name.clone()).collect();
         assert!(names.contains("alpha"));
@@ -322,7 +516,10 @@ mod tests {
         let hidden = base.join(".dotfiles");
         fs::create_dir_all(hidden.join(".git")).unwrap();
 
-        let found = find_in_primary(std::slice::from_ref(&hidden), &["dotfiles".to_string()]);
+        let found = find_in_primary(
+            std::slice::from_ref(&hidden),
+            &by_name(&["dotfiles".to_string()]),
+        );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].name, "dotfiles", "leading dot stripped");
         assert_eq!(found[0].path, hidden);
@@ -337,7 +534,7 @@ mod tests {
         let nested = base.join("nested");
         fs::create_dir_all(nested.join("alpha").join(".git")).unwrap();
 
-        let found = find_in_primary(&[base.clone(), nested], &["alpha".to_string()]);
+        let found = find_in_primary(&[base.clone(), nested], &by_name(&["alpha".to_string()]));
         assert_eq!(found.len(), 1, "one repo, one row");
 
         fs::remove_dir_all(base).ok();
@@ -387,7 +584,7 @@ mod tests {
         let deep = dir.join("a").join("b").join("c").join("d").join("deep");
         fs::create_dir_all(deep.join(".git")).unwrap();
 
-        let found = find_in_primary(std::slice::from_ref(&dir), &["deep".to_string()]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &by_name(&["deep".to_string()]));
         assert!(found.is_empty());
 
         fs::remove_dir_all(dir).ok();

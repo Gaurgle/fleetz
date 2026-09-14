@@ -357,14 +357,16 @@ pub enum RepoKind {
     Unknown,
 }
 
-/// Pull the owner out of a git remote URL, covering the forms git actually
-/// writes: scp-style (`git@host:owner/repo.git`), HTTPS/SSH URLs
+/// Pull `(owner, repo)` out of a git remote URL, covering the forms git
+/// actually writes: scp-style (`git@host:owner/repo.git`), HTTPS/SSH URLs
 /// (`https://host/owner/repo.git`, `ssh://git@host/owner/repo.git`), with or
-/// without the `.git` suffix. Anything that doesn't yield an `owner/repo`
-/// pair returns None rather than a guess.
+/// without the `.git` suffix, which is stripped from the repo. Anything that
+/// doesn't yield an `owner/repo` pair returns None rather than a guess.
 ///
-/// Self-hosted hosts work too: only the path shape matters, not the host.
-pub fn owner_from_remote_url(url: &str) -> Option<String> {
+/// Self-hosted hosts work too: only the path shape matters, not the host. So
+/// does an SSH host alias (`git@github-work:owner/repo.git`), which is what
+/// lets discovery match on this without knowing which host a clone uses.
+pub fn repo_from_remote_url(url: &str) -> Option<(String, String)> {
     let url = url.trim().trim_end_matches('/');
     // scp-style has no scheme and puts the path after a colon. Checking for
     // "://" first keeps a URL's own "host:port" colon from matching here.
@@ -377,8 +379,16 @@ pub fn owner_from_remote_url(url: &str) -> Option<String> {
     let mut segments = path.trim_start_matches('/').split('/');
     let owner = segments.next().filter(|s| !s.is_empty())?;
     // Require a repo segment as well, so a bare host never reads as an owner.
-    segments.next().filter(|s| !s.is_empty())?;
-    Some(owner.to_string())
+    let repo = segments
+        .next()
+        .map(|s| s.strip_suffix(".git").unwrap_or(s))
+        .filter(|s| !s.is_empty())?;
+    Some((owner.to_string(), repo.to_string()))
+}
+
+/// The owner half of `repo_from_remote_url`.
+pub fn owner_from_remote_url(url: &str) -> Option<String> {
+    repo_from_remote_url(url).map(|(owner, _)| owner)
 }
 
 /// What a not-cloned repo reports instead of a counter summary, in both the
@@ -550,6 +560,24 @@ mod tests {
             "/local/path/repo",
         ] {
             assert_eq!(owner_from_remote_url(url), None, "parsing {url:?}");
+        }
+    }
+
+    #[test]
+    fn repo_parsed_with_the_git_suffix_stripped() {
+        for url in [
+            "git@github.com:Gaurgle/portfolio-site.git",
+            "git@github.com:Gaurgle/portfolio-site",
+            "https://github.com/Gaurgle/portfolio-site/",
+            "ssh://git@github.com/Gaurgle/portfolio-site.git",
+            // An SSH host alias from ~/.ssh/config: the host is never checked.
+            "git@github-work:Gaurgle/portfolio-site.git",
+        ] {
+            assert_eq!(
+                repo_from_remote_url(url),
+                Some(("Gaurgle".to_string(), "portfolio-site".to_string())),
+                "parsing {url}"
+            );
         }
     }
 

@@ -28,7 +28,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 
 /// How many commits/reflog entries to show in the detail pane's history
@@ -2277,6 +2277,30 @@ fn sort_by_activity(
     });
 }
 
+/// Pass 3's candidates: the local repos passes 1-2 have not already shown,
+/// each with the name it reports as.
+///
+/// Skipped by path as well as by name. A clone matched through its remote can
+/// sit in a folder whose name is not the GitHub name (`DevOps_Portfolio` for
+/// `portfolio-site`), and the name check alone let it back in as a second,
+/// local-only row whenever it was dirty.
+fn unclaimed_local(
+    all_local: Vec<PathBuf>,
+    claimed_paths: &HashSet<&Path>,
+    checked_names: &HashSet<String>,
+) -> Vec<(PathBuf, String)> {
+    all_local
+        .into_iter()
+        .filter(|path| !claimed_paths.contains(path.as_path()))
+        .filter_map(|path| {
+            // Undotted, so a hidden clone dedupes against the GitHub name passes
+            // 1-2 registered it under rather than showing a second `.foo` row.
+            let name = discovery::repo_name_for_path(&path);
+            (!checked_names.contains(&name.to_lowercase())).then_some((path, name))
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 async fn assemble_view(
     dataset: &[github::GithubRepo],
@@ -2323,10 +2347,11 @@ async fn assemble_view(
         active = github::filter_before(&active, b);
     }
 
-    let active_names: Vec<String> = active.iter().map(|r| r.name.clone()).collect();
+    let wanted =
+        discovery::Wanted::new(active.iter().map(|r| (r.owner.as_deref(), r.name.as_str())));
 
     // Pass 1: find under every scan root (repo_dir + extra_dirs)
-    let primary_found = discovery::find_in_primary(&scan_roots, &active_names);
+    let primary_found = discovery::find_in_primary(&scan_roots, &wanted);
     let found_set: HashSet<String> = primary_found
         .iter()
         .map(|f| f.name.to_lowercase())
@@ -2334,7 +2359,7 @@ async fn assemble_view(
 
     // Pass 2: find elsewhere
     let home = dirs::home_dir().unwrap_or_default();
-    let elsewhere_found = discovery::find_elsewhere(&home, &scan_roots, &active_names, &found_set);
+    let elsewhere_found = discovery::find_elsewhere(&home, &scan_roots, &wanted, &found_set);
 
     // Dedupe up front: a repo found in both passes is one stat target, so the
     // gauge total is the real amount of work rather than a count that has to
@@ -2417,15 +2442,13 @@ async fn assemble_view(
     // the repo as LocalOnly rather than being mislabeled "not cloned" when
     // it lives at a hidden path passes 1/2 don't reach.
     let all_local = discovery::find_all_local(&scan_roots);
+    let claimed_paths: HashSet<&Path> = targets.iter().map(|(f, _)| f.path.as_path()).collect();
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
     let mut set = tokio::task::JoinSet::new();
-    for (i, path) in all_local.into_iter().enumerate() {
-        // Undotted, so a hidden clone dedupes against the GitHub name passes
-        // 1-2 registered it under rather than showing a second `.foo` row.
-        let name = discovery::repo_name_for_path(&path);
-        if checked_names.contains(&name.to_lowercase()) {
-            continue;
-        }
+    for (i, (path, name)) in unclaimed_local(all_local, &claimed_paths, &checked_names)
+        .into_iter()
+        .enumerate()
+    {
         // Glyph metadata by name from the full GitHub fetch, so a local-only
         // repo (e.g. dotfiles) still shows its org/private/public glyph.
         let repo_kind = kind_by_name
@@ -2856,6 +2879,21 @@ mod tests {
             }
         }
         dir
+    }
+
+    /// The regression: a clone matched through its remote lives in a folder
+    /// named something else, so deduping pass 3 by name alone listed it a
+    /// second time, as local-only, once it was dirty.
+    #[test]
+    fn a_clone_passes_1_and_2_claimed_is_not_listed_again_as_local_only() {
+        let claimed = PathBuf::from("/tmp/x/DevOps_Portfolio");
+        let candidates = unclaimed_local(
+            vec![claimed.clone(), PathBuf::from("/tmp/x/scratch")],
+            &HashSet::from([claimed.as_path()]),
+            &HashSet::from(["portfolio-site".to_string()]),
+        );
+        let names: Vec<&str> = candidates.iter().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(names, ["scratch"]);
     }
 
     fn found_targets(dir: &Path, names: &[&str]) -> Vec<(discovery::FoundRepo, RepoLocation)> {

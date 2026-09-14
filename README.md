@@ -171,7 +171,10 @@ work_end = 18
 # headroom, so leave it generous.
 repo_limit = 50
 
-# Where to look for local clones (~ expanded)
+# Where to look for local clones (~ expanded). A clone is matched to its
+# GitHub repo by its `origin` remote, so the folder can be named anything; one
+# whose remote matches nothing falls back to matching on the folder name. After
+# renaming a repo on GitHub, run `git remote set-url` so the remote matches.
 repo_dir = "~/repos"
 
 # Extra scan roots, searched alongside repo_dir (repoz's EXTRA_DIRS).

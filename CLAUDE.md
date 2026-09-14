@@ -110,6 +110,17 @@ scans the configured roots, pass 2 sweeps `$HOME`, pass 3 picks up local-only
 repos, and only then is anything "not cloned". A local clone must win over that
 fallback, or a repo under a hidden path reports as absent.
 
+**A clone is matched by its `origin` remote first, its folder name second**
+(`discovery::Wanted::match_clone`). A folder name is only a convention: a clone
+of `portfolio-site` in `~/repos/DevOps_Portfolio` reported as not cloned. The
+remote is read from `.git/config`, not `git remote get-url`, since it runs for
+every candidate in both sweeps. The owner is part of the key, so a clone of
+someone else's same-named repo can't claim yours. A linked worktree has no
+config of its own and keeps the name match, or it would race its main clone for
+the row. Pass 3 dedupes by path as well as name (`main.rs::unclaimed_local`),
+because a remote-matched folder name is not the row's name. This diverges from
+repoz on purpose: repoz still matches on names only.
+
 **A local clone may be dot-prefixed when its GitHub repo is not** (`dotfiles`
 lives at `~/.dotfiles`). Discovery matches both spellings and reports the
 undotted name: match, glyph lookup and dedupe all key on the GitHub name
