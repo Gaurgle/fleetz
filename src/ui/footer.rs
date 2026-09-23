@@ -169,7 +169,7 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
         View::Detail => "compact",
         View::Compact => "detail",
     };
-    let refreshing = app.sweep_started.is_some() && app.sweep_manual;
+    let refreshing = app.is_refreshing();
 
     let mut hints = vec![Span::styled("[enter]", key_style)];
     if with_desc {

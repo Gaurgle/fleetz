@@ -978,6 +978,17 @@ pub struct StatusMessage {
     pub created: std::time::Instant,
 }
 
+/// The two halves of a manual `r`, named apart in the header because they
+/// cost very different amounts: the local sweep lands in well under a second,
+/// the GitHub poll takes 6-7s before its fetches even start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshPhase {
+    /// Re-reading the local clones.
+    Local,
+    /// Waiting on the GitHub poll, then on the fetches it set off.
+    Remote,
+}
+
 /// Main application state.
 pub struct App {
     pub repos: Vec<RepoStatus>,
@@ -1156,6 +1167,17 @@ pub struct App {
     ///
     /// Only meaningful while `sweep_started` is `Some`.
     pub sweep_manual: bool,
+    /// True while a manual `r` waits on its GitHub poll. The local sweep is
+    /// only half of a refresh: the poll lands later and fetches the remotes
+    /// that moved, so a spinner keyed on the sweep alone stopped while rows
+    /// were still changing under it.
+    pub refresh_awaits_poll: bool,
+    /// Display paths of the fetches that poll set off for a manual `r`, each
+    /// cleared by that repo's fetched update. See `is_refreshing`.
+    pub refresh_fetches: std::collections::HashSet<String>,
+    /// When `refresh_fetches` was filled, so a fetch that never returns
+    /// cannot leave the spinner running for the rest of the session.
+    pub refresh_fetches_started: Option<std::time::Instant>,
     /// When GitHub was last re-polled in watch mode.
     pub last_github_poll: Option<DateTime<Local>>,
     /// True while a GitHub re-poll is in flight, so ticks do not stack them.
@@ -1275,6 +1297,9 @@ impl App {
             loading: false,
             sweep_started: None,
             sweep_manual: false,
+            refresh_awaits_poll: false,
+            refresh_fetches: std::collections::HashSet::new(),
+            refresh_fetches_started: None,
             last_github_poll: None,
             github_poll_inflight: false,
             github_poll_started: None,
@@ -1295,6 +1320,59 @@ impl App {
         self.spinner_frame = self.spinner_frame.wrapping_add(1);
         if self.spinner_frame.is_multiple_of(BLINK_TICKS) {
             self.blink_on = !self.blink_on;
+        }
+    }
+
+    /// Which half of a manual `r` is running, or None when none is: first its
+    /// local sweep, then the GitHub poll it started and the fetches that poll
+    /// set off. The spinner and the lit `[r]` key both read this, so neither
+    /// stops before the last row lands. A watch-timer sweep does not count; it
+    /// runs silently.
+    pub fn refresh_phase(&self) -> Option<RefreshPhase> {
+        if self.sweep_started.is_some() && self.sweep_manual {
+            Some(RefreshPhase::Local)
+        } else if self.refresh_awaits_poll || !self.refresh_fetches.is_empty() {
+            Some(RefreshPhase::Remote)
+        } else {
+            None
+        }
+    }
+
+    /// Whether a manual `r` is still in flight, in either half.
+    pub fn is_refreshing(&self) -> bool {
+        self.refresh_phase().is_some()
+    }
+
+    /// Hand the fetches a GitHub poll set off to the manual refresh waiting
+    /// on that poll, if there is one. A poll nobody pressed `r` for (the
+    /// watch timer) fetches silently and adds nothing.
+    pub fn settle_refresh_poll(&mut self, fetched_paths: impl IntoIterator<Item = String>) {
+        if !std::mem::take(&mut self.refresh_awaits_poll) {
+            return;
+        }
+        self.refresh_fetches.extend(fetched_paths);
+        if !self.refresh_fetches.is_empty() {
+            self.refresh_fetches_started = Some(std::time::Instant::now());
+        }
+    }
+
+    /// A repo's update landed. Only a fetched one settles a pending refresh
+    /// fetch: the local sweep can report the same repo before its fetch has
+    /// run, and that update does not carry the remote's news yet.
+    pub fn settle_refresh_fetch(&mut self, path: &str, fetched: bool) {
+        if fetched && self.refresh_fetches.remove(path) && self.refresh_fetches.is_empty() {
+            self.refresh_fetches_started = None;
+        }
+    }
+
+    /// Give up on refresh fetches that have outlived `limit`.
+    pub fn expire_refresh_fetches(&mut self, limit: std::time::Duration) {
+        if self
+            .refresh_fetches_started
+            .is_some_and(|t| t.elapsed() > limit)
+        {
+            self.refresh_fetches.clear();
+            self.refresh_fetches_started = None;
         }
     }
 
@@ -2291,6 +2369,97 @@ mod tests {
             })
             .collect();
         App::new(repos, "test".to_string(), 120, 40)
+    }
+
+    /// Regression: the `r` spinner keyed on the local sweep alone, so it
+    /// stopped while the GitHub poll and the fetches it set off were still
+    /// landing rows one at a time.
+    #[test]
+    fn a_manual_refresh_spins_until_its_poll_and_fetches_land() {
+        let mut app = make_app(3);
+        app.sweep_started = Some(std::time::Instant::now());
+        app.sweep_manual = true;
+        app.refresh_awaits_poll = true;
+        assert!(app.is_refreshing());
+
+        // The local sweep finishing is not the end of it.
+        app.sweep_started = None;
+        assert!(app.is_refreshing(), "stopped before the poll landed");
+
+        app.settle_refresh_poll(["~/repos/repo-0".to_string(), "~/repos/repo-2".to_string()]);
+        assert!(app.is_refreshing(), "stopped before the fetches landed");
+
+        app.settle_refresh_fetch("~/repos/repo-0", true);
+        assert!(app.is_refreshing());
+        app.settle_refresh_fetch("~/repos/repo-2", true);
+        assert!(!app.is_refreshing());
+        assert!(app.refresh_fetches_started.is_none());
+    }
+
+    #[test]
+    fn a_manual_refresh_is_local_until_its_sweep_ends_then_remote() {
+        let mut app = make_app(1);
+        assert_eq!(app.refresh_phase(), None);
+        app.sweep_started = Some(std::time::Instant::now());
+        app.sweep_manual = true;
+        app.refresh_awaits_poll = true;
+        assert_eq!(app.refresh_phase(), Some(RefreshPhase::Local));
+        app.sweep_started = None;
+        assert_eq!(app.refresh_phase(), Some(RefreshPhase::Remote));
+        app.settle_refresh_poll(std::iter::empty());
+        assert_eq!(app.refresh_phase(), None);
+    }
+
+    #[test]
+    fn a_manual_refresh_ends_with_its_poll_when_nothing_moved() {
+        let mut app = make_app(1);
+        app.refresh_awaits_poll = true;
+        app.settle_refresh_poll(std::iter::empty());
+        assert!(!app.is_refreshing());
+        assert!(app.refresh_fetches_started.is_none());
+    }
+
+    /// The local sweep can report a repo before that repo's fetch has run.
+    #[test]
+    fn an_unfetched_update_does_not_settle_a_refresh_fetch() {
+        let mut app = make_app(1);
+        app.refresh_awaits_poll = true;
+        app.settle_refresh_poll(["~/repos/repo-0".to_string()]);
+        app.settle_refresh_fetch("~/repos/repo-0", false);
+        assert!(app.is_refreshing());
+    }
+
+    /// The watch timer's poll fetches silently: no spinner, nothing to wait on.
+    #[test]
+    fn a_poll_nobody_pressed_r_for_adds_no_refresh_fetches() {
+        let mut app = make_app(1);
+        app.settle_refresh_poll(["~/repos/repo-0".to_string()]);
+        assert!(!app.is_refreshing());
+        assert!(app.refresh_fetches.is_empty());
+    }
+
+    #[test]
+    fn a_watch_timer_sweep_is_not_a_refresh() {
+        let mut app = make_app(1);
+        app.sweep_started = Some(std::time::Instant::now());
+        app.sweep_manual = false;
+        assert!(!app.is_refreshing());
+    }
+
+    #[test]
+    fn a_refresh_fetch_that_never_returns_is_given_up_on() {
+        let mut app = make_app(1);
+        app.refresh_awaits_poll = true;
+        app.settle_refresh_poll(["~/repos/repo-0".to_string()]);
+        app.expire_refresh_fetches(std::time::Duration::from_secs(60));
+        assert!(
+            app.is_refreshing(),
+            "expired a fetch still inside its limit"
+        );
+        app.refresh_fetches_started =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(61));
+        app.expire_refresh_fetches(std::time::Duration::from_secs(60));
+        assert!(!app.is_refreshing());
     }
 
     /// Regression: the footer folded `self.repos` while the repo list drew

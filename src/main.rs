@@ -122,6 +122,8 @@ pub enum AppEvent {
     RepoUpdated {
         path: String,
         status: Box<RepoStatus>,
+        /// Whether `git fetch` ran before this rebuild.
+        fetched: bool,
     },
     Github(Result<Box<github::GithubFetch>, String>),
     Progress(ApplyProgress),
@@ -616,7 +618,7 @@ async fn run_event_loop(
                 // animation reads as a slow stutter rather than a spin. A
                 // silent watch sweep draws no spinner, so it buys no repaints
                 // either: it just updates the rows when it lands.
-                let spinning = app.loading || (app.sweep_started.is_some() && app.sweep_manual);
+                let spinning = app.loading || app.is_refreshing();
                 // Everything else that moves on its own (the swept-ago clock,
                 // the CI blink) only needs about one repaint a second.
                 let slow_animated = app.watch_mode || app.apply_progress.is_some();
@@ -632,6 +634,7 @@ async fn run_event_loop(
                 {
                     app.sweep_started = None;
                 }
+                app.expire_refresh_fetches(SWEEP_STUCK_AFTER);
                 if app.watch_mode && !app.loading && app.sweep_started.is_none() {
                     // A missing timestamp means "due now", so watch can never
                     // silently die the way a Some-only guard could.
@@ -651,6 +654,7 @@ async fn run_event_loop(
                 {
                     app.github_poll_inflight = false;
                     app.github_poll_started = None;
+                    app.refresh_awaits_poll = false;
                 }
                 if app.watch_mode && !app.dirty_mode && !app.loading && !app.github_poll_inflight {
                     let poll_every = github_poll_secs(app, config);
@@ -729,7 +733,12 @@ async fn run_event_loop(
                 app.apply_progress = Some(p);
                 app.needs_redraw = true;
             }
-            AppEvent::RepoUpdated { path, status } => {
+            AppEvent::RepoUpdated {
+                path,
+                status,
+                fetched,
+            } => {
+                app.settle_refresh_fetch(&path, fetched);
                 if let Some(repo) = app
                     .repos
                     .iter_mut()
@@ -784,13 +793,23 @@ async fn run_event_loop(
                         // One API call just told us which remotes moved, so
                         // fetch only those instead of waiting for the next
                         // blanket sweep to fetch all of them.
-                        for idx in remotes_that_moved(&app.dataset, &dataset, &app.repos) {
+                        let moved = remotes_that_moved(&app.dataset, &dataset, &app.repos);
+                        for &idx in &moved {
                             start_single_sweep(app, &tx, idx, true, args.author.clone());
                         }
+                        // A manual `r` keeps spinning until these land.
+                        let fetched_paths: Vec<String> = moved
+                            .iter()
+                            .filter_map(|&idx| app.repos[idx].path.clone())
+                            .collect();
+                        app.settle_refresh_poll(fetched_paths);
                         app.dataset = dataset;
                     }
                     Err(e) => app.set_status(format!("GitHub refresh failed: {e}"), true),
                 }
+                // A failed poll fetched nothing, so a refresh waiting on it
+                // is over. No-op when the Ok arm already settled it.
+                app.settle_refresh_poll(std::iter::empty());
                 app.needs_redraw = true;
             }
             AppEvent::SweepDone { at } => {
@@ -1548,6 +1567,9 @@ async fn handle_normal_input(
             app.set_status("Refreshing…".to_string(), false);
             start_sweep(app, tx, false, args.author.clone(), true);
             start_github_poll(app, tx, config);
+            // Already in flight from the watch timer counts too: its answer
+            // is the one this refresh is waiting for.
+            app.refresh_awaits_poll = app.github_poll_inflight;
         }
         // Full reload: re-fetch GitHub (cache-bypassed) and re-run discovery,
         // so a just-pushed or newly-cloned repo appears. Shifted because it
@@ -1890,6 +1912,7 @@ fn spawn_sweep(
                 let _ = tx.send(AppEvent::RepoUpdated {
                     path: target.display_path.clone(),
                     status: Box::new(status),
+                    fetched: do_fetch,
                 });
             });
         }

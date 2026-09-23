@@ -697,8 +697,12 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     // sweep runs silently and leaves the timestamp in place, so an interval
     // refresh cannot repaint a moving colored indicator over a dashboard
     // being read.
-    let ts_span = if app.sweep_started.is_some() && app.sweep_manual {
-        Some(spinner_group(app.spinner_frame, "sweeping"))
+    let ts_span = if let Some(phase) = app.refresh_phase() {
+        let label = match phase {
+            crate::app::RefreshPhase::Local => "checking local changes…",
+            crate::app::RefreshPhase::Remote => "checking remote…",
+        };
+        Some(spinner_group(app.spinner_frame, label))
     } else {
         app.last_refreshed.map(|ts| {
             let now = chrono::Local::now();
@@ -1006,6 +1010,29 @@ mod tests {
         // whenever the header text it points at is absent.
         let row = header_row("", 100);
         assert!(!row.contains("[t]"), "got {row:?}");
+    }
+
+    /// A manual `r` says which half it is on: the local re-read is quick, the
+    /// GitHub poll after it takes seconds, and one word for both made the
+    /// fast part look slow.
+    #[test]
+    fn a_manual_refresh_names_the_half_it_is_on() {
+        let local = header_row_with("h", 120, |app| {
+            app.sweep_started = Some(std::time::Instant::now());
+            app.sweep_manual = true;
+            app.refresh_awaits_poll = true;
+        });
+        assert!(local.contains("checking local changes"), "{local}");
+        assert!(!local.contains("checking remote"), "{local}");
+
+        let remote = header_row_with("h", 120, |app| app.refresh_awaits_poll = true);
+        assert!(remote.contains("checking remote"), "{remote}");
+        assert!(!remote.contains("checking local"), "{remote}");
+
+        let fetching = header_row_with("h", 120, |app| {
+            app.refresh_fetches.insert("~/repos/a".to_string());
+        });
+        assert!(fetching.contains("checking remote"), "{fetching}");
     }
 
     #[test]
