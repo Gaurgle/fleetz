@@ -27,6 +27,11 @@ pub struct Config {
     /// identities can be joined: `me@work.com\|me@home.com`.
     #[serde(default)]
     pub contributions_author: Option<String>,
+    /// Which Nerd Font square the strip draws a day as: "small", "medium"
+    /// (the default) or "large". Three icons of measured size; see
+    /// `app::CellSize`.
+    #[serde(default)]
+    pub contributions_cell_size: Option<String>,
     #[serde(default)]
     pub groups: HashMap<String, Vec<String>>,
     /// Pin the startup view: "detail", "compact", or "auto" (the default,
@@ -93,6 +98,7 @@ impl Default for Config {
         Self {
             contributions: None,
             contributions_author: None,
+            contributions_cell_size: None,
             work_start: 9,
             work_end: 18,
             repo_limit: 50,

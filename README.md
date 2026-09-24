@@ -121,7 +121,7 @@ in the header instead.
 | `v` | Toggle detail vs compact view. The compact grid packs as many columns as the terminal has room for |
 | `[` / `]` | Repo pane: step its body between five views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`, wrapped to the pane and given the whole column (its blocks already carry what the inspector would repeat, so no inspector is docked there); `branches` every local branch and every remote-tracking branch in one list, read-only, with the inspector showing the highlighted branch's tip commit (a remote branch nothing local claims is marked `not fetched`, and its tip is not on any local branch, so the inspector says so rather than drawing a blank). Each keeps its own scroll position and selection, and the inspector follows whichever is active. The active view is named in the pane's top border in its own colour (the tabs are capitalised; the pane's own headliner repeats the same name over a divider that fades from the view's colour into the background across the pane), and the repo header below it stays pinned, so both survive scrolling. In `info` the local branches pin with it where the pane has the rows to spare, since they are what the repo's behind count is a sum of; the remote-only list below them collapses to a count, being bounded by what everyone else has pushed rather than by what you have: `B` expands it in place, and `branches` lists them all |
 | `B` | `info`: expand or collapse the remote branch summary. The full list, with each branch's state, is the `branches` view |
-| `c` | Toggle the contributions strip (the footer's `[c]` lights up in the strip's colour while it is open): three years of activity, GitHub-style. Each day is a half-block square with its own padding, so the grid fits in 11 rows; it scrolls rather than shrinking, with the newest week pinned to the right edge, and no day is marked until you move the cursor |
+| `c` | Toggle the contributions strip (the footer's `[c]` lights up in the strip's colour while it is open): three years of activity, GitHub-style. Each day is a Nerd Font square icon, which sits level with the `Mon`/`Wed`/`Fri` labels where a half block cannot, in three sizes (`contributions_cell_size`); the grid scrolls rather than shrinking, with the newest week pinned to the right edge, and no day is marked until you move the cursor |
 | `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
 | `4` | Focus the contributions strip (only while it is open) |
 | `h` / `l`, `←` / `→` | Contributions: move the day cursor back/forward a week. The grid scrolls with it, oldest weeks hiding off to the left |
@@ -139,7 +139,7 @@ in the header instead.
 | `G` | Show all (clear group) |
 | `/` | Fuzzy-search repos by name (best match first, `flz` finds `fleetz`), or type `#dirty` `#behind` `#ahead` `#ci` `#prs` `#stash` to filter |
 | `0` | Clear `#tag` filters (keeps free-text search) |
-| `,` | Settings overlay: refresh interval, startup view, work hours, pane persistence, contributions strip, intro animation. `Enter` saves to `config.toml` |
+| `,` | Settings overlay: refresh interval, startup view, work hours, pane persistence, contributions strip and its cell size, intro animation. `Enter` saves to `config.toml` |
 | `<` / `>` | Narrow / widen the repo list |
 | `+` / `-` | Shrink / grow the inspector pane |
 | `=` | Reset both panes to their default sizes |
@@ -197,6 +197,11 @@ contributions = "github"
 # Git author regex the "local" source filters by, overriding each repo's own
 # user.email. --author takes a regex, so several identities can be joined.
 contributions_author = "me@work.com\\|me@home.com"
+
+# Size of the square each day is drawn as: "small", "medium" (default) or
+# "large". Three Nerd Font icons of measured size, all sitting level with the
+# weekday labels. Also in the `,` menu, where it applies live.
+contributions_cell_size = "medium"
 
 # Start in watch mode. On by default: a dashboard you leave open should keep
 # itself current. --watch / --no-watch override for one session, `w` toggles live.

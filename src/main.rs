@@ -319,6 +319,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(app::DEFAULT_CONTRIBUTIONS),
     );
     app.contrib_author = config.contributions_author.clone();
+    app.contrib_cell = config
+        .contributions_cell_size
+        .as_deref()
+        .map(app::CellSize::from_config)
+        .unwrap_or_default();
     app.show_pr_detail = args.prs;
     // Pane sizes start at their defaults every launch. Only an explicit
     // persist_pane_sizes opt-in restores the ones saved on last exit.
@@ -1212,11 +1217,12 @@ fn handle_settings_input(app: &mut App, key: KeyEvent) {
             let path = config::settings_path();
             match config::save_settings(&path, &updates) {
                 Ok(()) => {
-                    let (interval, view, persist, contributions) = (
+                    let (interval, view, persist, contributions, contrib_cell) = (
                         so.refresh_interval,
                         so.view,
                         so.persist_panes,
                         so.contributions,
+                        so.contrib_cell,
                     );
                     so.status = Some(format!("saved to {}", tilde_display(&path)));
                     // Live fields take effect immediately; the overlay stays
@@ -1225,6 +1231,7 @@ fn handle_settings_input(app: &mut App, key: KeyEvent) {
                     app.persist_pane_sizes = persist;
                     // Focus cannot be left on a strip the save just closed.
                     app.contributions = contributions;
+                    app.contrib_cell = contrib_cell;
                     if !app.contributions.is_open()
                         && app.focused_panel == FocusedPanel::Contributions
                     {
@@ -1535,6 +1542,7 @@ async fn handle_normal_input(
                 config.work_end,
                 app.persist_pane_sizes,
                 app.contributions,
+                app.contrib_cell,
                 config.intro,
             ));
         }

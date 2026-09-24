@@ -118,6 +118,66 @@ impl ContributionsMode {
     }
 }
 
+/// Which Nerd Font square the contribution strip draws a day as. Three
+/// icons of measured size rather than one icon scaled: a terminal cannot
+/// scale a glyph, so "size" can only mean "a different glyph". Persisted as
+/// `contributions_cell_size`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CellSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl CellSize {
+    pub fn from_config(value: &str) -> Self {
+        match value {
+            "small" => Self::Small,
+            "large" => Self::Large,
+            _ => Self::Medium,
+        }
+    }
+
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Small => "small",
+            Self::Medium => "medium",
+            Self::Large => "large",
+        }
+    }
+
+    /// Label for the settings row.
+    pub fn label(self) -> &'static str {
+        self.config_value()
+    }
+
+    /// The icon, from JetBrainsMono Nerd Font's glyph boxes: `nf-fa-stop` at
+    /// 693 units, `nf-md-square` at 750 and `nf-fa-square` at 808, all
+    /// centred on the same line as a capital letter. Measured, not eyeballed:
+    /// the three looked interchangeable in a list and are clearly stepped on
+    /// screen.
+    pub const fn glyph(self) -> &'static str {
+        match self {
+            Self::Small => "\u{f04d}",
+            Self::Medium => "\u{f0764}",
+            Self::Large => "\u{f0c8}",
+        }
+    }
+
+    /// small -> medium -> large, wrapping; `delta` is -1 or 1.
+    pub fn step(self, delta: i32) -> Self {
+        match (self, delta > 0) {
+            (Self::Small, true) => Self::Medium,
+            (Self::Medium, true) => Self::Large,
+            (Self::Large, true) => Self::Small,
+            (Self::Small, false) => Self::Large,
+            (Self::Medium, false) => Self::Small,
+            (Self::Large, false) => Self::Medium,
+        }
+    }
+}
+
 /// One quick-filter a repo can be toggled against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterKind {
@@ -283,11 +343,12 @@ pub enum SettingField {
     WorkEnd,
     PersistPanes,
     Contributions,
+    ContribCellSize,
     Intro,
 }
 
 /// The settings rows in display order.
-pub const SETTING_FIELDS: [SettingField; 9] = [
+pub const SETTING_FIELDS: [SettingField; 10] = [
     SettingField::RefreshInterval,
     SettingField::GithubPollInterval,
     SettingField::Watch,
@@ -296,6 +357,7 @@ pub const SETTING_FIELDS: [SettingField; 9] = [
     SettingField::WorkEnd,
     SettingField::PersistPanes,
     SettingField::Contributions,
+    SettingField::ContribCellSize,
     SettingField::Intro,
 ];
 
@@ -310,6 +372,7 @@ impl SettingField {
             Self::WorkEnd => "work ends",
             Self::PersistPanes => "remember pane sizes",
             Self::Contributions => "contributions",
+            Self::ContribCellSize => "contrib cell size",
             Self::Intro => "intro animation",
         }
     }
@@ -325,6 +388,7 @@ impl SettingField {
             Self::WorkEnd => "work_end",
             Self::PersistPanes => "persist_pane_sizes",
             Self::Contributions => "contributions",
+            Self::ContribCellSize => "contributions_cell_size",
             Self::Intro => "intro",
         }
     }
@@ -335,7 +399,8 @@ impl SettingField {
             | Self::GithubPollInterval
             | Self::View
             | Self::PersistPanes
-            | Self::Contributions => Applies::Live,
+            | Self::Contributions
+            | Self::ContribCellSize => Applies::Live,
             // Only read when the app starts; `w` is how you change it now.
             Self::Watch => Applies::Restart,
             // The wave plays once, on the first screen of a launch. By the
@@ -423,6 +488,7 @@ pub struct SettingsOverlay {
     pub work_end: u8,
     pub persist_panes: bool,
     pub contributions: ContributionsMode,
+    pub contrib_cell: CellSize,
     pub intro: bool,
     /// Result of the last save attempt, shown as a footer line.
     pub status: Option<String>,
@@ -441,6 +507,7 @@ impl SettingsOverlay {
         work_end: u8,
         persist_panes: bool,
         contributions: ContributionsMode,
+        contrib_cell: CellSize,
         intro: bool,
     ) -> Self {
         Self {
@@ -453,6 +520,7 @@ impl SettingsOverlay {
             work_end,
             persist_panes,
             contributions,
+            contrib_cell,
             intro,
             status: None,
             digits: String::new(),
@@ -508,6 +576,7 @@ impl SettingsOverlay {
             }
             SettingField::PersistPanes => self.persist_panes = !self.persist_panes,
             SettingField::Intro => self.intro = !self.intro,
+            SettingField::ContribCellSize => self.contrib_cell = self.contrib_cell.step(delta),
             // off -> github -> local -> off
             SettingField::Contributions => {
                 self.contributions = match (self.contributions, delta > 0) {
@@ -611,6 +680,10 @@ impl SettingsOverlay {
                 SettingValue::Str(self.contributions.config_value()),
             ),
             (
+                SettingField::ContribCellSize.config_key(),
+                SettingValue::Str(self.contrib_cell.config_value()),
+            ),
+            (
                 SettingField::Intro.config_key(),
                 SettingValue::Bool(self.intro),
             ),
@@ -644,6 +717,7 @@ impl SettingsOverlay {
             SettingField::WorkEnd => format!("{:02}:00", self.work_end),
             SettingField::PersistPanes => bool_label(self.persist_panes),
             SettingField::Contributions => self.contributions.label().to_string(),
+            SettingField::ContribCellSize => self.contrib_cell.label().to_string(),
             SettingField::Intro => bool_label(self.intro),
         }
     }
@@ -663,6 +737,7 @@ mod settings_intro_tests {
             18,
             false,
             ContributionsMode::Off,
+            CellSize::Medium,
             intro,
         )
     }
@@ -1116,6 +1191,9 @@ pub struct App {
     /// `Config` at each use, because the sweep is started from call sites
     /// that hold an `App` but not a `Config`.
     pub contrib_author: Option<String>,
+    /// Which square icon the strip draws a day as, from the
+    /// `contributions_cell_size` config key and the settings row.
+    pub contrib_cell: CellSize,
     /// Grid slot the day cursor sits on, or None while the user has not
     /// travelled the grid yet. None is the resting state on purpose: a cell
     /// highlighted before anyone asked for it reads as a selection you did
@@ -1284,6 +1362,7 @@ impl App {
             last_contributions_source: ContributionsMode::Github,
             github_calendar: None,
             contrib_author: None,
+            contrib_cell: CellSize::default(),
             contrib_cursor: None,
             // Out of range on purpose: the renderer clamps it down to
             // "newest week at the right edge", which is where the grid opens.
@@ -2947,6 +3026,7 @@ mod tests {
             18,
             false,
             ContributionsMode::Off,
+            CellSize::Medium,
             true,
         )
     }
@@ -3723,6 +3803,50 @@ mod tests {
         );
     }
 
+    /// The row cycles the three sizes both ways, starts from what the app
+    /// holds, and writes the key `Config` reads back. A row whose key did not
+    /// match would save happily and change nothing.
+    #[test]
+    fn the_cell_size_row_cycles_and_writes_its_key() {
+        let mut overlay = SettingsOverlay::new(
+            60,
+            60,
+            true,
+            None,
+            9,
+            18,
+            false,
+            ContributionsMode::Off,
+            CellSize::Medium,
+            true,
+        );
+        overlay.cursor = SETTING_FIELDS
+            .iter()
+            .position(|f| *f == SettingField::ContribCellSize)
+            .unwrap();
+        assert_eq!(SettingField::ContribCellSize.applies(), Applies::Live);
+        assert_eq!(overlay.value_label(SettingField::ContribCellSize), "medium");
+        overlay.step(1);
+        assert_eq!(overlay.value_label(SettingField::ContribCellSize), "large");
+        overlay.step(1);
+        assert_eq!(overlay.value_label(SettingField::ContribCellSize), "small");
+        overlay.step(-1);
+        assert_eq!(overlay.value_label(SettingField::ContribCellSize), "large");
+
+        let updates = overlay.config_updates();
+        let written = updates
+            .iter()
+            .find(|(key, _)| *key == "contributions_cell_size")
+            .map(|(_, v)| v.clone());
+        assert_eq!(written, Some(crate::config::SettingValue::Str("large")));
+        let cfg: crate::config::Config =
+            toml::from_str(r#"contributions_cell_size = "large""#).unwrap();
+        assert_eq!(
+            CellSize::from_config(cfg.contributions_cell_size.as_deref().unwrap()),
+            CellSize::Large
+        );
+    }
+
     #[test]
     fn the_settings_row_cycles_the_three_modes() {
         let mut overlay = SettingsOverlay::new(
@@ -3734,6 +3858,7 @@ mod tests {
             18,
             false,
             ContributionsMode::Off,
+            CellSize::Medium,
             true,
         );
         overlay.cursor = SETTING_FIELDS
@@ -3772,6 +3897,7 @@ mod tests {
             18,
             false,
             ContributionsMode::Local,
+            CellSize::Medium,
             true,
         );
         let updates = overlay.config_updates();

@@ -1,22 +1,22 @@
 //! The contribution strip: a year of activity docked under the main panes.
 //!
-//! Drawn with half-block characters. A day is the lower half of a `▄`, and
-//! since a terminal cell is about twice as tall as it is wide, that half is a
-//! genuinely square pixel. The upper half is left unpainted, which is what
-//! pads the grid vertically: the gap above a square is exactly as tall as the
-//! square, and the gap beside it exactly as wide, so the padding is equal in
-//! both directions. A full-height block would be a rectangle needing a whole
-//! blank row to pad it, which is twice the cost for the same look.
+//! A day is a Nerd Font square icon in one character cell, with a blank column
+//! between weeks. The icon is the point: it is drawn by the font to sit on the
+//! text line, centred where a capital letter is centred, so it lines up with
+//! the `Mon`/`Wed`/`Fri` label beside it. Nothing in the block-element range
+//! can do that. A half block (`\u{2584}` or `\u{2580}`) is a true square, but
+//! it fills the bottom or top half of the cell and so sits a quarter row off
+//! the label's centre either way; this strip was drawn with the lower half
+//! for a long time and the labels never looked attached to their rows. A full
+//! block aligns but is a rectangle twice as tall as it is wide, with no
+//! padding between days. The icon has the square's shape and the text's
+//! baseline, and its unpainted surround is the padding, in both directions.
 //!
-//! The *lower* half rather than the upper: text ink sits between the baseline
-//! and the x-height, which is the lower middle of a cell, so a square anchored
-//! to the top of its row floats above the `Mon`/`Wed`/`Fri` label beside it.
-//! Nothing in Unicode paints a centred half, and the Nerd Font squares that
-//! would be centred are all East Asian Ambiguous: one column in some
-//! terminals and two in others. This grid does exact column arithmetic that
-//! `slot_at` reverses to route clicks, so an ambiguous-width cell would
-//! misplace every click and overflow every row, silently. Narrow by
-//! definition beats centred by luck.
+//! Three sizes ship (`CellSize`), picked by the `contributions_cell_size`
+//! config key; they are three different icons, measured in the font rather
+//! than named by feel. All are one column wide in the `unicode-width` sense
+//! ratatui lays out by, which the grid's exact column arithmetic (`slot_at`
+//! reverses it to route clicks) depends on.
 //!
 //! The grid draws at a fixed size and scrolls, rather than shrinking to fit.
 //! The newest weeks are pinned to the right edge and older ones hide off to
@@ -32,11 +32,8 @@ use crate::app::{App, ContributionsMode, FocusedPanel};
 use crate::contributions::{Calendar, WEEKS};
 use crate::ui::colors;
 
-/// One day, drawn as the lower half of a character cell. The upper half is
-/// deliberately left unpainted: it is the vertical padding.
-const CELL: &str = "▄";
-/// Points at the column holding the marked day, since a single bright half
-/// cell is easy to lose in a year of them.
+/// Points at the column holding the marked day, since a single small square
+/// is easy to lose in a year of them.
 const CARET: &str = "▾";
 
 /// A day is one column wide, with one blank column between weeks.
@@ -46,8 +43,8 @@ const GAP_COLS: u16 = 1;
 /// emitted, including after the last column, so the grid width is uniform.
 const WEEK_COLS: u16 = CELL_COLS + GAP_COLS;
 
-/// One row per weekday. Each costs a whole character row, but only its top
-/// half is painted, so the row below every square is its padding.
+/// One row per weekday. The icon does not fill its cell, so the row needs
+/// no padding row of its own.
 const DAY_ROWS: u16 = 7;
 
 /// Columns reserved for the weekday gutter.
@@ -250,9 +247,9 @@ pub fn title(calendar: &Calendar, cursor: Option<usize>, width: u16) -> String {
 /// The grid slot under a screen cell, or None for the gutter, the gaps, the
 /// label rows, and anything outside the drawn window.
 ///
-/// A click anywhere in a day's character row selects that day, including the
-/// unpainted lower half, which is the padding under it: a click that lands a
-/// pixel low still means the day you were pointing at.
+/// A click anywhere in a day's character cell selects that day, including
+/// the unpainted surround of the icon: a click that lands a pixel off still
+/// means the day you were pointing at.
 pub fn slot_at(area: Rect, scroll: usize, col: u16, row: u16) -> Option<usize> {
     let visible = visible_weeks(area);
     let weekday = row.checked_sub(area.y + FIRST_DAY_ROW)?;
@@ -322,10 +319,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let inner_width = area.width.saturating_sub(FRAME_COLS * 2);
 
     let pad = grid_pad(area);
+    let glyph = app.contrib_cell.glyph();
     let mut lines = Vec::with_capacity(CONTRIB_HEIGHT as usize);
     lines.push(month_and_caret_line(&calendar, first, visible, pad, marked));
     for weekday in 0..DAY_ROWS as usize {
-        lines.push(day_line(&calendar, first, visible, weekday, marked, pad));
+        lines.push(day_line(
+            &calendar, first, visible, weekday, marked, pad, glyph,
+        ));
     }
 
     let heading = title(&calendar, cursor, inner_width);
@@ -347,7 +347,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 // The legend rides in the bottom border rather than costing a
                 // row of its own, which is what the other panes do with their
                 // secondary information.
-                .title_bottom(legend_line(calendar.source()).right_aligned()),
+                .title_bottom(legend_line(calendar.source(), glyph).right_aligned()),
         ),
         area,
     );
@@ -428,7 +428,8 @@ fn month_and_caret_line(
     ])
 }
 
-/// One row of the grid: a single weekday, drawn in the bottom half of the row.
+/// One row of the grid: a single weekday.
+#[allow(clippy::too_many_arguments)]
 fn day_line(
     calendar: &Calendar,
     first: usize,
@@ -436,6 +437,7 @@ fn day_line(
     weekday: usize,
     marked: Option<(usize, usize)>,
     pad: u16,
+    glyph: &'static str,
 ) -> Line<'static> {
     // Only three of the seven rows are labelled, as GitHub does: seven labels
     // is a wall of text beside a picture.
@@ -463,29 +465,29 @@ fn day_line(
                 } else {
                     ladder[calendar.intensity(count) as usize]
                 };
-                spans.push(Span::styled(CELL, Style::default().fg(color)));
+                spans.push(Span::styled(glyph, Style::default().fg(color)));
             }
             // Past today: hold the column open so the grid keeps its shape.
-            None => spans.push(Span::raw(" ")),
+            None => spans.push(Span::raw(" ".repeat(CELL_COLS as usize))),
         }
         spans.push(Span::raw(" ".repeat(GAP_COLS as usize)));
     }
     Line::from(spans)
 }
 
-fn legend_line(source: crate::contributions::Source) -> Line<'static> {
+fn legend_line(source: crate::contributions::Source, glyph: &'static str) -> Line<'static> {
     let mut spans = vec![Span::styled(
         " Less ".to_string(),
         Style::default().fg(colors::OVERLAY),
     )];
-    // Drawn with the same half cell and the same one-column gap as the grid,
-    // so the legend is a sample of the thing it explains rather than a
-    // separate rendering of it.
+    // Drawn with the same icon and the same one-column gap as the grid, so
+    // the legend is a sample of the thing it explains rather than a separate
+    // rendering of it.
     for (i, shade) in colors::contrib_ladder(source).iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw(" "));
         }
-        spans.push(Span::styled(CELL, Style::default().fg(*shade)));
+        spans.push(Span::styled(glyph, Style::default().fg(*shade)));
     }
     spans.push(Span::styled(
         " More ".to_string(),
@@ -497,7 +499,11 @@ fn legend_line(source: crate::contributions::Source) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::CellSize;
     use crate::contributions::{Calendar, Source, WEEKS};
+
+    /// What a fresh `App` draws a day as.
+    const CELL: &str = CellSize::Medium.glyph();
 
     fn area(height: u16) -> Rect {
         Rect::new(0, 1, 120, height)
@@ -541,29 +547,58 @@ mod tests {
         assert!(split_main_area(area(floor), true).1.is_some());
     }
 
-    /// A half block is a square, and the unpainted half above it is padding
-    /// exactly as tall as the square is. One blank column does the same
-    /// horizontally, so the gap around every square is equal on all sides
-    /// without spending a blank row on it.
-    ///
-    /// The *lower* half: an upper-half square floats above the weekday label
-    /// beside it, since text ink sits between the baseline and the x-height.
-    /// Nothing in Unicode paints a centred half, and every centred Nerd Font
-    /// square is East Asian Ambiguous, which would put this grid's column
-    /// arithmetic at the mercy of a terminal setting.
+    /// Every size is one Nerd Font icon in one column. The grid's column
+    /// arithmetic, and `slot_at` reversing it to route clicks, both assume a
+    /// day is exactly `CELL_COLS` wide as ratatui measures it; a glyph that
+    /// laid out wider would overflow every row and misroute every click.
     #[test]
-    fn a_half_cell_square_pads_itself_vertically() {
-        assert_eq!(CELL.chars().count(), CELL_COLS as usize);
-        assert_eq!(CELL, "\u{2584}", "lower half only: the rest is padding");
+    fn every_cell_size_is_one_icon_one_column_wide() {
+        for size in [CellSize::Small, CellSize::Medium, CellSize::Large] {
+            let glyph = size.glyph();
+            assert_eq!(glyph.chars().count(), 1, "{size:?} is one glyph");
+            assert_eq!(
+                Span::raw(glyph).width(),
+                CELL_COLS as usize,
+                "{size:?} lays out one column wide"
+            );
+            let cp = glyph.chars().next().unwrap() as u32;
+            assert!(
+                (0xE000..=0xF8FF).contains(&cp) || (0xF0000..=0xFFFFD).contains(&cp),
+                "{size:?} is a private-use icon, not a block element"
+            );
+        }
+        assert_eq!(CellSize::default(), CellSize::Medium);
         assert_eq!(GAP_COLS, 1);
         assert_eq!(WEEK_COLS, 2);
-        assert_eq!(DAY_ROWS, 7, "one row per weekday");
-        // border + the shared month/caret row + grid + border; the count,
-        // source and legend all ride in the borders. The caret's own row is
-        // gone: blank whenever no day was marked, it read as a gap between
-        // the labels and the grid rather than as breathing room.
-        assert_eq!(CONTRIB_HEIGHT, 1 + 1 + 7 + 1);
-        assert_eq!(CONTRIB_HEIGHT, 10);
+    }
+
+    /// The configured size reaches the grid and the legend alike, or the
+    /// legend explains a strip it does not match.
+    #[test]
+    fn the_configured_size_is_drawn_in_the_grid_and_the_legend() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = app_with_calendar(1);
+        app.contrib_cell = CellSize::Large;
+        let mut t = Terminal::new(TestBackend::new(120, CONTRIB_HEIGHT)).unwrap();
+        t.draw(|f| render(f, f.area(), &app)).unwrap();
+        let buf = t.backend().buffer();
+        let large = CellSize::Large.glyph();
+        let rows: Vec<String> = (0..CONTRIB_HEIGHT)
+            .map(|y| (0..120).map(|x| buf[(x, y)].symbol()).collect())
+            .collect();
+        let grid = &rows[FIRST_DAY_ROW as usize + 1];
+        assert!(
+            grid.contains(large),
+            "Monday row uses the large icon: {grid}"
+        );
+        assert!(!grid.contains(CELL), "and none of the default: {grid}");
+        let bottom = &rows[CONTRIB_HEIGHT as usize - 1];
+        assert!(
+            bottom.contains(large),
+            "legend samples the same icon: {bottom}"
+        );
     }
 
     /// The grid never shrinks to fit. A narrower pane shows fewer weeks at
@@ -993,9 +1028,9 @@ mod tests {
         assert!(!lines[3].contains(CELL), "no cells painted: {}", lines[3]);
     }
 
-    /// Nothing is highlighted until the user travels the grid. At half-block
-    /// density a box cannot be drawn around a half-height cell, so the marked
-    /// day is painted in plain white with a caret over its column.
+    /// Nothing is highlighted until the user travels the grid. A box cannot
+    /// be drawn around a one-cell icon, so the marked day is painted in plain
+    /// white with a caret over its column.
     #[test]
     fn the_marked_day_is_flagged_by_a_caret_and_only_after_travelling() {
         let mut app = app_with_calendar(1);
@@ -1037,7 +1072,7 @@ mod tests {
         let mut app = app_with_calendar(4);
         app.focused_panel = FocusedPanel::Contributions;
         app.contrib_scroll.set(0);
-        app.contrib_cursor = Some(3 * 7); // week 3, a Sunday: an upper half
+        app.contrib_cursor = Some(3 * 7); // week 3, a Sunday
 
         let mut t = Terminal::new(TestBackend::new(120, CONTRIB_HEIGHT)).unwrap();
         t.draw(|f| render(f, f.area(), &app)).unwrap();
@@ -1051,7 +1086,7 @@ mod tests {
                 buf[(*x, *y)].symbol() == CELL && buf[(*x, *y)].style().fg == Some(colors::TEXT)
             })
             .count();
-        assert_eq!(marked, 1, "exactly one half cell is painted as marked");
+        assert_eq!(marked, 1, "exactly one cell is painted as marked");
 
         for shade in colors::contrib_ladder(Source::Github) {
             assert_ne!(colors::TEXT, shade, "the mark cannot collide with a shade");

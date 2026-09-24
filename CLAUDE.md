@@ -87,8 +87,9 @@ cargo fmt                     # must be clean before committing
 cargo install --path .        # to ~/.cargo/bin (the `fleetz` on PATH)
 ```
 
-Needs a Nerd Font (`ui/badges.rs::kind_glyph` uses Nerd Font codepoints, tofu
-without one) and an authenticated `gh` on PATH, which the GitHub fetch uses.
+Needs a Nerd Font (`ui/badges.rs::kind_glyph` and the contribution strip's
+day squares, `app::CellSize`, use Nerd Font codepoints, tofu without one) and
+an authenticated `gh` on PATH, which the GitHub fetch uses.
 
 ## Domain invariants - do not violate
 
@@ -154,6 +155,14 @@ dark. The greens are tuned from github.com's, not sampled. The blue tops out
 lower, carrying 0.07 of luminance to green's 0.72, so at the green's top the
 bluest colour sRGB has reads as paper. Even L*, rate parity and chroma are the
 invariants, not equal luminance; tests pin each, and `colors.rs` has the why.
+
+**A contribution day is a Nerd Font square icon, not a block element.** The
+icon is drawn by the font to sit on the text line, so it lines up with the
+`Mon`/`Wed`/`Fri` labels. A half block cannot: it fills the top or bottom half
+of the cell and sits a quarter row off the label's centre either way, which is
+how the strip looked for a long time. The three sizes are three icons measured
+in the font (`CellSize::glyph`), each one column wide as ratatui lays it out,
+which the grid's column arithmetic and `slot_at`'s click routing depend on.
 
 **The compact history graph is computed, not parsed.** `git::graph` asks for
 `%p` and `crate::graph` derives the topology, as lazygit does. Re-adding
