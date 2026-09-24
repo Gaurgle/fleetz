@@ -191,7 +191,10 @@ extra_dirs = ["~/.dotfiles"]
 # (your commits in the repos currently listed), or "off". `c` toggles it and
 # `C` switches source; this is what a fresh launch starts from. The two
 # sources use different colour ladders (green for github, blue for local)
-# because they count different things and will never agree.
+# because they count different things and will never agree. The github source
+# shades each day with GitHub's own level, so it matches github.com (which
+# scales each year to itself and trims outliers first); local buckets by
+# quartile of its busiest day.
 contributions = "github"
 
 # Git author regex the "local" source filters by, overriding each repo's own

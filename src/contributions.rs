@@ -171,6 +171,10 @@ pub struct Calendar {
     start: NaiveDate,
     today: NaiveDate,
     counts: [u32; SLOTS],
+    /// GitHub's own shade for the day, where the payload carried one. None
+    /// falls back to `intensity`, which is how the local source and a cached
+    /// payload from before levels were fetched are drawn.
+    levels: [Option<u8>; SLOTS],
     source: Source,
 }
 
@@ -180,6 +184,7 @@ impl Calendar {
             start: grid_start(today),
             today,
             counts: [0; SLOTS],
+            levels: [None; SLOTS],
             source,
         }
     }
@@ -221,9 +226,71 @@ impl Calendar {
     /// same day. Summing those would silently double it. The local source has
     /// the opposite requirement: its counts are genuinely summed across
     /// repos, so it keeps `add`.
+    ///
+    /// Also drops any level the day carried: the level was GitHub's verdict
+    /// on the old count, and the `recent` window that overwrites a count
+    /// cannot supply a usable one of its own (`derive_missing_levels`).
     pub fn set(&mut self, date: NaiveDate, count: u32) {
         if let Some(slot) = self.slot(date) {
             self.counts[slot] = count;
+            self.levels[slot] = None;
+        }
+    }
+
+    /// Record GitHub's own shade step for a day, 0..=4.
+    pub fn set_level(&mut self, date: NaiveDate, level: u8) {
+        if let Some(slot) = self.slot(date) {
+            self.levels[slot] = Some(level.min(4));
+        }
+    }
+
+    /// Shade step 0..=4 at a grid position: GitHub's where it gave one, else
+    /// `intensity` of the count.
+    pub fn level_at(&self, week: usize, weekday: usize) -> u8 {
+        let slot = week * 7 + weekday;
+        match self.levels.get(slot) {
+            Some(Some(level)) => *level,
+            _ => self.intensity(self.counts.get(slot).copied().unwrap_or(0)),
+        }
+    }
+
+    /// Give every unlevelled day from `from` to today a level on GitHub's
+    /// own scale, read off the days around it that have one.
+    ///
+    /// GitHub scales a level to the window it was asked for, and trims
+    /// outliers first by a rule this code cannot reproduce (measured against
+    /// three years: a year whose busiest day had 83 contributions was scaled
+    /// as if the top were 47, another with a 86-day as if it were 10). So a
+    /// day the `recent` window overwrote cannot be bucketed by formula
+    /// without landing on a different scale from its neighbours, and the
+    /// `recent` window's own levels are scaled to a range that rotates every
+    /// few minutes. The one scale that is knowable is the year window's, by
+    /// example: the smallest count GitHub put at each level. A count lands
+    /// on the highest level whose smallest example it reaches. A level with
+    /// no example that year is skipped, and with no examples at all the day
+    /// is left for `intensity`.
+    pub fn derive_missing_levels(&mut self, from: NaiveDate) {
+        let Some(first) = self.slot(from) else {
+            return;
+        };
+        let window = first..self.live();
+        let mut floor = [None::<u32>; 5];
+        for slot in window.clone() {
+            let count = self.counts[slot];
+            if let Some(level) = self.levels[slot].filter(|_| count > 0) {
+                let entry = &mut floor[level as usize];
+                *entry = Some(entry.map_or(count, |f| f.min(count)));
+            }
+        }
+        for slot in window {
+            if self.levels[slot].is_some() || self.counts[slot] == 0 {
+                continue;
+            }
+            let count = self.counts[slot];
+            let level = (1..=4u8)
+                .rev()
+                .find(|l| floor[*l as usize].is_some_and(|f| count >= f));
+            self.levels[slot] = level;
         }
     }
 
@@ -269,9 +336,12 @@ impl Calendar {
         (slot < self.live()).then(|| (self.start + Duration::days(slot as i64), self.counts[slot]))
     }
 
-    /// Shade step 0..=4 for a count. Quartiles of the calendar's own busiest
-    /// day, matching GitHub's relative scaling: a quiet fleet still shows
-    /// shape instead of one flat tone.
+    /// Shade step 0..=4 for a count: quartiles of the calendar's own busiest
+    /// day, so a quiet fleet still shows shape instead of one flat tone. This
+    /// is the local source's scale, and the fallback for a GitHub day with
+    /// no level. It is paler than github.com, which trims outliers before
+    /// scaling; the GitHub source carries GitHub's own levels for that
+    /// reason (`level_at`).
     pub fn intensity(&self, count: u32) -> u8 {
         if count == 0 {
             return 0;
@@ -420,6 +490,80 @@ mod tests {
         assert_eq!(cal.intensity(26), 2);
         assert_eq!(cal.intensity(75), 3);
         assert_eq!(cal.intensity(100), 4, "the busiest day is the brightest");
+    }
+
+    fn at(cal: &Calendar, date: NaiveDate) -> u8 {
+        let slot = cal.slot(date).unwrap();
+        cal.level_at(slot / 7, slot % 7)
+    }
+
+    /// A level from the payload beats the formula; a fresh count for the
+    /// same day discards it, since it was GitHub's verdict on the old count.
+    #[test]
+    fn a_github_level_wins_over_the_formula_until_the_count_changes() {
+        let mut cal = Calendar::new(d("2026-08-18"), Source::Github);
+        cal.set(d("2026-08-01"), 100);
+        cal.set(d("2026-08-10"), 12);
+        assert_eq!(at(&cal, d("2026-08-10")), 1, "formula: 12 of 100");
+        cal.set_level(d("2026-08-10"), 3);
+        assert_eq!(at(&cal, d("2026-08-10")), 3, "github said 3");
+        cal.set(d("2026-08-10"), 13);
+        assert_eq!(
+            at(&cal, d("2026-08-10")),
+            1,
+            "a new count drops the old verdict"
+        );
+        assert_eq!(
+            cal.level_at(WEEKS + 5, 0),
+            0,
+            "past the grid is unshaded, not a panic"
+        );
+    }
+
+    /// An unlevelled day takes the highest level whose smallest example that
+    /// year it reaches, on GitHub's scale rather than the formula's. A level
+    /// with no example is skipped over, not interpolated.
+    #[test]
+    fn derive_missing_levels_reads_the_years_scale_off_its_examples() {
+        let mut cal = Calendar::new(d("2026-08-18"), Source::Github);
+        for (date, count, level) in [
+            ("2026-08-10", 3, 1),
+            ("2026-08-11", 12, 2),
+            ("2026-08-12", 14, 2),
+            ("2026-08-13", 38, 4),
+        ] {
+            cal.set(d(date), count);
+            cal.set_level(d(date), level);
+        }
+        // The recent window overwrote these, so they have counts and no level.
+        cal.set(d("2026-08-17"), 30);
+        cal.set(d("2026-08-18"), 1);
+        cal.set(d("2026-08-16"), 0);
+        cal.derive_missing_levels(d("2026-01-01"));
+        assert_eq!(
+            at(&cal, d("2026-08-17")),
+            2,
+            "30 reaches 12 but not 38, and 3 has no example"
+        );
+        assert_eq!(
+            at(&cal, d("2026-08-18")),
+            1,
+            "1 is below every example (the level-1 floor is 3), so the formula shades it"
+        );
+        assert_eq!(at(&cal, d("2026-08-16")), 0, "an empty day stays empty");
+        assert_eq!(at(&cal, d("2026-08-13")), 4, "levelled days are untouched");
+    }
+
+    /// With no examples at all (a payload from before levels were fetched)
+    /// nothing is derived and every day is drawn by the formula.
+    #[test]
+    fn derive_missing_levels_without_examples_leaves_the_formula_in_charge() {
+        let mut cal = Calendar::new(d("2026-08-18"), Source::Github);
+        cal.set(d("2026-08-10"), 40);
+        cal.set(d("2026-08-17"), 10);
+        cal.derive_missing_levels(d("2026-01-01"));
+        assert_eq!(at(&cal, d("2026-08-17")), 1, "10 of 40 by formula");
+        assert_eq!(at(&cal, d("2026-08-10")), 4);
     }
 
     #[test]

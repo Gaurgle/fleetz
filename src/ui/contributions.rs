@@ -456,14 +456,14 @@ fn day_line(
     for column in 0..visible {
         let week = first + column;
         match calendar.day_at(week, weekday) {
-            Some((_, count)) => {
+            Some(_) => {
                 // The marked day is painted in plain text white: it has to
                 // beat both ladders, and every status colour in the palette
                 // already means something else.
                 let color = if marked == Some((column, weekday)) {
                     colors::TEXT
                 } else {
-                    ladder[calendar.intensity(count) as usize]
+                    ladder[calendar.level_at(week, weekday) as usize]
                 };
                 spans.push(Span::styled(glyph, Style::default().fg(color)));
             }

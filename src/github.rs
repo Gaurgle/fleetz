@@ -110,6 +110,23 @@ struct CalendarWeek {
 struct CalendarDay {
     date: String,
     contribution_count: u32,
+    /// GitHub's own shade step, absent from a payload cached before it was
+    /// asked for, and not asked for in the `recent` window at all.
+    #[serde(default)]
+    contribution_level: Option<String>,
+}
+
+/// GitHub's `ContributionLevel` enum as a shade step, or None for anything
+/// unrecognised.
+fn level_from_api(level: &str) -> Option<u8> {
+    match level {
+        "NONE" => Some(0),
+        "FIRST_QUARTILE" => Some(1),
+        "SECOND_QUARTILE" => Some(2),
+        "THIRD_QUARTILE" => Some(3),
+        "FOURTH_QUARTILE" => Some(4),
+        _ => None,
+    }
 }
 
 /// Fold every year window's week/day nesting into one grid. The API's own
@@ -142,6 +159,12 @@ fn parse_calendar(
     if let Some(collection) = recent {
         let floor = crate::contributions::recent_merge_floor(today);
         fill(&mut calendar, collection, Some(floor));
+        // The days just overwritten lost their levels with their counts. Put
+        // them back on the current year window's scale, which is the only
+        // scale those days' neighbours are on; see `derive_missing_levels`.
+        if let Some((from, _)) = crate::contributions::year_windows(today).first() {
+            calendar.derive_missing_levels(*from);
+        }
     }
     Some(calendar)
 }
@@ -160,6 +183,9 @@ fn fill(
                     continue;
                 }
                 calendar.set(date, day.contribution_count);
+                if let Some(level) = day.contribution_level.as_deref().and_then(level_from_api) {
+                    calendar.set_level(date, level);
+                }
             }
         }
     }
@@ -373,7 +399,7 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate, rotation: i64) -> Stri
             format!(
                 r#"  y{i}: contributionsCollection(from: "{}T00:00:00Z", to: "{}T23:59:59Z") {{
     contributionCalendar {{
-      weeks {{ contributionDays {{ date, contributionCount }} }}
+      weeks {{ contributionDays {{ date, contributionCount, contributionLevel }} }}
     }}
   }}
 "#,
@@ -387,6 +413,11 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate, rotation: i64) -> Stri
     // just worked can come back as 0 from `y0` while a short window on the
     // same date reports it correctly. Another alias, so still no request and
     // still no `first:` connection to pay for.
+    //
+    // No `contributionLevel` here: GitHub scales a level to the window asked
+    // for, and this window's `from` rotates, so its levels would re-shade the
+    // newest week every few minutes. Those days get the year window's scale
+    // instead (`Calendar::derive_missing_levels`).
     let (recent_from, recent_to) = crate::contributions::recent_window(today, rotation);
     let recent_field = format!(
         r#"  recent: contributionsCollection(from: "{}T00:00:00Z", to: "{}T23:59:59Z") {{
@@ -1029,6 +1060,72 @@ mod tests {
         assert!(
             parse_calendar(viewer.contribution_years, viewer.recent, day("2026-08-18")).is_none()
         );
+    }
+
+    /// The year windows' `contributionLevel` is the shade drawn, not a bucket
+    /// of the count: github.com trims outliers before scaling and the formula
+    /// does not, so the two disagree on ordinary days. A day the `recent`
+    /// window overwrote has no level of its own and is put on the year's
+    /// scale by example. Measured cost of the field: none (`rateLimit` cost
+    /// 1, nodeCount 0 with and without it).
+    #[test]
+    fn github_levels_are_drawn_as_given_and_recent_days_join_their_scale() {
+        let json = r#"{"data":{"viewer":{
+            "repositories":{"nodes":[]},
+            "y0":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[
+                {"date":"2026-08-10","contributionCount":12,"contributionLevel":"THIRD_QUARTILE"},
+                {"date":"2026-08-11","contributionCount":38,"contributionLevel":"FOURTH_QUARTILE"},
+                {"date":"2026-08-18","contributionCount":0,"contributionLevel":"NONE"}
+              ]}
+            ]}},
+            "recent":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[{"date":"2026-08-18","contributionCount":20}]}
+            ]}}
+        }}}"#;
+        let response: GraphQlResponse = serde_json::from_str(json).unwrap();
+        let viewer = response.data.unwrap().viewer;
+        let cal =
+            parse_calendar(viewer.contribution_years, viewer.recent, day("2026-08-18")).unwrap();
+        let at = |date: &str| {
+            let slot = cal.slot(day(date)).unwrap();
+            cal.level_at(slot / 7, slot % 7)
+        };
+        assert_eq!(cal.intensity(12), 2, "the formula would have said 2");
+        assert_eq!(at("2026-08-10"), 3, "github said 3, and github is drawn");
+        assert_eq!(at("2026-08-11"), 4);
+        assert_eq!(
+            cal.day_at(cal.slot(day("2026-08-18")).unwrap() / 7, 2)
+                .unwrap()
+                .1,
+            20
+        );
+        assert_eq!(
+            at("2026-08-18"),
+            3,
+            "20 reaches the level-3 example (12), not the 4 (38)"
+        );
+    }
+
+    /// A payload cached before `contributionLevel` was requested has no
+    /// levels anywhere. It must still parse, and draw by the formula.
+    #[test]
+    fn a_payload_without_levels_still_parses_and_draws_by_formula() {
+        let json = r#"{"data":{"viewer":{
+            "repositories":{"nodes":[]},
+            "y0":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[
+                {"date":"2026-08-10","contributionCount":10},
+                {"date":"2026-08-11","contributionCount":40}
+              ]}
+            ]}}
+        }}}"#;
+        let response: GraphQlResponse = serde_json::from_str(json).unwrap();
+        let viewer = response.data.unwrap().viewer;
+        let cal =
+            parse_calendar(viewer.contribution_years, viewer.recent, day("2026-08-18")).unwrap();
+        let slot = cal.slot(day("2026-08-10")).unwrap();
+        assert_eq!(cal.level_at(slot / 7, slot % 7), 1, "10 of 40");
     }
 
     /// A payload carrying the single un-aliased `contributionsCollection` key

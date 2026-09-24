@@ -164,6 +164,17 @@ how the strip looked for a long time. The three sizes are three icons measured
 in the font (`CellSize::glyph`), each one column wide as ratatui lays it out,
 which the grid's column arithmetic and `slot_at`'s click routing depend on.
 
+**The GitHub strip draws GitHub's `contributionLevel`, not a bucket of the
+count.** github.com trims outliers before scaling each year and the rule is
+not reproducible: measured over three years, a year whose busiest day had 83
+contributions was scaled as if the top were 47, and one with an 86-day as if
+it were 10. Quartiles of the max drew a 38-commit day two shades paler than
+github.com. The field is free (cost 1, nodeCount 0, with and without it). The
+`recent` window's levels are never used: its `from` rotates, so they are on a
+scale that changes every few minutes. Days it overwrites are put on the year
+window's scale by example (`Calendar::derive_missing_levels`), and a payload
+cached before the field was asked for falls back to `intensity`.
+
 **The compact history graph is computed, not parsed.** `git::graph` asks for
 `%p` and `crate::graph` derives the topology, as lazygit does. Re-adding
 `--graph` brings back filler rows carrying no commit -- which forced row and
