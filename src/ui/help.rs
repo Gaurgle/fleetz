@@ -16,11 +16,11 @@ pub fn render(frame: &mut Frame, area: Rect) {
     let keybinds = [
         (
             "1 / 2 / 3 / 4",
-            "Focus repo list / detail / inspector / contributions (Tab cycles)",
+            "Focus repo list / detail / inspector / contributions (Tab cycles) · again on 3/4 folds",
         ),
         (
             "mouse",
-            "Click a panel to focus · drag a ⠿ grip to resize · wheel scrolls",
+            "Click a panel to focus · click [3]/[4] to fold · drag a ⠿ grip to resize · wheel scrolls",
         ),
         (
             "j/k ↑/↓",
@@ -37,14 +37,13 @@ pub fn render(frame: &mut Frame, area: Rect) {
             "Repo pane: previous / next view (info, commits, reflog, graph, branches)",
         ),
         ("B", "info: expand the remote branch summary"),
-        ("c", "Toggle the contributions strip (a year of activity)"),
+        (
+            "c",
+            "Contributions source: github calendar \u{2194} your commits here (strip up)",
+        ),
         (
             "h/l \u{2190}/\u{2192}",
             "Contributions: move the day cursor a week (grid scrolls with it)",
-        ),
-        (
-            "C",
-            "Switch its source: github calendar \u{2194} your commits here",
         ),
         ("enter", "Open repo in lazygit (pull/merge live here)"),
         ("e", "Open repo in $EDITOR"),

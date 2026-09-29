@@ -80,11 +80,16 @@ const MAIN_MIN_HEIGHT: u16 = 10;
 /// `detail::split_main` and `detail::split_inspector`: `ui::render` draws
 /// from it and `ui::panel_rects` hit-tests against it. It lives here rather
 /// than in `detail.rs` because the strip exists in Compact view too.
-pub fn split_main_area(main: Rect, open: bool) -> (Rect, Option<Rect>) {
-    if !open || main.height < MAIN_MIN_HEIGHT + CONTRIB_HEIGHT + 1 {
+pub fn split_main_area(main: Rect, folded: bool) -> (Rect, Option<Rect>) {
+    let height = if folded {
+        crate::ui::FOLDED_HEIGHT
+    } else {
+        CONTRIB_HEIGHT
+    };
+    if main.height < MAIN_MIN_HEIGHT + height + 1 {
         return (main, None);
     }
-    let v = Layout::vertical([Constraint::Min(1), Constraint::Length(CONTRIB_HEIGHT)])
+    let v = Layout::vertical([Constraint::Min(1), Constraint::Length(height)])
         .spacing(1)
         .split(main);
     (v[0], Some(v[1]))
@@ -276,6 +281,16 @@ pub fn slot_at(area: Rect, scroll: usize, col: u16, row: u16) -> Option<usize> {
 /// focusable the same way they are: without a border there is nothing on
 /// screen to say `4` reached it or that it currently holds the keys.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    if app.contributions_folded {
+        crate::ui::render_folded(
+            frame,
+            area,
+            crate::ui::CONTRIBUTIONS_NUM,
+            "contributions",
+            app.focused_panel == FocusedPanel::Contributions,
+        );
+        return;
+    }
     let today = chrono::Local::now().date_naive();
     let focused = app.focused_panel == FocusedPanel::Contributions;
     let border_color = if focused {
@@ -293,7 +308,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         // No poll has landed yet. The frame still draws, so the pane does not
         // blink into existence when the first fetch completes.
         frame.render_widget(
-            block.title_top(crate::ui::panel_title(4, "contributions", focused)),
+            block.title_top(crate::ui::panel_title(
+                crate::ui::CONTRIBUTIONS_NUM,
+                "contributions",
+                focused,
+            )),
             area,
         );
         return;
@@ -332,7 +351,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(
         Paragraph::new(lines).block(
             block
-                .title_top(crate::ui::panel_title(4, "contributions", focused))
+                .title_top(crate::ui::panel_title(
+                    crate::ui::CONTRIBUTIONS_NUM,
+                    "contributions",
+                    focused,
+                ))
                 .title_top(
                     Line::from(Span::styled(
                         format!(" {heading} "),
@@ -514,15 +537,17 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_pane_leaves_the_main_area_alone() {
-        let (main, strip) = split_main_area(area(40), false);
-        assert_eq!(main, area(40));
-        assert!(strip.is_none());
+    fn a_folded_pane_keeps_only_its_frame_at_the_bottom() {
+        let (main, strip) = split_main_area(area(40), true);
+        let strip = strip.expect("a folded strip is still drawn");
+        assert_eq!(strip.height, crate::ui::FOLDED_HEIGHT);
+        assert_eq!(strip.y + strip.height, area(40).y + area(40).height);
+        assert_eq!(main.y + main.height + 1, strip.y);
     }
 
     #[test]
     fn an_open_pane_takes_a_fixed_strip_off_the_bottom() {
-        let (main, strip) = split_main_area(area(40), true);
+        let (main, strip) = split_main_area(area(40), false);
         let strip = strip.expect("room for the strip");
         assert_eq!(strip.height, CONTRIB_HEIGHT);
         assert_eq!(
@@ -543,8 +568,8 @@ mod tests {
     #[test]
     fn a_short_area_suppresses_the_strip_entirely() {
         let floor = MAIN_MIN_HEIGHT + CONTRIB_HEIGHT + 1;
-        assert!(split_main_area(area(floor - 1), true).1.is_none());
-        assert!(split_main_area(area(floor), true).1.is_some());
+        assert!(split_main_area(area(floor - 1), false).1.is_none());
+        assert!(split_main_area(area(floor), false).1.is_some());
     }
 
     /// Every size is one Nerd Font icon in one column. The grid's column

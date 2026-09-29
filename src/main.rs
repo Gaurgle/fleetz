@@ -308,16 +308,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.window = initial_window;
     app.dirty_mode = mode == Mode::Dirty;
     app.loading = true;
-    // The strip's open state and source are persisted, so a dashboard set up
-    // once comes back that way. `c` and `C` still change it for the session.
-    // Open on github when the key is absent. A dashboard whose headline
-    // feature needs a keypress to appear reads as a feature that is broken.
-    app.contributions = app::ContributionsMode::from_config(
+    // The strip's source, or "off" to start it folded, is persisted, so a
+    // dashboard set up once comes back that way. `c` and `4` still change it
+    // for the session. Open on github when the key is absent. A dashboard
+    // whose headline feature needs a keypress to appear reads as a feature
+    // that is broken.
+    app.apply_contributions_setting(app::ContributionsMode::from_config(
         config
             .contributions
             .as_deref()
             .unwrap_or(app::DEFAULT_CONTRIBUTIONS),
-    );
+    ));
     app.contrib_author = config.contributions_author.clone();
     app.contrib_cell = config
         .contributions_cell_size
@@ -997,6 +998,16 @@ fn handle_mouse_input(
         return;
     }
 
+    // A click on the inspector's or the strip's `[N]` tag folds or unfolds
+    // it. Ahead of the divider, whose grab zone covers the inspector's tag.
+    if m.kind == MouseEventKind::Down(MouseButton::Left)
+        && let Some(panel) = rects.fold_tag_at(m.column, m.row)
+    {
+        app.clear_status();
+        app.toggle_fold(panel);
+        return;
+    }
+
     // Grabbing a boundary starts a resize instead of focusing a panel.
     if m.kind == MouseEventKind::Down(MouseButton::Left)
         && let Some(divider) = rects.divider_at(m.column, m.row)
@@ -1229,14 +1240,8 @@ fn handle_settings_input(app: &mut App, key: KeyEvent) {
                     // open so the confirmation is actually readable.
                     app.refresh_interval = interval;
                     app.persist_pane_sizes = persist;
-                    // Focus cannot be left on a strip the save just closed.
-                    app.contributions = contributions;
+                    app.apply_contributions_setting(contributions);
                     app.contrib_cell = contrib_cell;
-                    if !app.contributions.is_open()
-                        && app.focused_panel == FocusedPanel::Contributions
-                    {
-                        app.focused_panel = FocusedPanel::RepoList;
-                    }
                     if let Some(v) = view {
                         app.view = v;
                         // Same flag `v` sets, so a later resize can't undo an
@@ -1370,18 +1375,19 @@ async fn handle_normal_input(
         KeyCode::Char('K') => app.scroll_next_panel(-1),
         KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(1),
         KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(-1),
-        // Must be matched before the plain `c` arm below, or ctrl-c toggles
-        // the contributions strip instead of quitting.
+        // Must be matched before the plain `c` arm below, or ctrl-c switches
+        // the contributions source instead of quitting.
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.should_quit = true;
         }
-        KeyCode::Char('c') => app.toggle_contributions(),
         // `[` and `]` step the repo pane's body between its four views --
         // lazygit's own binding for the same gesture, and unlike a shifted
         // letter it gives backwards for free.
         KeyCode::Char(']') => app.cycle_history_view(false),
         KeyCode::Char('[') => app.cycle_history_view(true),
-        KeyCode::Char('C') => {
+        // Only while the strip is unfolded; `cycle_contributions_source`
+        // ignores it otherwise.
+        KeyCode::Char('c') => {
             app.cycle_contributions_source();
             // Switching to the local source is useless without a histogram,
             // and the sweep is the only thing that fills one. Ask for one
@@ -1393,7 +1399,7 @@ async fn handle_normal_input(
                 start_sweep(app, tx, false, args.author.clone(), true);
             }
         }
-        KeyCode::Char('4') => app.focus_panel(FocusedPanel::Contributions),
+        KeyCode::Char('4') => app.press_panel_key(FocusedPanel::Contributions),
         // Left/right walk columns (weeks), up/down walk rows (weekdays),
         // which is how the grid reads on screen. They used to be swapped, so
         // the arrow keys moved at right angles to what the eye expected.
@@ -1488,12 +1494,13 @@ async fn handle_normal_input(
         KeyCode::Char('G') => {
             app.clear_group();
         }
-        // Panel focus: 1 = repo list, 2 = detail pane, 3 = inspector. Quick
+        // Panel focus: 1 = repo list, 2 = detail pane, 3 = inspector, and on
+        // the focused inspector or strip its number folds it. Quick
         // filters moved to `#tag` words typed into search (see
         // app::parse_query) so plain digits are free for this.
-        KeyCode::Char('1') => app.focus_panel(FocusedPanel::RepoList),
-        KeyCode::Char('2') => app.focus_panel(FocusedPanel::Detail),
-        KeyCode::Char('3') => app.focus_panel(FocusedPanel::Inspector),
+        KeyCode::Char('1') => app.press_panel_key(FocusedPanel::RepoList),
+        KeyCode::Char('2') => app.press_panel_key(FocusedPanel::Detail),
+        KeyCode::Char('3') => app.press_panel_key(FocusedPanel::Inspector),
         KeyCode::Char('0') => app.clear_filters(),
         // Branches overlay: switch (Enter) or clean up merged branches
         // (space to mark, d to delete). `b` and `s` both open it -- `s` for
@@ -3253,9 +3260,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// `c` toggles the strip and ctrl-c quits. Match arms are ordered, so an
-    /// unguarded `c` arm placed above the modifier check silently turns the
-    /// quit key into a pane toggle. That regression happened once already.
+    /// `c` switches the strip's source and ctrl-c quits. Match arms are
+    /// ordered, so an unguarded `c` arm placed above the modifier check
+    /// silently turns the quit key into a pane key. That regression happened
+    /// once already.
     #[test]
     fn ctrl_c_is_matched_before_the_plain_c_arm() {
         let source = include_str!("main.rs");
@@ -3263,8 +3271,8 @@ mod tests {
             .find("KeyCode::Char('c') if key.modifiers")
             .expect("ctrl-c arm present");
         let plain_c = source
-            .find("KeyCode::Char('c') => app.toggle_contributions()")
-            .expect("toggle arm present");
+            .find("KeyCode::Char('c') => {")
+            .expect("plain c arm present");
         assert!(
             ctrl_c < plain_c,
             "the ctrl-c arm must be matched before the plain c arm"
@@ -3272,16 +3280,11 @@ mod tests {
     }
 
     /// The local histogram is the most expensive probe in the sweep: a year
-    /// of log per repo. It must not run for a fleet whose strip is closed or
-    /// is showing GitHub's own numbers.
+    /// of log per repo. It must not run for a strip showing GitHub's own
+    /// numbers.
     #[test]
     fn the_daily_probe_is_skipped_unless_the_local_source_is_showing() {
         let mut app = App::new(vec![test_repo()], "h".to_string(), 120, 44);
-        assert_eq!(app.contributions, app::ContributionsMode::Off);
-        assert!(
-            contrib_probe(&app).is_none(),
-            "closed strip: no year-long log"
-        );
         app.contributions = app::ContributionsMode::Github;
         assert!(
             contrib_probe(&app).is_none(),

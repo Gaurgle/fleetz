@@ -41,15 +41,31 @@ const DETAIL_MIN_HEIGHT: u16 = 8;
 /// keys move. It is a request, not a promise: the min/max clamp and the row
 /// above's floor both outrank it, so a short terminal still yields a readable
 /// split (or drops the inspector entirely) whatever the user asked for.
-pub fn split_inspector(area: Rect, pct: u16, show_inspector: bool) -> (Rect, Option<Rect>) {
+///
+/// `folded` overrides `pct` with the single title row a folded pane keeps.
+pub fn split_inspector(
+    area: Rect,
+    pct: u16,
+    show_inspector: bool,
+    folded: bool,
+) -> (Rect, Option<Rect>) {
+    let min_height = if folded {
+        crate::ui::FOLDED_HEIGHT
+    } else {
+        INSPECTOR_MIN_HEIGHT
+    };
     // The graph view gives the whole column to the history: its blocks
     // already say what an inspector would.
-    if !show_inspector || area.height < DETAIL_MIN_HEIGHT + INSPECTOR_MIN_HEIGHT {
+    if !show_inspector || area.height < DETAIL_MIN_HEIGHT + min_height {
         return (area, None);
     }
-    let height = (area.height * pct / 100)
-        .clamp(INSPECTOR_MIN_HEIGHT, INSPECTOR_MAX_HEIGHT)
-        .min(area.height - DETAIL_MIN_HEIGHT);
+    let height = if folded {
+        crate::ui::FOLDED_HEIGHT
+    } else {
+        (area.height * pct / 100)
+            .clamp(INSPECTOR_MIN_HEIGHT, INSPECTOR_MAX_HEIGHT)
+            .min(area.height - DETAIL_MIN_HEIGHT)
+    };
     let v = Layout::vertical([Constraint::Min(1), Constraint::Length(height)]).split(area);
     (v[0], Some(v[1]))
 }
@@ -1248,6 +1264,16 @@ fn inspector_empty_text(app: &App) -> String {
 }
 
 fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
+    if app.inspector_folded {
+        crate::ui::render_folded(
+            frame,
+            area,
+            crate::ui::INSPECTOR_NUM,
+            "inspector",
+            app.focused_panel == FocusedPanel::Inspector,
+        );
+        return;
+    }
     let focused = app.focused_panel == FocusedPanel::Inspector;
     let border_color = if focused {
         colors::LAVENDER
@@ -1259,7 +1285,11 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
         .padding(Padding::new(2, 2, 1, 0))
-        .title_top(crate::ui::panel_title(3, "inspector", focused));
+        .title_top(crate::ui::panel_title(
+            crate::ui::INSPECTOR_NUM,
+            "inspector",
+            focused,
+        ));
     let inner = block.inner(area);
 
     let Some(c) = app.inspected_commit() else {
@@ -5073,6 +5103,7 @@ mod tests {
         let mut app = crate::app::App::new(vec![repo], "h".to_string(), w, h);
         app.view = crate::app::View::Detail;
         app.history_view = crate::app::HistoryView::Commits;
+        app.contributions_folded = true;
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         term.draw(|f| crate::ui::render(f, &app)).unwrap();
         let buf = term.backend().buffer().clone();
@@ -5141,6 +5172,7 @@ mod tests {
             app.view = crate::app::View::Detail;
             app.history_view = view;
             app.focused_panel = crate::app::FocusedPanel::Detail;
+            app.contributions_folded = true;
 
             let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
             term.draw(|f| crate::ui::render(f, &app)).unwrap();

@@ -15,7 +15,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::{Block, BorderType, Borders};
 
 use crate::app::{App, FilterKind, FocusedPanel, Overlay, View};
 
@@ -91,6 +91,11 @@ pub fn sweep_overdue(
 ) -> bool {
     watch_mode && (now - ts).num_seconds() > refresh_interval as i64 * OVERDUE_INTERVALS
 }
+
+/// The header's watch indicator: a Nerd Font eye while watching
+/// (`nf-md-eye`), the same eye struck through when not (`nf-md-eye_off`).
+const WATCH_ON_GLYPH: &str = "\u{f0208}";
+const WATCH_OFF_GLYPH: &str = "\u{f0209}";
 
 /// Columns between the edge of a pane and the first cell of its content: one
 /// for the border, one for the block's horizontal padding.
@@ -200,6 +205,8 @@ pub struct PanelRects {
     pub repo_list: Rect,
     pub detail: Option<Rect>,
     pub inspector: Option<Rect>,
+    /// Whether that inspector is folded, which leaves it nothing to resize.
+    pub inspector_folded: bool,
     /// The contribution strip, when it is open and the area had room for it.
     pub contributions: Option<Rect>,
 }
@@ -212,6 +219,10 @@ pub enum Divider {
     /// Between the detail pane and the inspector.
     Horizontal,
 }
+
+/// Rows a folded pane keeps: its whole frame around one empty row, so it
+/// still reads as a pane (and shows focus) with its content collapsed.
+pub const FOLDED_HEIGHT: u16 = 3;
 
 /// How far from a divider a click still counts as grabbing it. One column
 /// either side: the gap itself is a single cell, which is too small a target
@@ -249,13 +260,42 @@ impl PanelRects {
         if col.abs_diff(split_x) <= GRAB_SLOP {
             return Some(Divider::Vertical);
         }
+        // A folded inspector has no height to drag.
         if let Some(inspector) = self.inspector
+            && !self.inspector_folded
             && col >= inspector.x
             && row.abs_diff(inspector.y) <= GRAB_SLOP
         {
             return Some(Divider::Horizontal);
         }
         None
+    }
+
+    /// Which foldable pane's `[N]` tag, if any, the given cell is on. Checked
+    /// before `divider_at`, since the inspector's tag sits on the row its
+    /// divider grabs.
+    ///
+    /// Every pane draws its title through `panel_title`, left-aligned just
+    /// past the corner, so the tag's cells are `panel_tag`'s width from there.
+    pub fn fold_tag_at(&self, col: u16, row: u16) -> Option<FocusedPanel> {
+        let p = Position { x: col, y: row };
+        [
+            (self.inspector, FocusedPanel::Inspector, INSPECTOR_NUM),
+            (
+                self.contributions,
+                FocusedPanel::Contributions,
+                CONTRIBUTIONS_NUM,
+            ),
+        ]
+        .into_iter()
+        .find_map(|(rect, panel, num)| {
+            let r = rect?;
+            let width = panel_tag(num).chars().count() as u16;
+            Rect::new(r.x + 1, r.y, width, 1)
+                .intersection(r)
+                .contains(p)
+                .then_some(panel)
+        })
     }
 
     /// The repo-list width the given column would produce, as a percentage of
@@ -299,19 +339,20 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
     ])
     .split(area);
     let main = chunks[1];
-    let open = app.contributions.is_open();
+    let strip_folded = app.contributions_folded;
 
     match app.view {
         // Compact has no right column for the strip to dock under, so it
         // comes off the bottom of the whole area and the list shrinks by it.
         View::Compact => {
-            let (body, contributions) = contributions::split_main_area(main, open);
+            let (body, contributions) = contributions::split_main_area(main, strip_folded);
             PanelRects {
                 main: body,
                 body,
                 repo_list: body,
                 detail: None,
                 inspector: None,
+                inspector_folded: false,
                 contributions,
             }
         }
@@ -324,9 +365,13 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
         // the width there is no column for it to dock under, and the list
         // scrolls anyway, so the trade is gone.
         View::Detail => {
-            let (body, contributions) = contributions::split_main_area(main, open);
-            let (top, inspector) =
-                detail::split_inspector(body, app.inspector_pct, app.shows_inspector());
+            let (body, contributions) = contributions::split_main_area(main, strip_folded);
+            let (top, inspector) = detail::split_inspector(
+                body,
+                app.inspector_pct,
+                app.shows_inspector(),
+                app.inspector_folded,
+            );
             let (repo_list, detail) = detail::split_main(top, app.repo_list_pct);
             PanelRects {
                 main,
@@ -334,6 +379,7 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
                 repo_list,
                 detail: Some(detail),
                 inspector,
+                inspector_folded: app.inspector_folded,
                 contributions,
             }
         }
@@ -514,6 +560,33 @@ pub fn divider_line(width: usize) -> Line<'static> {
     ))
 }
 
+/// The panel numbers of the two foldable panes, which are also the keys that
+/// focus them.
+pub const INSPECTOR_NUM: u8 = 3;
+pub const CONTRIBUTIONS_NUM: u8 = 4;
+
+/// The number half of a panel title, spaces included: the cells a click has
+/// to land on to fold the pane.
+fn panel_tag(num: u8) -> String {
+    format!(" [{num}] ")
+}
+
+/// A folded pane: its full frame and title around no content. It keeps
+/// focus styling, since folding the focused pane leaves it focused.
+pub fn render_folded(frame: &mut Frame, area: Rect, num: u8, label: &str, focused: bool) {
+    let border_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title_top(panel_title(num, label, focused));
+    frame.render_widget(block, area);
+}
+
 /// A numbered panel title for a bordered pane, like `[1] repos`. The number
 /// is the key that focuses this panel; the whole title goes bold+lavender
 /// when the panel is focused and muted otherwise, so the active pane reads at
@@ -534,7 +607,7 @@ pub fn panel_title(num: u8, label: &str, focused: bool) -> Line<'static> {
         (colors::OVERLAY, Style::default().fg(colors::OVERLAY))
     };
     Line::from(vec![
-        Span::styled(format!(" [{num}] "), Style::default().fg(num_color)),
+        Span::styled(panel_tag(num), Style::default().fg(num_color)),
         Span::styled(format!("{label} "), label_style),
     ])
     .left_aligned()
@@ -589,8 +662,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
 
     // Grab handles, drawn last of the main-area furniture so the horizontal
-    // one lands on the inspector's border rather than under it.
-    grips::render(frame, &rects, app);
+    // one lands on the inspector's border rather than under it. Not over the
+    // load error, which has no panes to divide: the grip landed mid-sentence.
+    if !app.shows_load_error() {
+        grips::render(frame, &rects, app);
+    }
 
     // Footer
     footer::render(frame, chunks[2], app);
@@ -749,17 +825,27 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     // the two to see at the edge of vision, which is the only place this
     // indicator is ever read. The word `watch` is what actually distinguishes
     // it from a CI lamp; the glyph never had to.
-    let watch_span = app.watch_mode.then(|| {
+    //
+    // Off is drawn too, as a crossed-out eye in a steady muted grey: an
+    // indicator that only exists while on cannot tell "off" from "not drawn
+    // at this width".
+    let watch_span = if app.watch_mode {
         let lamp = if app.blink_on {
             colors::WATCH_ON
         } else {
             colors::WATCH_OFF
         };
         vec![
-            Span::styled(" ◉".to_string(), Style::default().fg(lamp)),
+            Span::styled(format!(" {WATCH_ON_GLYPH}"), Style::default().fg(lamp)),
             Span::styled(" watch ".to_string(), Style::default().fg(colors::WATCH_ON)),
         ]
-    });
+    } else {
+        let off = Style::default().fg(colors::OVERLAY);
+        vec![
+            Span::styled(format!(" {WATCH_OFF_GLYPH}"), off),
+            Span::styled(" watch ".to_string(), off),
+        ]
+    };
     let mut include_version = true;
     let mut include_ts = true;
     let mut include_group = true;
@@ -787,9 +873,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         if let Some(ref g) = gh_fail_span {
             right.push(g.clone());
         }
-        if let Some(ref w) = watch_span {
-            right.extend(w.iter().cloned());
-        }
+        right.extend(watch_span.iter().cloned());
         if include_ts && let Some(ref t) = ts_span {
             right.extend(t.iter().cloned());
         }
@@ -837,6 +921,7 @@ mod tests {
             repo_list: Rect::new(0, 1, 35, 24),
             detail: Some(Rect::new(36, 1, 64, 24)),
             inspector: Some(Rect::new(0, 25, 100, 16)),
+            inspector_folded: false,
             contributions: None,
         }
     }
@@ -875,7 +960,7 @@ mod tests {
     }
 
     /// The foreground colour of the `watch` indicator's glyph at a given blink
-    /// phase. With no repos loaded it is the only `◉` in the header.
+    /// phase.
     fn watch_glyph_color(blink_on: bool) -> ratatui::style::Color {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
@@ -889,7 +974,7 @@ mod tests {
         terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let x = (0..width)
-            .find(|x| buffer[(*x, 0)].symbol() == "◉")
+            .find(|x| buffer[(*x, 0)].symbol() == WATCH_ON_GLYPH)
             .expect("watch indicator not drawn");
         buffer[(x, 0)]
             .style()
@@ -912,7 +997,7 @@ mod tests {
         terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let lamp = (0..width)
-            .find(|x| buffer[(*x, 0)].symbol() == "◉")
+            .find(|x| buffer[(*x, 0)].symbol() == WATCH_ON_GLYPH)
             .expect("watch indicator not drawn");
         // The first cell of "watch", one space past the lamp.
         buffer[(lamp + 2, 0)]
@@ -978,7 +1063,40 @@ mod tests {
             a.blink_on = false;
         });
         assert_eq!(lit, dim, "the phases differ in colour, not in text");
-        assert!(lit.contains("◉ watch"), "got {lit:?}");
+        assert!(
+            lit.contains(&format!("{WATCH_ON_GLYPH} watch")),
+            "got {lit:?}"
+        );
+    }
+
+    /// Off is shown, not omitted: the struck-through eye, never the open one,
+    /// and in a colour that does not pulse or read as the live red.
+    #[test]
+    fn watch_off_draws_a_crossed_out_eye() {
+        let width = 80u16;
+        let row = header_row_with("t", width, |a| a.watch_mode = false);
+        assert!(
+            row.contains(&format!("{WATCH_OFF_GLYPH} watch")),
+            "got {row:?}"
+        );
+        assert!(
+            !row.contains(WATCH_ON_GLYPH),
+            "the open eye drawn while off"
+        );
+
+        for blink_on in [true, false] {
+            use ratatui::Terminal;
+            use ratatui::backend::TestBackend;
+            let mut app = crate::app::App::new(Vec::new(), "t".to_string(), width, 40);
+            app.blink_on = blink_on;
+            let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+            terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let x = (0..width)
+                .find(|x| buffer[(*x, 0)].symbol() == WATCH_OFF_GLYPH)
+                .expect("watch-off indicator not drawn");
+            assert_eq!(buffer[(x, 0)].style().fg, Some(colors::OVERLAY));
+        }
     }
 
     #[test]
@@ -1238,6 +1356,7 @@ mod tests {
             repo_list: Rect::new(0, 0, 0, 0),
             detail: None,
             inspector: None,
+            inspector_folded: false,
             contributions: None,
         };
         assert_eq!(empty.repo_list_pct_at(10), 0);
@@ -1285,15 +1404,20 @@ mod tests {
     /// `panel_rects` and `render` must agree about the strip, or clicks land
     /// on a pane that is not where the eye sees it.
     #[test]
-    fn panel_rects_reports_the_strip_only_when_it_is_drawn() {
+    fn panel_rects_reports_the_strip_as_it_is_drawn() {
         let area = Rect::new(0, 0, 200, 44);
         let mut app = layout_app();
         app.view = crate::app::View::Detail;
 
-        let closed = panel_rects(area, &app);
-        assert!(closed.contributions.is_none());
+        app.contributions_folded = true;
+        let folded = panel_rects(area, &app);
+        assert_eq!(
+            folded.contributions.map(|r| r.height),
+            Some(FOLDED_HEIGHT),
+            "a folded strip is still laid out"
+        );
 
-        app.contributions = crate::app::ContributionsMode::Github;
+        app.contributions_folded = false;
         let open = panel_rects(area, &app);
         let strip = open.contributions.expect("strip present");
         assert_eq!(strip.height, contributions::CONTRIB_HEIGHT);
@@ -1304,8 +1428,8 @@ mod tests {
         );
         // The strip comes off the bottom of everything, under the inspector,
         // so the panes above all give up rows for it.
-        assert!(open.repo_list.height < closed.repo_list.height);
-        assert!(open.detail.unwrap().height < closed.detail.unwrap().height);
+        assert!(open.repo_list.height < folded.repo_list.height);
+        assert!(open.detail.unwrap().height < folded.detail.unwrap().height);
     }
 
     /// The strip spans the full width at the very bottom whatever the
@@ -1634,5 +1758,111 @@ mod tests {
             tall.height > with.detail.unwrap().height,
             "suppressing the inspector did not give its rows to the graph"
         );
+    }
+
+    /// The whole screen rendered, with the rects `panel_rects` reports for it.
+    fn rendered(setup: impl FnOnce(&mut crate::app::App)) -> (PanelRects, ratatui::buffer::Buffer) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (width, height) = (120u16, 44u16);
+        let mut app = crate::app::App::new(Vec::new(), String::new(), width, height);
+        app.view = View::Detail;
+        app.contributions = crate::app::ContributionsMode::Github;
+        setup(&mut app);
+        let app = app;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let rects = panel_rects(Rect::new(0, 0, width, height), &app);
+        (rects, terminal.backend().buffer().clone())
+    }
+
+    /// The column of `needle` on `row`, as drawn.
+    fn column_of(buffer: &ratatui::buffer::Buffer, row: u16, needle: &str) -> Option<u16> {
+        let line: Vec<&str> = (0..buffer.area.width)
+            .map(|x| buffer[(x, row)].symbol())
+            .collect();
+        let chars: Vec<&str> = needle.split("").filter(|c| !c.is_empty()).collect();
+        (0..line.len().saturating_sub(chars.len()))
+            .find(|&x| line[x..x + chars.len()] == chars[..])
+            .map(|x| x as u16)
+    }
+
+    /// The click target has to be where the tag is drawn, folded or not, or
+    /// a click on `[3]` folds nothing and a click beside it folds the pane.
+    #[test]
+    fn the_fold_tag_is_where_the_title_draws_it() {
+        for folded in [false, true] {
+            let (rects, buffer) = rendered(|a| {
+                a.inspector_folded = folded;
+                a.contributions_folded = folded;
+            });
+            for (rect, panel, tag, label) in [
+                (rects.inspector, FocusedPanel::Inspector, "[3]", "inspector"),
+                (
+                    rects.contributions,
+                    FocusedPanel::Contributions,
+                    "[4]",
+                    "contributions",
+                ),
+            ] {
+                let r = rect.unwrap_or_else(|| panic!("{label} not laid out"));
+                let x = column_of(&buffer, r.y, tag)
+                    .unwrap_or_else(|| panic!("{tag} not drawn (folded: {folded})"));
+                for dx in 0..3 {
+                    assert_eq!(rects.fold_tag_at(x + dx, r.y), Some(panel), "{tag}");
+                }
+                let lx = column_of(&buffer, r.y, label).expect("label drawn");
+                assert_eq!(rects.fold_tag_at(lx, r.y), None, "{label} is not the tag");
+                assert_eq!(rects.fold_tag_at(x, r.y + 1), None, "below the title row");
+            }
+        }
+    }
+
+    /// Only the auxiliary panes fold: the list and detail tags do nothing.
+    #[test]
+    fn the_repo_list_and_detail_tags_do_not_fold() {
+        let (rects, buffer) = rendered(|_| {});
+        let row = rects.repo_list.y;
+        for tag in ["[1]", "[2]"] {
+            let x = column_of(&buffer, row, tag).expect("tag drawn");
+            assert_eq!(rects.fold_tag_at(x + 1, row), None, "{tag}");
+        }
+    }
+
+    /// Folded is the frame alone, and the rows it gave up go to the panes
+    /// above.
+    #[test]
+    fn a_folded_pane_keeps_only_its_frame() {
+        let (open, _) = rendered(|_| {});
+        let (folded, buffer) = rendered(|a| {
+            a.inspector_folded = true;
+            a.contributions_folded = true;
+        });
+        let inspector = folded.inspector.expect("folded inspector still laid out");
+        let strip = folded.contributions.expect("folded strip still laid out");
+        assert_eq!(inspector.height, FOLDED_HEIGHT);
+        assert_eq!(strip.height, FOLDED_HEIGHT);
+        assert!(folded.detail.unwrap().height > open.detail.unwrap().height);
+        assert!(column_of(&buffer, inspector.y, "inspector").is_some());
+        assert!(column_of(&buffer, strip.y, "contributions").is_some());
+        for r in [inspector, strip] {
+            let bottom = r.y + r.height - 1;
+            assert_eq!(buffer[(r.x, r.y)].symbol(), "╭", "top frame");
+            assert_eq!(buffer[(r.x, bottom)].symbol(), "╰", "bottom frame");
+            assert_eq!(buffer[(r.x + 2, r.y + 1)].symbol(), " ", "no content");
+        }
+    }
+
+    /// A folded inspector has nothing to resize, and its top row is its tag.
+    #[test]
+    fn a_folded_inspector_is_not_a_divider() {
+        let (open, _) = rendered(|_| {});
+        let r = open.inspector.unwrap();
+        assert_eq!(open.divider_at(r.x + 20, r.y), Some(Divider::Horizontal));
+
+        let (folded, _) = rendered(|a| a.inspector_folded = true);
+        let r = folded.inspector.unwrap();
+        assert_eq!(folded.divider_at(r.x + 20, r.y), None);
     }
 }

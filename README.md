@@ -112,18 +112,17 @@ in the header instead.
 
 | Key | Action |
 |-----|--------|
-| `1` / `2` / `3` / `4` | Focus repo list / detail / inspector / contributions |
+| `1` / `2` / `3` / `4` | Focus repo list / detail / inspector / contributions. On the focused inspector or strip, its number folds it to an empty frame (still focused) and unfolds it again; on a folded one from elsewhere, it unfolds and focuses it |
 | `Tab` | Cycle panel focus |
-| mouse | Click a panel to focus; drag a pane border to resize it (a `⠿` grip marks each draggable border, and lights up while you drag it); scroll wheel scrolls whichever panel the cursor is over. Scrolling moves the view, never the selection: the highlight stays with the row it is on and travels off the pane if you scroll past it, and the next `j`/`k` re-enters at the edge you are looking at |
+| mouse | Click a panel to focus; click the `[3]` or `[4]` tag in the inspector's or the strip's title to fold it to an empty frame, and again to unfold and focus it; drag a pane border to resize it (a `⠿` grip marks each draggable border, and lights up while you drag it); scroll wheel scrolls whichever panel the cursor is over. Scrolling moves the view, never the selection: the highlight stays with the row it is on and travels off the pane if you scroll past it, and the next `j`/`k` re-enters at the edge you are looking at |
 | `j` / `k`, `↑` / `↓` | Repo list: move selection · Detail: pick commit · Inspector: scroll · Contributions: move the day cursor up/down a weekday (a caret above the grid marks the column) |
 | `J` / `K` | Drive the **next** pane without leaving the one you are in: repo list → window 2, window 2 → the inspector, inspector → back to the list. Aimed at window 2 it steps that pane's commit cursor, so the inspector reads out each commit in turn; past the last commit it falls through to scrolling, so the sections below a short list stay reachable. Two exceptions: `graph` docks no inspector, so there the keys stay on the pane and walk its **rows** a line at a time where plain `j`/`k` jumps whole commit blocks; and the contributions strip is skipped, being a horizontal timeline with nothing below the fold to scroll into |
 | `PgUp` / `PgDn` | Scroll the focused pane itself by a page, leaving its selection where it is |
 | `v` | Toggle detail vs compact view. The compact grid packs as many columns as the terminal has room for |
 | `[` / `]` | Repo pane: step its body between five views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`, wrapped to the pane and given the whole column (its blocks already carry what the inspector would repeat, so no inspector is docked there); `branches` every local branch and every remote-tracking branch in one list, read-only, with the inspector showing the highlighted branch's tip commit (a remote branch nothing local claims is marked `not fetched`, and its tip is not on any local branch, so the inspector says so rather than drawing a blank). Each keeps its own scroll position and selection, and the inspector follows whichever is active. The active view is named in the pane's top border in its own colour (the tabs are capitalised; the pane's own headliner repeats the same name over a divider that fades from the view's colour into the background across the pane), and the repo header below it stays pinned, so both survive scrolling. In `info` the local branches pin with it where the pane has the rows to spare, since they are what the repo's behind count is a sum of; the remote-only list below them collapses to a count, being bounded by what everyone else has pushed rather than by what you have: `B` expands it in place, and `branches` lists them all |
 | `B` | `info`: expand or collapse the remote branch summary. The full list, with each branch's state, is the `branches` view |
-| `c` | Toggle the contributions strip (the footer's `[c]` lights up in the strip's colour while it is open): three years of activity, GitHub-style. Each day is a Nerd Font square icon, which sits level with the `Mon`/`Wed`/`Fri` labels where a half block cannot, in three sizes (`contributions_cell_size`); the grid scrolls rather than shrinking, with the newest week pinned to the right edge, and no day is marked until you move the cursor |
-| `C` | Switch its source: GitHub's own calendar, or your commits in the listed repos |
-| `4` | Focus the contributions strip (only while it is open) |
+| `c` | Switch the contributions strip's source, while it is unfolded (the footer's `[c]` lights up in that source's colour): GitHub's own calendar, or your commits in the listed repos. The strip is always on screen, folded or not: three years of activity, GitHub-style. Each day is a Nerd Font square icon, which sits level with the `Mon`/`Wed`/`Fri` labels where a half block cannot, in three sizes (`contributions_cell_size`); the grid scrolls rather than shrinking, with the newest week pinned to the right edge, and no day is marked until you move the cursor |
+| `4` | Focus the contributions strip, unfolding it if it is folded; on the focused strip, fold or unfold it |
 | `h` / `l`, `←` / `→` | Contributions: move the day cursor back/forward a week. The grid scrolls with it, oldest weeks hiding off to the left |
 | mouse | Contributions: click picks a day, drag pans the grid, and any wheel axis (including shift-wheel) scrolls it sideways |
 | `Home` / `End` | Contributions: jump to the oldest / newest week |
@@ -145,7 +144,7 @@ in the header instead.
 | `=` | Reset both panes to their default sizes |
 | `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates. No rediscovery |
 | `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear |
-| `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub. While it is on, a red `◉ watch` in the header pulses between two shades so the dashboard says it is live without anything moving |
+| `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub. While it is on, a red eye (`󰈈 watch`) in the header pulses between two shades so the dashboard says it is live without anything moving; off, it is a grey crossed-out eye (`󰈉 watch`) |
 | `?` | Toggle help overlay |
 | `Esc` | Close search or help |
 | `q` | Quit |
@@ -188,8 +187,8 @@ extra_dirs = ["~/.dotfiles"]
 # Covers three years. GitHub caps one contributionsCollection at a year, so
 # the poll asks for one aliased window per year -- still a single request, and
 # measured at the same rate-limit cost as asking for none.
-# (your commits in the repos currently listed), or "off". `c` toggles it and
-# `C` switches source; this is what a fresh launch starts from. The two
+# (your commits in the repos currently listed), or "off" to start it folded.
+# `c` switches source and `4` folds it; this is what a fresh launch starts from. The two
 # sources use different colour ladders (green for github, blue for local)
 # because they count different things and will never agree. The github source
 # shades each day with GitHub's own level, so it matches github.com (which

@@ -17,9 +17,9 @@ pub struct Config {
     /// under "local changes".
     #[serde(default)]
     pub extra_dirs: Vec<String>,
-    /// Whether the contribution strip starts open, and from which source:
-    /// "off", "github", or "local". `c` and `C` toggle it live; this is what
-    /// a fresh launch starts from.
+    /// Which source the contribution strip starts on: "github" or "local",
+    /// or "off" to start it folded. `c` switches source and `4` folds it
+    /// live; this is what a fresh launch starts from.
     #[serde(default)]
     pub contributions: Option<String>,
     /// Git author regex the local contribution source filters by, overriding
@@ -459,8 +459,9 @@ mod tests {
         );
     }
 
-    /// An explicit "off" still closes it: the new default must not override
-    /// someone who turned it off on purpose.
+    /// An explicit "off" still parses as off, which starts the strip folded:
+    /// the new default must not override someone who turned it off on
+    /// purpose.
     #[test]
     fn an_explicit_off_still_closes_the_strip() {
         let cfg: Config = toml::from_str(r#"contributions = "off""#).unwrap();

@@ -79,9 +79,8 @@ impl CiStatus {
     /// mode). One shape, so it can never be confused with the sync status's
     /// `✓` the way the old checkmark could.
     ///
-    /// Same glyph as the header's watch indicator, deliberately: the ring
-    /// reads as a status lamp, which is what both of them are. It also carries
-    /// further at one cell than a plain `●`.
+    /// The ring reads as a status lamp, and carries further at one cell than
+    /// a plain `●`.
     ///
     /// The cost is that passed and failed differ by color alone. The detail
     /// pane spells the state out in words next to the lamp, which is where

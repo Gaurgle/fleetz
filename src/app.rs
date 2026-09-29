@@ -76,9 +76,9 @@ impl HistoryView {
     }
 }
 
-/// Whether the contribution strip is showing, and from which source.
-/// Persisted to `config.toml` as one key, so the source survives a restart
-/// along with the open state.
+/// Which source the contribution strip shows. Persisted to `config.toml` as
+/// one key, where `Off` starts the strip folded: the strip itself is always on
+/// screen, so at runtime `App::contributions` is never `Off`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContributionsMode {
     #[default]
@@ -88,7 +88,7 @@ pub enum ContributionsMode {
 }
 
 /// What the strip does when `config.toml` says nothing: show GitHub's own
-/// calendar. Explicit `contributions = "off"` still closes it.
+/// calendar. Explicit `contributions = "off"` starts it folded.
 pub const DEFAULT_CONTRIBUTIONS: &str = "github";
 
 impl ContributionsMode {
@@ -111,10 +111,6 @@ impl ContributionsMode {
     /// Label for the settings row and the pane title.
     pub fn label(self) -> &'static str {
         self.config_value()
-    }
-
-    pub fn is_open(self) -> bool {
-        self != Self::Off
     }
 }
 
@@ -1177,11 +1173,17 @@ pub struct App {
     /// set, so a layout tweaked for one repo doesn't silently become the norm.
     pub repo_list_pct: u16,
     pub inspector_pct: u16,
-    /// Whether the contribution strip is open, and from which source.
+    /// Which source the contribution strip shows. Never `Off` here: the
+    /// strip is always on screen, and the setting's "off" folds it instead
+    /// (`apply_contributions_setting`).
     pub contributions: ContributionsMode,
-    /// The last source the strip was on, so closing and reopening returns to
-    /// it instead of always snapping back to github.
-    last_contributions_source: ContributionsMode,
+    /// Whether the inspector and the strip are folded to an empty frame. A
+    /// folded pane stays on screen and can hold focus, so its `[3]`/`[4]` tag
+    /// is still there to click and its number still reaches it. Neither is
+    /// ever removed outright. Only these two fold: the repo list and the
+    /// detail pane are the dashboard itself.
+    pub inspector_folded: bool,
+    pub contributions_folded: bool,
     /// The account-wide calendar from the last GitHub poll. None until the
     /// first poll lands, or when the payload predates the field.
     pub github_calendar: Option<Box<crate::contributions::Calendar>>,
@@ -1358,8 +1360,9 @@ impl App {
             view_overridden: false,
             repo_list_pct: DEFAULT_REPO_LIST_PCT,
             inspector_pct: DEFAULT_INSPECTOR_PCT,
-            contributions: ContributionsMode::Off,
-            last_contributions_source: ContributionsMode::Github,
+            contributions: ContributionsMode::Github,
+            inspector_folded: false,
+            contributions_folded: false,
             github_calendar: None,
             contrib_author: None,
             contrib_cell: CellSize::default(),
@@ -1492,6 +1495,55 @@ impl App {
     /// whether the pane exists.
     pub fn shows_inspector(&self) -> bool {
         self.history_view != HistoryView::Graph
+    }
+
+    /// Whether the inspector is drawn with its content, not folded to an
+    /// empty frame. Shift-scroll aims only at a pane whose rows it can see.
+    fn inspector_is_expanded(&self) -> bool {
+        self.shows_inspector() && !self.inspector_folded
+    }
+
+    /// The fold flag of a foldable pane; None for the two that never fold,
+    /// the repo list and the detail pane, which are the dashboard itself.
+    fn fold_flag(&mut self, panel: FocusedPanel) -> Option<&mut bool> {
+        match panel {
+            FocusedPanel::Inspector => Some(&mut self.inspector_folded),
+            FocusedPanel::Contributions => Some(&mut self.contributions_folded),
+            FocusedPanel::RepoList | FocusedPanel::Detail => None,
+        }
+    }
+
+    /// A pane's number key (`1`-`4`). On a pane that is not focused it
+    /// focuses it, unfolding it if folded. On the focused pane it folds or
+    /// unfolds it in place, keeping focus, so the same key both reaches a
+    /// pane and gets it out of the way.
+    pub fn press_panel_key(&mut self, panel: FocusedPanel) {
+        let focused = self.focused_panel == panel;
+        self.focus_panel(panel);
+        // Focus refused: the pane is not on screen (the graph view's
+        // inspector), so there is nothing to fold either.
+        if self.focused_panel != panel {
+            return;
+        }
+        if let Some(folded) = self.fold_flag(panel) {
+            *folded = focused && !*folded;
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Fold `panel` to an empty frame, or unfold it: the click on a pane's
+    /// `[3]`/`[4]` tag. Unfolding focuses the pane, since opening it is
+    /// asking to look at it; folding leaves focus where it is, the same as
+    /// the number key does.
+    pub fn toggle_fold(&mut self, panel: FocusedPanel) {
+        let Some(folded) = self.fold_flag(panel) else {
+            return;
+        };
+        *folded = !*folded;
+        if !*folded {
+            self.focus_panel(panel);
+        }
+        self.needs_redraw = true;
     }
 
     pub fn visible_repos(&self) -> Vec<(usize, &RepoStatus)> {
@@ -1823,7 +1875,7 @@ impl App {
         }
         Some(match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
-            FocusedPanel::Detail if self.shows_inspector() => FocusedPanel::Inspector,
+            FocusedPanel::Detail if self.inspector_is_expanded() => FocusedPanel::Inspector,
             // The graph docks no inspector, so there is no next pane to reach
             // into -- and it is the one view whose rows are finer than its
             // commits, so there is a gesture worth having here instead. The
@@ -1892,39 +1944,32 @@ impl App {
         self.set_detail_scroll(0);
     }
 
-    /// Cycle keyboard focus: repo list -> detail -> inspector -> repo list.
+    /// Cycle keyboard focus: repo list -> detail -> inspector -> strip ->
+    /// repo list.
     /// Only meaningful in `Detail` view.
     pub fn toggle_panel_focus(&mut self) {
-        let strip = self.contributions.is_open();
         if self.view != View::Detail {
             // Compact has one flat grid, but the strip is still a real target.
-            if strip {
-                self.focused_panel = match self.focused_panel {
-                    FocusedPanel::Contributions => FocusedPanel::RepoList,
-                    _ => FocusedPanel::Contributions,
-                };
-            }
+            self.focused_panel = match self.focused_panel {
+                FocusedPanel::Contributions => FocusedPanel::RepoList,
+                _ => FocusedPanel::Contributions,
+            };
             return;
         }
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             FocusedPanel::Detail if self.shows_inspector() => FocusedPanel::Inspector,
-            FocusedPanel::Detail if strip => FocusedPanel::Contributions,
-            FocusedPanel::Detail => FocusedPanel::RepoList,
-            FocusedPanel::Inspector if strip => FocusedPanel::Contributions,
-            FocusedPanel::Inspector | FocusedPanel::Contributions => FocusedPanel::RepoList,
+            FocusedPanel::Detail | FocusedPanel::Inspector => FocusedPanel::Contributions,
+            FocusedPanel::Contributions => FocusedPanel::RepoList,
         };
     }
 
     /// Jump keyboard focus directly to `panel` (the `1`/`2` bindings).
     /// Only meaningful in `Detail` view.
     pub fn focus_panel(&mut self, panel: FocusedPanel) {
-        // The strip is the one panel that exists in both views, and it is
-        // only a target while it is open.
+        // The strip is the one panel that exists in both views.
         if panel == FocusedPanel::Contributions {
-            if self.contributions.is_open() {
-                self.focused_panel = panel;
-            }
+            self.focused_panel = panel;
             return;
         }
         if self.view != View::Detail {
@@ -1938,41 +1983,36 @@ impl App {
         self.focused_panel = panel;
     }
 
-    /// `c`: open or close the strip. Reopening returns to whichever source it
-    /// was last on.
-    pub fn toggle_contributions(&mut self) {
-        if self.contributions.is_open() {
-            self.last_contributions_source = self.contributions;
-            self.contributions = ContributionsMode::Off;
-            // Focus cannot be left pointing at a panel that is no longer on
-            // screen: every key routed to it would silently do nothing.
-            if self.focused_panel == FocusedPanel::Contributions {
-                self.focused_panel = FocusedPanel::RepoList;
-            }
-        } else {
-            self.open_contributions(self.last_contributions_source);
+    /// Apply the `contributions` setting, at launch or when the settings
+    /// overlay saves it. The strip is always on screen, so "off" folds it
+    /// rather than removing it, and keeps whichever source it is on.
+    pub fn apply_contributions_setting(&mut self, mode: ContributionsMode) {
+        match mode {
+            ContributionsMode::Off => self.contributions_folded = true,
+            mode => self.open_contributions(mode),
         }
         self.needs_redraw = true;
     }
 
-    /// `C`: switch which source fills the strip, opening it if it was closed.
-    /// Opening from `Off` lands on the remembered source rather than always
-    /// snapping to github, so `c` and `C` agree about where "open" means.
+    /// `c`: switch which source fills the strip. Only while it is unfolded:
+    /// a folded strip shows neither source, so there is nothing to switch.
     pub fn cycle_contributions_source(&mut self) {
+        if self.contributions_folded {
+            return;
+        }
         let next = match self.contributions {
-            ContributionsMode::Off => self.last_contributions_source,
             ContributionsMode::Github => ContributionsMode::Local,
-            ContributionsMode::Local => ContributionsMode::Github,
+            ContributionsMode::Local | ContributionsMode::Off => ContributionsMode::Github,
         };
         self.open_contributions(next);
         self.needs_redraw = true;
     }
 
-    /// Open the strip on `mode`, with no day marked and the grid scrolled to
-    /// the newest weeks. Shared by `c` and `C` so both land in the same state.
+    /// Show the strip unfolded on `mode`, with no day marked and the grid
+    /// scrolled to the newest weeks.
     fn open_contributions(&mut self, mode: ContributionsMode) {
         self.contributions = mode;
-        self.last_contributions_source = mode;
+        self.contributions_folded = false;
         self.contrib_cursor = None;
         // Out of range on purpose, exactly as at startup: the renderer is the
         // only place the visible width is known, and it clamps this down to
@@ -3513,10 +3553,8 @@ mod tests {
     }
 
     #[test]
-    fn c_toggles_the_pane_and_remembers_the_source() {
+    fn c_switches_the_source_while_the_strip_is_up() {
         let mut app = make_app(1);
-        assert_eq!(app.contributions, ContributionsMode::Off);
-        app.toggle_contributions();
         assert_eq!(
             app.contributions,
             ContributionsMode::Github,
@@ -3524,43 +3562,38 @@ mod tests {
         );
         app.cycle_contributions_source();
         assert_eq!(app.contributions, ContributionsMode::Local);
-        app.toggle_contributions();
-        assert_eq!(app.contributions, ContributionsMode::Off);
-        app.toggle_contributions();
-        assert_eq!(
-            app.contributions,
-            ContributionsMode::Local,
-            "reopens where it closed"
-        );
-    }
-
-    #[test]
-    fn cycling_the_source_on_a_closed_pane_opens_it() {
-        let mut app = make_app(1);
         app.cycle_contributions_source();
-        assert!(app.contributions.is_open());
+        assert_eq!(app.contributions, ContributionsMode::Github);
     }
 
     #[test]
-    fn closing_the_pane_moves_focus_off_it() {
+    fn c_does_nothing_while_the_strip_is_folded() {
         let mut app = make_app(1);
-        app.toggle_contributions();
-        app.focus_panel(FocusedPanel::Contributions);
-        assert_eq!(app.focused_panel, FocusedPanel::Contributions);
-        app.toggle_contributions();
-        assert_eq!(
-            app.focused_panel,
-            FocusedPanel::RepoList,
-            "focus cannot strand"
-        );
+        app.contributions_folded = true;
+        app.cycle_contributions_source();
+        assert_eq!(app.contributions, ContributionsMode::Github);
+        assert!(app.contributions_folded, "c unfolded the strip");
+    }
+
+    /// The setting's "off" predates folding and meant "not on screen". The
+    /// strip is always on screen now, so it folds, and keeps its source.
+    #[test]
+    fn the_off_setting_folds_the_strip_and_keeps_its_source() {
+        let mut app = make_app(1);
+        app.apply_contributions_setting(ContributionsMode::Local);
+        assert!(!app.contributions_folded);
+        app.apply_contributions_setting(ContributionsMode::Off);
+        assert!(app.contributions_folded);
+        assert_eq!(app.contributions, ContributionsMode::Local);
+        app.apply_contributions_setting(ContributionsMode::Github);
+        assert!(!app.contributions_folded, "a source setting unfolds it");
+        assert_eq!(app.contributions, ContributionsMode::Github);
     }
 
     #[test]
-    fn the_pane_is_only_focusable_while_open() {
+    fn the_strip_is_always_focusable() {
         let mut app = make_app(1);
-        app.focus_panel(FocusedPanel::Contributions);
-        assert_eq!(app.focused_panel, FocusedPanel::RepoList, "closed: refused");
-        app.toggle_contributions();
+        app.contributions_folded = true;
         app.focus_panel(FocusedPanel::Contributions);
         assert_eq!(app.focused_panel, FocusedPanel::Contributions);
     }
@@ -3571,7 +3604,6 @@ mod tests {
     fn the_pane_is_focusable_in_compact_view() {
         let mut app = make_app(1);
         app.view = View::Compact;
-        app.toggle_contributions();
         app.focus_panel(FocusedPanel::Contributions);
         assert_eq!(app.focused_panel, FocusedPanel::Contributions);
         app.focus_panel(FocusedPanel::Detail);
@@ -3583,33 +3615,32 @@ mod tests {
     }
 
     #[test]
-    fn tab_includes_the_pane_only_while_open() {
+    fn tab_walks_all_four_panes() {
         let mut app = make_app(1);
         app.view = View::Detail;
-        app.toggle_panel_focus();
-        app.toggle_panel_focus();
+        for next in [
+            FocusedPanel::Detail,
+            FocusedPanel::Inspector,
+            FocusedPanel::Contributions,
+            FocusedPanel::RepoList,
+        ] {
+            app.toggle_panel_focus();
+            assert_eq!(app.focused_panel, next);
+        }
+        app.history_view = HistoryView::Graph;
+        app.focused_panel = FocusedPanel::Detail;
         app.toggle_panel_focus();
         assert_eq!(
             app.focused_panel,
-            FocusedPanel::RepoList,
-            "closed: three panels"
+            FocusedPanel::Contributions,
+            "no inspector"
         );
-
-        app.toggle_contributions();
-        app.focused_panel = FocusedPanel::Inspector;
-        app.toggle_panel_focus();
-        assert_eq!(app.focused_panel, FocusedPanel::Contributions);
-        app.toggle_panel_focus();
-        assert_eq!(app.focused_panel, FocusedPanel::RepoList);
     }
 
     #[test]
     fn tab_in_compact_toggles_between_the_list_and_the_pane() {
         let mut app = make_app(1);
         app.view = View::Compact;
-        app.toggle_panel_focus();
-        assert_eq!(app.focused_panel, FocusedPanel::RepoList, "closed: no-op");
-        app.toggle_contributions();
         app.toggle_panel_focus();
         assert_eq!(app.focused_panel, FocusedPanel::Contributions);
         app.toggle_panel_focus();
@@ -3650,8 +3681,7 @@ mod tests {
     #[test]
     fn no_day_is_marked_until_the_user_moves() {
         let mut app = make_app(1);
-        app.toggle_contributions();
-        assert_eq!(app.contrib_cursor, None, "opening marks nothing");
+        assert_eq!(app.contrib_cursor, None, "starting marks nothing");
         app.focus_panel(FocusedPanel::Contributions);
         assert_eq!(app.contrib_cursor, None, "focusing marks nothing");
 
@@ -3659,9 +3689,8 @@ mod tests {
         app.move_contrib_cursor(-1, 0, today());
         assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(today())));
 
-        // And it goes back to unmarked when the pane is reopened.
-        app.toggle_contributions();
-        app.toggle_contributions();
+        // And it goes back to unmarked when the source changes.
+        app.cycle_contributions_source();
         assert_eq!(app.contrib_cursor, None);
     }
 
@@ -3754,15 +3783,15 @@ mod tests {
         );
     }
 
-    /// Opening the strip pins the newest weeks to the right edge: the grid
-    /// should open on now, not on last August. The request is deliberately
+    /// Switching the source pins the newest weeks to the right edge: the grid
+    /// should show now, not last August. The request is deliberately
     /// past the end, because only the renderer knows how many weeks fit; it
     /// clamps this down on the next frame.
     #[test]
-    fn opening_the_strip_asks_for_the_newest_weeks() {
+    fn switching_the_source_asks_for_the_newest_weeks() {
         let mut app = make_app(1);
         app.contrib_scroll.set(0);
-        app.toggle_contributions();
+        app.cycle_contributions_source();
         assert!(
             app.contrib_scroll.get() >= crate::contributions::WEEKS,
             "an out-of-range request is what anchors the grid right"
@@ -4463,5 +4492,114 @@ mod tests {
             FocusedPanel::Detail,
             "focus left on a hidden pane"
         );
+    }
+
+    fn fold_app() -> App {
+        let mut app = App::new(Vec::new(), String::new(), 120, 44);
+        app.view = View::Detail;
+        app.contributions = ContributionsMode::Github;
+        app
+    }
+
+    fn is_folded(app: &App, panel: FocusedPanel) -> bool {
+        match panel {
+            FocusedPanel::Inspector => app.inspector_folded,
+            _ => app.contributions_folded,
+        }
+    }
+
+    const FOLDABLE: [FocusedPanel; 2] = [FocusedPanel::Inspector, FocusedPanel::Contributions];
+
+    #[test]
+    fn a_pane_number_on_an_unfocused_pane_focuses_it_without_folding() {
+        for panel in FOLDABLE {
+            let mut app = fold_app();
+            app.press_panel_key(panel);
+            assert_eq!(app.focused_panel, panel);
+            assert!(!is_folded(&app, panel), "{panel:?} folded on first press");
+        }
+    }
+
+    #[test]
+    fn the_focused_panes_number_folds_it_and_keeps_focus() {
+        for panel in FOLDABLE {
+            let mut app = fold_app();
+            app.press_panel_key(panel);
+            app.press_panel_key(panel);
+            assert!(is_folded(&app, panel), "{panel:?}");
+            assert_eq!(app.focused_panel, panel, "focus left the folded pane");
+            app.press_panel_key(panel);
+            assert!(!is_folded(&app, panel), "{panel:?} did not unfold");
+            assert_eq!(app.focused_panel, panel);
+        }
+    }
+
+    #[test]
+    fn a_folded_panes_number_from_elsewhere_opens_and_focuses_it() {
+        for panel in FOLDABLE {
+            let mut app = fold_app();
+            app.toggle_fold(panel);
+            app.focus_panel(FocusedPanel::RepoList);
+            app.press_panel_key(panel);
+            assert!(!is_folded(&app, panel), "{panel:?}");
+            assert_eq!(app.focused_panel, panel);
+        }
+    }
+
+    /// The graph view draws no inspector, so `3` there neither focuses nor
+    /// folds anything.
+    #[test]
+    fn three_does_nothing_where_there_is_no_inspector() {
+        let mut app = fold_app();
+        app.history_view = HistoryView::Graph;
+        app.press_panel_key(FocusedPanel::Inspector);
+        assert_eq!(app.focused_panel, FocusedPanel::RepoList);
+        assert!(!app.inspector_folded);
+    }
+
+    #[test]
+    fn the_list_and_detail_numbers_only_focus() {
+        let mut app = fold_app();
+        for panel in [FocusedPanel::RepoList, FocusedPanel::Detail] {
+            app.press_panel_key(panel);
+            app.press_panel_key(panel);
+            assert_eq!(app.focused_panel, panel);
+        }
+        app.toggle_fold(FocusedPanel::RepoList);
+        app.toggle_fold(FocusedPanel::Detail);
+        assert!(!app.inspector_folded && !app.contributions_folded);
+    }
+
+    #[test]
+    fn clicking_the_tag_folds_in_place_and_unfolds_into_focus() {
+        for panel in FOLDABLE {
+            let mut app = fold_app();
+            app.focus_panel(FocusedPanel::Detail);
+            app.toggle_fold(panel);
+            assert!(is_folded(&app, panel));
+            assert_eq!(app.focused_panel, FocusedPanel::Detail, "fold moved focus");
+            app.toggle_fold(panel);
+            assert!(!is_folded(&app, panel));
+            assert_eq!(app.focused_panel, panel, "unfold did not focus");
+        }
+    }
+
+    /// Shift-scroll reads a pane whose rows it can see; a folded inspector
+    /// has none, so the detail pane walks its own rows instead.
+    #[test]
+    fn shift_scroll_skips_a_folded_inspector() {
+        let mut app = fold_app();
+        app.inspector_folded = true;
+        app.focus_panel(FocusedPanel::Detail);
+        assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Detail));
+    }
+
+    /// Saving a source in settings is asking to see it.
+    #[test]
+    fn saving_a_source_setting_unfolds_the_strip() {
+        let mut app = fold_app();
+        app.toggle_fold(FocusedPanel::Contributions);
+        app.apply_contributions_setting(ContributionsMode::Local);
+        assert!(!app.contributions_folded);
     }
 }

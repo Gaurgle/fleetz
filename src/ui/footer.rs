@@ -196,7 +196,10 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
         hints.push(Span::styled(" watch", desc_style));
     }
     hints.push(gap.clone());
-    hints.push(Span::styled("[c]", contrib_key_style(app.contributions)));
+    hints.push(Span::styled(
+        "[c]",
+        contrib_key_style(app.contributions, app.contributions_folded),
+    ));
     if with_desc {
         hints.push(Span::styled(" contrib", desc_style));
     }
@@ -230,17 +233,20 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
     hints
 }
 
-/// The `[c]` hint's style: the brightest rung of the open strip's ladder, or
-/// the ordinary key colour while the strip is closed.
-fn contrib_key_style(mode: ContributionsMode) -> Style {
+/// The `[c]` hint's style: the brightest rung of the source the strip is
+/// showing, or the ordinary key colour while it is folded and `c` does
+/// nothing.
+fn contrib_key_style(mode: ContributionsMode, folded: bool) -> Style {
     let source = match mode {
-        ContributionsMode::Off => {
-            return Style::default()
-                .fg(colors::TEXT)
-                .add_modifier(Modifier::BOLD);
-        }
-        ContributionsMode::Github => crate::contributions::Source::Github,
-        ContributionsMode::Local => crate::contributions::Source::Local,
+        _ if folded => None,
+        ContributionsMode::Off => None,
+        ContributionsMode::Github => Some(crate::contributions::Source::Github),
+        ContributionsMode::Local => Some(crate::contributions::Source::Local),
+    };
+    let Some(source) = source else {
+        return Style::default()
+            .fg(colors::TEXT)
+            .add_modifier(Modifier::BOLD);
     };
     Style::default()
         .fg(colors::contrib_ladder(source)[4])
@@ -322,8 +328,8 @@ mod tests {
         assert!(text(&keybind_hints(&app_in(View::Compact), true)).contains("[v] detail"));
     }
 
-    /// The strip is a toggle like watch, and the footer is where every other
-    /// action key is discovered, so `c` is hinted there too.
+    /// `c` switches the strip's source, and the footer is where every other
+    /// action key is discovered, so it is hinted there too.
     #[test]
     fn contributions_are_hinted_beside_watch() {
         let hints = text(&keybind_hints(&app_in(View::Detail), true));
@@ -332,14 +338,16 @@ mod tests {
         assert!(keys.contains("[w] [c]"), "got {keys:?}");
     }
 
-    /// The `c` key shows the toggle's state: neutral while the strip is
-    /// closed, and the strip's own ladder colour while it is open, so the
-    /// hint and the cells above it can never disagree about which source is
-    /// drawn.
+    /// The `c` key shows the strip's state: neutral while the strip is
+    /// folded and the key does nothing, and the source's own ladder colour
+    /// while it is up, so the hint and the cells above it can never disagree
+    /// about which source is drawn.
     #[test]
-    fn the_contributions_key_lights_up_in_the_strips_colour_when_open() {
+    fn the_contributions_key_lights_up_in_the_strips_colour_when_up() {
         let mut app = app_in(View::Detail);
+        app.contributions_folded = true;
         assert_eq!(key_color(&app, "[c]"), Some(colors::TEXT));
+        app.contributions_folded = false;
         app.contributions = ContributionsMode::Github;
         assert_eq!(
             key_color(&app, "[c]"),
