@@ -24,11 +24,9 @@ where the session runs.
   `cleanup:`), first line under 72 characters. Body is for the why, not the what.
 - **No `Co-Authored-By` lines.** Ever.
 - **Present the full `git commit -m "..."` command for review; do not commit.**
-  The human commits and pushes. The one exception is **"ship it"**: commit and
-  push, plus a PR where this repo's flow calls for one. It never merges, tags,
-  releases or deploys, and never ships a red build. The **Ship policy** line
-  below says what it does here; with no such line, push the current branch and
-  never `main`.
+  Andreas owns commits, merges and pushes. **"Ship it"** means prepare and
+  validate the change and present the commands for review; it does not grant
+  agents permission to commit, merge, push, tag, release or deploy.
 - **Never edit, delete or disable a test to make code pass.** Fix the code. If a
   test looks wrong, stop and say so rather than changing it.
 - **Ask before** adding or removing dependencies, changing schema or API
@@ -42,8 +40,7 @@ as the code they cover. There is no integration test suite. CI is
 `.github/workflows/ci.yml` (fmt, clippy, tests on every push to `main`) and
 `release.yml`, which turns a pushed `v*` tag into a GitHub
 release: it checks the tag against `Cargo.toml`, runs fmt, clippy and tests,
-and writes the notes with `scripts/release-notes.sh` (commit-based, since
-nothing here goes through a PR).
+and writes commit-based notes with `scripts/release-notes.sh`. PRs are optional.
 
 The event loop is channel-driven and async: the TUI opens instantly, GitHub and
 local discovery load in the background (`AppEvent`), a 250ms tick drives spinner
@@ -55,6 +52,8 @@ and blink, watch mode re-sweeps on an interval.
 |---|---|
 | `README.md` | User-facing: install, flags, keybindings, config keys |
 | `docs/ideas.md` | Design backlog: problem, options, rejected alternatives per feature |
+| `docs/release-plan.md` | Release milestones, ticket status and dispatch order |
+| `docs/agent-workflow.md` | Shared worker/reviewer instructions and integration rules |
 | `docs/superpowers/` | Dated plans and specs, paired, for landed work |
 
 Read the relevant `docs/ideas.md` section before building anything it covers:
@@ -64,16 +63,18 @@ everything else is unbuilt, and its line references drift.
 
 ## Working conventions
 
-- **Commit straight to `main`.** No feature branches, no PRs. The `(#10)`
-  suffixes on older commits are history, not current policy.
-- **Ship policy:** commit and push to `main`. No PR, and there is no merge
-  step to withhold. Before pushing, run the gates CI runs (`cargo fmt --check`,
-  `cargo clippy --all-targets -- -D warnings`, `cargo test`); after pushing,
-  watch the workflow the push triggers (`gh run watch`) and report the result.
-- **Release policy:** "release it" bumps the patch version (or the level or
-  version you name), commits `chore: release vX.Y.Z`, pushes, tags and pushes
-  the tag; `release.yml` publishes from there. It shows the What's Changed
-  notes before the tag goes out, and never runs on a dirty tree or a red build.
+- **One feature branch and worktree per implementation ticket.** Branch from
+  the agreed `main` commit, for example `fix/fz-02-preserve-github-state`.
+  PRs are optional. Andreas commits reviewed work on its branch and merges
+  into `main`; agents do not implement tickets directly in the main checkout.
+- **Ship policy:** prepare and review the branch changes, then validate the
+  combined result against current `main` (`cargo fmt --check`,
+  `cargo clippy --all-targets -- -D warnings`, `cargo test`). Present commit
+  and integration commands for Andreas to run. Do not commit, merge or push.
+- **Release policy:** prepare the requested version bump and What's Changed
+  notes, run the release checks, and present commands for Andreas. The
+  `release.yml` workflow publishes when he pushes the version tag. Never
+  recommend releasing a dirty tree or a red build.
 - Tests live beside the code in `#[cfg(test)] mod tests`, not in `tests/`.
 - Every behavior change lands with a test that would have caught the old
   behavior; many existing tests name the regression they guard. Match that.

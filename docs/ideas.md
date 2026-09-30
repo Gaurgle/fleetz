@@ -3,6 +3,11 @@
 Design notes for features not yet built. Nothing here is committed to; it is
 thinking captured so it is not lost.
 
+The public-release work is sequenced in [release-plan.md](release-plan.md),
+with [first-wave ticket drafts](first-wave-tickets.md) and a shared
+[agent workflow](agent-workflow.md). This file retains the design reasoning;
+the release plan records sequencing and links to GitHub for live ticket status.
+
 ---
 
 ## Interactive time scope
