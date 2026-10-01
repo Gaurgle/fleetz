@@ -400,9 +400,20 @@ fn classify_fetch_error(stderr: &str) -> FetchFailureKind {
     let missing_repo = text
         .lines()
         .any(|l| l.contains("repository '") && l.trim_end().ends_with("' not found"));
+    // ssh saying it never reached the host, whatever reason follows the last
+    // colon: the reason is an errno text, and no list of those is complete
+    // (macOS with the network down prints `Undefined error: 0`). The generic
+    // `fatal: Could not read from remote repository.` after it is no kind on
+    // its own: git prints it after auth failures and missing repositories too.
+    let ssh_unreachable = text.lines().map(str::trim).any(|l| {
+        l.starts_with("ssh: connect to host ") || l.starts_with("ssh: could not resolve hostname ")
+    });
+    // Auth first even then: a credential that was asked for or refused means
+    // a server answered at some point (another address, a jump host), and the
+    // credential is what the user has to fix.
     if has(AUTH) {
         FetchFailureKind::Auth
-    } else if has(UNREACHABLE) {
+    } else if ssh_unreachable || has(UNREACHABLE) {
         FetchFailureKind::Unreachable
     } else if missing_repo || has(NO_REMOTE) {
         FetchFailureKind::NoRemote
@@ -411,16 +422,22 @@ fn classify_fetch_error(stderr: &str) -> FetchFailureKind {
     }
 }
 
-/// git's first error line, made safe to draw: the first `fatal:` or `error:`
-/// line, else the first non-empty one, with URL userinfo removed, control
-/// characters dropped and the length capped.
+/// git's first error line, made safe to draw: an `ssh: ` line printed before
+/// the first `fatal:` or `error:` line (it says why, where the fatal line
+/// after it is generic), else that first `fatal:` or `error:` line, else the
+/// first non-empty one, with URL userinfo removed, control characters dropped
+/// and the length capped.
 fn first_error_line(stderr: &str) -> Option<String> {
     let lines = || stderr.lines().map(str::trim).filter(|l| !l.is_empty());
-    let line = lines()
-        .find(|l| {
-            let lower = l.to_lowercase();
-            lower.starts_with("fatal:") || lower.starts_with("error:")
-        })
+    let is_error = |l: &str| {
+        let lower = l.to_lowercase();
+        lower.starts_with("fatal:") || lower.starts_with("error:")
+    };
+    let ssh_reason = lines()
+        .take_while(|l| !is_error(l))
+        .find(|l| l.to_lowercase().starts_with("ssh: "));
+    let line = ssh_reason
+        .or_else(|| lines().find(|l| is_error(l)))
         .or_else(|| lines().next())?;
     let clean: String = redact_userinfo(line)
         .chars()
@@ -2713,6 +2730,33 @@ mod fetch_outcome_tests {
                 "ERROR: Repository not found.\nfatal: Could not read from remote repository.",
                 NoRemote,
             ),
+            // macOS OpenSSH with the network down, git 2.39.3, as pasted.
+            (
+                "ssh: connect to host github.com port 22: Undefined error: 0\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n",
+                Unreachable,
+            ),
+            (
+                "ssh: Could not resolve hostname fleetz-nonexistent.invalid: nodename nor servname provided, or not known\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n",
+                Unreachable,
+            ),
+            (
+                "ssh: connect to host github.com port 22: Network is unreachable\nfatal: Could not read from remote repository.",
+                Unreachable,
+            ),
+            (
+                "ssh: connect to host github.com port 22: Operation timed out\nfatal: Could not read from remote repository.",
+                Unreachable,
+            ),
+            // The generic fatal lines alone say nothing about why.
+            (
+                "fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n",
+                Other,
+            ),
+            // A refused key stays Auth even if a connect line came first.
+            (
+                "ssh: connect to host h port 22: Undefined error: 0\ngit@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+                Auth,
+            ),
             // git 2.39.3 on an HTTP 404 (a removed or renamed remote).
             (
                 "fatal: repository 'http://127.0.0.1:18765/nope.git/' not found",
@@ -2759,6 +2803,23 @@ mod fetch_outcome_tests {
         );
         assert!(!detail.contains('\u{1b}'), "{detail:?}");
         assert!(detail.contains("https://host.invalid/o/r.git/"), "{detail}");
+    }
+
+    /// The owner's case: with the network down the fatal line is generic and
+    /// the ssh line before it is the one that says why.
+    #[test]
+    fn the_detail_prefers_the_ssh_line_that_says_why() {
+        let FetchOutcome::Failed(failure) = fetch_outcome(exited(
+            128,
+            "ssh: connect to host github.com port 22: Undefined error: 0\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n",
+        )) else {
+            panic!("a failure");
+        };
+        assert_eq!(failure.kind, FetchFailureKind::Unreachable);
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("ssh: connect to host github.com port 22: Undefined error: 0")
+        );
     }
 
     /// The detail is built inside the spawned fetch task: a non-ASCII
