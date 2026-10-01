@@ -106,7 +106,7 @@ pub fn github_freshness_segment(
         (Outcome::Failed(failure), data_time) => {
             let label = github_failure_label(failure);
             let long = match data_time {
-                DataTime::At(t) => format!(" ⚠ github {label}, data {} ", swept_label(t, now)),
+                DataTime::At(t) => format!(" ⚠ github {label}, as of {} ", swept_label(t, now)),
                 DataTime::Unknown => format!(" ⚠ github {label}, age unknown "),
                 DataTime::NoData => format!(" ⚠ github {label} "),
             };
@@ -1600,7 +1600,7 @@ mod tests {
         freshness.succeeded(at(2026, 10, 1, 14, 2));
         freshness.failed(failure(crate::github::FailureKind::Offline, "dns"), now);
         let (long, short, color) = github_freshness_segment(&freshness, now).unwrap();
-        assert_eq!(long, " ⚠ github offline, data 14:02 ");
+        assert_eq!(long, " ⚠ github offline, as of 14:02 ");
         assert_eq!(short, " ⚠ github ");
         assert_eq!(color, colors::PEACH);
     }

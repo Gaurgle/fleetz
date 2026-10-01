@@ -41,7 +41,7 @@ current, in one segment beside the watch eye:
 - `github cached 14:02` (dim), when launch painted from the disk cache and the
   request that confirms it is still on its way. One request follows a cached
   launch even with watch off;
-- `⚠ github offline, data 14:02` (orange), when the last request failed. The
+- `⚠ github offline, as of 14:02` (orange), when the last request failed. The
   word says how (`offline`, `rate limited`, `http error`, `api error`,
   `not signed in`, `bad response`, `timed out`) and the time is when the data
   on screen left GitHub, written like the `swept` time. A cache whose age
