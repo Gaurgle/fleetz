@@ -381,23 +381,74 @@ pub enum RepoKind {
 /// does an SSH host alias (`git@github-work:owner/repo.git`), which is what
 /// lets discovery match on this without knowing which host a clone uses.
 pub fn repo_from_remote_url(url: &str) -> Option<(String, String)> {
-    let url = url.trim().trim_end_matches('/');
-    // scp-style has no scheme and puts the path after a colon. Checking for
-    // "://" first keeps a URL's own "host:port" colon from matching here.
-    let path = if let Some((_, after)) = url.split_once("://") {
-        after.split_once('/').map(|(_, p)| p)?
-    } else {
-        url.split_once(':').map(|(_, p)| p)?
-    };
+    RemoteRef::parse(url).map(|remote| (remote.owner, remote.name))
+}
 
-    let mut segments = path.trim_start_matches('/').split('/');
-    let owner = segments.next().filter(|s| !s.is_empty())?;
-    // Require a repo segment as well, so a bare host never reads as an owner.
-    let repo = segments
-        .next()
-        .map(|s| s.strip_suffix(".git").unwrap_or(s))
-        .filter(|s| !s.is_empty())?;
-    Some((owner.to_string(), repo.to_string()))
+/// What a git remote URL points at: `(host, owner, name)`, each in the
+/// spelling the URL used, so it can be displayed as written. Evidence for
+/// matching a clone to a GitHub repo, not an identity in itself.
+///
+/// The host is parsed and carried but nothing matches on it yet: an SSH host
+/// alias (`git@github-work:owner/repo.git`) is a real GitHub remote that a
+/// strict host check would reject, and resolving it through `~/.ssh/config`
+/// costs a parse of `Include` and `Match` or a process per candidate.
+/// Carrying it lets a later caller prefer `github.com` among several clones,
+/// or scope by host, without parsing the URL again.
+///
+/// No case folding happens here. A lowercased comparison key arrives in
+/// FZ-05b, with its first caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteRef {
+    /// Without user or port: `github.com` for `ssh://git@github.com:22/...`,
+    /// the alias itself for an SSH host alias, empty for `file:///...`. Case
+    /// is kept as written (`GitHub.com` stays `GitHub.com`). A bracketed IPv6
+    /// host is not understood: `ssh://git@[::1]:22/o/r` yields host `[`,
+    /// though owner and name still parse.
+    pub host: String,
+    pub owner: String,
+    /// The repo, with a lowercase `.git` suffix stripped.
+    pub name: String,
+}
+
+impl RemoteRef {
+    /// Parses the forms git writes: scp-style (`git@host:owner/repo.git`) and
+    /// URLs with a scheme (`https://host/owner/repo.git`,
+    /// `ssh://git@host:port/owner/repo.git`), with or without the `.git`
+    /// suffix and a trailing slash. Anything without an `owner/repo` pair is
+    /// None rather than a guess. Only the path shape decides; the host can be
+    /// anything, so self-hosted servers and aliases parse too.
+    pub fn parse(url: &str) -> Option<Self> {
+        let url = url.trim().trim_end_matches('/');
+        // scp-style has no scheme and puts the path after a colon. Checking
+        // for "://" first keeps a URL's own "host:port" colon from matching.
+        let (host, path) = if let Some((_, after)) = url.split_once("://") {
+            let (authority, path) = after.split_once('/')?;
+            let host = without_user(authority);
+            (host.split_once(':').map_or(host, |(h, _)| h), path)
+        } else {
+            let (before, path) = url.split_once(':')?;
+            (without_user(before), path)
+        };
+
+        let mut segments = path.trim_start_matches('/').split('/');
+        let owner = segments.next().filter(|s| !s.is_empty())?;
+        // Require a repo segment as well, so a bare host never reads as an
+        // owner.
+        let name = segments
+            .next()
+            .map(|s| s.strip_suffix(".git").unwrap_or(s))
+            .filter(|s| !s.is_empty())?;
+        Some(Self {
+            host: host.to_string(),
+            owner: owner.to_string(),
+            name: name.to_string(),
+        })
+    }
+}
+
+/// `host` from `user@host`, or the input when there is no user.
+fn without_user(authority: &str) -> &str {
+    authority.rsplit_once('@').map_or(authority, |(_, h)| h)
 }
 
 /// The owner half of `repo_from_remote_url`.
@@ -685,6 +736,136 @@ mod tests {
                 Some(("Gaurgle".to_string(), "portfolio-site".to_string())),
                 "parsing {url}"
             );
+        }
+    }
+
+    /// The S10 forms of the identity design, each pinned to the exact
+    /// `(owner, repo)` it yields, spelling included: case is kept here and
+    /// only folded by whoever compares.
+    #[test]
+    fn repo_parsed_from_every_s10_remote_form() {
+        for (url, owner, repo) in [
+            ("git@github.com:Gaurgle/fleetz.git", "Gaurgle", "fleetz"),
+            ("git@github.com:Gaurgle/fleetz", "Gaurgle", "fleetz"),
+            ("https://github.com/Gaurgle/fleetz.git", "Gaurgle", "fleetz"),
+            ("https://github.com/Gaurgle/fleetz", "Gaurgle", "fleetz"),
+            ("https://github.com/gaurgle/FLEETZ/", "gaurgle", "FLEETZ"),
+            (
+                "ssh://git@github.com:22/Gaurgle/fleetz.git",
+                "Gaurgle",
+                "fleetz",
+            ),
+            ("git@github-work:Gaurgle/fleetz.git", "Gaurgle", "fleetz"),
+        ] {
+            assert_eq!(
+                repo_from_remote_url(url),
+                Some((owner.to_string(), repo.to_string())),
+                "parsing {url}"
+            );
+        }
+    }
+
+    /// Two edges the identity design could only reason about, pinned as they
+    /// behave: a `file://` URL reads its first two path segments as owner and
+    /// repo, and only a lowercase `.git` suffix is stripped. Neither is a
+    /// claim that this is right, only that it is what discovery sees today.
+    #[test]
+    fn file_url_and_uppercase_git_suffix_parse_as_they_always_have() {
+        assert_eq!(
+            repo_from_remote_url("file:///Users/me/repo"),
+            Some(("Users".to_string(), "me".to_string()))
+        );
+        assert_eq!(
+            repo_from_remote_url("git@github.com:Gaurgle/fleetz.GIT"),
+            Some(("Gaurgle".to_string(), "fleetz.GIT".to_string()))
+        );
+    }
+
+    /// The host comes out of every S10 form without user or port, and an
+    /// SSH alias is carried as written: nothing resolves or checks it.
+    #[test]
+    fn remote_ref_carries_the_host_of_every_s10_form() {
+        for (url, host, owner, name) in [
+            (
+                "git@github.com:Gaurgle/fleetz.git",
+                "github.com",
+                "Gaurgle",
+                "fleetz",
+            ),
+            (
+                "git@github.com:Gaurgle/fleetz",
+                "github.com",
+                "Gaurgle",
+                "fleetz",
+            ),
+            (
+                "https://github.com/Gaurgle/fleetz.git",
+                "github.com",
+                "Gaurgle",
+                "fleetz",
+            ),
+            (
+                "https://github.com/Gaurgle/fleetz",
+                "github.com",
+                "Gaurgle",
+                "fleetz",
+            ),
+            (
+                "https://github.com/gaurgle/FLEETZ/",
+                "github.com",
+                "gaurgle",
+                "FLEETZ",
+            ),
+            (
+                "ssh://git@github.com:22/Gaurgle/fleetz.git",
+                "github.com",
+                "Gaurgle",
+                "fleetz",
+            ),
+            (
+                "git@github-work:Gaurgle/fleetz.git",
+                "github-work",
+                "Gaurgle",
+                "fleetz",
+            ),
+            ("file:///Users/me/repo", "", "Users", "me"),
+        ] {
+            assert_eq!(
+                RemoteRef::parse(url),
+                Some(RemoteRef {
+                    host: host.to_string(),
+                    owner: owner.to_string(),
+                    name: name.to_string(),
+                }),
+                "parsing {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_ref_keeps_the_url_spelling_for_display() {
+        let mixed = RemoteRef::parse("https://GitHub.com/gaurgle/FLEETZ/").unwrap();
+        assert_eq!(
+            (
+                mixed.host.as_str(),
+                mixed.owner.as_str(),
+                mixed.name.as_str()
+            ),
+            ("GitHub.com", "gaurgle", "FLEETZ")
+        );
+    }
+
+    #[test]
+    fn remote_ref_is_none_where_repo_from_remote_url_is() {
+        for url in [
+            "",
+            "not a url",
+            "https://github.com",
+            "https://github.com/Gaurgle",
+            "git@github.com:",
+            "/local/path/repo",
+        ] {
+            assert_eq!(RemoteRef::parse(url), None, "parsing {url:?}");
         }
     }
 
