@@ -102,13 +102,22 @@ userinfo never appearing in the detail.
   alone would keep a known way for the fleet to look more current than it is.
 - **No fleet-level marker for watch-mode failures.** The per-repo marker is
   enough, and the header already carries the GitHub segment.
-- **Where the facts live.** Either a field on the row or state on `App` keyed
-  by the checkout's path satisfies rule 2; the worker picks the smaller one
-  and says why. If it is a row field, rows rebuilt by `R` take `last_success`
-  from `FETCH_HEAD` again under rule 3.
-- **The drawn remote URL.** The detail pane draws `remote_url` as stored. If
-  an HTTPS remote with userinfo shows it on screen, FZ-04 strips the userinfo
-  there too, under rule 8.
+- **Where the facts live.** A field on the row (`RepoStatus.fetch`), owned by
+  the fetch and by nothing else: the fourth writer beside the load, the poll
+  and the sweep.
+- **A load carries the facts by path.** Amended on 2026-10-01 after review:
+  when a load replaces the rows, a row at the same path keeps its fetch
+  facts. A window apply fetches nothing and must not wipe a failure while
+  the counts are still stale. A newer non-empty `FETCH_HEAD` on disk clears
+  an older failure, and a fetch the load itself ran is recorded only when it
+  is newer than the kept attempt. Known limit: when a path now holds a
+  different repo, the old facts stay on it until its next fetch.
+- **The drawn remote URL.** The detail pane drew `remote_url` as stored, so
+  an HTTPS remote with userinfo put a credential on screen (confirmed by a
+  failing test). It is redacted where it is drawn: all userinfo for `http`
+  and `https`, only the password part for other schemes, because an ssh
+  login name is not a credential and the drawn URL should stay one that
+  works.
 - **Linked worktrees.** `FETCH_HEAD` is per worktree (FZ-06, executed), so a
   fetch in the main checkout does not advance a linked worktree's
   `last_success`. Accepted: extra fetches, not wrong data.
