@@ -60,8 +60,8 @@ setup check still open. GitHub is authoritative for current status and
 assignment.
 
 Done and closed on 2026-10-01: FZ-02 (#15), FZ-01 (#14), FZ-05 (#18) and
-issue #1. In flight: FZ-03 (#16) and FZ-06 (#19) in review, FZ-05a (#31) in
-progress. All are described below.
+issue #1. FZ-03 (#16) is Ready to integrate and waits for Andreas to try its header.
+In review: FZ-06 (#19) and FZ-05a (#31). All are described below.
 No release has started.
 
 Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
@@ -207,29 +207,33 @@ Dispatched on 2026-10-01 once FZ-01's timing runs were over.
   fix tickets FIX-A to FIX-E as issues. FIX-C (`src/git.rs` only) can run
   first, but not beside FZ-04.
 
-## FZ-03: in progress
+## FZ-03: Ready to integrate, waiting for Andreas
 
-Dispatched on 2026-10-01 under the standing instruction.
+Reviewed, committed and pushed, **not merged**: the header's wording and
+look are Andreas's to accept on the branch build.
 
-- Base `6dd260f9a253dc2ba37b0efe6c1315fecd0dde60`, branch
-  `fix/fz-03-github-freshness`, worktree `.claude/worktrees/fz-03`.
-- Worker `fz-worker` (`claude-opus-5-5`, medium). Allowed files:
-  `src/github.rs`, `src/cache.rs`, `src/app.rs`, `src/main.rs`,
-  `src/ui/mod.rs`, `README.md`. Contract: the section below.
-- Existing tests that set `github_poll_failing` or `last_github_poll`
-  directly stop compiling when those fields are replaced. The worker may
-  change how such a fixture sets the state and nothing else: no assertion,
-  expected value or test name. The reviewer checks those hunks line by line.
-- State when last written: in Review. First review found one real gap
-  (a late poll answer could land over a successful `R` and rewind rows and
-  data time); the worker fixed it and three small items, 688 tests pass in
-  the worktree, and `fz-reviewer` is on its final pass. The change is
-  uncommitted in the worktree.
-- Board: #16 Review, assignment on the issue.
-- Next: on acceptance commit, push, combined checks, then **stop at Ready to
-  integrate**: the header's wording and look are Andreas's to accept on the
-  branch build (`cargo run --release --manifest-path
-  .claude/worktrees/fz-03/Cargo.toml`). Do not merge before he has.
+- Ticket commit `5217d30308be8aff5c8bf308c5c7215cf17d3254` on
+  `fix/fz-03-github-freshness`, base `6dd260f`, worktree
+  `.claude/worktrees/fz-03`: `README.md`, `src/app.rs`, `src/cache.rs`,
+  `src/github.rs`, `src/main.rs`, `src/ui/mod.rs`, +1632 -148.
+- Review: two passes, final verdict accepted. The first found that an `R`
+  did not supersede an outstanding poll; fixed with regressions.
+- CI green on the branch (`ci` and `docs`). Combined result with `main` at
+  `0ab1890`: fmt, clippy with warnings denied, 688 tests passed, docs check.
+  **Rerun the combined checks if `main` has gained source changes since**,
+  which it will once FZ-05a merges.
+- Board: #16 Ready to integrate, with the evidence, the try command and a
+  table of how to see each header state.
+- Try: `cargo run --release --manifest-path
+  .claude/worktrees/fz-03/Cargo.toml`.
+- When Andreas accepts: rerun the combined checks, `git merge --no-ff`,
+  push, confirm CI on `main`, Done, close #16. If he wants wording or colour
+  changes, they are in `ui::github_freshness_segment` and
+  `ui::github_failure_label`; a change goes back through a worker and a
+  re-review of that hunk.
+- Until it is merged, nothing that touches `src/main.rs`, `src/app.rs`,
+  `src/github.rs`, `src/cache.rs` or `src/ui/mod.rs` can start: FZ-04,
+  FZ-05b to f and the FZ-06 fixes other than the common-directory helper.
 
 ## Freshness contract for FZ-03: accepted
 
