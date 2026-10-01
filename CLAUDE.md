@@ -62,6 +62,7 @@ and blink, watch mode re-sweeps on an interval.
 | `docs/cache-invalidation-design.md` | Accepted design: what the sweep's `WorkKey` misses, the ref-content signature, fix tickets FIX-A to E |
 | `docs/freshness-contract.md` | Accepted contract for GitHub data freshness: attempt, outcome, data time, header states |
 | `docs/fetch-outcome-contract.md` | Accepted contract for per-repo `git fetch` outcomes (FZ-04): last success, attempt, outcome |
+| `docs/api-budget-design.md` | Design for the GitHub API budget, pacing and retry (FZ-10): decisions A1 to A7, owner items O1 to O5 open, tickets FZ-10a to c |
 | `.claude/agents/` | Claude-native workforce: `fz-coordinator`, `fz-worker`, `fz-reviewer`, `fz-small` |
 | `docs/superpowers/` | Dated plans and specs, paired, for landed work |
 

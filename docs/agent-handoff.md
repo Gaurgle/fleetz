@@ -1,9 +1,9 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-01 21:13 by `claude-fable-5-1`. FZ-04 is merged and
-closed. **Two agents are running: a reviewer on FZ-06b (#38) in
-`.claude/worktrees/fz-06b`, and the worker writing revision 3 of the FZ-10
-(#23) design in `.claude/worktrees/fz-10`.** Read this file, the repository
+Last written 2026-10-01 22:20 by `claude-fable-5-1`. Merged today in this
+session: FZ-04, FZ-06b and the FZ-10 design; FZ-06e closed as delivered by
+FZ-06b. **One worker is running: FZ-06c (#39) in `.claude/worktrees/fz-06c`,
+not yet reported, not reviewed.** Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md),
 [release-plan.md](release-plan.md) and
 [first-wave-tickets.md](first-wave-tickets.md) before acting. GitHub (the
@@ -59,57 +59,42 @@ usage limit and ask Andreas for routing.
 
 In order of weight:
 
-1. **FZ-10 owner items**, to be presented together once the revised design
-   passes review: what the header says when polling is slowed, paused or rate
-   limited (O1); manual `r` and `R` under a rate limit skipping the request
-   (O2 with A6); no new config key (O3); the effects on freshness contract
-   rules 6 and 9; and whatever the revision adds to the owner section.
-2. **Should a recovered network clear fetch marks sooner?** Today a failed
+1. **FZ-10 owner items O1 to O5**, presented to him at 22:20, unanswered.
+   They are in plain language at the end of
+   [api-budget-design.md](api-budget-design.md) ("Owner: open"): header
+   wording when polling is held back (O1, settled on the FZ-10c build); `r`
+   and `R` sending nothing while GitHub rate limits (O2); no new config key
+   (O3); the freshness contract changes to rules 6, 9 and 10 and the new
+   failure kinds (O4); four compile-forced edits to existing test builders
+   in FZ-10a (O5). FZ-10a is not dispatched before a yes on O5, FZ-10b
+   needs O2 and O4.
+2. **May issues be created** for FZ-10a, b and c (bodies are section 6 of
+   the design) and for the follow-ups below? Asked at 22:20. The 19:34
+   session's instructions say to ask before creating issues.
+3. **Should a recovered network clear fetch marks sooner?** Today a failed
    fetch stays marked until that repo is fetched again (`f`, `F`, a moved
    remote, or the watch sweep every `refresh_interval`, 300 s in his config).
    The alternative, refetching the repos that failed as unreachable or timed
    out when the GitHub poll recovers, changes fetch contract rule 6 and is
-   its own ticket. Offered at 19:55; he merged without choosing it. Not
-   ticketed.
-3. **Was Wi-Fi off or changing state** when he saw `⚠ timeout` on three rows
-   in his first FZ-04 run? Still unanswered. His 19:51 run with Wi-Fi fully
-   off failed at once with no timeout, which fits a network in transition
-   the first time. It only matters for the ssh follow-up below.
-4. **Try `main`** (`cargo run --release`). It now holds FZ-02, FZ-03 and
-   FZ-04. M0's exit asks for his verification of FZ-02; he has run the branch
-   builds that contain it but has not said so about `main`.
-5. **#45: decided.** Leave it until the repository goes public: the setting
-   stays off and nothing merges now. Recorded on #45.
-6. Not blocking: whether setting Status through `gh` belongs in FZ-08's
+   its own ticket. Offered at 19:55; he merged without choosing it.
+4. **Was Wi-Fi off or changing state** when he saw `⚠ timeout` on three rows
+   in his first FZ-04 run? Still unanswered; it only matters for the ssh
+   follow-up below.
+5. **Try `main`** (`cargo run --release`). It now holds FZ-02, FZ-03, FZ-04
+   and FZ-06b. M0's exit asks for his verification of FZ-02; he has run the
+   branch builds that contain it but has not said so about `main`.
+6. **#45: decided.** Leave it until the repository goes public.
+7. Not blocking: whether setting Status through `gh` belongs in FZ-08's
    first version; whether #46 may change an existing test's setup order.
 
 ## Last verdicts, and what is on disk uncommitted
 
-- **FZ-06b (#38): in review since 20:57.** The worker reports the ticket
-  implemented: uncommitted in `.claude/worktrees/fz-06b` on
-  `fix/fz-06b-ref-content-key` (base `f8a54c0`), `src/git.rs` and
-  `src/main.rs`, +725 -113, 778 passed, 0 failed, 1 ignored by its own run.
-  Its report is on #38. Existing tests edited: only the three FZ-06a tests
-  with `shared_fields`, and `tests::key`, which Andreas allowed at 20:30;
-  the reviewer verifies that nothing else was touched and that each
-  rewritten test still fails when the key stops reading from the common
-  directory. A fresh `fz-reviewer` is running. On acceptance: commit the
-  reviewed diff, push, CI on the branch, combined checks, merge (no look or
-  format change in this ticket), Done.
-- **FZ-10 (#23): revision 3 being written since 21:12.** The re-review of
-  revision 2 (fresh `fz-reviewer`) confirmed F1 to F7 resolved and the
-  rulings on A3, A5 and A6 sound, and requested four corrections plus
-  optional items; nothing blocked. Verdict and the coordinator's rulings are
-  on #23 in full. The ones that shape tickets: backoff step 1 is exactly
-  the interval with no jitter (an existing test asserts due at +90 s);
-  FZ-10c checks the typed rate-limit flag as well as the word match (an
-  existing test sets only the text); a discarded answer's budget reading
-  applies only for the held token; `Offline` and `Auth` neither change the
-  count nor set or clear a not-before; the A6 rebuild starts only when no
-  poll is in flight; the longest wait is about twelve minutes. The same
-  worker session is applying all of it to the untracked
-  `docs/api-budget-design.md` in `.claude/worktrees/fz-10`. Next: continue
-  the same reviewer for a narrow re-review of its own findings.
+- **FZ-06c (#39): worker running since 22:07, nothing reviewed.** Base
+  `f3663e6`, branch `fix/fz-06c-worktree-list-freshness`, worktree
+  `.claude/worktrees/fz-06c`, allowed files `src/main.rs`, `src/git.rs`,
+  `src/model.rs` (doc comment only). It was told to stop and report if any
+  existing test must change; that question is Andreas's. When it reports:
+  a separate `fz-reviewer`, then commit, push, CI, combined checks, merge.
 - **#45:** uncommitted `ci.yml` and `docs.yml` in
   `.claude/worktrees/issue-45`; reviewer verdict blocked on a repository
   setting, diff judged correct. Parked by Andreas until the repository is
@@ -119,29 +104,23 @@ In order of weight:
 
 ## Next steps, in order
 
-1. FZ-06b: when the worker reports, dispatch `fz-reviewer` as a separate
-   invocation with the report. On acceptance commit exactly the reviewed
-   diff, push, wait for CI on the branch, run the combined checks against
-   current `main` in a throwaway clone, and merge under the safe-merge rule
-   (no look or interaction to accept, no format change). Then Done and close
-   #38 with the evidence.
-2. FZ-10: when the worker reports, dispatch a reviewer for the re-review.
-   On acceptance commit, push, merge the document, add its row to the
-   `CLAUDE.md` index, move #23 to Done and close it, and create issues
-   FZ-10a, b and c from its ticket section. Bring the owner items to Andreas
-   in plain language. Rule on any "proposed change to A<n>" first.
-3. FZ-09 (#22): dispatch when a slot frees. Nothing was written. Handoff as
-   recorded on the issue: output `docs/coverage-cache-design.md`, at most 6
-   live GraphQL requests, the real cache read-only, no cache schema change
-   authorized. Add what FZ-10 found: `repo_limit` 100 fails with a 502 at
-   GitHub's server deadline, so "what to do when the query no longer fits"
-   is FZ-09's to design.
-4. The rest of the `main.rs` line, one ticket at a time after FZ-06b:
-   FZ-06e (#41), FZ-06c (#39), FZ-06d (#40); then the identity series
-   FZ-05b to f (#32 to #36); then FZ-10a, b, c. #43 (`git.rs`) fits between
-   any two. #46 needs Andreas's OK first.
-5. #45: nothing until the repository goes public. Then the YAML needs a
-   reviewer acceptance before it merges.
+1. FZ-06c: review, integrate and close as above.
+2. FZ-06d (#40, the histogram's own reuse key), next on the `main.rs` line
+   after FZ-06c. Then the identity series FZ-05b to f (#32 to #36), serial;
+   then FZ-10a, b, c once Andreas has answered O1 to O5. #43 (`git.rs`) fits
+   between any two. #46 needs Andreas's OK first.
+3. FZ-09 (#22): dispatch into the second slot. Nothing was written. Handoff
+   as recorded on the issue: output `docs/coverage-cache-design.md`, at most
+   6 live GraphQL requests, the real cache read-only, no cache schema change
+   authorized. Add what FZ-10 found: `repo_limit` 100 fails with a 502 near
+   an 11 s server deadline, so "what to do when the query no longer fits" is
+   FZ-09's to design; and FZ-10's A4 leaves cache-based coordination between
+   instances to a ticket after FZ-09's atomic, account-keyed cache.
+4. FZ-10: on his answers, record them on #23's successor issues, amend
+   [freshness-contract.md](freshness-contract.md) as O4 says (the design's
+   "Contract and invariant changes" has the text), and create or request the
+   FZ-10a, b, c issues.
+5. #45: nothing until the repository goes public.
 
 ## The FZ-04 story, for what it left behind
 
@@ -188,6 +167,9 @@ closed with the evidence in a comment.
 | FZ-06a | #37 | `520e77e` | `28fd17f` | `git::repo_dirs`, the git and common directories in one helper |
 | FZ-03 | #16 | `5217d30`, `963f575` | `407aa49` | GitHub freshness as three facts; header `github cached` and `⚠ github <kind>, as of HH:MM` |
 | Tests | #42 | `497ee62` | `d564fc7` | repoz parity tests run repoz from outside any repository |
+| FZ-06b | #38 | `e33914d` | `f3663e6` | `WorkKey` hashes every ref name and object id plus the shallow file; key inputs read before the probes on both paths |
+| FZ-06e | #41 | `e33914d` (FZ-06b) | `f3663e6` | Closed without a dispatch: FZ-06b reordered `build_repo_status` and fixed its comment |
+| FZ-10 | #23 | `9494938` | `f627a84` | [api-budget-design.md](api-budget-design.md), decisions A1 to A7, tickets FZ-10a to c, owner items open |
 | FZ-04 | #17 | `4839891`, `3469f67` | `f8a54c0` | Fetch outcomes as three facts per checkout; `⚠ unreachable` and its kin on the row, the reason in the detail pane, no credential drawn |
 
 Facts from these that later tickets need:
@@ -225,22 +207,21 @@ Facts from these that later tickets need:
 ## Tickets that exist and wait
 
 On the board in Backlog, milestone M1 unless noted. None dispatched except
-FZ-06b, which is In progress.
+FZ-06c, which is In progress.
 
 - **Identity series:** FZ-05b #32 (`discovery.rs` plus named
   `assemble_view` call sites, and the comparison key in `model.rs`), FZ-05c
   #33 (test seam, pure refactor), FZ-05d #34 (assembly and poll, the largest;
   its reviewer traces both), FZ-05e #35 (`merge_sources`), FZ-05f #36 (pass 3
   by path only). Serial, in that order.
-- **Cache fixes:** FZ-06b #38 (ref signature), FZ-06c #39 (worktree
-  freshness, after a and b), FZ-06d #40 (histogram key, after b), FZ-06e #41
-  (load-path order). All touch `src/main.rs`.
+- **Cache fixes:** FZ-06c #39 (worktree list freshness, running) and FZ-06d
+  #40 (histogram key). Both touch `src/main.rs`. FZ-06a, b and e are done.
 - **Follow-ups (P2):** #43 local contribution count includes stash commits;
   #46 the FZ-02 failed-poll test also passes on the old code (edits an
   existing test, needs Andreas's OK).
 - **#45** (M5): described above.
-- **FZ-09 #22** is Ready, to be dispatched again. **FZ-10 #23** is In
-  progress: the revision after a review that requested changes.
+- **FZ-09 #22** is Ready, to be dispatched again. **FZ-10a, b, c** have no
+  issues yet: their bodies are section 6 of the design.
 - **FZ-08 #21** (M4) was reshaped at Andreas's request into a read-only
   GitHub Project board view: columns and table with status, priority,
   milestone, worker and ticket reviewer; `Enter` opens a ticket's details in
@@ -263,7 +244,7 @@ FZ-06b, which is In progress.
 | [repository-identity-design.md](repository-identity-design.md) | Accepted; Andreas signed off on the invariant changes |
 | [cache-invalidation-design.md](cache-invalidation-design.md) | Accepted by the coordinator; nothing in it needs Andreas |
 | [performance-baseline.md](performance-baseline.md) | Measured baseline |
-| `docs/api-budget-design.md` | Draft in the `fz-10` worktree, in review, not on `main` |
+| [api-budget-design.md](api-budget-design.md) | On `main`. Accepted by the reviewer after four revisions; decisions A1 to A7 are the coordinator's; owner items O1 to O5 open with Andreas |
 
 Astra reviewed none of these. A disagreement goes to Andreas, not into the
 code.
@@ -320,15 +301,13 @@ code.
 All under `.claude/worktrees/` in the main checkout. Removing a worktree or
 a remote branch is Andreas's call; none was removed.
 
-- **Active:** `fz-06b` (worker writing, base `f8a54c0`), `fz-10` (worker
-  revising the untracked `docs/api-budget-design.md`, fast-forwarded to
-  `f8a54c0`), `fz-09` (clean, nothing written), `issue-45` (uncommitted
-  `ci.yml` and `docs.yml`, parked).
+- **Active:** `fz-06c` (worker writing, base `f3663e6`), `fz-09` (clean,
+  nothing written), `issue-45` (uncommitted `ci.yml` and `docs.yml`, parked).
 - **Integrated and kept:** `fz-01`, `fz-02`, `fz-03`, `fz-04`, `fz-05`, `fz-05a`,
-  `fz-06`, `fz-06a`, `issue-1`, `issue-42`, `issue-44`, each with its branch
+  `fz-06`, `fz-06a`, `fz-06b`, `fz-10`, `issue-1`, `issue-42`, `issue-44`, each with its branch
   pushed.
-- Not pushed: `docs/fz-09-coverage-cache-isolation`, `docs/fz-10-api-budget`,
-  `ci/45-pull-request-trigger`, `fix/fz-06b-ref-content-key`.
+- Not pushed: `docs/fz-09-coverage-cache-isolation`,
+  `ci/45-pull-request-trigger`, `fix/fz-06c-worktree-list-freshness`.
 - The session scratchpad holds throwaway integration clones and diagnostic
   captures. Nothing there is needed.
 
@@ -345,6 +324,22 @@ before creating more.
   since overriding those would drop a user's key or agent wrapper. Its own
   ticket. The same reviewer noted the failure detail prefers any `ssh: `
   line while the kind looks only at connect and resolve lines.
+- **Ref query cost on repos with many refs** (from the FZ-06b review,
+  medium): the widened `for-each-ref` computes `%(refname:short)` for every
+  ref each sweep, about 74 ms per call at 5,000 refs and 300 ms at 20,000
+  against about 10 ms before. The largest repo in this fleet has 50 refs.
+  Candidates: derive the short remote name in Rust, or
+  `%(refname:lstrip=2)`; either changes the short name of an ambiguous ref
+  and needs a decision. Matters for a public release; record the number in
+  [performance-baseline.md](performance-baseline.md) when ticketed.
+- **From the FZ-06b review, small:** `parse_other_refs` keeps a line with a
+  missing id as an empty string while `parse_branch_refs` skips it;
+  `dirty_mode_status` and `local_only_status` start with `work_key: None`,
+  so their first sweep always re-probes; no deterministic E13 test exists
+  (it needs a seam).
+- **From the FZ-10 review, nits in the merged document:** line 4 still says
+  "revision 3"; O5 calls two test helpers "tests"; one over-long line in
+  FZ-10c's acceptance. Fix with the O4 contract amendment.
 - **Refetch on recovery:** when the GitHub poll goes from failing to
   healthy, refetch the repos whose last fetch failed as unreachable or
   timed out, so a mark does not outlive the outage by a sweep interval.
