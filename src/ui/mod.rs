@@ -72,6 +72,60 @@ pub fn swept_label(
     }
 }
 
+/// The words the header and the `R` status line use for a failed GitHub
+/// attempt. One place, so the wording can change without hunting.
+pub fn github_failure_label(failure: &crate::github::Failure) -> &'static str {
+    use crate::github::FailureKind;
+    match failure.kind {
+        FailureKind::Offline => "offline",
+        FailureKind::Http => "http error",
+        // Decided by the fetch layer from GitHub's error `type`.
+        FailureKind::Api if failure.rate_limited => "rate limited",
+        FailureKind::Api => "api error",
+        FailureKind::Auth => "not signed in",
+        FailureKind::Malformed => "bad response",
+        FailureKind::TimedOut => "timed out",
+    }
+}
+
+/// The header's GitHub freshness segment: the full text, the short form a
+/// narrow header falls back to, and its colour. `None` when the data is
+/// fresh, which is the ordinary case and says nothing.
+///
+/// Stale is `PEACH`, not `RED`: red already means CI failed, and this is the
+/// same thing the overdue `swept` timestamp means, that a refresh is not
+/// keeping up. Cached is the dim `OVERLAY` of the `swept` label: an attempt
+/// is on its way and it is reassurance, not a warning. Ages are written the
+/// way `swept_label` writes them.
+pub fn github_freshness_segment(
+    freshness: &crate::app::GithubFreshness,
+    now: chrono::DateTime<chrono::Local>,
+) -> Option<(String, String, Color)> {
+    use crate::app::{DataTime, Outcome};
+    match (&freshness.outcome, freshness.data_time) {
+        (Outcome::Failed(failure), data_time) => {
+            let label = github_failure_label(failure);
+            let long = match data_time {
+                DataTime::At(t) => format!(" ⚠ github {label}, data {} ", swept_label(t, now)),
+                DataTime::Unknown => format!(" ⚠ github {label}, age unknown "),
+                DataTime::NoData => format!(" ⚠ github {label} "),
+            };
+            Some((long, " ⚠ github ".to_string(), colors::PEACH))
+        }
+        (Outcome::NotAttempted, DataTime::At(t)) => Some((
+            format!(" github cached {} ", swept_label(t, now)),
+            " github cached ".to_string(),
+            colors::OVERLAY,
+        )),
+        (Outcome::NotAttempted, DataTime::Unknown) => Some((
+            " github cached, age unknown ".to_string(),
+            " github cached ".to_string(),
+            colors::OVERLAY,
+        )),
+        (Outcome::NotAttempted, DataTime::NoData) | (Outcome::Success, _) => None,
+    }
+}
+
 /// Refresh intervals that must elapse before the timestamp reads as overdue.
 /// Generous on purpose: a sweep landing a little late is ordinary, and a
 /// warning that cries wolf is one you learn to ignore.
@@ -802,14 +856,11 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     // -- left the CI lamps and the contribution strip frozen at their last
     // good values with nothing on screen to say they had stopped moving.
     //
-    // `PEACH`, not `RED`: red already means CI failed, and this is the same
-    // thing the overdue `swept` timestamp beside it means, which is that a
-    // refresh is not keeping up. Never dropped by the fit loop, for the same
-    // reason `loading` is not: while it lasts it is the most important thing
-    // on the line.
-    let gh_fail_span = app
-        .github_poll_failing
-        .then(|| Span::styled(" ⚠ github ", Style::default().fg(colors::PEACH)));
+    // Never dropped by the fit loop, for the same reason `loading` is not:
+    // while it lasts it is the most important thing on the line. A narrow
+    // header gets the short form instead. Wording and colours live in
+    // `github_freshness_segment`.
+    let gh_segment = github_freshness_segment(&app.github_freshness, chrono::Local::now());
     // Persistent indicator so the `w` toggle's state is visible at a glance,
     // not just in the transient status message when it flips.
     //
@@ -850,6 +901,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let mut include_ts = true;
     let mut include_group = true;
     let mut include_header = true;
+    let mut gh_long = true;
 
     loop {
         let mut left: Vec<Span> = vec![name.clone()];
@@ -870,8 +922,9 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         if let Some(ref l) = loading_span {
             right.extend(l.iter().cloned());
         }
-        if let Some(ref g) = gh_fail_span {
-            right.push(g.clone());
+        if let Some((ref long, ref short, color)) = gh_segment {
+            let text = if gh_long { long } else { short };
+            right.push(Span::styled(text.clone(), Style::default().fg(color)));
         }
         right.extend(watch_span.iter().cloned());
         if include_ts && let Some(ref t) = ts_span {
@@ -880,7 +933,11 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 
         let left_w: usize = left.iter().map(|s| s.content.len()).sum();
         let right_w: usize = right.iter().map(|s| s.content.len()).sum();
-        let exhausted = !include_version && !include_ts && !include_group && !include_header;
+        let exhausted = !include_version
+            && !include_ts
+            && !include_group
+            && !include_header
+            && (!gh_long || gh_segment.is_none());
 
         if left_w + right_w < width || exhausted {
             let block = Block::default()
@@ -898,8 +955,10 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             include_ts = false;
         } else if include_group {
             include_group = false;
-        } else {
+        } else if include_header {
             include_header = false;
+        } else {
+            gh_long = false;
         }
     }
 }
@@ -1516,14 +1575,107 @@ mod tests {
     /// lamps and contribution strip looked like current data.
     #[test]
     fn a_failing_github_poll_is_marked_in_the_header() {
-        let row = header_row_with("", 80, |app| app.github_poll_failing = true);
+        let row = header_row_with("", 80, fail_github);
         assert!(row.contains("⚠ github"), "no failure marker in: {row:?}");
+    }
+
+    /// A poll that came back an error, as the event loop records one.
+    fn fail_github(app: &mut crate::app::App) {
+        app.github_freshness.failed(
+            crate::github::Failure::new(crate::github::FailureKind::Http, "HTTP 502"),
+            chrono::Local::now(),
+        );
+    }
+
+    fn failure(kind: crate::github::FailureKind, message: &str) -> crate::github::Failure {
+        crate::github::Failure::new(kind, message)
+    }
+
+    /// The case that was invisible: a poll that failed offline with good data
+    /// on screen names the failure and how old the data is.
+    #[test]
+    fn a_stale_header_names_the_failure_and_the_data_age() {
+        let now = at(2026, 10, 1, 14, 30);
+        let mut freshness = crate::app::GithubFreshness::default();
+        freshness.succeeded(at(2026, 10, 1, 14, 2));
+        freshness.failed(failure(crate::github::FailureKind::Offline, "dns"), now);
+        let (long, short, color) = github_freshness_segment(&freshness, now).unwrap();
+        assert_eq!(long, " ⚠ github offline, data 14:02 ");
+        assert_eq!(short, " ⚠ github ");
+        assert_eq!(color, colors::PEACH);
+    }
+
+    /// A rate limit is an API failure, never "offline", and with a cache of
+    /// unreadable age the age is said to be unknown rather than made up.
+    #[test]
+    fn a_rate_limit_on_data_of_unknown_age_says_both() {
+        let now = at(2026, 10, 1, 14, 30);
+        let mut freshness = crate::app::GithubFreshness::default();
+        freshness.loaded(&crate::app::DatasetSource::Cache { written: None }, now);
+        freshness.failed(
+            crate::github::Failure::rate_limit("GitHub API errors: API rate limit exceeded"),
+            now,
+        );
+        let (long, _, _) = github_freshness_segment(&freshness, now).unwrap();
+        assert_eq!(long, " ⚠ github rate limited, age unknown ");
+    }
+
+    /// A cache-served launch, before its attempt lands: quiet, and dated the
+    /// way the `swept` label is, so yesterday's cache carries its date.
+    #[test]
+    fn a_cache_served_launch_is_marked_cached_with_its_age() {
+        let now = at(2026, 10, 1, 9, 0);
+        let mut freshness = crate::app::GithubFreshness::default();
+        freshness.loaded(
+            &crate::app::DatasetSource::Cache {
+                written: Some(at(2026, 9, 30, 18, 5)),
+            },
+            now,
+        );
+        let (long, short, color) = github_freshness_segment(&freshness, now).unwrap();
+        assert_eq!(long, " github cached Sep 30 18:05 ");
+        assert_eq!(short, " github cached ");
+        assert_eq!(color, colors::OVERLAY);
+
+        let mut unknown = crate::app::GithubFreshness::default();
+        unknown.loaded(&crate::app::DatasetSource::Cache { written: None }, now);
+        let (long, _, _) = github_freshness_segment(&unknown, now).unwrap();
+        assert_eq!(long, " github cached, age unknown ");
+    }
+
+    /// Fresh says nothing, and neither does a dashboard with no GitHub data
+    /// at all (`-d`, or before the first load lands).
+    #[test]
+    fn fresh_or_no_github_data_draws_no_segment() {
+        let now = chrono::Local::now();
+        let mut freshness = crate::app::GithubFreshness::default();
+        assert!(github_freshness_segment(&freshness, now).is_none());
+        freshness.succeeded(now);
+        assert!(github_freshness_segment(&freshness, now).is_none());
+    }
+
+    /// The long form when there is room for it, the short form when there is
+    /// not, and never neither.
+    #[test]
+    fn the_cached_segment_shortens_rather_than_disappears() {
+        let cached = |app: &mut crate::app::App| {
+            app.github_freshness.loaded(
+                &crate::app::DatasetSource::Cache { written: None },
+                chrono::Local::now(),
+            )
+        };
+        let wide = header_row_with("", 100, cached);
+        assert!(wide.contains("github cached, age unknown"), "{wide:?}");
+        let narrow = header_row_with("last 7 days", 30, cached);
+        assert!(narrow.contains("github cached"), "dropped: {narrow:?}");
     }
 
     /// The other half: a healthy poll must not leave a warning sitting there.
     #[test]
     fn a_healthy_github_poll_leaves_the_header_clean() {
-        let row = header_row_with("", 80, |app| app.github_poll_failing = false);
+        let row = header_row_with("", 80, |app| {
+            app.github_freshness.succeeded(chrono::Local::now())
+        });
         assert!(!row.contains("⚠"), "spurious failure marker in: {row:?}");
     }
 
@@ -1532,7 +1684,7 @@ mod tests {
     /// terminal is not a reason to hide that the data stopped updating.
     #[test]
     fn the_failure_marker_survives_a_narrow_header() {
-        let row = header_row_with("last 7 days", 30, |app| app.github_poll_failing = true);
+        let row = header_row_with("last 7 days", 30, fail_github);
         assert!(
             row.contains("⚠ github"),
             "marker dropped by the fit loop: {row:?}"

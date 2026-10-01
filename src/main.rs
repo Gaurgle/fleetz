@@ -118,14 +118,20 @@ fn should_paint(queue_empty: bool, held: u32, animating: bool) -> bool {
 pub enum AppEvent {
     Input(Event),
     Tick,
-    Loaded(Result<Box<LoadResult>, String>),
+    Loaded(Result<Box<LoadResult>, LoadError>),
     RepoUpdated {
         path: String,
         status: Box<RepoStatus>,
         /// Whether `git fetch` ran before this rebuild.
         fetched: bool,
     },
-    Github(Result<Box<github::GithubFetch>, String>),
+    /// A background poll's answer. `attempt` is the id it was started with
+    /// (`GithubFreshness::begin_attempt`), so an answer that arrives after a
+    /// newer one was applied can be told apart and discarded.
+    Github {
+        attempt: u64,
+        result: Result<Box<github::GithubFetch>, github::FetchError>,
+    },
     Progress(ApplyProgress),
     /// One frame of the intro wave. On its own timer: the loop's 100ms tick is
     /// the spinner rate and far too coarse for an animation. See `ui::intro`.
@@ -141,7 +147,8 @@ pub enum AppEvent {
 pub enum LoadKind {
     /// First load at startup: no status message, nothing to announce.
     Initial,
-    /// `R`: full rediscover, announces "Reloaded".
+    /// `R`: full rediscover, announces "Reloaded", or that it fell back to
+    /// the cache.
     Reload,
     /// Time-window overlay: pure re-filter, persists the chosen window.
     WindowApply(time::TimeWindow),
@@ -157,10 +164,28 @@ pub struct LoadResult {
     /// WindowApply and for a cached payload predating the field, so the
     /// consumer must not treat None as "the year is empty".
     pub github_calendar: Option<Box<contributions::Calendar>>,
-    /// Whether `dataset` came off the disk cache rather than the network.
-    /// Startup serves any cached payload however old, so this decides whether
-    /// the re-poll clock may start here or the first poll is due immediately.
-    pub dataset_from_cache: bool,
+    /// Where `dataset` came from. Startup serves any cached payload however
+    /// old, so this decides whether the re-poll clock may start here or the
+    /// first poll is due immediately, and what the header says about it.
+    pub source: app::DatasetSource,
+}
+
+/// Why a load produced nothing to show.
+#[derive(Debug)]
+pub struct LoadError {
+    pub message: String,
+    /// The GitHub attempt behind it, when that is what failed. A failed
+    /// attempt still advances the retry clock even though nothing landed.
+    pub github_failure: Option<github::Failure>,
+}
+
+impl From<String> for LoadError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            github_failure: None,
+        }
+    }
 }
 
 /// True while a child program (lazygit, $EDITOR, a shell) owns the terminal.
@@ -450,14 +475,14 @@ fn spawn_load(
         let mode = args.mode();
         let result = load_repos(&args, &config, &repo_dir, &mode, window, bypass_cache)
             .await
-            .map(|(repos, header, dataset, calendar, dataset_from_cache)| {
+            .map(|(repos, header, dataset, calendar, source)| {
                 Box::new(LoadResult {
                     kind,
                     repos,
                     header,
                     dataset: Some(dataset),
                     github_calendar: calendar,
-                    dataset_from_cache,
+                    source,
                 })
             });
         let _ = tx.send(AppEvent::Loaded(result));
@@ -504,9 +529,10 @@ fn spawn_window_apply(
                 // A window apply re-filters what is already in memory and
                 // fetches nothing, so it must not touch the poll clock either
                 // way. `dataset: None` already guards that.
-                dataset_from_cache: false,
+                source: app::DatasetSource::Local,
             })
-        });
+        })
+        .map_err(LoadError::from);
         let _ = tx.send(AppEvent::Loaded(result));
     });
 }
@@ -516,8 +542,9 @@ fn spawn_window_apply(
 fn apply_load_result(
     app: &mut App,
     config: &config::Config,
-    result: Result<Box<LoadResult>, String>,
+    result: Result<Box<LoadResult>, LoadError>,
 ) {
+    let now = chrono::Local::now();
     app.apply_progress = None;
     app.loading = false;
     match result {
@@ -528,17 +555,15 @@ fn apply_load_result(
             app.header = lr.header;
             if let Some(ds) = lr.dataset {
                 app.dataset = ds;
-                // Only a dataset that actually came from GitHub may start the
-                // re-poll clock. Startup serves any cached payload however old
-                // (`CacheMode::AnyCached`), and starting the clock from that
-                // left the first real poll a full `github_poll_interval` away:
-                // every launch opened on whatever the last session had left on
-                // disk and sat there for thirty seconds, with nothing on
-                // screen to say the numbers were not current. Leaving it None
-                // makes the poll due on the first tick instead.
-                if !lr.dataset_from_cache {
-                    app.last_github_poll = Some(chrono::Local::now());
-                }
+                // Only an attempt may start the re-poll clock. Startup serves
+                // any cached payload however old (`CacheMode::AnyCached`), and
+                // starting the clock from that left the first real poll a full
+                // `github_poll_interval` away: every launch opened on whatever
+                // the last session had left on disk and sat there for thirty
+                // seconds, with nothing on screen to say the numbers were not
+                // current. A cache read leaves it unset, so the poll is due on
+                // the first tick instead.
+                app.github_freshness.loaded(&lr.source, now);
             }
             // The calendar rides the same fetch as the dataset. Dropping it
             // here left the strip blank until the first background poll
@@ -551,7 +576,18 @@ fn apply_load_result(
             app.last_refreshed = Some(chrono::Local::now());
             match lr.kind {
                 LoadKind::Initial => {}
-                LoadKind::Reload => app.set_status("Reloaded".to_string(), false),
+                LoadKind::Reload => match &lr.source {
+                    // `R` exists to be current, so a reload that could only
+                    // rebuild from the cache must not claim it reloaded.
+                    app::DatasetSource::Fallback { failure, .. } => app.set_status(
+                        format!(
+                            "Reloaded from cache: GitHub {}",
+                            ui::github_failure_label(failure)
+                        ),
+                        true,
+                    ),
+                    _ => app.set_status("Reloaded".to_string(), false),
+                },
                 LoadKind::WindowApply(w) => {
                     window_state::WindowState::new().save(&w);
                     let label = app.header.clone();
@@ -560,10 +596,13 @@ fn apply_load_result(
             }
         }
         Err(e) => {
+            if let Some(failure) = e.github_failure {
+                app.github_freshness.failed(failure, now);
+            }
             // The status message says it once; `load_error` keeps saying it
             // for as long as there is nothing on screen to say it instead.
-            app.set_status(format!("Load failed: {e}"), true);
-            app.load_error = Some(e);
+            app.set_status(format!("Load failed: {}", e.message), true);
+            app.load_error = Some(e.message);
         }
     }
 }
@@ -652,27 +691,10 @@ async fn run_event_loop(
                         start_sweep(app, &tx, true, args.author.clone(), false);
                     }
                 }
-                // A poll that never reported back must not wedge CI updates
-                // for the rest of the session. `gh` has no timeout of its own,
-                // so a dead network can leave the in-flight flag set forever.
-                if let Some(started) = app.github_poll_started
-                    && started.elapsed() > GITHUB_POLL_STUCK_AFTER
-                {
-                    app.github_poll_inflight = false;
-                    app.github_poll_started = None;
-                    app.refresh_awaits_poll = false;
-                }
-                if app.watch_mode && !app.dirty_mode && !app.loading && !app.github_poll_inflight {
-                    let poll_every = github_poll_secs(app, config);
-                    let due = app
-                        .last_github_poll
-                        .is_none_or(|t| (chrono::Local::now() - t).num_seconds() >= poll_every);
-                    // A detected push jumps the queue: it is the one moment CI
-                    // is about to change with nothing `Pending` yet to notice.
-                    if due || app.push_detected {
-                        app.push_detected = false;
-                        start_github_poll(app, &tx, config);
-                    }
+                expire_stuck_github_poll(app, GITHUB_POLL_STUCK_AFTER, chrono::Local::now());
+                if github_poll_due(app, config, chrono::Local::now()) {
+                    app.push_detected = false;
+                    start_github_poll(app, &tx, config);
                 }
             }
             AppEvent::Input(Event::Key(key)) => {
@@ -744,7 +766,9 @@ async fn run_event_loop(
                 status,
                 fetched,
             } => apply_repo_updated(app, &path, *status, fetched),
-            AppEvent::Github(result) => apply_github_poll(app, result, &tx, &args.author),
+            AppEvent::Github { attempt, result } => {
+                apply_github_poll(app, attempt, result, &tx, &args.author)
+            }
             AppEvent::SweepDone { at } => {
                 app.sweep_started = None;
                 app.last_refreshed = Some(at);
@@ -1612,9 +1636,11 @@ struct SweepTarget {
 /// A sweep that never reported back must not hold the watch lock forever.
 const SWEEP_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(180);
 
-/// Same idea for the GitHub poll. `gh` carries no timeout of its own, so a
-/// black-holed request would otherwise leave `github_poll_inflight` set for
-/// the rest of the session and stop CI updating, silently.
+/// Same idea for the GitHub poll. The HTTP client has no timeout (`gh` only
+/// supplies the token), so a black-holed request would otherwise hold
+/// `github_poll_inflight` for the rest of the session and no poll could start.
+/// Past this the poll is given up on and recorded as a timed-out failure,
+/// which the header shows (`expire_stuck_github_poll`).
 const GITHUB_POLL_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Floor on the GitHub poll interval, whatever the config says. Measured
@@ -1678,25 +1704,46 @@ fn apply_repo_updated(app: &mut App, path: &str, status: RepoStatus, fetched: bo
 }
 
 /// Land a GitHub poll's result (`AppEvent::Github`).
+///
+/// A failure changes no row and leaves the data time alone: what is in memory
+/// is at least as new as the cache file, so the fallback the fetch attaches is
+/// not applied here (contract rule 4). Only launch and `R` use it.
 fn apply_github_poll(
     app: &mut App,
-    result: Result<Box<github::GithubFetch>, String>,
+    attempt: u64,
+    result: Result<Box<github::GithubFetch>, github::FetchError>,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     author: &Option<String>,
 ) {
-    app.github_poll_inflight = false;
-    app.github_poll_started = None;
-    app.last_github_poll = Some(chrono::Local::now());
-    app.github_poll_failing = result.is_err();
+    // The in-flight lock belongs to the newest attempt. A late answer from
+    // one given up on must not release it, or a second request stacks; the
+    // newest one's answer always does, even when it is discarded below.
+    let is_latest = app.github_freshness.is_latest(attempt);
+    if is_latest {
+        app.github_poll_inflight = false;
+        app.github_poll_started = None;
+    }
+    // An attempt given up on can still answer, and an `R` can land while a
+    // poll is out. Once a newer answer has landed, applying this one would
+    // move the data backwards (rule 10).
+    if !app.github_freshness.accept_answer(attempt) {
+        if is_latest {
+            // A refresh waiting on this request is over all the same.
+            app.settle_refresh_poll(std::iter::empty());
+        }
+        return;
+    }
+    let now = chrono::Local::now();
     match result {
         Ok(fetch) => {
+            app.github_freshness.succeeded(now);
             let github::GithubFetch {
                 repos: dataset,
                 calendar,
                 has_pr_counts: _,
                 // The poll always bypasses the cache, so this is
                 // network data by construction.
-                from_cache: _,
+                origin: _,
             } = *fetch;
             // The calendar rides the same payload as the repos, so
             // a poll that updated CI also refreshed the year at no
@@ -1729,15 +1776,73 @@ fn apply_github_poll(
                 .iter()
                 .filter_map(|&idx| app.repos[idx].path.clone())
                 .collect();
-            app.settle_refresh_poll(fetched_paths);
+            if is_latest {
+                app.settle_refresh_poll(fetched_paths);
+            }
             app.dataset = dataset;
         }
-        Err(e) => app.set_status(format!("GitHub refresh failed: {e}"), true),
+        Err(e) => {
+            app.set_status(
+                format!("GitHub refresh failed: {}", e.failure.message),
+                true,
+            );
+            app.github_freshness.failed(e.failure, now);
+        }
     }
     // A failed poll fetched nothing, so a refresh waiting on it
     // is over. No-op when the Ok arm already settled it.
-    app.settle_refresh_poll(std::iter::empty());
+    if is_latest {
+        app.settle_refresh_poll(std::iter::empty());
+    }
     app.needs_redraw = true;
+}
+
+/// Give up on a background poll that has not answered within `limit`.
+///
+/// Recorded as a timed-out failure, which also advances the retry clock: the
+/// in-flight flag used to be dropped with nothing else changed, so the next
+/// tick started a second request while the first was still open (decision
+/// D4). The request itself is not cancelled; that is FZ-11.
+fn expire_stuck_github_poll(
+    app: &mut App,
+    limit: std::time::Duration,
+    now: chrono::DateTime<chrono::Local>,
+) {
+    if let Some(started) = app.github_poll_started
+        && started.elapsed() > limit
+    {
+        app.github_poll_inflight = false;
+        app.github_poll_started = None;
+        app.refresh_awaits_poll = false;
+        app.github_freshness.gave_up(limit, now);
+        app.needs_redraw = true;
+    }
+}
+
+/// Whether the tick should start a background GitHub poll now.
+///
+/// With watch on, once per `github_poll_secs` after the last attempt,
+/// whatever it ended in, or sooner for a detected push while polls succeed.
+/// With watch off, only the one attempt a cache-served launch is owed
+/// (decision D2): the data on screen came off the disk and nothing has
+/// confirmed it yet.
+fn github_poll_due(
+    app: &App,
+    config: &config::Config,
+    now: chrono::DateTime<chrono::Local>,
+) -> bool {
+    if app.dirty_mode || app.loading || app.github_poll_inflight {
+        return false;
+    }
+    let freshness = &app.github_freshness;
+    if !app.watch_mode {
+        return freshness.awaits_first_attempt();
+    }
+    // A detected push jumps the queue: it is the one moment CI is about to
+    // change with nothing `Pending` yet to notice. Not while polls fail, where
+    // the next attempt waits out a full interval (rule 6).
+    let push = app.push_detected && !freshness.is_failing();
+    push || freshness.retry_due(now, github_poll_secs(app, config))
 }
 
 /// Indices into `repos` whose remote moved between two GitHub polls.
@@ -1796,8 +1901,15 @@ fn resolve_watch(flag_watch: bool, flag_no_watch: bool, config_watch: bool) -> b
 /// Drops to the floor while any repo is `Pending`, which is exactly when a
 /// human is watching the screen for a run to finish, and relaxes to the
 /// configured interval when nothing is in flight. Costs nothing at idle.
+///
+/// Not while polls fail (decision D3): a `Pending` frozen by a failing poll
+/// says nothing about what CI is doing now, and the floor would only retry a
+/// dead network four times a minute.
 fn github_poll_secs(app: &App, config: &config::Config) -> i64 {
     let configured = config.github_poll_interval.max(GITHUB_POLL_MIN);
+    if app.github_freshness.is_failing() {
+        return configured as i64;
+    }
     let any_pending = app
         .repos
         .iter()
@@ -1816,12 +1928,20 @@ fn start_github_poll(
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     config: &config::Config,
 ) {
+    if let Some(attempt) = claim_github_poll(app) {
+        spawn_github_poll(tx, config, attempt);
+    }
+}
+
+/// Take the in-flight lock and an attempt id for a new poll, or `None` when
+/// one is already running or `-d` has no GitHub to poll.
+fn claim_github_poll(app: &mut App) -> Option<u64> {
     if app.github_poll_inflight || app.dirty_mode {
-        return;
+        return None;
     }
     app.github_poll_inflight = true;
     app.github_poll_started = Some(std::time::Instant::now());
-    spawn_github_poll(tx, config);
+    Some(app.github_freshness.begin_attempt())
 }
 
 /// Snapshot the repos that have a local path, as sweep targets.
@@ -2055,14 +2175,21 @@ async fn rebuild_repo_status(
 
 /// Re-poll GitHub for PR and CI data in the background, so badges stop being
 /// frozen at whatever they were when fleetz launched.
-fn spawn_github_poll(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, config: &config::Config) {
+fn spawn_github_poll(
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    config: &config::Config,
+    attempt: u64,
+) {
     let tx = tx.clone();
     let repo_limit = config.repo_limit;
     // PR data is always fetched now, so the cache key no longer varies by it.
     let cache = cache::ApiCache::new(config.cache_ttl, repo_limit);
     tokio::spawn(async move {
         let result = github::fetch_repos(repo_limit, &cache, github::CacheMode::Bypass).await;
-        let _ = tx.send(AppEvent::Github(result.map(Box::new)));
+        let _ = tx.send(AppEvent::Github {
+            attempt,
+            result: result.map(Box::new),
+        });
     });
 }
 
@@ -2082,9 +2209,9 @@ async fn load_repos(
         String,
         Vec<github::GithubRepo>,
         Option<Box<contributions::Calendar>>,
-        bool,
+        app::DatasetSource,
     ),
-    String,
+    LoadError,
 > {
     // Local scan roots: the primary repo_dir plus any configured extra dirs
     // (e.g. ~/.dotfiles), so repos outside the main tree still surface under
@@ -2117,20 +2244,49 @@ async fn load_repos(
         }
         results.sort_by_key(|(i, _)| *i);
         let repos: Vec<RepoStatus> = results.into_iter().filter_map(|(_, r)| r).collect();
-        return Ok((repos, header, Vec::new(), None, false));
+        return Ok((repos, header, Vec::new(), None, app::DatasetSource::Local));
     }
 
     // Fetch from GitHub (with caching)
     let api_cache = cache::ApiCache::new(config.cache_ttl, config.repo_limit);
-    let fetch = fetch_dataset(config, &api_cache, bypass_cache).await?;
-    let from_cache = fetch.from_cache;
+    let (fetch, source) = match fetch_dataset(config, &api_cache, bypass_cache).await {
+        Ok(fetch) => {
+            let source = match fetch.origin {
+                github::Origin::Network => app::DatasetSource::Network,
+                github::Origin::Cache { written } => app::DatasetSource::Cache { written },
+            };
+            (fetch, source)
+        }
+        // Launch and `R` have nothing in memory worth keeping over the
+        // cache, so they build from it, but as a failure: the header and
+        // the status line say the data is not current.
+        Err(github::FetchError {
+            failure,
+            fallback: Some(fallback),
+        }) => {
+            let written = match fallback.origin {
+                github::Origin::Cache { written } => written,
+                github::Origin::Network => None,
+            };
+            (*fallback, app::DatasetSource::Fallback { failure, written })
+        }
+        Err(github::FetchError {
+            failure,
+            fallback: None,
+        }) => {
+            return Err(LoadError {
+                message: failure.message.clone(),
+                github_failure: Some(failure),
+            });
+        }
+    };
     let (dataset, calendar) = (fetch.repos, fetch.calendar);
 
     let (cutoff, header) = resolve_cutoff(window, mode, config)?;
     let (repos, full_header) =
         assemble_view(&dataset, cutoff, header, args, config, repo_dir, true, None).await?;
 
-    Ok((repos, full_header, dataset, calendar, from_cache))
+    Ok((repos, full_header, dataset, calendar, source))
 }
 
 /// One repo's full local status for `-d` mode. Returns None for a repo with
@@ -2208,7 +2364,7 @@ async fn fetch_dataset(
     config: &config::Config,
     cache: &cache::ApiCache,
     bypass_cache: bool,
-) -> Result<github::GithubFetch, String> {
+) -> Result<github::GithubFetch, github::FetchError> {
     let mode = match bypass_cache {
         true => github::CacheMode::Bypass,
         false => github::CacheMode::AnyCached,
@@ -2955,15 +3111,34 @@ mod tests {
             }],
             calendar: None,
             has_pr_counts: true,
-            from_cache: false,
+            origin: github::Origin::Network,
         }))
     }
 
     fn poll(app: &mut App, result: Result<Box<github::GithubFetch>, String>) {
+        let result = result.map_err(|message| github::FetchError {
+            failure: github::Failure::new(github::FailureKind::Http, message),
+            fallback: None,
+        });
+        poll_with(app, result);
+    }
+
+    /// Start an attempt and land `result` as its answer.
+    fn poll_with(app: &mut App, result: Result<Box<github::GithubFetch>, github::FetchError>) {
+        let attempt = claim_github_poll(app).expect("no poll in flight");
+        answer(app, attempt, result);
+    }
+
+    /// Land `result` as the answer to `attempt`.
+    fn answer(
+        app: &mut App,
+        attempt: u64,
+        result: Result<Box<github::GithubFetch>, github::FetchError>,
+    ) {
         // No previous dataset, so no remote "moved" and nothing is spawned:
         // the receiver is never read and no runtime is needed.
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        apply_github_poll(app, result, &tx, &None);
+        apply_github_poll(app, attempt, result, &tx, &None);
     }
 
     fn assert_poll_fields(repo: &RepoStatus) {
@@ -3029,10 +3204,444 @@ mod tests {
         let snapshot = sweep_targets(&app, None).remove(0).old;
         poll(&mut app, Err("HTTP 502".to_string()));
         apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), true);
-        assert!(app.github_poll_failing);
+        assert!(app.github_freshness.is_failing());
         let repo = &app.repos[0];
         assert_poll_fields(repo);
         assert_sweep_fields(repo);
+    }
+
+    fn local(h: u32, m: u32) -> chrono::DateTime<chrono::Local> {
+        use chrono::TimeZone;
+        chrono::Local
+            .with_ymd_and_hms(2026, 10, 1, h, m, 0)
+            .single()
+            .expect("unambiguous local time")
+    }
+
+    /// The payload a failed request finds on disk: the same repo, but CI as
+    /// it was when the cache was written.
+    fn offline_with_cache(written: Option<chrono::DateTime<chrono::Local>>) -> github::FetchError {
+        let mut cached = poll_says_passed().ok().unwrap();
+        cached.repos[0].ci_status = model::CiStatus::Failed;
+        cached.origin = github::Origin::Cache { written };
+        github::FetchError {
+            failure: github::Failure::new(github::FailureKind::Offline, "no route"),
+            fallback: Some(cached),
+        }
+    }
+
+    /// The case that was invisible. `fetch_repos` answered an offline poll
+    /// with the cache as `Ok`, and this cleared the failure, restarted the
+    /// clock and wrote the cache's older CI over the rows. Now it is a
+    /// failure: no row changes, the data time stays, the marker shows.
+    #[test]
+    fn a_failed_background_poll_with_a_cache_present_changes_no_row() {
+        let mut app = app_with_pending_repo();
+        poll(&mut app, poll_says_passed());
+        let data_time = app.github_freshness.data_time;
+        poll_with(&mut app, Err(offline_with_cache(Some(local(9, 0)))));
+
+        assert_poll_fields(&app.repos[0]);
+        assert!(app.github_freshness.is_failing(), "offline looked healthy");
+        assert_eq!(app.github_freshness.data_time, data_time);
+        assert!(
+            ui::github_freshness_segment(&app.github_freshness, chrono::Local::now())
+                .is_some_and(|(long, _, _)| long.contains("⚠ github offline")),
+            "no marker for an offline poll"
+        );
+    }
+
+    /// Rule 7: the first success after a failure clears it on the same frame
+    /// and lands its data.
+    #[test]
+    fn a_successful_poll_after_a_failure_clears_it() {
+        let mut app = app_with_pending_repo();
+        poll_with(&mut app, Err(offline_with_cache(None)));
+        assert!(app.github_freshness.is_failing());
+        poll(&mut app, poll_says_passed());
+        assert_eq!(app.github_freshness.outcome, app::Outcome::Success);
+        assert!(matches!(
+            app.github_freshness.data_time,
+            app::DataTime::At(_)
+        ));
+        assert!(
+            ui::github_freshness_segment(&app.github_freshness, chrono::Local::now()).is_none()
+        );
+        assert_poll_fields(&app.repos[0]);
+    }
+
+    fn watching(app: &mut App) -> config::Config {
+        app.watch_mode = true;
+        config::Config {
+            github_poll_interval: 90,
+            ..config::Config::default()
+        }
+    }
+
+    /// Rule 6: a failure advances the retry clock, so the next automatic
+    /// attempt waits one whole interval. Not at once, and not in a loop.
+    #[test]
+    fn no_attempt_sooner_than_one_interval_after_a_failure() {
+        let mut app = app_with_pending_repo();
+        app.repos[0].ci_status = model::CiStatus::Passed;
+        let config = watching(&mut app);
+        poll(&mut app, Err("HTTP 502".to_string()));
+        let failed_at = app.github_freshness.last_attempt.expect("clock advanced");
+
+        let early = failed_at + chrono::Duration::seconds(89);
+        assert!(!github_poll_due(&app, &config, early), "retried early");
+        let on_time = failed_at + chrono::Duration::seconds(90);
+        assert!(github_poll_due(&app, &config, on_time));
+
+        // A detected push does not jump the queue while polls fail either.
+        app.push_detected = true;
+        assert!(!github_poll_due(&app, &config, early), "push retried early");
+    }
+
+    /// Decision D4: a poll that never answers is recorded as a timed-out
+    /// failure and advances the clock, so the next tick does not open a
+    /// second request beside the first.
+    #[test]
+    fn a_poll_given_up_on_is_recorded_as_a_timed_out_failure() {
+        let mut app = app_with_pending_repo();
+        let config = watching(&mut app);
+        claim_github_poll(&mut app).unwrap();
+        app.github_poll_started = std::time::Instant::now()
+            .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
+        let now = chrono::Local::now();
+        expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, now);
+
+        assert!(!app.github_poll_inflight);
+        assert!(matches!(
+            &app.github_freshness.outcome,
+            app::Outcome::Failed(f) if f.kind == github::FailureKind::TimedOut
+        ));
+        assert_eq!(app.github_freshness.last_attempt, Some(now));
+        assert!(!github_poll_due(&app, &config, now), "restarted at once");
+    }
+
+    /// Rule 10: once a newer attempt has been applied, a late answer from
+    /// the one given up on is discarded, so the rows and the data time
+    /// never go backwards.
+    #[test]
+    fn an_answer_from_an_older_attempt_is_discarded_once_a_newer_one_applied() {
+        let mut app = app_with_pending_repo();
+        let first = claim_github_poll(&mut app).unwrap();
+        app.github_poll_started = std::time::Instant::now()
+            .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
+        expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, chrono::Local::now());
+        let second = claim_github_poll(&mut app).unwrap();
+        answer(&mut app, second, Ok(poll_says_passed().ok().unwrap()));
+        let applied = app.github_freshness.clone();
+
+        let mut late = poll_says_passed().ok().unwrap();
+        late.repos[0].ci_status = model::CiStatus::Failed;
+        late.repos[0].pushed_at = app.dataset[0].pushed_at;
+        answer(&mut app, first, Ok(late));
+
+        assert_poll_fields(&app.repos[0]);
+        assert_eq!(app.github_freshness, applied);
+    }
+
+    /// The other order: the given-up attempt answers while the newer one is
+    /// still out. Its data is the newest there is, so it lands, but the lock
+    /// belongs to the newer request and stays held.
+    #[test]
+    fn a_late_answer_does_not_release_the_newer_attempts_lock() {
+        let mut app = app_with_pending_repo();
+        let first = claim_github_poll(&mut app).unwrap();
+        app.github_poll_started = std::time::Instant::now()
+            .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
+        expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, chrono::Local::now());
+        let _second = claim_github_poll(&mut app).unwrap();
+        answer(&mut app, first, Ok(poll_says_passed().ok().unwrap()));
+
+        assert_poll_fields(&app.repos[0]);
+        assert!(app.github_poll_inflight, "the newer request lost its lock");
+        assert!(app.github_poll_started.is_some());
+    }
+
+    /// Decision D3: a `Pending` frozen by a failing poll does not hold the
+    /// interval at the floor.
+    #[test]
+    fn a_pending_repo_does_not_shorten_the_interval_while_polls_fail() {
+        let config = config::Config {
+            github_poll_interval: 90,
+            ..config::Config::default()
+        };
+        let mut app = app_with(&[model::CiStatus::Pending]);
+        assert_eq!(github_poll_secs(&app, &config), GITHUB_POLL_MIN as i64);
+        app.github_freshness.failed(
+            github::Failure::new(github::FailureKind::Offline, "no route"),
+            chrono::Local::now(),
+        );
+        assert_eq!(github_poll_secs(&app, &config), 90);
+    }
+
+    fn launch(app: &mut App, kind: LoadKind, source: app::DatasetSource) {
+        apply_load_result(
+            app,
+            &config::Config::default(),
+            Ok(Box::new(LoadResult {
+                kind,
+                repos: Vec::new(),
+                header: "h".to_string(),
+                dataset: Some(Vec::new()),
+                github_calendar: None,
+                source,
+            })),
+        );
+    }
+
+    /// Decision D2: a cache-served launch is followed by one attempt even with
+    /// watch off, and only one. Watch decides whether polling continues.
+    #[test]
+    fn a_cache_served_launch_with_watch_off_makes_exactly_one_attempt() {
+        for outcome in [Ok(()), Err(())] {
+            let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+            let config = config::Config::default();
+            assert!(!app.watch_mode);
+            assert!(
+                !github_poll_due(&app, &config, chrono::Local::now()),
+                "before load"
+            );
+            launch(
+                &mut app,
+                LoadKind::Initial,
+                app::DatasetSource::Cache {
+                    written: Some(local(8, 0)),
+                },
+            );
+            assert!(github_poll_due(&app, &config, chrono::Local::now()));
+
+            let attempt = claim_github_poll(&mut app).unwrap();
+            assert!(!github_poll_due(&app, &config, chrono::Local::now()));
+            let result = match outcome {
+                Ok(()) => poll_says_passed(),
+                Err(()) => Err("HTTP 502".to_string()),
+            };
+            let result = result.map_err(|m| github::FetchError {
+                failure: github::Failure::new(github::FailureKind::Http, m),
+                fallback: None,
+            });
+            answer(&mut app, attempt, result);
+
+            let tomorrow = chrono::Local::now() + chrono::Duration::days(1);
+            assert!(
+                !github_poll_due(&app, &config, tomorrow),
+                "watch off kept polling after {outcome:?}"
+            );
+        }
+    }
+
+    /// A network-served launch with watch off owes nothing more.
+    #[test]
+    fn a_network_served_launch_with_watch_off_does_not_poll() {
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        launch(&mut app, LoadKind::Initial, app::DatasetSource::Network);
+        let tomorrow = chrono::Local::now() + chrono::Duration::days(1);
+        assert!(!github_poll_due(&app, &config::Config::default(), tomorrow));
+    }
+
+    /// Rule 1 with a planted age: the cache's write time is the data time,
+    /// and no attempt is recorded, so the poll stays due.
+    #[test]
+    fn a_launch_from_a_cache_of_planted_age_carries_that_age() {
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        let written = chrono::Local::now() - chrono::Duration::hours(3);
+        launch(
+            &mut app,
+            LoadKind::Initial,
+            app::DatasetSource::Cache {
+                written: Some(written),
+            },
+        );
+        assert_eq!(app.github_freshness.data_time, app::DataTime::At(written));
+        assert_eq!(app.github_freshness.outcome, app::Outcome::NotAttempted);
+        assert!(app.github_freshness.last_attempt.is_none());
+    }
+
+    /// A cache whose age cannot be read stays unknown: never the launch time.
+    #[test]
+    fn a_launch_from_a_cache_of_unreadable_age_leaves_the_age_unknown() {
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        launch(
+            &mut app,
+            LoadKind::Initial,
+            app::DatasetSource::Cache { written: None },
+        );
+        assert_eq!(app.github_freshness.data_time, app::DataTime::Unknown);
+    }
+
+    /// No usable cache and the request fails: the error panel, as before, and
+    /// the failed attempt is recorded so the retry clock advances.
+    #[test]
+    fn a_launch_with_no_usable_cache_records_the_failed_attempt() {
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        let failure = github::Failure::new(github::FailureKind::Auth, "not authenticated");
+        apply_load_result(
+            &mut app,
+            &config::Config::default(),
+            Err(LoadError {
+                message: failure.message.clone(),
+                github_failure: Some(failure.clone()),
+            }),
+        );
+        assert_eq!(app.load_error.as_deref(), Some("not authenticated"));
+        assert_eq!(app.github_freshness.outcome, app::Outcome::Failed(failure));
+        assert!(app.github_freshness.last_attempt.is_some());
+        assert_eq!(app.github_freshness.data_time, app::DataTime::NoData);
+    }
+
+    /// An `R` that went to GitHub, landing over the row `app_with_pending_repo`
+    /// draws, the way a reload rebuilds it: CI as the reload saw it.
+    fn reload_lands(app: &mut App, source: app::DatasetSource) {
+        let mut repo = app.repos[0].clone();
+        repo.ci_status = model::CiStatus::Passed;
+        apply_load_result(
+            app,
+            &config::Config::default(),
+            Ok(Box::new(LoadResult {
+                kind: LoadKind::Reload,
+                repos: vec![repo],
+                header: "h".to_string(),
+                dataset: Some(Vec::new()),
+                github_calendar: None,
+                source,
+            })),
+        );
+    }
+
+    /// A poll answer older than the `R` that landed: CI as it was before.
+    fn stale_answer() -> Result<Box<github::GithubFetch>, github::FetchError> {
+        let mut old = poll_says_passed().ok().unwrap();
+        old.repos[0].ci_status = model::CiStatus::Failed;
+        Ok(old)
+    }
+
+    /// Rule 10 with `R` as the newer attempt. A watch poll hangs and is
+    /// given up on, `R` succeeds, then the hung request answers. Loads never
+    /// touched the attempt ids, so the old payload was written over the
+    /// reload's rows and stamped fresh.
+    #[test]
+    fn a_late_poll_answer_after_a_successful_reload_is_discarded() {
+        let mut app = app_with_pending_repo();
+        let hung = claim_github_poll(&mut app).unwrap();
+        app.github_poll_started = std::time::Instant::now()
+            .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
+        expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, chrono::Local::now());
+        reload_lands(&mut app, app::DatasetSource::Network);
+        let after_reload = app.github_freshness.clone();
+
+        answer(&mut app, hung, stale_answer());
+
+        assert_eq!(
+            app.repos[0].ci_status,
+            model::CiStatus::Passed,
+            "rows rewound"
+        );
+        assert_eq!(app.github_freshness, after_reload, "freshness rewound");
+        assert!(!app.github_poll_inflight);
+        assert!(app.github_poll_started.is_none());
+        let config = watching(&mut app);
+        let later = chrono::Local::now() + chrono::Duration::seconds(90);
+        assert!(
+            github_poll_due(&app, &config, later),
+            "polling never resumed"
+        );
+    }
+
+    /// The mirror case: the poll is still in flight, not given up on, when
+    /// `R` lands, with an `r` waiting on it. `R` wins: it is applied first and
+    /// rebuilt every row, and an answer that cannot be ordered against it
+    /// must not overwrite it. The answer still releases the lock and settles
+    /// the waiting `r`, or polling and the spinner would stall for good.
+    #[test]
+    fn a_poll_in_flight_when_a_reload_lands_is_superseded_but_releases_its_lock() {
+        let mut app = app_with_pending_repo();
+        let in_flight = claim_github_poll(&mut app).unwrap();
+        app.refresh_awaits_poll = true;
+        reload_lands(&mut app, app::DatasetSource::Network);
+        let after_reload = app.github_freshness.clone();
+        assert!(
+            app.github_poll_inflight,
+            "the lock is the request's to release"
+        );
+
+        answer(&mut app, in_flight, stale_answer());
+
+        assert_eq!(
+            app.repos[0].ci_status,
+            model::CiStatus::Passed,
+            "rows rewound"
+        );
+        assert_eq!(app.github_freshness, after_reload);
+        assert!(!app.github_poll_inflight, "lock left set");
+        assert!(app.github_poll_started.is_none());
+        assert!(!app.refresh_awaits_poll, "the waiting r never settled");
+        assert!(claim_github_poll(&mut app).is_some(), "no poll can start");
+    }
+
+    /// A reload that fell back to the cache supersedes the same way: its rows
+    /// were rebuilt from the file, and a poll started before it is older.
+    #[test]
+    fn a_reload_fallback_also_supersedes_an_older_poll() {
+        let mut app = app_with_pending_repo();
+        let in_flight = claim_github_poll(&mut app).unwrap();
+        reload_lands(
+            &mut app,
+            app::DatasetSource::Fallback {
+                failure: github::Failure::new(github::FailureKind::Offline, "no route"),
+                written: None,
+            },
+        );
+        answer(&mut app, in_flight, stale_answer());
+        assert_eq!(app.repos[0].ci_status, model::CiStatus::Passed);
+        assert!(app.github_freshness.is_failing());
+        assert!(!app.github_poll_inflight);
+    }
+
+    /// A cache-served launch made no attempt and is older than any poll, so
+    /// a poll in flight past it still lands.
+    #[test]
+    fn a_cache_served_load_does_not_supersede_a_poll() {
+        let mut app = app_with_pending_repo();
+        let in_flight = claim_github_poll(&mut app).unwrap();
+        reload_lands(&mut app, app::DatasetSource::Cache { written: None });
+        answer(
+            &mut app,
+            in_flight,
+            poll_says_passed().map_err(|_| unreachable!()),
+        );
+        assert_poll_fields(&app.repos[0]);
+        assert_eq!(app.github_freshness.outcome, app::Outcome::Success);
+    }
+
+    /// `R` exists to be current. One that could only rebuild from the cache
+    /// says so instead of `Reloaded`, and the header goes stale with the
+    /// cache file's age.
+    #[test]
+    fn a_reload_that_fell_back_to_the_cache_does_not_claim_a_reload() {
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        let written = local(7, 30);
+        launch(
+            &mut app,
+            LoadKind::Reload,
+            app::DatasetSource::Fallback {
+                failure: github::Failure::new(github::FailureKind::Offline, "no route"),
+                written: Some(written),
+            },
+        );
+        let status = app.status_message.as_ref().map(|m| m.text.clone()).unwrap();
+        assert_ne!(status, "Reloaded");
+        assert!(status.contains("cache"), "{status:?}");
+        assert!(app.github_freshness.is_failing());
+        assert!(app.github_freshness.last_attempt.is_some());
+        assert_eq!(app.github_freshness.data_time, app::DataTime::At(written));
+
+        launch(&mut app, LoadKind::Reload, app::DatasetSource::Network);
+        let status = app.status_message.as_ref().map(|m| m.text.clone()).unwrap();
+        assert_eq!(status, "Reloaded");
     }
 
     /// Rows the sweep does not probe keep their current values: identity,
@@ -3573,7 +4182,7 @@ mod tests {
                 header: "h".to_string(),
                 dataset: Some(Vec::new()),
                 github_calendar: Some(Box::new(cal)),
-                dataset_from_cache: false,
+                source: app::DatasetSource::Network,
             })),
         );
         assert_eq!(
@@ -3605,11 +4214,11 @@ mod tests {
                 header: "h".to_string(),
                 dataset: Some(Vec::new()),
                 github_calendar: None,
-                dataset_from_cache: true,
+                source: app::DatasetSource::Cache { written: None },
             })),
         );
         assert!(
-            app.last_github_poll.is_none(),
+            app.github_freshness.last_attempt.is_none(),
             "a cached payload started the re-poll clock, delaying the first \
              real poll by a whole interval"
         );
@@ -3629,11 +4238,11 @@ mod tests {
                 header: "h".to_string(),
                 dataset: Some(Vec::new()),
                 github_calendar: None,
-                dataset_from_cache: false,
+                source: app::DatasetSource::Network,
             })),
         );
         assert!(
-            app.last_github_poll.is_some(),
+            app.github_freshness.last_attempt.is_some(),
             "fresh data should not re-poll at once"
         );
     }
@@ -3656,7 +4265,7 @@ mod tests {
                 header: "h".to_string(),
                 dataset: None,
                 github_calendar: None,
-                dataset_from_cache: false,
+                source: app::DatasetSource::Network,
             })),
         );
         assert_eq!(app.github_calendar.as_ref().map(|c| c.total()), Some(9));
