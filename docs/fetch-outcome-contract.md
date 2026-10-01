@@ -1,12 +1,13 @@
-# Fetch outcome contract (draft)
+# Fetch outcome contract
 
-Status: **draft by the coordinator (`claude-fable-5-1`), 2026-10-01, against
-`main` at `32ffb2b`.** Not accepted. It is the per-repo fetch state contract
-that [FZ-04 / #17](https://github.com/Gaurgle/fleetz/issues/17) depends on.
-FZ-04 runs after FZ-03 is integrated, so this has time to be read. It reuses
-the vocabulary of [freshness-contract.md](freshness-contract.md): attempt,
-outcome, and a time that only a success may advance. Astra has not reviewed
-it.
+Status: **accepted by the coordinator (`claude-fable-5-1`) on 2026-10-01** as
+the per-repo fetch state contract that
+[FZ-04 / #17](https://github.com/Gaurgle/fleetz/issues/17) implements. Written
+against `main` at `32ffb2b`; line numbers drift, follow the symbols. It reuses
+the vocabulary of [freshness-contract.md](freshness-contract.md), which
+Andreas accepted and FZ-03 implemented: attempt, outcome, and a time that
+only a success may advance. Astra has not reviewed it and Andreas may veto
+any rule; what the user sees is his to accept on the branch build.
 
 Scope: what fleetz knows and says about `git fetch` for one checkout. Not in
 scope: fetch cadence, retries, authentication, a shared scheduler.
@@ -93,12 +94,21 @@ a mixed sweep; recovery after a failure; a non-fetching sweep leaving the
 fetch facts alone; an empty `FETCH_HEAD` treated as never fetched; a URL with
 userinfo never appearing in the detail.
 
-## Open points
+## Decisions
 
-- **Look and wording.** Andreas, on the branch build.
-- **Rule 7 in `stale_remotes`.** Recommended as written. The alternative,
-  leaving the baseline alone, keeps a known way for the fleet to look more
-  current than it is.
-- **Whether watch-mode failures need a fleet-level marker** beside the one on
-  the repo. Recommendation: no, the per-repo marker is enough, and the header
-  already carries the GitHub segment.
+- **Look and wording.** Andreas, on the branch build. FZ-04 stops at Ready to
+  integrate.
+- **Rule 7 in `stale_remotes`.** Adopted as written. Leaving the baseline
+  alone would keep a known way for the fleet to look more current than it is.
+- **No fleet-level marker for watch-mode failures.** The per-repo marker is
+  enough, and the header already carries the GitHub segment.
+- **Where the facts live.** Either a field on the row or state on `App` keyed
+  by the checkout's path satisfies rule 2; the worker picks the smaller one
+  and says why. If it is a row field, rows rebuilt by `R` take `last_success`
+  from `FETCH_HEAD` again under rule 3.
+- **The drawn remote URL.** The detail pane draws `remote_url` as stored. If
+  an HTTPS remote with userinfo shows it on screen, FZ-04 strips the userinfo
+  there too, under rule 8.
+- **Linked worktrees.** `FETCH_HEAD` is per worktree (FZ-06, executed), so a
+  fetch in the main checkout does not advance a linked worktree's
+  `last_success`. Accepted: extra fetches, not wrong data.

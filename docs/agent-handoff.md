@@ -59,10 +59,9 @@ Status. Issue #7 has no milestone. Visual layout in the browser is the one
 setup check still open. GitHub is authoritative for current status and
 assignment.
 
-Done and closed on 2026-10-01: FZ-02 (#15), FZ-01 (#14), FZ-05 (#18) and
-issue #1. Also done and closed: FZ-06 (#19) and FZ-05a (#31). FZ-03 (#16) is Ready to
-integrate and waits for Andreas to try its header; he was given the command
-and a list of what to look for. All are described below.
+Done and closed on 2026-10-01: FZ-02 (#15), FZ-01 (#14), FZ-05 (#18),
+FZ-06 (#19), FZ-03 (#16), FZ-05a (#31), FZ-06a (#37), issue #1 and issue
+#44. In progress: FZ-04 (#17). All are described below.
 No release has started.
 
 Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
@@ -210,60 +209,61 @@ landing order: FZ-06a #37 (FIX-C in the design, the common-directory helper,
 (FIX-E, load-path order). b to e touch `src/main.rs` and wait for FZ-03.
 None runs beside FZ-04, which will also own `src/git.rs`.
 
-FZ-06a (#37) is in progress: base `69aeddf9f77822fe5849492f5137a72b48cd6d72`,
-branch `refactor/fz-06a-common-dir-helper`, worktree
-`.claude/worktrees/fz-06a`, worker `fz-worker` (`claude-opus-5-5`, medium),
-allowed file `src/git.rs`. Next: review, commit, push, combined checks,
-merge, Done and close. It needs nothing from Andreas.
+FZ-06a (#37) is Done and closed: ticket commit `520e77e`, merge `28fd17f`.
+`git::repo_dirs` returns the git and common directories; `work_key` and
+`last_fetch_at` use it; behavior unchanged. FZ-06b (#38) is next in this
+series, after FZ-04.
 
-## FZ-03: Ready to integrate, waiting for Andreas
+## FZ-03: Done, integrated into `main`
 
-Reviewed, committed and pushed, **not merged**: the header's wording and
-look are Andreas's to accept on the branch build.
+Andreas tried the branch build on 2026-10-01 and accepted the colours, the
+weight and the words `cached` and `offline`. He asked for one wording change:
+the stale segment reads `⚠ github <kind>, as of 14:02`, not `data 14:02`.
 
-- Ticket commit `5217d30308be8aff5c8bf308c5c7215cf17d3254` on
-  `fix/fz-03-github-freshness`, base `6dd260f`, worktree
-  `.claude/worktrees/fz-03`: `README.md`, `src/app.rs`, `src/cache.rs`,
-  `src/github.rs`, `src/main.rs`, `src/ui/mod.rs`, +1632 -148.
-- Review: two passes, final verdict accepted. The first found that an `R`
-  did not supersede an outstanding poll; fixed with regressions.
-- CI green on the branch (`ci` and `docs`). Combined result with `main` at
-  `8c1546c` (after the FZ-05a merge): fmt, clippy with warnings denied, 693
-  tests passed, docs check. **Rerun the combined checks if `main` has gained
-  source changes since.**
-- Board: #16 Ready to integrate, with the evidence, the try command and a
-  table of how to see each header state.
-- Try: `cargo run --release --manifest-path
-  .claude/worktrees/fz-03/Cargo.toml`.
-- When Andreas accepts: rerun the combined checks, `git merge --no-ff`,
-  push, confirm CI on `main`, Done, close #16. If he wants wording or colour
-  changes, they are in `ui::github_freshness_segment` and
-  `ui::github_failure_label`; a change goes back through a worker and a
-  re-review of that hunk.
-- Until it is merged, nothing that touches `src/main.rs`, `src/app.rs`,
-  `src/github.rs`, `src/cache.rs` or `src/ui/mod.rs` can start: FZ-04,
-  FZ-05b to f and the FZ-06 fixes other than the common-directory helper.
+- Commits `5217d30` (implementation) and `963f575` (the wording change,
+  re-reviewed) on `fix/fz-03-github-freshness`; merge `407aa49` on `main`;
+  CI green on the branch and on `main`; #16 Done and closed.
+- Combined result before the merge: fmt, clippy with warnings denied, 704
+  tests passed, docs check.
+- GitHub freshness is now `App::github_freshness` (`GithubFreshness`: data
+  time, last attempt, outcome, attempt ids). `fetch_repos` returns
+  `Result<GithubFetch, FetchError>` where a cached fallback is an `Err` that
+  carries data. A reload supersedes polls started before it lands.
+- Left for later tickets: cancelling a hung request and a client timeout
+  (FZ-11), per-row staleness (FZ-13), rows that drop out of a poll (FZ-09).
+
+The main line is open again: tickets that touch `src/main.rs` run one at a
+time. Order chosen by the coordinator: FZ-04 first (P0, and it needs Andreas
+to look at the result, which is easiest while he is active), then FZ-06b,
+e, c, d, then the FZ-05 series once he has signed off its invariant changes.
+
+## FZ-04: in progress
+
+Dispatched on 2026-10-01 under the standing instruction.
+
+- Contract: [fetch-outcome-contract.md](fetch-outcome-contract.md), accepted
+  by the coordinator (Astra not consulted, Andreas may veto any rule). One
+  finding in it was executed: a failed `git fetch` empties `FETCH_HEAD` and
+  advances its mtime, so `git::last_fetch_at` counts a failed fetch as a
+  fetch.
+- Branch `fix/fz-04-fetch-outcomes`, worktree `.claude/worktrees/fz-04`,
+  worker `fz-worker` (`claude-opus-5-5`, medium). The base and the allowed
+  files are in the assignment comment on #17.
+- It **stops at Ready to integrate**: how a failed fetch looks on a row and
+  in the detail pane is Andreas's to accept on the branch build. Until it is
+  merged nothing else that touches `src/main.rs`, `src/git.rs`, `src/app.rs`,
+  `src/model.rs` or the status display can start.
 
 ## Freshness contract for FZ-03: accepted
 
 [freshness-contract.md](freshness-contract.md) is the contract FZ-03
-implements. Andreas accepted it on 2026-10-01: D1 (header information content;
-the look is settled on the branch build) and D2 (a cache-served launch polls
-once even with watch off) himself, D3 to D6 by the coordinator's
-recommendations. It defines attempt, outcome and data time as three separate
-facts, the transitions, what the header must say and file ownership. Astra
-has not reviewed it; a disagreement goes to Andreas, not into the code.
-
-Two findings behind it, read from the code and not executed: a background
-poll that falls back to the cache is reported as a success, so offline shows
-no marker at all; and with watch off a cache-served launch never polls.
-
-Board: #16 is Ready, with the contract and file ownership in a comment.
-FZ-04 follows FZ-03 and must not run beside it. Its per-repo contract is
-drafted in [fetch-outcome-contract.md](fetch-outcome-contract.md), not yet
-accepted. One finding in it was executed: a failed `git fetch` empties
-`FETCH_HEAD` and advances its mtime, so `git::last_fetch_at` counts a failed
-fetch as a fetch.
+implemented. Andreas accepted it on 2026-10-01: D1 (header information
+content) and D2 (a cache-served launch polls once even with watch off)
+himself, D3 to D6 by the coordinator's recommendations. It defines attempt,
+outcome and data time as three separate facts, the transitions and what the
+header must say. Its example strings predate the build; the code and the
+README have the wording he accepted. Astra has not reviewed it; a
+disagreement goes to Andreas, not into the code.
 
 ## Issue #1: Done
 
@@ -278,13 +278,14 @@ exist.
 ## Open items that are Andreas's
 
 - Try FZ-02 on `main` (`cargo run --release`): M0's exit asks for his
-  verification.
-- Accept the FZ-03 header on its branch build when it reaches Ready to
-  integrate.
+  verification. He has run the FZ-03 branch build, which contains it.
+- Accept the FZ-04 failed-fetch display on its branch build when it reaches
+  Ready to integrate.
 - Before the FZ-05 implementation tickets: the four `CLAUDE.md` invariant
   changes and the veto on FZ-05f, both in the identity design.
-- The `fz-02`, `fz-01`, `fz-05`, `fz-06`, `fz-05a` and `issue-1` worktrees
-  and their remote branches are integrated and kept. Removing them is his call.
+- The `fz-02`, `fz-01`, `fz-03`, `fz-05`, `fz-05a`, `fz-06`, `fz-06a`,
+  `issue-1` and `issue-44` worktrees and their remote branches are
+  integrated and kept. Removing them is his call.
 - Follow-ups ticketed on 2026-10-01 (Backlog, P2): #42 `repoz_parity` tests
   fail from a dirty checkout outside `$HOME` (edits an existing test's
   harness, needs his OK); #43 the local contribution count includes stash
@@ -294,10 +295,10 @@ exist.
   planning issues as comments instead: overlapping sweeps and the reload
   race (#24), the drawn remote URL and `FETCH_HEAD` findings (#17), coverage
   (#22), the baseline's findings (#25).
-- #44 is in progress: base `69aeddf`, branch `test/44-missing-config`,
-  worktree `.claude/worktrees/issue-44`, worker `fz-small` (`sonnet`),
-  allowed file `src/config.rs` (test module only). Next: review, commit,
-  push, combined checks, merge, Done and close.
+- #44 is Done and closed: ticket commit `3b38c49`, merge `375bc7a`. The loop
+  in `Config::load()` is extracted into `load_from_candidates` so the
+  fallback is testable. A test pins, without endorsing it, that an invalid
+  config file is silently replaced by defaults; noted on #2.
 
 ## Running the next ticket
 
