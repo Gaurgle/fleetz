@@ -172,9 +172,15 @@ impl Config {
     /// rather than burying the file under `~/Library/Application Support`.
     /// The legacy `epoz` name (pre-rename) is checked last in both roots.
     pub fn load() -> Self {
-        for path in config_candidates() {
+        Self::load_from_candidates(&config_candidates())
+    }
+
+    /// The first candidate that exists wins; a winner that fails to load
+    /// yields defaults rather than falling through. No candidate means defaults.
+    fn load_from_candidates(candidates: &[PathBuf]) -> Self {
+        for path in candidates {
             if path.exists() {
-                return Self::load_from(&path).unwrap_or_default();
+                return Self::load_from(path).unwrap_or_default();
             }
         }
         Self::default()
@@ -440,6 +446,105 @@ mod tests {
         std::fs::write(&path, "not = [valid toml {{").unwrap();
         let result = Config::load_from(&path);
         assert!(result.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// `load_from` is the strict path: a missing file is an error naming the
+    /// read failure, not silent defaults (only `load` falls back to those).
+    #[test]
+    fn load_from_a_missing_file_reports_the_read_failure() {
+        let dir = std::env::temp_dir().join("fleetz_test_missing_config");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+
+        let err = Config::load_from(&path).unwrap_err();
+
+        assert!(
+            err.starts_with("failed to read config:"),
+            "a read failure, not a parse failure: {err}"
+        );
+        assert!(!path.exists(), "loading must not create the file");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A missing parent directory fails the same way and is not created.
+    #[test]
+    fn load_from_a_missing_directory_reports_the_read_failure() {
+        let dir = std::env::temp_dir().join("fleetz_test_missing_config_dir");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("config.toml");
+
+        let err = Config::load_from(&path).unwrap_err();
+
+        assert!(err.starts_with("failed to read config:"), "{err}");
+        assert!(!dir.exists(), "loading must not create the directory");
+    }
+
+    /// Fresh empty directory for the `load_from_candidates` tests.
+    fn candidate_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn load_with_no_candidate_file_returns_defaults_and_creates_nothing() {
+        let dir = candidate_dir("fleetz_test_no_candidates");
+        let first = dir.join("fleetz").join("config.toml");
+        let second = dir.join("epoz").join("config.toml");
+
+        let c = Config::load_from_candidates(&[first.clone(), second.clone()]);
+
+        assert_eq!(format!("{c:?}"), format!("{:?}", Config::default()));
+        assert!(!first.exists() && !second.exists());
+        assert!(!dir.join("fleetz").exists() && !dir.join("epoz").exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn load_falls_through_a_missing_first_candidate_to_the_second() {
+        let dir = candidate_dir("fleetz_test_second_candidate");
+        let first = dir.join("missing.toml");
+        let second = dir.join("second.toml");
+        std::fs::write(&second, "refresh_interval = 77").unwrap();
+
+        let c = Config::load_from_candidates(&[first.clone(), second]);
+
+        assert_eq!(c.refresh_interval, 77);
+        assert!(!first.exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn load_prefers_the_first_candidate_when_both_exist() {
+        let dir = candidate_dir("fleetz_test_first_wins");
+        let first = dir.join("first.toml");
+        let second = dir.join("second.toml");
+        std::fs::write(&first, "refresh_interval = 11").unwrap();
+        std::fs::write(&second, "refresh_interval = 22").unwrap();
+
+        let c = Config::load_from_candidates(&[first, second]);
+
+        assert_eq!(c.refresh_interval, 11);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Pins CURRENT behavior, not a rule being endorsed: an existing but
+    /// invalid config is swallowed and defaults are returned, without falling
+    /// through to a later valid candidate. Change this test if that is fixed.
+    #[test]
+    fn current_behavior_an_invalid_first_candidate_yields_defaults_silently() {
+        let dir = candidate_dir("fleetz_test_invalid_candidate");
+        let first = dir.join("first.toml");
+        let second = dir.join("second.toml");
+        std::fs::write(&first, "not = [valid toml {{").unwrap();
+        std::fs::write(&second, "refresh_interval = 22").unwrap();
+
+        let c = Config::load_from_candidates(&[first, second]);
+
+        assert_eq!(format!("{c:?}"), format!("{:?}", Config::default()));
         std::fs::remove_dir_all(dir).ok();
     }
 
