@@ -98,8 +98,9 @@ pub async fn user_email(repo_path: &Path) -> Option<String> {
 }
 
 /// A cheap fingerprint of what the expensive probes (log, reflog, graph,
-/// stash, worktree) read. A sweep that finds it equal to the last one reuses
-/// their output instead of running them.
+/// stash) read. A sweep that finds it equal to the last one reuses their
+/// output instead of running them. The worktree list is not gated by it:
+/// worktrees are not refs, so `linked_worktrees` reads it on every sweep.
 ///
 /// Refs are keyed by content, never by file metadata: every ref's full
 /// object id, as `for-each-ref` reports it, goes into `ref_signature`. File
@@ -270,7 +271,7 @@ pub async fn work_key(repo_path: &Path) -> Option<WorkKey> {
 /// Cheap change detector over the cheap tier's ref queries: when none of
 /// HEAD's sha, the HEAD symref, any ref's content, the shallow boundary, the
 /// index or the HEAD and stash reflog sizes moved, the expensive probes (log,
-/// reflog, graph, stash, worktree) are reused. See `WorkKey` for what this
+/// reflog, graph, stash) are reused. See `WorkKey` for what this
 /// cannot see. Untracked files do not touch the index, so dirty_count is
 /// always probed regardless.
 ///
@@ -1437,6 +1438,25 @@ pub async fn stash_list(repo_path: &Path) -> Vec<String> {
     }
 }
 
+/// Whether `git worktree list` has anything to say for this checkout: one
+/// `stat` of `<common>/worktrees`, which git creates with the first linked
+/// worktree and deletes with the last. `true` when the directories cannot be
+/// resolved, so an unreadable layout still asks git rather than assuming none.
+fn worktree_probe_needed(repo_path: &Path) -> bool {
+    repo_dirs(repo_path).is_none_or(|dirs| dirs.common_dir.join("worktrees").is_dir())
+}
+
+/// The linked worktrees, cheap enough for every sweep: no process at all when
+/// `<common>/worktrees` is absent, which then means none, never "unknown".
+/// Otherwise `worktree_list`. Worktrees are not refs, so `WorkKey` cannot gate
+/// this list; it is read fresh instead.
+pub async fn linked_worktrees(repo_path: &Path) -> Vec<crate::model::Worktree> {
+    if !worktree_probe_needed(repo_path) {
+        return Vec::new();
+    }
+    worktree_list(repo_path).await
+}
+
 /// List active worktrees (excluding the main one).
 pub async fn worktree_list(repo_path: &Path) -> Vec<crate::model::Worktree> {
     let output = run_git(repo_path, &["worktree", "list", "--porcelain"]).await;
@@ -2250,6 +2270,37 @@ mod real_repo_tests {
 
     fn canonical(path: &Path) -> PathBuf {
         std::fs::canonicalize(path).expect("path exists")
+    }
+
+    /// The gate in front of `git worktree list`: a clone that never had a
+    /// linked worktree, or lost its last one, spawns no process for it, and
+    /// one that has one always asks git. `linked_worktrees` runs the process
+    /// only when this says so, which is how an idle sweep of a repo without
+    /// linked worktrees pays nothing for the list.
+    #[tokio::test]
+    async fn worktree_list_runs_only_while_common_worktrees_exists() {
+        let dir = temp_repo("wtgate");
+        assert!(
+            !worktree_probe_needed(&dir),
+            "a plain clone has nothing to list"
+        );
+        assert!(linked_worktrees(&dir).await.is_empty());
+
+        let wt = linked_worktree(&dir, "wtgate");
+        assert!(
+            worktree_probe_needed(&dir),
+            "the main checkout must ask git"
+        );
+        assert!(worktree_probe_needed(&wt), "a linked worktree must ask git");
+        assert_eq!(linked_worktrees(&dir).await.len(), 1);
+
+        sh(&dir, &["git", "worktree", "remove", &wt.to_string_lossy()]);
+        assert!(!dir.join(".git/worktrees").exists());
+        assert!(
+            !worktree_probe_needed(&dir),
+            "the last one went, so did the probe"
+        );
+        assert!(linked_worktrees(&dir).await.is_empty());
     }
 
     /// The parts of `WorkKey` shared by every checkout of one clone: the

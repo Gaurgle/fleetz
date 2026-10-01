@@ -1067,6 +1067,13 @@ async fn handle_branch_input(
                         }
                     }
                     app.set_status(format!("Deleted {deleted} branch(es)"), false);
+                    // Refresh the row as the switch does, rather than wait for
+                    // the next sweep to notice the deletion.
+                    if deleted > 0
+                        && let Some(idx) = app.selected_repo_index()
+                    {
+                        start_single_sweep(app, tx, idx, false, args.author.clone());
+                    }
                 }
                 app.overlay = Overlay::None;
             }
@@ -2044,7 +2051,8 @@ fn start_sweep(
     spawn_sweep(tx.clone(), targets, do_fetch, author, true, probe);
 }
 
-/// Sweep a single repo (the `f` fetch and the post-branch-switch refresh).
+/// Sweep a single repo (the `f` fetch and the refresh after a branch switch
+/// or delete).
 /// Does not take the sweep lock: it is one repo, and it must work while a
 /// full sweep is running.
 fn start_single_sweep(
@@ -2141,6 +2149,10 @@ async fn rebuild_repo_status(
     let other = git::try_ref_listing(path).await;
     let key = git::work_key_from(path, local.as_ref().ok(), other.as_ref().ok()).await;
     let unchanged = key_unchanged(&key, &old.work_key);
+    // Not gated: no ref moves when a worktree is added on an existing branch,
+    // removed, or switched, so the key cannot see it. One stat, and a process
+    // only for a clone that has linked worktrees.
+    let worktrees = git::linked_worktrees(path).await;
 
     let branches = local.map(|l| l.statuses).unwrap_or_default();
     let remote = other.map(|o| o.remotes).unwrap_or_default();
@@ -2149,14 +2161,13 @@ async fn rebuild_repo_status(
         .iter()
         .fold((0u32, 0u32), |(b, a), s| (b + s.behind, a + s.ahead));
 
-    let (commits, reflog, graph, graph_expanded, stash_entries, worktrees) = if unchanged {
+    let (commits, reflog, graph, graph_expanded, stash_entries) = if unchanged {
         (
             old.commits.clone(),
             old.reflog.clone(),
             old.graph.clone(),
             old.graph_expanded.clone(),
             old.stash_entries.clone(),
-            old.worktrees.clone(),
         )
     } else {
         (
@@ -2172,7 +2183,6 @@ async fn rebuild_repo_status(
             git::graph(path, &branch_names, HISTORY_COUNT).await,
             git::graph_expanded(path, &branch_names, HISTORY_COUNT).await,
             git::stash_list(path).await,
-            git::worktree_list(path).await,
         )
     };
 
@@ -4705,5 +4715,225 @@ mod tests {
             ["glanze", "old"],
             "case mismatch dropped it to the end"
         );
+    }
+
+    // --- FZ-06c: the worktree list is re-read on every sweep ---
+    //
+    // Each scenario sweeps a real repo with `rebuild_repo_status`, feeding
+    // every sweep the previous one's result as its snapshot, as the app does.
+    // Unless a test says otherwise, the row asserted on is the MAIN
+    // checkout's: its `worktrees` lists the linked worktrees of its clone.
+
+    fn wt_sh(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new(args[0])
+            .args(&args[1..])
+            .current_dir(dir)
+            .status()
+            .expect("spawn");
+        assert!(status.success(), "command failed: {args:?}");
+    }
+
+    /// A scratch directory unique to this test and this test process.
+    fn wt_scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fleetz_wt_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A repo with one commit on `main` and an idle branch `spare`, at
+    /// `<scratch>/main`.
+    fn wt_repo(scratch: &Path) -> PathBuf {
+        let dir = scratch.join("main");
+        std::fs::create_dir_all(&dir).unwrap();
+        wt_sh(&dir, &["git", "init", "-q", "-b", "main"]);
+        wt_sh(&dir, &["git", "config", "user.email", "t@example.com"]);
+        wt_sh(&dir, &["git", "config", "user.name", "t"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        wt_sh(&dir, &["git", "add", "."]);
+        wt_sh(&dir, &["git", "commit", "-q", "-m", "init"]);
+        wt_sh(&dir, &["git", "branch", "spare"]);
+        dir
+    }
+
+    fn path_arg(path: &Path) -> String {
+        path.to_string_lossy().into_owned()
+    }
+
+    /// One sweep of `path` against `old`, without the histogram probe.
+    async fn sweep_once(path: &Path, old: &RepoStatus) -> RepoStatus {
+        let target = SweepTarget {
+            display_path: path_arg(path),
+            fs_path: path.to_path_buf(),
+            old: Box::new(old.clone()),
+        };
+        rebuild_repo_status(&target, None, None).await
+    }
+
+    /// The first sweep of a row, from a snapshot with no key.
+    async fn first_sweep(path: &Path) -> RepoStatus {
+        let mut row = test_repo();
+        row.path = Some(path_arg(path));
+        sweep_once(path, &row).await
+    }
+
+    /// The branches the row's linked worktrees have checked out, sorted.
+    fn worktree_branches(row: &RepoStatus) -> Vec<String> {
+        let mut names: Vec<String> = row.worktrees.iter().map(|w| w.branch.clone()).collect();
+        names.sort();
+        names
+    }
+
+    fn common_worktrees_dir(path: &Path) -> PathBuf {
+        git::repo_dirs(path)
+            .expect("a repo")
+            .common_dir
+            .join("worktrees")
+    }
+
+    /// E4a: `worktree add -b` must show up on the next sweep.
+    #[tokio::test]
+    async fn a_worktree_added_on_a_new_branch_is_listed_on_the_next_sweep() {
+        let scratch = wt_scratch("e4a");
+        let repo = wt_repo(&scratch);
+        let before = first_sweep(&repo).await;
+        assert!(before.worktrees.is_empty());
+
+        let wt = path_arg(&scratch.join("lw"));
+        wt_sh(&repo, &["git", "worktree", "add", "-q", "-b", "wt1", &wt]);
+        let after = sweep_once(&repo, &before).await;
+
+        assert_eq!(worktree_branches(&after), ["wt1"]);
+    }
+
+    /// E4b: `worktree add` of an existing branch creates no ref, so nothing
+    /// in the key moves; the list must move anyway.
+    #[tokio::test]
+    async fn a_worktree_added_on_an_existing_branch_is_listed_on_the_next_sweep() {
+        let scratch = wt_scratch("e4b");
+        let repo = wt_repo(&scratch);
+        let before = first_sweep(&repo).await;
+        assert!(before.worktrees.is_empty());
+
+        let wt = path_arg(&scratch.join("lw"));
+        wt_sh(&repo, &["git", "worktree", "add", "-q", &wt, "spare"]);
+        let after = sweep_once(&repo, &before).await;
+
+        assert_eq!(worktree_branches(&after), ["spare"]);
+    }
+
+    /// E4c: `worktree remove` of one of two linked worktrees.
+    #[tokio::test]
+    async fn a_removed_worktree_drops_off_on_the_next_sweep() {
+        let scratch = wt_scratch("e4c");
+        let repo = wt_repo(&scratch);
+        let (one, two) = (scratch.join("lw1"), scratch.join("lw2"));
+        wt_sh(&repo, &["git", "branch", "other"]);
+        wt_sh(
+            &repo,
+            &["git", "worktree", "add", "-q", &path_arg(&one), "spare"],
+        );
+        wt_sh(
+            &repo,
+            &["git", "worktree", "add", "-q", &path_arg(&two), "other"],
+        );
+        let before = first_sweep(&repo).await;
+        assert_eq!(worktree_branches(&before), ["other", "spare"]);
+
+        wt_sh(&repo, &["git", "worktree", "remove", &path_arg(&one)]);
+        let after = sweep_once(&repo, &before).await;
+
+        assert_eq!(worktree_branches(&after), ["other"]);
+    }
+
+    /// E4d: a linked worktree switches to a new branch.
+    #[tokio::test]
+    async fn a_linked_worktree_switching_to_a_new_branch_is_seen_on_the_next_sweep() {
+        let scratch = wt_scratch("e4d");
+        let repo = wt_repo(&scratch);
+        let wt = scratch.join("lw");
+        wt_sh(
+            &repo,
+            &["git", "worktree", "add", "-q", &path_arg(&wt), "spare"],
+        );
+        let before = first_sweep(&repo).await;
+        assert_eq!(worktree_branches(&before), ["spare"]);
+
+        wt_sh(&wt, &["git", "switch", "-q", "-c", "fresh"]);
+        let after = sweep_once(&repo, &before).await;
+
+        assert_eq!(worktree_branches(&after), ["fresh"]);
+    }
+
+    /// E4d's quieter form: switching a linked worktree to a branch that
+    /// already exists moves no ref and touches nothing of the main
+    /// checkout's, so the main row's key cannot see it.
+    #[tokio::test]
+    async fn a_linked_worktree_switching_to_an_existing_branch_is_seen_on_the_next_sweep() {
+        let scratch = wt_scratch("e4d_existing");
+        let repo = wt_repo(&scratch);
+        wt_sh(&repo, &["git", "branch", "other"]);
+        let wt = scratch.join("lw");
+        wt_sh(
+            &repo,
+            &["git", "worktree", "add", "-q", &path_arg(&wt), "spare"],
+        );
+        let before = first_sweep(&repo).await;
+        assert_eq!(worktree_branches(&before), ["spare"]);
+
+        wt_sh(&wt, &["git", "switch", "-q", "other"]);
+        let after = sweep_once(&repo, &before).await;
+
+        assert_eq!(worktree_branches(&after), ["other"]);
+    }
+
+    /// Git deletes `<common>/worktrees` with the last linked worktree, so the
+    /// absent directory is the only trace of the removal. It must read as an
+    /// empty list, never as "reuse the last one".
+    #[tokio::test]
+    async fn removing_the_only_worktree_empties_the_list() {
+        let scratch = wt_scratch("only");
+        let repo = wt_repo(&scratch);
+        let first = first_sweep(&repo).await;
+        let wt = path_arg(&scratch.join("lw"));
+        wt_sh(&repo, &["git", "worktree", "add", "-q", "-b", "solo", &wt]);
+        let with_one = sweep_once(&repo, &first).await;
+        assert_eq!(worktree_branches(&with_one), ["solo"]);
+
+        wt_sh(&repo, &["git", "worktree", "remove", &wt]);
+        let after = sweep_once(&repo, &with_one).await;
+
+        assert!(
+            !common_worktrees_dir(&repo).exists(),
+            "git left <common>/worktrees behind, so this did not test the absent path"
+        );
+        assert!(
+            after.worktrees.is_empty(),
+            "the removed worktree is still listed: {:?}",
+            after.worktrees
+        );
+    }
+
+    /// A sweep of the linked worktree's own row: it lists the main checkout
+    /// and every other linked worktree, and sees a sibling added on an
+    /// existing branch.
+    #[tokio::test]
+    async fn a_linked_worktrees_own_row_sees_a_new_sibling() {
+        let scratch = wt_scratch("own_row");
+        let repo = wt_repo(&scratch);
+        wt_sh(&repo, &["git", "branch", "other"]);
+        let wt = scratch.join("lw");
+        wt_sh(
+            &repo,
+            &["git", "worktree", "add", "-q", &path_arg(&wt), "spare"],
+        );
+        let before = first_sweep(&wt).await;
+        assert_eq!(worktree_branches(&before), ["main"]);
+
+        let sibling = path_arg(&scratch.join("lw2"));
+        wt_sh(&repo, &["git", "worktree", "add", "-q", &sibling, "other"]);
+        let after = sweep_once(&wt, &before).await;
+
+        assert_eq!(worktree_branches(&after), ["main", "other"]);
     }
 }
