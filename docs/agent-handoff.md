@@ -172,10 +172,14 @@ In order of weight:
 - **FZ-13 (#26) split, asked for by Andreas at about 21:00:** break it into
   small, bounded M3 tickets and propose an order starting with one or two
   quick visible wins (he named the intro off by default and the normal-font
-  fallback), and bring them to him before dispatching anything. A read-only
-  scan of the UI code is running to ground the split; the split itself is
-  the coordinator's. No M3 ticket exists yet and none may be dispatched
-  before he has seen the list.
+  fallback), and bring them to him before dispatching anything. Done at
+  21:15: the proposal is a comment on #26 (eighteen tickets FZ-13a to r in
+  four waves plus rendering, with the inventory facts they rest on) and was
+  put to him with four decisions: intro off by default (FZ-13a); the name
+  and default of the plain-font setting (FZ-13b); scrolling or two-column
+  help (FZ-13c); what replaces the em dash in the header (FZ-13f). **No M3
+  issue exists and none is dispatched until he answers.** FZ-13a and FZ-13b
+  touch no file the identity series owns and can run in the second slot.
 - **#45:** uncommitted `ci.yml` and `docs.yml` in
   `.claude/worktrees/issue-45`; reviewer verdict blocked on a repository
   setting, diff judged correct. Parked by Andreas until the repository is
@@ -183,9 +187,10 @@ In order of weight:
 
 ## Next steps, in order
 
-1. FZ-06d: review, integrate and close as above. It is the last cache fix.
-2. Then the identity series FZ-05b to f (#32 to #36), serial, one worker at
-   a time; then FZ-10a, b, c (#47 to #49). #43 (`git.rs`) fits between any
+1. FZ-05b: review, integrate and close as above.
+2. Then the rest of the identity series FZ-05c to f (#33 to #36), serial,
+   one worker at a time; then, in the order ruled for FZ-09 (C8): FZ-10a
+   (#47), FZ-09c, FZ-09b, FZ-10b (#48), FZ-10c (#49), FZ-09d. #43 (`git.rs`) fits between any
    two. #46 needs Andreas's OK first. **From the merge of FZ-05b until the
    merge of FZ-05e, every report tells Andreas not to install from `main`
    and nothing is tagged** (see Identity under "Facts" below). The
@@ -244,6 +249,7 @@ closed with the evidence in a comment.
 | FZ-06b | #38 | `e33914d` | `f3663e6` | `WorkKey` hashes every ref name and object id plus the shallow file; key inputs read before the probes on both paths |
 | FZ-06e | #41 | `e33914d` (FZ-06b) | `f3663e6` | Closed without a dispatch: FZ-06b reordered `build_repo_status` and fixed its comment |
 | FZ-10 | #23 | `9494938` | `f627a84` | [api-budget-design.md](api-budget-design.md), decisions A1 to A7, tickets FZ-10a to c (#47 to #49), owner items accepted |
+| FZ-06d | #40 | `92cf932` | `e4e3f42` | The local histogram carries its own reuse key (grid start, configured author, ref signature, HEAD id); six test builders gained the field |
 | FZ-06c | #39 | `5c83fb0` | `24b2210` | The worktree list is read on every sweep when the common directory has a `worktrees` folder; the branch-delete overlay sweeps its repo |
 | FZ-04 | #17 | `4839891`, `3469f67` | `f8a54c0` | Fetch outcomes as three facts per checkout; `⚠ unreachable` and its kin on the row, the reason in the detail pane, no credential drawn |
 
@@ -282,15 +288,14 @@ Facts from these that later tickets need:
 ## Tickets that exist and wait
 
 On the board in Backlog, milestone M1 unless noted. None dispatched except
-FZ-06d and FZ-09, which are In progress.
+FZ-05b and FZ-09, which are In progress.
 
 - **Identity series:** FZ-05b #32 (`discovery.rs` plus named
   `assemble_view` call sites, and the comparison key in `model.rs`), FZ-05c
   #33 (test seam, pure refactor), FZ-05d #34 (assembly and poll, the largest;
   its reviewer traces both), FZ-05e #35 (`merge_sources`), FZ-05f #36 (pass 3
   by path only). Serial, in that order.
-- **Cache fixes:** FZ-06d #40 (histogram key, running) is the last one.
-  FZ-06a, b, c and e are done.
+- **Cache fixes:** all done (FZ-06a to e).
 - **API budget:** FZ-10a #47 (`github.rs`, after FZ-05e), FZ-10b #48
   (`app.rs`, `main.rs`), FZ-10c #49 (`ui/mod.rs`, README; stops at Ready to
   integrate for Andreas's look). Serial, after the identity series.
@@ -378,14 +383,14 @@ code.
 All under `.claude/worktrees/` in the main checkout. Removing a worktree or
 a remote branch is Andreas's call; none was removed.
 
-- **Active:** `fz-06d` (worker writing, base `24b2210`), `fz-09` (worker
-  drafting, base `769c1fd`), `issue-45` (uncommitted `ci.yml` and
+- **Active:** `fz-05b` (worker writing, base `e4e3f42`), `fz-09` (worker
+  revising the design, at `aa66577`), `issue-45` (uncommitted `ci.yml` and
   `docs.yml`, parked).
 - **Integrated and kept:** `fz-01`, `fz-02`, `fz-03`, `fz-04`, `fz-05`,
-  `fz-05a`, `fz-06`, `fz-06a`, `fz-06b`, `fz-06c`, `fz-10`, `issue-1`,
-  `issue-42`, `issue-44`, each with its branch pushed.
+  `fz-05a`, `fz-06`, `fz-06a`, `fz-06b`, `fz-06c`, `fz-06d`, `fz-10`,
+  `issue-1`, `issue-42`, `issue-44`, each with its branch pushed.
 - Not pushed: `docs/fz-09-coverage-cache-isolation`,
-  `ci/45-pull-request-trigger`, `fix/fz-06d-histogram-reuse-key`.
+  `ci/45-pull-request-trigger`, `fix/fz-05b-owner-aware-discovery`.
 - The session scratchpad holds throwaway integration clones and diagnostic
   captures. Nothing there is needed.
 
