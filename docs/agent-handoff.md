@@ -273,10 +273,12 @@ than repo state. **He said not to start it.**
 The issue body is rewritten with the scope, the measured GraphQL cost (every
 query costs the floor of one point; field values through `fieldValueByName`
 keep the list at 100 nodes), six proposed tickets and the dependencies. The
-coordinator's proposed placement, which he has not confirmed: the design
-ticket right after M1 alongside M2, data and the table as the first item of
-M4, columns and ticket details after M3's pane work, the `gh` handoffs after
-FZ-16. No sub-issues are created and nothing is dispatched.
+placement he agreed to ("sounds good to me"): the design ticket right after
+M1 alongside M2, data and the table as the first item of M4, columns and
+ticket details after M3's pane work, the `gh` handoffs after FZ-16. Priority
+stays P2. Left open for the design ticket: whether setting Status through
+`gh` is in the first version. No sub-issues are created and nothing is
+dispatched.
 
 ## Freshness contract for FZ-03: accepted
 
