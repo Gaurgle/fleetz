@@ -34,14 +34,95 @@ pub struct GithubFetch {
     /// upgraded install serves its old cache and reports no PRs anywhere for
     /// a full TTL, silently.
     pub has_pr_counts: bool,
-    /// Whether this came off the disk cache rather than the network.
+    /// Whether this came off the network or the disk cache, and how old.
     ///
     /// Startup serves any cached payload however old (`CacheMode::AnyCached`),
     /// so "the load returned a dataset" does not mean "GitHub was just asked".
     /// The caller needs the difference: starting the re-poll clock from a
     /// cached payload leaves the first real poll a whole interval away, and
     /// the dashboard spends it showing whatever the last session left behind.
-    pub from_cache: bool,
+    pub origin: Origin,
+}
+
+/// Where a payload came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// A request made just now, answered with data.
+    Network,
+    /// The disk cache. `written` is the cache file's write time, which is when
+    /// the payload left GitHub; `None` when it could not be read, and then the
+    /// age is unknown, never "now".
+    Cache {
+        written: Option<DateTime<chrono::Local>>,
+    },
+}
+
+/// How a request to GitHub failed. See `docs/freshness-contract.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    /// Transport: DNS, TLS, no route, a body cut off.
+    Offline,
+    /// A non-2xx status.
+    Http,
+    /// A GraphQL `errors` body; the rate limit is one of these.
+    Api,
+    /// No token from `gh`.
+    Auth,
+    /// A body that does not parse, or parses without `data`.
+    Malformed,
+    /// Given up on after `GITHUB_POLL_STUCK_AFTER` with no answer.
+    TimedOut,
+}
+
+/// One failed attempt: its kind, and the message the status line shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    pub kind: FailureKind,
+    pub message: String,
+    /// An `Api` failure that is GitHub's rate limit: the common way the API
+    /// refuses, and one that clears on its own, so the header names it.
+    pub rate_limited: bool,
+}
+
+impl Failure {
+    pub fn new(kind: FailureKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            rate_limited: false,
+        }
+    }
+
+    /// An `Api` failure that is a rate limit.
+    pub fn rate_limit(message: impl Into<String>) -> Self {
+        Self {
+            rate_limited: true,
+            ..Self::new(FailureKind::Api, message)
+        }
+    }
+}
+
+/// A request that failed, with the cached payload if there was one to fall
+/// back on.
+///
+/// A fallback used to come back as `Ok`, which made an offline poll look
+/// exactly like a successful one: the caller cleared the failure marker and
+/// restarted the clock. Carrying the payload inside the error keeps "the
+/// request failed" impossible to miss, while the callers with nothing in
+/// memory to keep (launch, `R`) can still use the data.
+pub struct FetchError {
+    pub failure: Failure,
+    /// Always `Origin::Cache` when present.
+    pub fallback: Option<Box<GithubFetch>>,
+}
+
+impl std::fmt::Debug for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FetchError")
+            .field("failure", &self.failure)
+            .field("has_fallback", &self.fallback.is_some())
+            .finish()
+    }
 }
 
 // --- Raw deserialization types (match GraphQL response shape) ---
@@ -291,6 +372,24 @@ struct WorkflowRef {
 #[derive(Deserialize)]
 struct GraphQlError {
     message: String,
+    /// GitHub's machine-readable error class, `RATE_LIMITED` among them.
+    /// Absent on some errors, so optional.
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+}
+
+/// Whether a GraphQL `errors` body is a rate limit. Decided on GitHub's
+/// `type` when any error carries one; the message text is only a fallback for
+/// a body with no `type` at all, so the UI never has to match words.
+fn is_rate_limited(errors: &[GraphQlError]) -> bool {
+    if errors.iter().any(|e| e.kind.is_some()) {
+        return errors
+            .iter()
+            .any(|e| e.kind.as_deref() == Some("RATE_LIMITED"));
+    }
+    errors
+        .iter()
+        .any(|e| e.message.to_lowercase().contains("rate limit"))
 }
 
 /// Build the GraphQL query string.
@@ -465,14 +564,34 @@ fn merge_sources(viewer: Viewer) -> Vec<RepoNode> {
 /// Parse a cached raw response body into repos plus the calendar, if it
 /// parses at all. The calendar is `None` for a payload written before the
 /// field existed, which is exactly what an upgraded install reads first.
+///
+/// The origin's write time is unknown here; `read_cached` fills it in.
 fn parse_cached(json: Option<String>, today: chrono::NaiveDate) -> Option<GithubFetch> {
     let response: GraphQlResponse = serde_json::from_str(&json?).ok()?;
-    Some(split_viewer(response.data?.viewer, today, true))
+    Some(split_viewer(
+        response.data?.viewer,
+        today,
+        Origin::Cache { written: None },
+    ))
+}
+
+/// The cache file's payload however old, stamped with the file's write time
+/// as its data time.
+fn read_cached(cache: &crate::cache::ApiCache, today: chrono::NaiveDate) -> Option<GithubFetch> {
+    let cached = cache.read_stale()?;
+    parse_cached(Some(cached.body), today).map(|fetch| stamp_written(fetch, cached.written))
+}
+
+fn stamp_written(mut fetch: GithubFetch, written: Option<std::time::SystemTime>) -> GithubFetch {
+    fetch.origin = Origin::Cache {
+        written: written.map(DateTime::<chrono::Local>::from),
+    };
+    fetch
 }
 
 /// Pull the calendar out of a viewer and flatten the rest into repos. Both
 /// halves consume the viewer, so it is destructured rather than borrowed.
-fn split_viewer(viewer: Viewer, today: chrono::NaiveDate, from_cache: bool) -> GithubFetch {
+fn split_viewer(viewer: Viewer, today: chrono::NaiveDate, origin: Origin) -> GithubFetch {
     let Viewer {
         repositories,
         organizations,
@@ -492,7 +611,7 @@ fn split_viewer(viewer: Viewer, today: chrono::NaiveDate, from_cache: bool) -> G
         repos: parse_repos(nodes),
         calendar: parse_calendar(contribution_years, recent, today).map(Box::new),
         has_pr_counts,
-        from_cache,
+        origin,
     }
 }
 
@@ -517,7 +636,7 @@ pub async fn fetch_repos(
     repo_limit: u32,
     cache: &crate::cache::ApiCache,
     mode: CacheMode,
-) -> Result<GithubFetch, String> {
+) -> Result<GithubFetch, FetchError> {
     // One "today" for the whole fetch, so every path builds the same grid.
     let today = chrono::Local::now().date_naive();
 
@@ -525,15 +644,47 @@ pub async fn fetch_repos(
     // carries no calendar, and serving it would show an empty year. Same for
     // one written before PR counts rode along. Treat either as a miss: the
     // whole point of the poll is that both come for free.
-    let usable = |raw| parse_cached(raw, today).filter(|f| f.calendar.is_some() && f.has_pr_counts);
+    let usable =
+        |fetch: Option<GithubFetch>| fetch.filter(|f| f.calendar.is_some() && f.has_pr_counts);
     if mode == CacheMode::AnyCached
-        && let Some(fetch) = usable(cache.read()).or_else(|| usable(cache.read_stale()))
+        && let Some(fetch) =
+            usable(parse_cached(cache.read(), today).map(|f| stamp_written(f, cache.written())))
+                .or_else(|| usable(read_cached(cache, today)))
     {
         return Ok(fetch);
     }
 
-    // Fetch fresh
-    let token = get_gh_token().await?;
+    let attempt = request(repo_limit, cache, today).await;
+    settle_attempt(attempt, cache, today)
+}
+
+/// Turn a finished attempt into the fetch result: a success as it is, a
+/// failure with whatever the cache holds attached.
+///
+/// The fallback used to be returned as `Ok`, so a background poll with the
+/// network down cleared the failure marker and restarted the clock, and the
+/// header said nothing while the data aged. Split out so the rule is
+/// reachable without a network.
+fn settle_attempt(
+    attempt: Result<GithubFetch, Failure>,
+    cache: &crate::cache::ApiCache,
+    today: chrono::NaiveDate,
+) -> Result<GithubFetch, FetchError> {
+    attempt.map_err(|failure| FetchError {
+        failure,
+        fallback: read_cached(cache, today).map(Box::new),
+    })
+}
+
+/// One network attempt: token, request, status, body.
+async fn request(
+    repo_limit: u32,
+    cache: &crate::cache::ApiCache,
+    today: chrono::NaiveDate,
+) -> Result<GithubFetch, Failure> {
+    let token = get_gh_token()
+        .await
+        .map_err(|e| Failure::new(FailureKind::Auth, e))?;
     let query = build_query(
         repo_limit,
         today,
@@ -550,28 +701,29 @@ pub async fn fetch_repos(
         .await
     {
         Ok(r) => r,
-        // Transport failure (offline, DNS, TLS): serve stale cache if any,
-        // matching the non-2xx path below, so launch works offline.
+        // Transport failure (offline, DNS, TLS). `settle_attempt` attaches
+        // the cache, so launch and `R` still work offline.
         Err(e) => {
-            if let Some(fetch) = parse_cached(cache.read_stale(), today) {
-                return Ok(fetch);
-            }
-            return Err(format!("GitHub API request failed: {e}"));
+            return Err(Failure::new(
+                FailureKind::Offline,
+                format!("GitHub API request failed: {e}"),
+            ));
         }
     };
 
     if !resp.status().is_success() {
-        // Fallback to stale cache
-        if let Some(fetch) = parse_cached(cache.read_stale(), today) {
-            return Ok(fetch);
-        }
-        return Err(format!("GitHub API returned {}", resp.status()));
+        return Err(Failure::new(
+            FailureKind::Http,
+            format!("GitHub API returned {}", resp.status()),
+        ));
     }
 
-    let body_text = resp
-        .text()
-        .await
-        .map_err(|e| format!("failed to read response: {e}"))?;
+    let body_text = resp.text().await.map_err(|e| {
+        Failure::new(
+            FailureKind::Offline,
+            format!("failed to read response: {e}"),
+        )
+    })?;
 
     accept_response(&body_text, cache, today)
 }
@@ -593,18 +745,28 @@ fn accept_response(
     body_text: &str,
     cache: &crate::cache::ApiCache,
     today: chrono::NaiveDate,
-) -> Result<GithubFetch, String> {
-    let body: GraphQlResponse =
-        serde_json::from_str(body_text).map_err(|e| format!("failed to parse response: {e}"))?;
+) -> Result<GithubFetch, Failure> {
+    let body: GraphQlResponse = serde_json::from_str(body_text).map_err(|e| {
+        Failure::new(
+            FailureKind::Malformed,
+            format!("failed to parse response: {e}"),
+        )
+    })?;
 
     if let Some(errors) = body.errors {
         let msgs: Vec<_> = errors.iter().map(|e| e.message.as_str()).collect();
-        return Err(format!("GitHub API errors: {}", msgs.join(", ")));
+        let message = format!("GitHub API errors: {}", msgs.join(", "));
+        return Err(match is_rate_limited(&errors) {
+            true => Failure::rate_limit(message),
+            false => Failure::new(FailureKind::Api, message),
+        });
     }
 
-    let data = body.data.ok_or("GitHub response missing data field")?;
+    let data = body.data.ok_or_else(|| {
+        Failure::new(FailureKind::Malformed, "GitHub response missing data field")
+    })?;
     cache.write(body_text);
-    Ok(split_viewer(data.viewer, today, false))
+    Ok(split_viewer(data.viewer, today, Origin::Network))
 }
 
 /// Parse raw GraphQL nodes into GithubRepo structs.
@@ -1367,6 +1529,157 @@ mod tests {
               {"contributionDays":[{"date":"2026-08-18","contributionCount":7}]}]}}}}}"#;
         assert!(accept_response(good, &cache, day("2026-08-18")).is_ok());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), good);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const SERVABLE: &str = r#"{"data":{"viewer":{"repositories":{"nodes":[]},
+            "contributionsCollection":{"contributionCalendar":{"weeks":[
+              {"contributionDays":[{"date":"2026-08-18","contributionCount":7}]}]}}}}}"#;
+
+    /// A cache file in its own directory, written `age` ago.
+    fn planted_cache(
+        tag: &str,
+        age: std::time::Duration,
+    ) -> (std::path::PathBuf, std::time::SystemTime) {
+        let dir = std::env::temp_dir().join(format!("fleetz_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("github-50.json");
+        std::fs::write(&path, SERVABLE).unwrap();
+        let planted = std::time::SystemTime::now() - age;
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(planted)
+            .unwrap();
+        (path, planted)
+    }
+
+    fn assert_written_near(origin: Origin, planted: std::time::SystemTime) {
+        let Origin::Cache {
+            written: Some(written),
+        } = origin
+        else {
+            panic!("expected a dated cache origin, got {origin:?}");
+        };
+        let drift = (written - DateTime::<chrono::Local>::from(planted))
+            .num_seconds()
+            .abs();
+        assert!(drift < 1, "data time {written} is not the file's");
+    }
+
+    /// Rule 2: a request that failed with a cache on disk is a failure that
+    /// happens to have data, never `Ok`. It used to come back as `Ok`, and an
+    /// offline poll looked like a successful one. The cache file is left
+    /// exactly as it was (rule 5).
+    #[test]
+    fn a_failed_attempt_with_a_cache_is_a_failure_carrying_the_cache() {
+        let (path, planted) = planted_cache("fallback", std::time::Duration::from_secs(2 * 3600));
+        let cache = crate::cache::ApiCache::at(path.clone(), 86_400);
+        let failure = Failure::new(FailureKind::Offline, "GitHub API request failed: dns");
+
+        let Err(error) = settle_attempt(Err(failure.clone()), &cache, day("2026-08-18")) else {
+            panic!("a fallback came back as Ok");
+        };
+        assert_eq!(error.failure, failure);
+        let fallback = error.fallback.expect("the cache was there to fall back on");
+        assert_written_near(fallback.origin, planted);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), SERVABLE);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// No cache to fall back on is the same failure with nothing attached:
+    /// the launch error panel's case.
+    #[test]
+    fn a_failed_attempt_without_a_cache_has_nothing_to_fall_back_on() {
+        let dir = std::env::temp_dir().join(format!("fleetz_nocache_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let failure = Failure::new(FailureKind::Http, "GitHub API returned 502");
+        let Err(error) = settle_attempt(Err(failure.clone()), &cache, day("2026-08-18")) else {
+            panic!("no data, yet Ok");
+        };
+        assert_eq!(error.failure, failure);
+        assert!(error.fallback.is_none());
+    }
+
+    /// A cache-served launch carries the cache file's write time as its data
+    /// time, so the header can say how old it is.
+    #[tokio::test]
+    async fn a_cache_served_launch_reports_the_files_age() {
+        let (path, planted) = planted_cache("aged", std::time::Duration::from_secs(3 * 3600));
+        let cache = crate::cache::ApiCache::at(path.clone(), 0);
+        let fetch = fetch_repos(50, &cache, CacheMode::AnyCached)
+            .await
+            .expect("an expired payload should still be served");
+        assert_written_near(fetch.origin, planted);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The fresh-within-TTL read is dated the same way as the stale one.
+    #[tokio::test]
+    async fn a_fresh_cache_read_reports_the_files_age_too() {
+        let (path, planted) = planted_cache("aged_fresh", std::time::Duration::from_secs(60));
+        let cache = crate::cache::ApiCache::at(path.clone(), 86_400);
+        assert!(cache.read().is_some(), "fixture should be fresh");
+        let fetch = fetch_repos(50, &cache, CacheMode::AnyCached).await.unwrap();
+        assert_written_near(fetch.origin, planted);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// An accepted answer is network data, and the kinds of a refused one are
+    /// told apart: a rate limit is an API failure, never "offline".
+    #[test]
+    fn accepted_answers_are_network_and_refusals_have_a_kind() {
+        let dir = std::env::temp_dir().join(format!("fleetz_kinds_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let today = day("2026-08-18");
+
+        let ok = accept_response(SERVABLE, &cache, today).ok().unwrap();
+        assert_eq!(ok.origin, Origin::Network);
+
+        let rate_limited =
+            r#"{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}"#;
+        let kind = |body| accept_response(body, &cache, today).err().unwrap().kind;
+        assert_eq!(kind(rate_limited), FailureKind::Api);
+        assert_eq!(kind("<html>"), FailureKind::Malformed);
+        assert_eq!(kind(r#"{"data":null}"#), FailureKind::Malformed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A rate limit is read off GitHub's `type`, not the wording of its
+    /// message, so the header can name it whatever the text says.
+    #[test]
+    fn a_typed_rate_limit_body_is_a_rate_limit() {
+        let dir = std::env::temp_dir().join(format!("fleetz_typed_rl_{}", std::process::id()));
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let today = day("2026-08-18");
+        let fail = |body| accept_response(body, &cache, today).err().unwrap();
+
+        let typed = fail(r#"{"errors":[{"type":"RATE_LIMITED","message":"Slow down"}]}"#);
+        assert_eq!(typed.kind, FailureKind::Api);
+        assert!(typed.rate_limited, "typed RATE_LIMITED missed");
+
+        // A typed error of another class is not a rate limit, whatever the
+        // message happens to say.
+        let other = fail(r#"{"errors":[{"type":"NOT_FOUND","message":"no rate limit here"}]}"#);
+        assert_eq!(other.kind, FailureKind::Api);
+        assert!(!other.rate_limited);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With no `type` on any error, the message is all there is to go on.
+    #[test]
+    fn an_untyped_rate_limit_body_falls_back_to_the_message() {
+        let dir = std::env::temp_dir().join(format!("fleetz_untyped_rl_{}", std::process::id()));
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let today = day("2026-08-18");
+        let fail = |body| accept_response(body, &cache, today).err().unwrap();
+
+        assert!(fail(r#"{"errors":[{"message":"API rate limit exceeded"}]}"#).rate_limited);
+        assert!(!fail(r#"{"errors":[{"message":"Something went wrong"}]}"#).rate_limited);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

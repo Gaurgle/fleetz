@@ -34,6 +34,25 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 The dashboard opens immediately: the first frame paints before any GitHub or
 filesystem work, and a spinner in the header marks the load until repos land.
 
+The header says when the GitHub data (CI, PRs, the contribution strip) is not
+current, in one segment beside the watch eye:
+
+- nothing, when the last request to GitHub succeeded;
+- `github cached 14:02` (dim), when launch painted from the disk cache and the
+  request that confirms it is still on its way. One request follows a cached
+  launch even with watch off;
+- `⚠ github offline, as of 14:02` (orange), when the last request failed. The
+  word says how (`offline`, `rate limited`, `http error`, `api error`,
+  `not signed in`, `bad response`, `timed out`) and the time is when the data
+  on screen left GitHub, written like the `swept` time. A cache whose age
+  cannot be read says `age unknown` instead.
+
+A failed request never blanks or rewinds what is on screen and never touches
+the cache. With watch on, the next one comes a full `github_poll_interval`
+later; with watch off, none follows on its own, and `r` retries at once. The
+segment clears on the first success. A narrow header shortens it to
+`⚠ github` or `github cached` rather than dropping it.
+
 ## Install
 
 Requires the Rust toolchain (`cargo`).
@@ -142,8 +161,8 @@ in the header instead.
 | `<` / `>` | Narrow / widen the repo list |
 | `+` / `-` | Shrink / grow the inspector pane |
 | `=` | Reset both panes to their default sizes |
-| `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates. No rediscovery |
-| `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear |
+| `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates. No rediscovery. A failed poll keeps the rows as they are and marks the header |
+| `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear. If GitHub cannot be reached it rebuilds from the cache and says `Reloaded from cache: GitHub offline` (or why) instead of `Reloaded` |
 | `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub. While it is on, a red eye (`󰈈 watch`) in the header pulses between two shades so the dashboard says it is live without anything moving; off, it is a grey crossed-out eye (`󰈉 watch`) |
 | `?` | Toggle help overlay |
 | `Esc` | Close search or help |
@@ -221,13 +240,14 @@ refresh_interval = 60
 # machine, someone else pushed) gets a targeted fetch straight away rather
 # than waiting for the next blanket sweep. Automatically tightened to 15s
 # while a CI run is in flight, forced immediately after a local push is
-# detected, and floored at 15s.
+# detected, and floored at 15s. While polls are failing it is this interval
+# exactly: no 15s floor and no push shortcut.
 github_poll_interval = 30
 
 # GitHub API cache TTL in seconds. Launch does not wait on this: it paints
 # from whatever is cached, however old, and the poll that fires a moment
-# later replaces it. The TTL bounds how long a *running* fleetz will reuse a
-# payload before going back to the network.
+# later replaces it (with watch off too). The TTL bounds how long a *running*
+# fleetz will reuse a payload before going back to the network.
 cache_ttl = 120
 
 # Write pane sizes back on exit and restore them next launch. Off by
