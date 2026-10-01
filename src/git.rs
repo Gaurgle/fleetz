@@ -170,13 +170,45 @@ pub fn resolve_git_dir(repo_path: &Path) -> Option<std::path::PathBuf> {
     })
 }
 
+/// Where a checkout's git metadata lives on disk.
+///
+/// A linked worktree splits its metadata in two. Per worktree, in `git_dir`:
+/// `HEAD`, `index`, `logs/HEAD` and `FETCH_HEAD`. Shared with the main clone,
+/// in `common_dir`: `refs/`, `packed-refs`, `logs/refs/` (the stash log among
+/// them), `config` and `worktrees/`. A plain clone and a submodule checkout
+/// have no `commondir` file, so both fields name the same directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoDirs {
+    pub git_dir: std::path::PathBuf,
+    pub common_dir: std::path::PathBuf,
+}
+
+/// Resolve a checkout's git and common directories, read from disk without
+/// spawning git. `None` when `.git` is neither a directory nor a readable
+/// `gitdir:` file.
+///
+/// `<git_dir>/commondir` is trimmed of surrounding whitespace and joined onto
+/// `git_dir`: a relative path stays unnormalized (`.../worktrees/lw/../..`),
+/// and an absolute one replaces `git_dir` outright, as `Path::join` does.
+pub fn repo_dirs(repo_path: &Path) -> Option<RepoDirs> {
+    let git_dir = resolve_git_dir(repo_path)?;
+    let common_dir = match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(rel) => git_dir.join(rel.trim()),
+        Err(_) => git_dir.clone(),
+    };
+    Some(RepoDirs {
+        git_dir,
+        common_dir,
+    })
+}
+
 /// When this clone last ran `git fetch`, from the mtime of `FETCH_HEAD`.
 ///
 /// `None` means it has never fetched -- a fresh `git clone` writes no
 /// `FETCH_HEAD` -- which the caller must read as "assume stale", not as
 /// "nothing to do".
 pub fn last_fetch_at(repo_path: &Path) -> Option<std::time::SystemTime> {
-    let git_dir = resolve_git_dir(repo_path)?;
+    let git_dir = repo_dirs(repo_path)?.git_dir;
     std::fs::metadata(git_dir.join("FETCH_HEAD"))
         .ok()?
         .modified()
@@ -193,12 +225,11 @@ pub async fn work_key(repo_path: &Path) -> Option<WorkKey> {
     }
     let head_sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
 
-    let git_dir = resolve_git_dir(repo_path)?;
     // Stash log lives in the COMMON dir for linked worktrees.
-    let common_dir = match std::fs::read_to_string(git_dir.join("commondir")) {
-        Ok(rel) => git_dir.join(rel.trim()),
-        Err(_) => git_dir.clone(),
-    };
+    let RepoDirs {
+        git_dir,
+        common_dir,
+    } = repo_dirs(repo_path)?;
     let index_meta = std::fs::metadata(git_dir.join("index")).ok();
     let stash_size = std::fs::metadata(common_dir.join("logs/refs/stash"))
         .map(|m| m.len())
@@ -1788,6 +1819,176 @@ mod real_repo_tests {
             before, after,
             "a deleted tag left the fingerprint unchanged"
         );
+    }
+
+    /// A linked worktree of `main_dir`, checked out on a new branch.
+    fn linked_worktree(main_dir: &Path, tag: &str) -> PathBuf {
+        let wt = std::env::temp_dir().join(format!("fleetz_it_{tag}_wt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wt);
+        let wt_arg = wt.to_string_lossy().into_owned();
+        sh(
+            main_dir,
+            &["git", "worktree", "add", "-q", "-b", tag, &wt_arg],
+        );
+        wt
+    }
+
+    fn canonical(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).expect("path exists")
+    }
+
+    /// The parts of `WorkKey` read from the common dir.
+    fn shared_fields(key: &WorkKey) -> (u64, Option<std::time::SystemTime>, u64, usize) {
+        (
+            key.stash_size,
+            key.refs_mtime,
+            key.packed_refs_size,
+            key.loose_tag_count,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_plain_clone_keeps_both_dirs_in_dot_git() {
+        let dir = temp_repo("dirs_plain");
+        let dot = dir.join(".git");
+
+        let dirs = repo_dirs(&dir).expect("a plain clone resolves");
+        assert_eq!(dirs.git_dir, dot);
+        assert_eq!(dirs.common_dir, dot);
+        assert_eq!(resolve_git_dir(&dir), Some(dot.clone()));
+
+        assert_eq!(last_fetch_at(&dir), None, "a fresh repo never fetched");
+        std::fs::write(dot.join("FETCH_HEAD"), "").unwrap();
+        assert!(last_fetch_at(&dir).is_some());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// git writes a linked worktree's `commondir` as the relative `../..`,
+    /// and its `FETCH_HEAD` beside its own `HEAD`, not in the main clone.
+    #[tokio::test]
+    async fn a_linked_worktree_shares_the_main_clones_common_dir() {
+        let main_dir = temp_repo("dirs_linked");
+        let wt = linked_worktree(&main_dir, "dirs_linked");
+
+        let dirs = repo_dirs(&wt).expect("a linked worktree resolves");
+        assert_eq!(Some(dirs.git_dir.clone()), resolve_git_dir(&wt));
+        // git names the admin dir after the worktree's folder.
+        let admin = main_dir
+            .join(".git/worktrees")
+            .join(wt.file_name().expect("named"));
+        assert_eq!(canonical(&dirs.git_dir), canonical(&admin));
+        assert_eq!(dirs.common_dir, dirs.git_dir.join("../.."));
+        assert_eq!(
+            canonical(&dirs.common_dir),
+            canonical(&main_dir.join(".git"))
+        );
+
+        // The key reads refs and the stash log from the common dir.
+        sh(&main_dir, &["git", "tag", "v1"]);
+        let main_key = work_key(&main_dir).await.expect("main key");
+        let wt_key = work_key(&wt).await.expect("worktree key");
+        assert_eq!(shared_fields(&main_key), shared_fields(&wt_key));
+        assert_eq!(wt_key.loose_tag_count, 1);
+
+        // FETCH_HEAD is per worktree.
+        std::fs::write(main_dir.join(".git/FETCH_HEAD"), "").unwrap();
+        assert_eq!(last_fetch_at(&wt), None, "main clone's fetch is not ours");
+        std::fs::write(dirs.git_dir.join("FETCH_HEAD"), "").unwrap();
+        assert!(last_fetch_at(&wt).is_some());
+
+        std::fs::remove_dir_all(&wt).ok();
+        std::fs::remove_dir_all(&main_dir).ok();
+    }
+
+    /// An absolute `commondir` replaces the git dir outright, and the
+    /// trailing newline git writes is not part of the path.
+    #[tokio::test]
+    async fn an_absolute_commondir_is_used_as_is() {
+        let main_dir = temp_repo("dirs_abs");
+        let wt = linked_worktree(&main_dir, "dirs_abs");
+        let git_dir = resolve_git_dir(&wt).expect("worktree git dir");
+        let common = canonical(&main_dir.join(".git"));
+        std::fs::write(git_dir.join("commondir"), format!("{}\n", common.display())).unwrap();
+
+        let dirs = repo_dirs(&wt).expect("resolves");
+        assert_eq!(dirs.git_dir, git_dir);
+        assert_eq!(dirs.common_dir, common);
+
+        sh(&main_dir, &["git", "tag", "v1"]);
+        let main_key = work_key(&main_dir).await.expect("main key");
+        let wt_key = work_key(&wt).await.expect("worktree key");
+        assert_eq!(shared_fields(&main_key), shared_fields(&wt_key));
+        assert_eq!(wt_key.loose_tag_count, 1);
+
+        std::fs::remove_dir_all(&wt).ok();
+        std::fs::remove_dir_all(&main_dir).ok();
+    }
+
+    /// A hand-built layout: a relative `gitdir:` pointer and a relative
+    /// `commondir` padded with whitespace. Both joins stay unnormalized.
+    #[test]
+    fn a_relative_commondir_is_trimmed_and_joined_onto_the_git_dir() {
+        let root = std::env::temp_dir().join(format!("fleetz_it_dirs_rel_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let checkout = root.join("checkout");
+        let store = root.join("store");
+        std::fs::create_dir_all(&checkout).unwrap();
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(checkout.join(".git"), "gitdir: ../store\n").unwrap();
+        std::fs::write(store.join("commondir"), "  ../common \n").unwrap();
+
+        let git_dir = checkout.join("../store");
+        let dirs = repo_dirs(&checkout).expect("resolves");
+        assert_eq!(dirs.git_dir, git_dir);
+        assert_eq!(dirs.common_dir, git_dir.join("../common"));
+        assert_eq!(resolve_git_dir(&checkout), Some(git_dir));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A submodule checkout (here `git init --separate-git-dir`, the same
+    /// shape) has a `gitdir:` file and no `commondir`: one directory.
+    #[tokio::test]
+    async fn a_gitdir_file_without_commondir_has_one_dir() {
+        let root = std::env::temp_dir().join(format!("fleetz_it_dirs_sub_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let checkout = root.join("sub");
+        let store = root.join("modules").join("sub");
+        std::fs::create_dir_all(&checkout).unwrap();
+        std::fs::create_dir_all(root.join("modules")).unwrap();
+        let store_arg = store.to_string_lossy().into_owned();
+        sh(
+            &checkout,
+            &[
+                "git",
+                "init",
+                "-q",
+                "-b",
+                "main",
+                "--separate-git-dir",
+                &store_arg,
+            ],
+        );
+        sh(&checkout, &["git", "config", "user.email", "t@example.com"]);
+        sh(&checkout, &["git", "config", "user.name", "t"]);
+        std::fs::write(checkout.join("a.txt"), "one\n").unwrap();
+        sh(&checkout, &["git", "add", "."]);
+        sh(&checkout, &["git", "commit", "-q", "-m", "init"]);
+        assert!(checkout.join(".git").is_file(), "a gitdir: pointer file");
+        assert!(!store.join("commondir").exists());
+
+        let dirs = repo_dirs(&checkout).expect("resolves");
+        assert_eq!(Some(dirs.git_dir.clone()), resolve_git_dir(&checkout));
+        assert_eq!(canonical(&dirs.git_dir), canonical(&store));
+        assert_eq!(dirs.common_dir, dirs.git_dir);
+
+        sh(&checkout, &["git", "tag", "v1"]);
+        let key = work_key(&checkout).await.expect("a key");
+        assert_eq!(key.loose_tag_count, 1, "refs read from the one dir");
+        assert!(key.index_size > 0, "index read from the one dir");
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[tokio::test]
