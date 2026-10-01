@@ -1,10 +1,10 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-01 23:20 by `claude-fable-5-1`. Merged today in this
+Last written 2026-10-02 00:16 by `claude-fable-5-1`. Merged today in this
 session: FZ-04, FZ-06b, FZ-06c and the FZ-10 design; FZ-06e closed as
-delivered by FZ-06b. **Two workers are running: FZ-06d (#40) in
-`.claude/worktrees/fz-06d` and the FZ-09 (#22) design draft in
-`.claude/worktrees/fz-09`. Neither has been reviewed.** Read this file, the repository
+delivered by FZ-06b. **Two reviewers are running: one on FZ-06d (#40) in
+`.claude/worktrees/fz-06d`, one on the FZ-09 (#22) design draft in
+`.claude/worktrees/fz-09`. No worker is running.** Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md),
 [release-plan.md](release-plan.md) and
 [first-wave-tickets.md](first-wave-tickets.md) before acting. GitHub (the
@@ -122,25 +122,36 @@ In order of weight:
 
 ## Last verdicts, and what is on disk uncommitted
 
-- **FZ-06d (#40): worker resumed at 23:47, nothing reviewed.** Base
-  `24b2210`, branch `fix/fz-06d-histogram-reuse-key`, worktree
-  `.claude/worktrees/fz-06d`. The new field next to `daily` on `RepoStatus`
-  forces one `None` line into six existing test builders (`model.rs`
-  `make_repo`, `app.rs` `make_app`, `main.rs` `test_repo`, and `repo` in
-  `ui/badges.rs`, `ui/compact.rs`, `ui/detail.rs`); Andreas allowed it at
-  23:45 (on #40). The reviewer confirms that those six lines are the only
-  change to existing test code. Before the resume: five new tests in
-  `src/main.rs`, E7 and E14 failing on the base by design. When it reports:
-  a separate `fz-reviewer`, then commit, push, CI, combined checks, merge.
-- **FZ-09 (#22): worker drafting since 22:35.** Worktree
-  `.claude/worktrees/fz-09` fast-forwarded to `769c1fd`; output
-  `docs/coverage-cache-design.md`, untracked; at most 6 live GraphQL
-  requests, the real cache read-only, no builds. It was told to leave the
-  architectural options to the coordinator and to name every existing test
-  a proposed ticket would force to change. Next: the coordinator rules on
-  the options, then a reviewer. Its worktree is at `769c1fd`, before the
-  freshness contract was amended (`702e546`): tell it, or its reviewer, that
-  amendments 1 to 6 exist.
+- **FZ-06d (#40): in review since 00:14 on 2026-10-02.** Uncommitted in
+  `.claude/worktrees/fz-06d` on `fix/fz-06d-histogram-reuse-key` (base
+  `24b2210`): `src/main.rs`, `src/model.rs`, and one `daily_key: None,` line
+  in each of six existing test builders (`model.rs` `make_repo`, `app.rs`
+  `make_app`, `main.rs` `test_repo`, and `repo` in `ui/badges.rs`,
+  `ui/compact.rs`, `ui/detail.rs`), which Andreas allowed at 23:45. +343 -8;
+  792 passed, 0 failed, 1 ignored by the worker's run. Its report is on #40.
+  A fresh `fz-reviewer` is running and confirms that those six lines are the
+  only change to existing test code. On acceptance: commit the reviewed
+  diff, push, CI on the branch, combined checks, merge, Done.
+- **FZ-09 (#22): draft in review since 00:10 on 2026-10-02.**
+  `docs/coverage-cache-design.md`, 886 lines, untracked in
+  `.claude/worktrees/fz-09` (fast-forwarded to `aa66577`, so it sees the
+  amended freshness contract). The coordinator ruled on its options C1 to
+  C9, all as the draft recommended, recorded in full on #22: the account key
+  is a pinned 64-bit FNV-1a fingerprint of the token, shared with FZ-10's
+  `token_id` (C1); FZ-10a's new fetch field is one struct with a `Default`
+  (C2, noted on #47); coverage travels on a `LoadResult` field (C3);
+  superseded cache files go after 30 days unwritten (C4); no pagination by
+  default (C5); order after FZ-05f is FZ-10a, FZ-09c, FZ-09b, FZ-10b,
+  FZ-10c, FZ-09d, with FZ-09a (`cache.rs` only) free to run now (C8). The
+  document still says "for the coordinator". A fresh `fz-reviewer` is
+  running and was asked to attack C1. Next: one worker pass applies the
+  rulings and the findings, a narrow re-review, land it as FZ-10 was
+  landed, then the owner items go to Andreas together: one saved copy per
+  account with a token fingerprint in the file name (O1), the upgrade
+  migration (O2), the "50 of 95 repos" note (O3), dimmed rows the last poll
+  missed (O4), an account switch rebuilding the list (O5), the signed-out
+  launch (O7), the PR count (O8), and the `CLAUDE.md` and contract changes.
+  The worker's raw responses in the scratchpad hold private repo names.
 - **#45:** uncommitted `ci.yml` and `docs.yml` in
   `.claude/worktrees/issue-45`; reviewer verdict blocked on a repository
   setting, diff judged correct. Parked by Andreas until the repository is
