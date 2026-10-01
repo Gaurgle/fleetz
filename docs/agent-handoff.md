@@ -61,9 +61,9 @@ assignment.
 
 Done and closed on 2026-10-01: FZ-02 (#15), FZ-01 (#14), FZ-05 (#18),
 FZ-06 (#19), FZ-03 (#16), FZ-05a (#31), FZ-06a (#37), issue #1 and issue
-#44. In progress: FZ-04 (#17, in review), #45 (in review), #42, FZ-10 (#23)
-and FZ-09 (#22); the last three were interrupted and wait to be dispatched
-again. All are described below.
+#44. Ready to integrate and waiting for Andreas: FZ-04 (#17) and #45. In
+progress: #42 (resumed). Interrupted and waiting to be dispatched again:
+FZ-10 (#23) and FZ-09 (#22). All are described below.
 No release has started.
 
 Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
@@ -244,37 +244,49 @@ time. Order chosen by the coordinator: FZ-04 first (P0, and it needs Andreas
 to look at the result, which is easiest while he is active), then FZ-06b,
 e, c, d, then the FZ-05 series once he has signed off its invariant changes.
 
-## FZ-04: in progress
+## FZ-04: Ready to integrate, waiting for Andreas
 
-Dispatched on 2026-10-01 under the standing instruction.
+Reviewed, committed and pushed, **not merged**: how a failed fetch looks on a
+row and in the detail pane is Andreas's to accept on the branch build.
 
+- Ticket commit `48398919d8d97afbd23c05e8481130ae8b1fef9c` on
+  `fix/fz-04-fetch-outcomes`, base `3ca7ae5`, worktree
+  `.claude/worktrees/fz-04`: nine files, +1682 -47.
 - Contract: [fetch-outcome-contract.md](fetch-outcome-contract.md), accepted
-  by the coordinator (Astra not consulted, Andreas may veto any rule). One
-  finding in it was executed: a failed `git fetch` empties `FETCH_HEAD` and
-  advances its mtime, so `git::last_fetch_at` counts a failed fetch as a
-  fetch.
-- Branch `fix/fz-04-fetch-outcomes`, worktree `.claude/worktrees/fz-04`,
-  worker `fz-worker` (`claude-opus-5-5`, medium). The base and the allowed
-  files are in the assignment comment on #17.
-- State when last written: implemented, four review passes so far. Pass one
-  asked for two fixes; pass two found a credential leak in
-  `git::redact_userinfo` (a password containing `,` `)` or `'` was drawn in
-  full), fixed; pass three confirmed that and found a panic the fix
-  introduced (R4: a multi-byte character directly before the scheme, for
-  example a URL pasted with smart quotes, crashes the detail pane). The
-  worker is fixing R4; then a final pass by the same reviewer. The change is
-  uncommitted in the worktree. Board: #17 Review.
-- Decisions taken in review are in the contract: fetch facts are a row
-  field carried by path across a load; the drawn remote URL loses all
-  userinfo except an ssh login name; the row badge says `unreachable`.
+  by the coordinator and amended with the review's decisions.
+- Review: five passes by one reviewer. Found and fixed: the `ssh://` login
+  name being stripped, git's real "repository not found" text not
+  recognised, a password containing `,` `)` or `'` reaching the screen, and
+  a panic on a multi-byte character before the URL scheme. Final verdict
+  accepted.
+- CI green on the branch (`ci` and `docs`). Combined result with `main` at
+  `4fc5ff7`: fmt, clippy with warnings denied, 753 tests passed, docs check.
+  **Rerun the combined checks if `main` has gained source changes since.**
+- Board: #17 Ready to integrate; the issue has the evidence, a safe way to
+  see each state with a throwaway clone, and the strings chosen.
+- When Andreas accepts: rerun the combined checks, `git merge --no-ff`,
+  push, confirm CI on `main`, Done, close #17. Wording and colours are in
+  five functions in `src/ui/mod.rs`; a change goes back through the worker
+  and a re-review of that hunk.
 - Follow-ups from the review, not ticketed: the fetch tally's 180 second
   expiry is not extended by a later batch; one failing repo widens the
-  compact grid's badge column; bidi characters are not stripped from the
-  failure detail.
-- It **stops at Ready to integrate**: how a failed fetch looks on a row and
-  in the detail pane is Andreas's to accept on the branch build. Until it is
-  merged nothing else that touches `src/main.rs`, `src/git.rs`, `src/app.rs`,
-  `src/model.rs` or the status display can start.
+  compact grid's badge column; old fetch facts stay on a path that now
+  holds a different repo; bidi characters are not stripped from the detail.
+- Until it is merged, nothing that touches `src/main.rs`, `src/git.rs`,
+  `src/app.rs`, `src/model.rs` or the status display can start: FZ-06b to e,
+  FZ-05b to f, #43 and #46.
+
+## Issue #45: Ready to integrate, waiting for an owner decision
+
+The YAML (a `pull_request` trigger in `ci.yml` and `docs.yml`, skipped for
+same-repository pull requests, read-only permissions) is uncommitted in
+`.claude/worktrees/issue-45`. The reviewer found it correct but returned
+**blocked**: the repository is private, and GitHub runs no workflow for a
+fork pull request to a private repository unless Settings > Actions > "Run
+workflows from fork pull requests" is on (it is off). Andreas decides:
+turn the setting on, or leave it until the repository goes public, and
+whether the YAML merges now as preparation. The safe-merge rule is not met
+without a reviewer acceptance, so nothing is committed. Details on #45.
 
 ## Usage limit hit on 2026-10-01, and what was interrupted
 
