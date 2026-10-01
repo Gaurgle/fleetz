@@ -48,9 +48,9 @@ Status. Issue #7 has no milestone. Visual layout in the browser is the one
 setup check still open. GitHub is authoritative for current status and
 assignment.
 
-FZ-02 is integrated and #15 is closed. FZ-01 and FZ-05 are in flight, FZ-06
-is authorized next and a freshness contract draft waits for Andreas. All are
-described below. No release has started.
+FZ-02 is integrated and #15 is closed. FZ-01 and FZ-05 are in flight; FZ-06
+and the pin for issue #1 are authorized and queued; the freshness contract
+for FZ-03 is accepted. All are described below. No release has started.
 
 Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
 Andreas asked to lean on Claude for the day. The Claude-native workforce is
@@ -179,20 +179,42 @@ mutation experiments do not disturb a timing run. Output is
 assumptions are coordinated with FZ-05. Nothing is created for it yet: no
 branch, no worktree, #19 still Ready.
 
-## Freshness contract for FZ-03: drafted, waiting for Andreas
+## Freshness contract for FZ-03: accepted
 
-Andreas asked for a draft of the freshness contract FZ-03 needs. It is in
-`docs/freshness-contract.md`, uncommitted in the main checkout, marked as a
-draft. It defines attempt, outcome and data time as three separate facts,
-the transitions, what the header must say, file ownership for FZ-03 and six
-open decisions (D1 to D6). D1 (header wording and look) and D2 (whether a
-cache-served launch polls once when watch is off) are Andreas's. Two findings
-from reading the code, not executed: a background poll that falls back to
-the cache is reported as a success, so offline shows no marker at all; and
-with watch off a cache-served launch never polls.
+[freshness-contract.md](freshness-contract.md) is the contract FZ-03
+implements. Andreas accepted it on 2026-10-01: D1 (header information content;
+the look is settled on the branch build) and D2 (a cache-served launch polls
+once even with watch off) himself, D3 to D6 by the coordinator's
+recommendations. It defines attempt, outcome and data time as three separate
+facts, the transitions, what the header must say and file ownership. Astra
+has not reviewed it; a disagreement goes to Andreas, not into the code.
 
-FZ-03 stays in Backlog until Andreas accepts the contract. It is not
-authorized to run, and it must not run beside FZ-04.
+Two findings behind it, read from the code and not executed: a background
+poll that falls back to the cache is reported as a success, so offline shows
+no marker at all; and with watch off a cache-served launch never polls.
+
+Board: #16 is Ready, with the contract and file ownership in a comment.
+FZ-03 is **not authorized to run**: Andreas has not told a session to
+dispatch it. When he does, it stops at Ready to integrate for him to try the
+header, and it must not run beside FZ-04.
+
+## Issue #1: pin the Rust toolchain action, then close
+
+Andreas instructed Fable on 2026-10-01 to close out #1: pin
+`dtolnay/rust-toolchain` in `ci.yml` and `release.yml`, then close the issue
+with a summary. He approved the CI change for this ticket, which the
+safe-merge rule requires.
+
+- Pin: commit `6bed0761d98439e5a578e2877258200ad565ba87`, the tip of the
+  action's `stable` branch on 2026-09-03, with `toolchain: stable` stated
+  explicitly because the ref no longer names it.
+- Branch `ci/1-pin-rust-toolchain`, worktree `.claude/worktrees/issue-1`.
+  Worker `fz-small`, reviewer `fz-reviewer`.
+- Queued behind two constraints: the limit of two workers (FZ-01 and FZ-05
+  are running), and the local fmt, clippy and test run on the combined
+  result, which must not overlap an FZ-01 timing run.
+- `release.yml` only runs on a tag, so its pinned line is checked by reading;
+  the identical line in `ci.yml` is exercised by the branch push.
 
 This file is committed and pushed through `89946f5`. A Claude session's
 permission check can refuse a docs commit to `main` that Andreas did not ask
