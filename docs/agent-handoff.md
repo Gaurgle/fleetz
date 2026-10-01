@@ -203,10 +203,18 @@ ref-content signature built from the `for-each-ref` calls the sweep already
 makes, widened to every ref namespace, plus the shallow file's content. The
 coordinator's decisions OD1 to OD7 are in the document; none needs Andreas.
 
-Fix tickets, issue drafts in progress (IDs FZ-06a to FZ-06e in landing
-order): a is FIX-C, the common-directory helper, `src/git.rs` only, and can
-run now; b FIX-A, c FIX-B, d FIX-D and e FIX-E touch `src/main.rs` and wait
-for FZ-03. None runs beside FZ-04, which will also own `src/git.rs`.
+Fix tickets, created as issues on 2026-10-01 (Backlog, M1, P1), IDs in
+landing order: FZ-06a #37 (FIX-C in the design, the common-directory helper,
+`src/git.rs` only), FZ-06b #38 (FIX-A, ref-content signature), FZ-06c #39
+(FIX-B, worktree freshness), FZ-06d #40 (FIX-D, histogram key), FZ-06e #41
+(FIX-E, load-path order). b to e touch `src/main.rs` and wait for FZ-03.
+None runs beside FZ-04, which will also own `src/git.rs`.
+
+FZ-06a (#37) is in progress: base `69aeddf9f77822fe5849492f5137a72b48cd6d72`,
+branch `refactor/fz-06a-common-dir-helper`, worktree
+`.claude/worktrees/fz-06a`, worker `fz-worker` (`claude-opus-5-5`, medium),
+allowed file `src/git.rs`. Next: review, commit, push, combined checks,
+merge, Done and close. It needs nothing from Andreas.
 
 ## FZ-03: Ready to integrate, waiting for Andreas
 
@@ -277,10 +285,19 @@ exist.
   changes and the veto on FZ-05f, both in the identity design.
 - The `fz-02`, `fz-01`, `fz-05`, `fz-06`, `fz-05a` and `issue-1` worktrees
   and their remote branches are integrated and kept. Removing them is his call.
-- Not ticketed yet: the `repoz_parity` tests failing from a dirty checkout
-  outside `$HOME`; overlapping local sweeps; the FZ-02 failed-poll test that
-  also passes on the old code; a credential in an HTTPS remote URL being
-  drawn in the detail pane (unconfirmed); the two gaps named under issue #1.
+- Follow-ups ticketed on 2026-10-01 (Backlog, P2): #42 `repoz_parity` tests
+  fail from a dirty checkout outside `$HOME` (edits an existing test's
+  harness, needs his OK); #43 the local contribution count includes stash
+  commits; #44 a test for a missing config file; #45 CI on pull requests
+  (a CI change, needs his approval); #46 the FZ-02 failed-poll test also
+  passes on the old code (edits an existing test, needs his OK). Routed to
+  planning issues as comments instead: overlapping sweeps and the reload
+  race (#24), the drawn remote URL and `FETCH_HEAD` findings (#17), coverage
+  (#22), the baseline's findings (#25).
+- #44 is in progress: base `69aeddf`, branch `test/44-missing-config`,
+  worktree `.claude/worktrees/issue-44`, worker `fz-small` (`sonnet`),
+  allowed file `src/config.rs` (test module only). Next: review, commit,
+  push, combined checks, merge, Done and close.
 
 ## Running the next ticket
 
