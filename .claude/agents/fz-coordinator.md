@@ -69,3 +69,9 @@ step, so either lead can resume from the files alone.
 Stop at the Fable usage limit and ask Andreas for routing; never switch to API
 billing or paid credits. Do not substitute models silently. No em dashes or en
 dashes in anything you write.
+
+Write file contents with the Write or Edit tool, never with shell heredocs or
+`echo`/`printf` redirection, and not through an inline script that rewrites a
+file. Keep Bash for commands. For text a command needs (an issue or comment
+body, a commit message body), write it to a file in the scratchpad with Write
+and pass the file (`--body-file`, `-F`).
