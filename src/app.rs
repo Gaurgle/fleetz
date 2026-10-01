@@ -1232,6 +1232,81 @@ impl GithubFreshness {
     }
 }
 
+/// What a batch of fetches someone asked for came to, once the last landed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchReport {
+    pub total: usize,
+    /// Repo name and failure kind of each fetch that failed, in landing order.
+    pub failed: Vec<(String, crate::git::FetchFailureKind)>,
+}
+
+/// The fetches a keypress is waiting on, so a mixed result is reported as
+/// mixed (rule 9 of the fetch contract): `3 of 12 fetches failed`, not
+/// silence. Only fetches someone asked for are tallied; a watch sweep's
+/// failures show on their rows and nowhere else.
+///
+/// Pure transitions, like `GithubFreshness`: `expect` when fetches start,
+/// `land` as each one finishes, which hands back the report with the last.
+#[derive(Debug, Default)]
+pub struct FetchTally {
+    awaiting: std::collections::HashSet<String>,
+    total: usize,
+    failed: Vec<(String, crate::git::FetchFailureKind)>,
+    started: Option<std::time::Instant>,
+}
+
+impl FetchTally {
+    /// Fetches for these display paths have started. Joins a batch still in
+    /// flight, so `r` and `F` pressed together report once.
+    pub fn expect(&mut self, paths: impl IntoIterator<Item = String>) {
+        if self.awaiting.is_empty() {
+            *self = Self::default();
+        }
+        for path in paths {
+            if self.awaiting.insert(path) {
+                self.total += 1;
+            }
+        }
+        if !self.awaiting.is_empty() && self.started.is_none() {
+            self.started = Some(std::time::Instant::now());
+        }
+    }
+
+    /// A repo's update landed. An update that did not fetch is not the one
+    /// awaited. Returns the report when this was the last fetch awaited and
+    /// at least one failed; every fetch succeeding says nothing extra.
+    pub fn land(
+        &mut self,
+        path: &str,
+        name: &str,
+        fetch: &crate::git::FetchOutcome,
+    ) -> Option<FetchReport> {
+        use crate::git::FetchOutcome;
+        if *fetch == FetchOutcome::NotAttempted || !self.awaiting.remove(path) {
+            return None;
+        }
+        if let FetchOutcome::Failed(failure) = fetch {
+            self.failed.push((name.to_string(), failure.kind));
+        }
+        if !self.awaiting.is_empty() {
+            return None;
+        }
+        let done = std::mem::take(self);
+        (!done.failed.is_empty()).then_some(FetchReport {
+            total: done.total,
+            failed: done.failed,
+        })
+    }
+
+    /// Stop waiting on fetches that have outlived `limit`. They report
+    /// nothing; their rows say what happened if they ever land.
+    pub fn expire(&mut self, limit: std::time::Duration) {
+        if self.started.is_some_and(|t| t.elapsed() > limit) {
+            *self = Self::default();
+        }
+    }
+}
+
 /// Main application state.
 pub struct App {
     pub repos: Vec<RepoStatus>,
@@ -1439,6 +1514,9 @@ pub struct App {
     /// they had stopped moving. Rate limits are the common case and they last
     /// an hour. The header reads this.
     pub github_freshness: GithubFreshness,
+    /// The fetches a keypress is waiting on (`f`, `F`, and the ones `r`'s
+    /// poll sets off), reported as one status line when the last lands.
+    pub manual_fetches: FetchTally,
     /// True while a GitHub re-poll is in flight, so ticks do not stack them.
     pub github_poll_inflight: bool,
     /// When the in-flight GitHub poll started, so a request that never returns
@@ -1552,6 +1630,7 @@ impl App {
             refresh_fetches: std::collections::HashSet::new(),
             refresh_fetches_started: None,
             github_freshness: GithubFreshness::default(),
+            manual_fetches: FetchTally::default(),
             github_poll_inflight: false,
             github_poll_started: None,
             load_error: None,
@@ -1600,22 +1679,27 @@ impl App {
         if !std::mem::take(&mut self.refresh_awaits_poll) {
             return;
         }
+        let fetched_paths: Vec<String> = fetched_paths.into_iter().collect();
+        self.manual_fetches.expect(fetched_paths.iter().cloned());
         self.refresh_fetches.extend(fetched_paths);
         if !self.refresh_fetches.is_empty() {
             self.refresh_fetches_started = Some(std::time::Instant::now());
         }
     }
 
-    /// A repo's update landed. Only a fetched one settles a pending refresh
-    /// fetch: the local sweep can report the same repo before its fetch has
-    /// run, and that update does not carry the remote's news yet.
-    pub fn settle_refresh_fetch(&mut self, path: &str, fetched: bool) {
-        if fetched && self.refresh_fetches.remove(path) && self.refresh_fetches.is_empty() {
+    /// A repo's update landed. Only one whose fetch finished settles a
+    /// pending refresh fetch, whether it succeeded or failed: the local sweep
+    /// can report the same repo before its fetch has run, and that update does
+    /// not carry the remote's news yet.
+    pub fn settle_refresh_fetch(&mut self, path: &str, fetch: &crate::git::FetchOutcome) {
+        let finished = *fetch != crate::git::FetchOutcome::NotAttempted;
+        if finished && self.refresh_fetches.remove(path) && self.refresh_fetches.is_empty() {
             self.refresh_fetches_started = None;
         }
     }
 
-    /// Give up on refresh fetches that have outlived `limit`.
+    /// Give up on refresh fetches that have outlived `limit`, and on a fetch
+    /// report still waiting after as long.
     pub fn expire_refresh_fetches(&mut self, limit: std::time::Duration) {
         if self
             .refresh_fetches_started
@@ -1624,6 +1708,7 @@ impl App {
             self.refresh_fetches.clear();
             self.refresh_fetches_started = None;
         }
+        self.manual_fetches.expire(limit);
     }
 
     /// After the repo list is replaced by a reload, keep the selection in
@@ -2653,6 +2738,7 @@ mod tests {
                 remote_only_branches: vec![],
                 remote_branches: vec![],
                 work_key: None,
+                fetch: crate::model::FetchFacts::default(),
             })
             .collect();
         App::new(repos, "test".to_string(), 120, 40)
@@ -2676,9 +2762,9 @@ mod tests {
         app.settle_refresh_poll(["~/repos/repo-0".to_string(), "~/repos/repo-2".to_string()]);
         assert!(app.is_refreshing(), "stopped before the fetches landed");
 
-        app.settle_refresh_fetch("~/repos/repo-0", true);
+        app.settle_refresh_fetch("~/repos/repo-0", &crate::git::FetchOutcome::Succeeded);
         assert!(app.is_refreshing());
-        app.settle_refresh_fetch("~/repos/repo-2", true);
+        app.settle_refresh_fetch("~/repos/repo-2", &crate::git::FetchOutcome::Succeeded);
         assert!(!app.is_refreshing());
         assert!(app.refresh_fetches_started.is_none());
     }
@@ -2712,8 +2798,106 @@ mod tests {
         let mut app = make_app(1);
         app.refresh_awaits_poll = true;
         app.settle_refresh_poll(["~/repos/repo-0".to_string()]);
-        app.settle_refresh_fetch("~/repos/repo-0", false);
+        app.settle_refresh_fetch("~/repos/repo-0", &crate::git::FetchOutcome::NotAttempted);
         assert!(app.is_refreshing());
+    }
+
+    fn fetch_failed(kind: crate::git::FetchFailureKind) -> crate::git::FetchOutcome {
+        crate::git::FetchOutcome::Failed(crate::git::FetchFailure { kind, detail: None })
+    }
+
+    /// Rule 4: a fetch that failed is still a fetch that finished, so it
+    /// settles the refresh waiting on it.
+    #[test]
+    fn a_failed_fetch_settles_a_refresh_fetch() {
+        let mut app = make_app(1);
+        app.refresh_awaits_poll = true;
+        app.settle_refresh_poll(["~/repos/repo-0".to_string()]);
+        app.settle_refresh_fetch(
+            "~/repos/repo-0",
+            &fetch_failed(crate::git::FetchFailureKind::Unreachable),
+        );
+        assert!(!app.is_refreshing());
+        assert!(app.refresh_fetches_started.is_none());
+    }
+
+    /// The fetches `r`'s poll sets off are the ones its report counts.
+    #[test]
+    fn a_manual_refresh_tallies_the_fetches_its_poll_set_off() {
+        let mut app = make_app(2);
+        app.refresh_awaits_poll = true;
+        app.settle_refresh_poll(["~/repos/repo-0".to_string(), "~/repos/repo-1".to_string()]);
+        let ok = crate::git::FetchOutcome::Succeeded;
+        assert_eq!(
+            app.manual_fetches.land("~/repos/repo-0", "repo-0", &ok),
+            None
+        );
+        let report = app.manual_fetches.land(
+            "~/repos/repo-1",
+            "repo-1",
+            &fetch_failed(crate::git::FetchFailureKind::Auth),
+        );
+        assert_eq!(
+            report,
+            Some(FetchReport {
+                total: 2,
+                failed: vec![("repo-1".to_string(), crate::git::FetchFailureKind::Auth)],
+            })
+        );
+    }
+
+    /// A watch timer's poll is not a keypress: its fetches report nothing.
+    #[test]
+    fn a_poll_nobody_pressed_r_for_tallies_nothing() {
+        let mut app = make_app(1);
+        app.settle_refresh_poll(["~/repos/repo-0".to_string()]);
+        let report = app.manual_fetches.land(
+            "~/repos/repo-0",
+            "repo-0",
+            &fetch_failed(crate::git::FetchFailureKind::Auth),
+        );
+        assert_eq!(report, None);
+    }
+
+    /// An update that did not fetch is not the fetch being waited on.
+    #[test]
+    fn a_tally_is_not_settled_by_an_update_that_did_not_fetch() {
+        let mut tally = FetchTally::default();
+        tally.expect(["a".to_string()]);
+        let not_fetched = crate::git::FetchOutcome::NotAttempted;
+        assert_eq!(tally.land("a", "a", &not_fetched), None);
+        let report = tally.land("a", "a", &fetch_failed(crate::git::FetchFailureKind::Other));
+        assert_eq!(report.map(|r| r.total), Some(1));
+    }
+
+    /// `r` and `F` pressed together report once, over both batches, and a
+    /// path in both counts once.
+    #[test]
+    fn a_tally_joins_a_batch_still_in_flight() {
+        let mut tally = FetchTally::default();
+        tally.expect(["a".to_string(), "b".to_string()]);
+        tally.expect(["b".to_string(), "c".to_string()]);
+        let failed = fetch_failed(crate::git::FetchFailureKind::Auth);
+        assert_eq!(tally.land("a", "a", &failed), None);
+        assert_eq!(
+            tally.land("b", "b", &crate::git::FetchOutcome::Succeeded),
+            None
+        );
+        let report = tally.land("c", "c", &crate::git::FetchOutcome::Succeeded);
+        assert_eq!(report.map(|r| (r.total, r.failed.len())), Some((3, 1)));
+    }
+
+    /// A fetch that never lands cannot hold a report open for the session.
+    #[test]
+    fn a_tally_that_outlives_its_limit_is_dropped() {
+        let mut tally = FetchTally::default();
+        tally.expect(["a".to_string()]);
+        tally.expire(std::time::Duration::from_secs(60));
+        assert!(tally.started.is_some(), "expired inside its limit");
+        tally.started = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(120));
+        tally.expire(std::time::Duration::from_secs(60));
+        let late = tally.land("a", "a", &fetch_failed(crate::git::FetchFailureKind::Auth));
+        assert_eq!(late, None);
     }
 
     /// The watch timer's poll fetches silently: no spinner, nothing to wait on.

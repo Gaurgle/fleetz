@@ -207,6 +207,7 @@ mod tests {
             remote_only_branches: vec![],
             remote_branches: vec![],
             work_key: None,
+            fetch: crate::model::FetchFacts::default(),
         }
     }
 

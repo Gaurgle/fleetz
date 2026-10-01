@@ -215,6 +215,24 @@ pub fn last_fetch_at(repo_path: &Path) -> Option<std::time::SystemTime> {
         .ok()
 }
 
+/// When this clone last fetched *successfully*, as far as the disk can say:
+/// the mtime of `FETCH_HEAD`, but only when that file is not empty.
+///
+/// A failed fetch truncates `FETCH_HEAD` to nothing and still moves its mtime
+/// (pinned by `a_failed_fetch_empties_fetch_head`), so the bare mtime counts a
+/// failure as a fetch. Rule 7 of `docs/fetch-outcome-contract.md`: an empty
+/// file is no fetch at all, and the caller reads `None` as unknown.
+///
+/// A successful fetch that brought nothing (a clone with no remote) also
+/// leaves it empty, and reads as unknown too. That costs a fetch, not wrong
+/// data.
+pub fn last_successful_fetch_at(repo_path: &Path) -> Option<std::time::SystemTime> {
+    let at = last_fetch_at(repo_path)?;
+    let git_dir = repo_dirs(repo_path)?.git_dir;
+    let written = std::fs::metadata(git_dir.join("FETCH_HEAD")).ok()?.len() > 0;
+    written.then_some(at)
+}
+
 /// Cheap change detector: if none of these moved, the expensive probes
 /// (log, reflog, graph, stash, worktree) cannot have new answers. Untracked
 /// files do not touch the index, so dirty_count is always probed regardless.
@@ -248,13 +266,226 @@ pub async fn work_key(repo_path: &Path) -> Option<WorkKey> {
     })
 }
 
+/// Why a `git fetch` failed, grouped by what you would do about it. Read from
+/// git's stderr under the C locale `git_cmd` sets (`classify_fetch_error`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchFailureKind {
+    /// No answer within `GIT_TIMEOUT`.
+    TimedOut,
+    /// Credentials wanted or refused. Prompts are disabled, so a remote that
+    /// asks for a password fails here instead of hanging.
+    Auth,
+    /// The network, DNS or the host itself.
+    Unreachable,
+    /// The remote is missing or is not a repository.
+    NoRemote,
+    /// Anything else, including git failing to start.
+    Other,
+}
+
+/// A failed fetch: its kind, and at most git's first error line with any URL
+/// userinfo removed (rule 8). Never the raw stderr.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchFailure {
+    pub kind: FetchFailureKind,
+    pub detail: Option<String>,
+}
+
+/// How a fetch for one checkout ended. `NotAttempted` is also what a sweep
+/// that did not fetch reports: requested is not successful (rule 1), and not
+/// requested says nothing at all (rule 2).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum FetchOutcome {
+    #[default]
+    NotAttempted,
+    Succeeded,
+    Failed(FetchFailure),
+}
+
+/// How the fetch process ended, before it is read as an outcome. `run_git`
+/// folds the first two into one `None`; a fetch has to tell them apart.
+enum FetchRun {
+    TimedOut,
+    NotStarted,
+    Exited(std::process::Output),
+}
+
+const FETCH_ARGS: &[&str] = &["fetch", "--quiet", "--prune"];
+
+/// The longest git error line kept as a failure's detail.
+const FETCH_DETAIL_MAX: usize = 160;
+
 /// Run `git fetch` on a repo. Prunes deleted remote branches so
 /// remote_only_branches does not accumulate stale entries.
-pub async fn fetch(repo_path: &Path) -> bool {
-    run_git(repo_path, &["fetch", "--quiet", "--prune"])
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+///
+/// Its own path rather than `run_git`, which every other caller keeps: a
+/// fetch is the one probe whose failure the user has to be told about, and
+/// `run_git` cannot say why one failed.
+pub async fn fetch(repo_path: &Path) -> FetchOutcome {
+    fetch_within(repo_path, GIT_TIMEOUT).await
+}
+
+async fn fetch_within(repo_path: &Path, limit: std::time::Duration) -> FetchOutcome {
+    let run = match tokio::time::timeout(limit, git_cmd(repo_path, FETCH_ARGS).output()).await {
+        Err(_) => FetchRun::TimedOut,
+        Ok(Err(_)) => FetchRun::NotStarted,
+        Ok(Ok(output)) => FetchRun::Exited(output),
+    };
+    fetch_outcome(run)
+}
+
+fn fetch_outcome(run: FetchRun) -> FetchOutcome {
+    let failure = match run {
+        FetchRun::Exited(output) if output.status.success() => return FetchOutcome::Succeeded,
+        FetchRun::Exited(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            FetchFailure {
+                kind: classify_fetch_error(&stderr),
+                detail: first_error_line(&stderr),
+            }
+        }
+        FetchRun::TimedOut => FetchFailure {
+            kind: FetchFailureKind::TimedOut,
+            detail: None,
+        },
+        FetchRun::NotStarted => FetchFailure {
+            kind: FetchFailureKind::Other,
+            detail: Some("git could not be started".to_string()),
+        },
+    };
+    FetchOutcome::Failed(failure)
+}
+
+/// Classify a failed fetch by git's stderr. Substrings of the messages git,
+/// curl and ssh print under the C locale, checked in this order so that a
+/// refused credential is not mistaken for a missing repository: git prints
+/// "Could not read from remote repository" after both.
+fn classify_fetch_error(stderr: &str) -> FetchFailureKind {
+    const AUTH: &[&str] = &[
+        "authentication failed",
+        "could not read username",
+        "could not read password",
+        "terminal prompts disabled",
+        "permission denied (",
+        "host key verification failed",
+        "invalid username or password",
+        "access denied",
+        "returned error: 401",
+        "returned error: 403",
+    ];
+    const UNREACHABLE: &[&str] = &[
+        "could not resolve host",
+        "temporary failure in name resolution",
+        "name or service not known",
+        "nodename nor servname",
+        "connection refused",
+        "connection timed out",
+        "operation timed out",
+        "connection reset",
+        "network is unreachable",
+        "no route to host",
+        "failed to connect",
+    ];
+    const NO_REMOTE: &[&str] = &[
+        "does not appear to be a git repository",
+        "repository not found",
+        "no such remote",
+        "no remote repository specified",
+        "returned error: 404",
+    ];
+    let text = stderr.to_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|n| text.contains(n));
+    // git's own wording for an HTTP 404: `repository '<url>' not found`, with
+    // the URL between the two halves.
+    let missing_repo = text
+        .lines()
+        .any(|l| l.contains("repository '") && l.trim_end().ends_with("' not found"));
+    if has(AUTH) {
+        FetchFailureKind::Auth
+    } else if has(UNREACHABLE) {
+        FetchFailureKind::Unreachable
+    } else if missing_repo || has(NO_REMOTE) {
+        FetchFailureKind::NoRemote
+    } else {
+        FetchFailureKind::Other
+    }
+}
+
+/// git's first error line, made safe to draw: the first `fatal:` or `error:`
+/// line, else the first non-empty one, with URL userinfo removed, control
+/// characters dropped and the length capped.
+fn first_error_line(stderr: &str) -> Option<String> {
+    let lines = || stderr.lines().map(str::trim).filter(|l| !l.is_empty());
+    let line = lines()
+        .find(|l| {
+            let lower = l.to_lowercase();
+            lower.starts_with("fatal:") || lower.starts_with("error:")
+        })
+        .or_else(|| lines().next())?;
+    let clean: String = redact_userinfo(line)
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(FETCH_DETAIL_MAX)
+        .collect();
+    Some(clean)
+}
+
+/// `text` with the credentials removed from every `scheme://user:pass@host`
+/// URL in it, so a credential embedded in a remote cannot reach the screen.
+///
+/// The authority is found by the RFC 3986 delimiters only: everything after
+/// `://` up to the first `/`, `?`, `#`, whitespace or the end of the text.
+/// If it holds an `@`, everything before the *last* one is userinfo. Quotes,
+/// commas and parentheses are legal unencoded in userinfo, so they get no
+/// special handling: ending the authority at one cut a password in half and
+/// let the whole URL through. Over-redacting odd text is acceptable; a
+/// credential on screen is not.
+///
+/// For the ssh family (`ssh`, and any scheme containing `ssh`, such as
+/// `git+ssh`) only `:password` goes and the user stays: an ssh user is a
+/// login name, and dropping it would draw a URL that differs from
+/// `git remote -v`. Every other scheme loses all userinfo, since a token is
+/// commonly written as the user alone (`https://<token>@host/...`) and no
+/// list of http-like schemes can be complete. scp-style remotes
+/// (`git@host:owner/repo`) have no `://` and cannot carry a password, so they
+/// are left as written.
+///
+/// A password must be percent-encoded to be stripped: one with an unencoded
+/// `/`, `?`, `#` or whitespace is passed through as git prints it, and git
+/// rejects such a URL, so it can never have authenticated.
+pub fn redact_userinfo(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("://") {
+        // By characters, never `rfind` plus one: the character found can be
+        // several bytes long (a smart quote before a pasted URL), and slicing
+        // one byte past its start panicked inside it.
+        let scheme_start = rest[..i]
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
+            .map_or(0, |(p, c)| p + c.len_utf8());
+        let scheme = rest[scheme_start..i].to_ascii_lowercase();
+        let (head, tail) = rest.split_at(i + 3);
+        out.push_str(head);
+        let end = tail
+            .find(|c: char| matches!(c, '/' | '?' | '#') || c.is_whitespace())
+            .unwrap_or(tail.len());
+        let authority = &tail[..end];
+        match authority.rsplit_once('@') {
+            None => out.push_str(authority),
+            Some((userinfo, host)) if scheme.contains("ssh") => {
+                let user = userinfo.split_once(':').map_or(userinfo, |(u, _)| u);
+                out.push_str(user);
+                out.push('@');
+                out.push_str(host);
+            }
+            Some((_, host)) => out.push_str(host),
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Get all branch statuses for a repo (behind/ahead relative to upstream).
@@ -2288,5 +2519,340 @@ mod real_repo_tests {
         assert!(age < 60, "newest change is the untracked file, got {at}");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A clone of a local upstream, fetched once so `FETCH_HEAD` holds
+    /// something. No network: the remote is a path on this disk. Returns the
+    /// upstream and the clone.
+    fn fetched_clone(tag: &str) -> (PathBuf, PathBuf) {
+        let upstream = temp_repo(&format!("{tag}_up"));
+        let dir = std::env::temp_dir().join(format!("fleetz_it_{tag}_down_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (from, to) = (
+            upstream.to_string_lossy().into_owned(),
+            dir.to_string_lossy().into_owned(),
+        );
+        sh(&std::env::temp_dir(), &["git", "clone", "-q", &from, &to]);
+        sh(&dir, &["git", "fetch", "-q"]);
+        (upstream, dir)
+    }
+
+    /// Point `origin` somewhere that is not a repository.
+    fn break_origin(dir: &Path) {
+        let missing = dir.join("no-such-remote").to_string_lossy().into_owned();
+        sh(dir, &["git", "remote", "set-url", "origin", &missing]);
+    }
+
+    /// Pins the git behaviour rule 7 of `docs/fetch-outcome-contract.md`
+    /// rests on: a failed fetch truncates `FETCH_HEAD` to nothing and moves
+    /// its mtime, so the mtime alone counts a failure as a fetch.
+    #[tokio::test]
+    async fn a_failed_fetch_empties_fetch_head() {
+        let (upstream, dir) = fetched_clone("emptyhead");
+        let fetch_head = repo_dirs(&dir).unwrap().git_dir.join("FETCH_HEAD");
+        assert!(std::fs::metadata(&fetch_head).unwrap().len() > 0);
+        break_origin(&dir);
+        fetch(&dir).await;
+        assert_eq!(
+            std::fs::metadata(&fetch_head).unwrap().len(),
+            0,
+            "git no longer truncates FETCH_HEAD on a failed fetch"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// Rule 1, the success half: a fetch that worked says so, and the disk
+    /// baseline then has a time to give.
+    #[tokio::test]
+    async fn a_fetch_from_a_reachable_remote_succeeds() {
+        let (upstream, dir) = fetched_clone("fetchok");
+        sh(
+            &upstream,
+            &["git", "commit", "-q", "--allow-empty", "-m", "two"],
+        );
+        assert_eq!(fetch(&dir).await, FetchOutcome::Succeeded);
+        assert!(last_successful_fetch_at(&dir).is_some());
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// Rule 1, the failure half, and rule 7 on a real clone: a remote that is
+    /// not a repository fails with `NoRemote`, git's own line as the detail,
+    /// and leaves no successful-fetch time on disk.
+    #[tokio::test]
+    async fn a_fetch_from_a_missing_remote_fails_as_no_remote() {
+        let (upstream, dir) = fetched_clone("fetchgone");
+        assert!(last_successful_fetch_at(&dir).is_some());
+        break_origin(&dir);
+        let FetchOutcome::Failed(failure) = fetch(&dir).await else {
+            panic!("a fetch from a missing path did not fail");
+        };
+        assert_eq!(failure.kind, FetchFailureKind::NoRemote);
+        let detail = failure.detail.expect("git said why");
+        assert!(
+            detail.contains("does not appear to be a git repository"),
+            "{detail:?}"
+        );
+        assert_eq!(
+            last_successful_fetch_at(&dir),
+            None,
+            "a failed fetch was read as a fetch"
+        );
+        // The raw mtime still moves, which is why it cannot be the baseline.
+        assert!(last_fetch_at(&dir).is_some());
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// A remote that never answers is given up on as `TimedOut`, not lumped
+    /// in with a failure to start. The upload-pack here waits on its input
+    /// forever, so the limit is what ends it, deterministically.
+    #[tokio::test]
+    async fn a_fetch_that_never_answers_times_out() {
+        let (upstream, dir) = fetched_clone("fetchhang");
+        sh(
+            &dir,
+            &[
+                "git",
+                "config",
+                "remote.origin.uploadpack",
+                "cat >/dev/null; :",
+            ],
+        );
+        let outcome = fetch_within(&dir, std::time::Duration::from_millis(300)).await;
+        assert_eq!(
+            outcome,
+            FetchOutcome::Failed(FetchFailure {
+                kind: FetchFailureKind::TimedOut,
+                detail: None,
+            })
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+}
+
+#[cfg(test)]
+mod fetch_outcome_tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    fn exited(code: i32, stderr: &str) -> FetchRun {
+        FetchRun::Exited(std::process::Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        })
+    }
+
+    fn kind_of(stderr: &str) -> FetchFailureKind {
+        match fetch_outcome(exited(128, stderr)) {
+            FetchOutcome::Failed(f) => f.kind,
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_zero_exit_is_a_success() {
+        assert_eq!(fetch_outcome(exited(0, "")), FetchOutcome::Succeeded);
+    }
+
+    /// `run_git` returns `None` for both; a fetch keeps them apart.
+    #[test]
+    fn a_timeout_and_a_failure_to_start_are_told_apart() {
+        let FetchOutcome::Failed(timed_out) = fetch_outcome(FetchRun::TimedOut) else {
+            panic!("a timeout is a failure");
+        };
+        let FetchOutcome::Failed(not_started) = fetch_outcome(FetchRun::NotStarted) else {
+            panic!("a failure to start is a failure");
+        };
+        assert_eq!(timed_out.kind, FetchFailureKind::TimedOut);
+        assert_eq!(not_started.kind, FetchFailureKind::Other);
+        assert_ne!(timed_out, not_started);
+    }
+
+    /// Messages as git 2.39, curl and OpenSSH print them under `LC_ALL=C`.
+    #[test]
+    fn git_error_messages_map_to_their_kind() {
+        use FetchFailureKind::*;
+        for (stderr, want) in [
+            (
+                "fatal: Authentication failed for 'https://github.com/o/r.git/'",
+                Auth,
+            ),
+            (
+                "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+                Auth,
+            ),
+            (
+                "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+                Auth,
+            ),
+            (
+                "Host key verification failed.\nfatal: Could not read from remote repository.",
+                Auth,
+            ),
+            (
+                "fatal: unable to access 'https://nohost.invalid/o/r.git/': Could not resolve host: nohost.invalid",
+                Unreachable,
+            ),
+            (
+                "ssh: Could not resolve hostname nohost: nodename nor servname provided, or not known",
+                Unreachable,
+            ),
+            (
+                "ssh: connect to host h port 22: Connection refused",
+                Unreachable,
+            ),
+            (
+                "fatal: '/x' does not appear to be a git repository\nfatal: Could not read from remote repository.",
+                NoRemote,
+            ),
+            (
+                "ERROR: Repository not found.\nfatal: Could not read from remote repository.",
+                NoRemote,
+            ),
+            // git 2.39.3 on an HTTP 404 (a removed or renamed remote).
+            (
+                "fatal: repository 'http://127.0.0.1:18765/nope.git/' not found",
+                NoRemote,
+            ),
+            (
+                "fatal: refusing to fetch into branch 'refs/heads/main'",
+                Other,
+            ),
+            ("", Other),
+        ] {
+            assert_eq!(kind_of(stderr), want, "{stderr:?}");
+        }
+    }
+
+    #[test]
+    fn the_detail_is_the_first_error_line_only() {
+        let FetchOutcome::Failed(failure) = fetch_outcome(exited(
+            128,
+            "warning: something first\nfatal: '/x' does not appear to be a git repository\nfatal: Could not read from remote repository.\n",
+        )) else {
+            panic!("a failure");
+        };
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("fatal: '/x' does not appear to be a git repository")
+        );
+    }
+
+    /// Rule 8: whatever git prints, a credential in a URL never reaches the
+    /// detail, and nothing in it can drive the terminal.
+    #[test]
+    fn the_detail_carries_no_userinfo_or_control_characters() {
+        let FetchOutcome::Failed(failure) = fetch_outcome(exited(
+            128,
+            "fatal: unable to access 'https://user:secret@host.invalid/o/r.git/': \u{1b}[31mCould not resolve host",
+        )) else {
+            panic!("a failure");
+        };
+        let detail = failure.detail.unwrap();
+        assert!(
+            !detail.contains("secret") && !detail.contains("user"),
+            "{detail}"
+        );
+        assert!(!detail.contains('\u{1b}'), "{detail:?}");
+        assert!(detail.contains("https://host.invalid/o/r.git/"), "{detail}");
+    }
+
+    /// The detail is built inside the spawned fetch task: a non-ASCII
+    /// character before `scheme://` in git's line must not panic there.
+    #[test]
+    fn a_detail_with_a_multibyte_character_before_the_url_does_not_panic() {
+        let FetchOutcome::Failed(failure) = fetch_outcome(exited(
+            128,
+            "fatal: unable to access \u{2018}https://u:secret@host.invalid/o/r.git/\u{2019}: Could not resolve host",
+        )) else {
+            panic!("a failure");
+        };
+        let detail = failure.detail.unwrap();
+        assert!(!detail.contains("secret"), "{detail}");
+        assert!(
+            detail.contains("\u{2018}https://host.invalid/o/r.git/"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn a_long_error_line_is_capped() {
+        let FetchOutcome::Failed(failure) =
+            fetch_outcome(exited(1, &format!("fatal: {}", "x".repeat(500))))
+        else {
+            panic!("a failure");
+        };
+        assert_eq!(failure.detail.unwrap().chars().count(), FETCH_DETAIL_MAX);
+    }
+
+    #[test]
+    fn userinfo_is_removed_from_every_url_form_that_can_carry_it() {
+        for (url, want) in [
+            (
+                "https://user:secret@github.com/Gaurgle/fleetz.git",
+                "https://github.com/Gaurgle/fleetz.git",
+            ),
+            (
+                "https://ghp_token@github.com/o/r.git",
+                "https://github.com/o/r.git",
+            ),
+            // An ssh user is a login name, not a credential: only a
+            // password goes.
+            (
+                "ssh://git@github.com:22/o/r.git",
+                "ssh://git@github.com:22/o/r.git",
+            ),
+            ("ssh://u:pw@host/x", "ssh://u@host/x"),
+            ("HTTPS://tok@host/x", "HTTPS://host/x"),
+            ("git+ssh://u:pw@host/x", "git+ssh://u@host/x"),
+            // Every scheme outside the ssh family loses all userinfo.
+            ("ftp://tok@host/x", "ftp://host/x"),
+            ("persistent-https://tok@host/x", "persistent-https://host/x"),
+            // `,` `)` and `'` are legal in userinfo: they must not end it.
+            ("https://user:abc,def@host/r.git", "https://host/r.git"),
+            ("https://user:p)ss@host/r.git", "https://host/r.git"),
+            ("https://user:it's@host/r.git", "https://host/r.git"),
+            ("https://u:a:b:c@host/x", "https://host/x"),
+            ("https://u:p@[::1]:8080/x", "https://[::1]:8080/x"),
+            // An `@` after the authority is not userinfo.
+            (
+                "https://host/o/r@v?x=a@b#c@d",
+                "https://host/o/r@v?x=a@b#c@d",
+            ),
+            ("(https://u:p@a), next", "(https://a), next"),
+            // Multi-byte characters right before the scheme must not land a
+            // slice inside them: the scan used to panic on all three.
+            (
+                "\u{2018}https://u:p@h/x\u{2019}",
+                "\u{2018}https://h/x\u{2019}",
+            ),
+            ("日本https://u:p@h/x", "日本https://h/x"),
+            // `é` is not a scheme character, so the scheme is empty and,
+            // being outside the ssh family, all userinfo goes.
+            ("é://u:p@h/x", "é://h/x"),
+            (
+                "https://u:p@a?x=1 and https://v@b#frag",
+                "https://a?x=1 and https://b#frag",
+            ),
+            (
+                "https://github.com/Gaurgle/fleetz.git",
+                "https://github.com/Gaurgle/fleetz.git",
+            ),
+            // scp-style has no `://` and no password to leak.
+            (
+                "git@github.com:Gaurgle/fleetz.git",
+                "git@github.com:Gaurgle/fleetz.git",
+            ),
+            (
+                "a 'https://u:p@a/x' and https://v@b/y",
+                "a 'https://a/x' and https://b/y",
+            ),
+        ] {
+            assert_eq!(redact_userinfo(url), want, "{url}");
+        }
     }
 }

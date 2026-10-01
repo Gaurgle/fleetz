@@ -137,9 +137,91 @@ pub enum RepoLocation {
     NotCloned,
 }
 
+/// The three fetch facts of `docs/fetch-outcome-contract.md` for one
+/// checkout: when its remote refs were last actually updated, when a fetch
+/// last finished, and how that ended. The same shape as
+/// `app::GithubFreshness`, for the same reason: a fetch that was asked for is
+/// not one that worked, and only a success may move the time the counts are
+/// measured against.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FetchFacts {
+    /// When a fetch last succeeded. At load, from a non-empty `FETCH_HEAD`
+    /// (`git::last_successful_fetch_at`); `None` is unknown and is never
+    /// drawn as a time.
+    pub last_success: Option<DateTime<chrono::Local>>,
+    /// When a fetch last finished, however it ended.
+    pub last_attempt: Option<DateTime<chrono::Local>>,
+    pub outcome: crate::git::FetchOutcome,
+}
+
+impl FetchFacts {
+    /// What a freshly loaded row knows: the disk's last success, no attempt.
+    pub fn from_disk(last_success: Option<std::time::SystemTime>) -> Self {
+        Self {
+            last_success: last_success.map(DateTime::from),
+            ..Self::default()
+        }
+    }
+
+    /// A fetch for this checkout finished. Only a success advances
+    /// `last_success` (rule 3); `NotAttempted` changes nothing (rule 2).
+    pub fn record(&mut self, outcome: &crate::git::FetchOutcome, now: DateTime<chrono::Local>) {
+        use crate::git::FetchOutcome;
+        match outcome {
+            FetchOutcome::NotAttempted => return,
+            FetchOutcome::Succeeded => self.last_success = Some(now),
+            FetchOutcome::Failed(_) => {}
+        }
+        self.last_attempt = Some(now);
+        self.outcome = outcome.clone();
+    }
+
+    /// The failure, while the last fetch failed. Behind and ahead are then
+    /// counted against the remote refs of `last_success` (rule 5).
+    pub fn failure(&self) -> Option<&crate::git::FetchFailure> {
+        match &self.outcome {
+            crate::git::FetchOutcome::Failed(failure) => Some(failure),
+            _ => None,
+        }
+    }
+
+    /// Carry what this session learned about fetching across a load that
+    /// rebuilt the row (`R`, a time-window apply). Without it a window apply,
+    /// which fetches nothing, wiped a failure off the row and drew stale
+    /// counts as current, and an `R` whose own fetch failed forgot the last
+    /// success the session had seen.
+    ///
+    /// `self` is the replaced row's facts, `loaded` the new row's: the disk's
+    /// last success plus any fetch the load ran. A disk success newer than
+    /// anything this session saw (a `git fetch` run in a terminal) is a
+    /// success all the same; the load's own fetch is recorded last, and only
+    /// when it is newer than the session's last attempt.
+    pub fn carried_into(&self, loaded: &FetchFacts) -> FetchFacts {
+        let mut kept = self.clone();
+        let newer = |at: DateTime<chrono::Local>, than: Option<DateTime<chrono::Local>>| {
+            than.is_none_or(|t| at > t)
+        };
+        if let Some(at) = loaded.last_success
+            && newer(at, kept.last_success)
+            && newer(at, kept.last_attempt)
+        {
+            kept.record(&crate::git::FetchOutcome::Succeeded, at);
+        }
+        // Only when newer than what the session already has: an `R` whose
+        // fetch finished before a sweep's fetch of the same repo landed must
+        // not move `last_attempt` back or put its older outcome on top.
+        if let Some(at) = loaded.last_attempt
+            && newer(at, kept.last_attempt)
+        {
+            kept.record(&loaded.outcome, at);
+        }
+        kept
+    }
+}
+
 /// Aggregate status for a single repository.
 ///
-/// Three writers own disjoint sets of fields, and each writes only its own:
+/// Four writers own disjoint sets of fields, and each writes only its own:
 ///
 /// - **GitHub poll** (`apply_github`): `pr_count`, `prs`, `ci_status`,
 ///   `ci_workflow`, `ci_duration`, `repo_kind`.
@@ -147,6 +229,8 @@ pub enum RepoLocation {
 ///   `ahead`, `dirty`, `stash_count`, `stash_entries`, `worktrees`, `reflog`,
 ///   `graph`, `graph_expanded`, `remote_branches`, `remote_only_branches`,
 ///   `daily`, `work_key`.
+/// - **Fetch** (`FetchFacts::record`, when a fetch lands): `fetch`. A sweep
+///   that did not fetch leaves it alone (rule 2 of the fetch contract).
 /// - **Load** (discovery and `assemble_view`, which rebuild the whole list):
 ///   everything else, including `owner`, which comes from GitHub data but is
 ///   only ever set at load.
@@ -213,6 +297,9 @@ pub struct RepoStatus {
     /// worktrees instead of re-running those subprocesses. None means
     /// "unknown", which always counts as changed.
     pub work_key: Option<crate::git::WorkKey>,
+    /// Whether the remote refs behind `behind` and `ahead` are current: the
+    /// fetch facts for this checkout.
+    pub fetch: FetchFacts,
 }
 
 /// An active git worktree.
@@ -562,6 +649,9 @@ impl RepoStatus {
             groups: _,
             owner: _,
             remote_url: _,
+            // Fetch-owned: written only when a fetch lands
+            // (`FetchFacts::record`). The sweep's copy is the snapshot's.
+            fetch: _,
         } = fresh;
         self.branches = branches;
         self.commits = commits;
@@ -950,6 +1040,7 @@ mod tests {
             remote_only_branches: vec![],
             remote_branches: vec![],
             work_key: None,
+            fetch: FetchFacts::default(),
         }
     }
 
@@ -1032,5 +1123,139 @@ mod tests {
         assert_eq!(s.dirty_count, 1);
         assert_eq!(s.synced_count, 1);
         assert_eq!(s.not_cloned_count, 1);
+    }
+
+    // --- FZ-04: the fetch facts (docs/fetch-outcome-contract.md) ---
+
+    fn at(h: u32) -> DateTime<chrono::Local> {
+        use chrono::TimeZone;
+        chrono::Local
+            .with_ymd_and_hms(2026, 10, 1, h, 0, 0)
+            .unwrap()
+    }
+
+    fn failed(kind: crate::git::FetchFailureKind) -> crate::git::FetchOutcome {
+        crate::git::FetchOutcome::Failed(crate::git::FetchFailure { kind, detail: None })
+    }
+
+    /// Rule 3: a failure records the attempt and leaves the last success
+    /// where it was.
+    #[test]
+    fn only_a_successful_fetch_advances_the_last_success() {
+        let mut facts = FetchFacts::default();
+        facts.record(&crate::git::FetchOutcome::Succeeded, at(9));
+        facts.record(&failed(crate::git::FetchFailureKind::Unreachable), at(10));
+        assert_eq!(facts.last_success, Some(at(9)));
+        assert_eq!(facts.last_attempt, Some(at(10)));
+        assert!(facts.failure().is_some());
+    }
+
+    /// Rule 3: unknown stays unknown through a failure.
+    #[test]
+    fn a_failure_with_no_known_success_leaves_it_unknown() {
+        let mut facts = FetchFacts::from_disk(None);
+        facts.record(&failed(crate::git::FetchFailureKind::NoRemote), at(10));
+        assert_eq!(facts.last_success, None);
+    }
+
+    /// Recovery: the next fetch that works clears the failure.
+    #[test]
+    fn a_success_after_a_failure_recovers() {
+        let mut facts = FetchFacts::default();
+        facts.record(&failed(crate::git::FetchFailureKind::Auth), at(9));
+        facts.record(&crate::git::FetchOutcome::Succeeded, at(10));
+        assert_eq!(facts.failure(), None);
+        assert_eq!(facts.last_success, Some(at(10)));
+    }
+
+    /// Rule 2: an update that did not fetch says nothing about fetching.
+    #[test]
+    fn a_sweep_that_did_not_fetch_changes_no_fetch_fact() {
+        let mut facts = FetchFacts::default();
+        facts.record(&failed(crate::git::FetchFailureKind::TimedOut), at(9));
+        let before = facts.clone();
+        facts.record(&crate::git::FetchOutcome::NotAttempted, at(10));
+        assert_eq!(facts, before);
+    }
+
+    /// Rule 2 under the FZ-02 ownership split: the fetch facts are their own
+    /// owner, so a sweep result never carries its snapshot's copy onto the
+    /// row, in either direction.
+    #[test]
+    fn a_local_sweep_does_not_carry_the_fetch_facts() {
+        let mut row = make_repo("r", 0, 0, 0);
+        row.fetch
+            .record(&failed(crate::git::FetchFailureKind::Unreachable), at(10));
+        let mut fresh = make_repo("r", 2, 0, 0);
+        fresh.fetch = FetchFacts::from_disk(Some(std::time::SystemTime::now()));
+        let kept = row.fetch.clone();
+        row.apply_local_sweep(fresh);
+        assert_eq!(row.behind, 2, "the sweep's own fields still land");
+        assert_eq!(row.fetch, kept);
+    }
+
+    /// A time-window apply rebuilds every row and fetches nothing. The
+    /// failure has to survive it, or the counts read as current again.
+    #[test]
+    fn a_load_that_did_not_fetch_keeps_the_sessions_failure() {
+        let mut session = FetchFacts::from_disk(None);
+        session.record(&crate::git::FetchOutcome::Succeeded, at(9));
+        session.record(&failed(crate::git::FetchFailureKind::Auth), at(10));
+        // The failure emptied FETCH_HEAD, so the disk knows nothing.
+        let loaded = FetchFacts::from_disk(None);
+        assert_eq!(session.carried_into(&loaded), session);
+    }
+
+    /// An `R` whose own fetch worked clears the failure; one whose fetch
+    /// failed keeps the last success the session saw.
+    #[test]
+    fn a_load_that_fetched_records_its_fetch_on_the_sessions_facts() {
+        let mut session = FetchFacts::default();
+        session.record(&crate::git::FetchOutcome::Succeeded, at(9));
+        session.record(&failed(crate::git::FetchFailureKind::Auth), at(10));
+
+        let mut ok = FetchFacts::from_disk(None);
+        ok.record(&crate::git::FetchOutcome::Succeeded, at(11));
+        let carried = session.carried_into(&ok);
+        assert_eq!(carried.failure(), None);
+        assert_eq!(carried.last_success, Some(at(11)));
+
+        let mut bad = FetchFacts::from_disk(None);
+        bad.record(&failed(crate::git::FetchFailureKind::Unreachable), at(11));
+        let carried = session.carried_into(&bad);
+        assert_eq!(
+            carried.failure().map(|f| f.kind),
+            Some(crate::git::FetchFailureKind::Unreachable)
+        );
+        assert_eq!(
+            carried.last_success,
+            Some(at(9)),
+            "the session's success was lost"
+        );
+    }
+
+    /// An `R` whose fetch finished before a sweep's fetch of the same repo
+    /// landed: the newer outcome and attempt time stay.
+    #[test]
+    fn a_load_fetch_older_than_the_sessions_attempt_is_not_recorded() {
+        let mut session = FetchFacts::default();
+        session.record(&crate::git::FetchOutcome::Succeeded, at(11));
+        let mut loaded = FetchFacts::from_disk(None);
+        loaded.record(&failed(crate::git::FetchFailureKind::Unreachable), at(10));
+        assert_eq!(session.carried_into(&loaded), session);
+    }
+
+    /// A fetch run in a terminal after the failure fixed it; the disk says so.
+    #[test]
+    fn a_newer_success_on_disk_clears_an_older_failure() {
+        let mut session = FetchFacts::default();
+        session.record(&failed(crate::git::FetchFailureKind::Auth), at(10));
+        let loaded = FetchFacts {
+            last_success: Some(at(11)),
+            ..FetchFacts::default()
+        };
+        let carried = session.carried_into(&loaded);
+        assert_eq!(carried.failure(), None);
+        assert_eq!(carried.last_success, Some(at(11)));
     }
 }

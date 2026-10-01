@@ -88,6 +88,71 @@ pub fn github_failure_label(failure: &crate::github::Failure) -> &'static str {
     }
 }
 
+/// Every word fleetz draws for a failed `git fetch`, in one place so the
+/// wording can change without hunting: the row marker's short form, the
+/// detail pane's phrase, and the status line after a fetch someone asked for.
+///
+/// The short form is a word, not a number: a failed fetch is a state, and
+/// counters are the only numeric badges. Colours are `PEACH` for the marker
+/// and the detail line, the "a refresh is not keeping up" colour the stale
+/// GitHub header uses; red already means CI failed.
+pub fn fetch_failure_short(kind: crate::git::FetchFailureKind) -> &'static str {
+    use crate::git::FetchFailureKind;
+    match kind {
+        FetchFailureKind::TimedOut => "timeout",
+        FetchFailureKind::Auth => "auth",
+        FetchFailureKind::Unreachable => "unreachable",
+        FetchFailureKind::NoRemote => "no remote",
+        FetchFailureKind::Other => "fetch",
+    }
+}
+
+/// The detail pane's and the status line's phrase for a fetch failure kind.
+pub fn fetch_failure_phrase(kind: crate::git::FetchFailureKind) -> &'static str {
+    use crate::git::FetchFailureKind;
+    match kind {
+        FetchFailureKind::TimedOut => "timed out",
+        FetchFailureKind::Auth => "authentication failed",
+        FetchFailureKind::Unreachable => "remote unreachable",
+        FetchFailureKind::NoRemote => "remote not found",
+        FetchFailureKind::Other => "git error",
+    }
+}
+
+/// The row marker for a repo whose last fetch failed, or None.
+pub fn fetch_marker(facts: &crate::model::FetchFacts) -> Option<String> {
+    let failure = facts.failure()?;
+    Some(format!("⚠ {}", fetch_failure_short(failure.kind)))
+}
+
+/// The detail pane's fetch line: that the last fetch failed, why, and when
+/// the remote refs behind `behind` and `ahead` are from. Written the way the
+/// header writes stale GitHub data (`as of 14:02`, `age unknown`). None
+/// while the last fetch did not fail.
+pub fn fetch_failure_line(
+    facts: &crate::model::FetchFacts,
+    now: chrono::DateTime<chrono::Local>,
+) -> Option<String> {
+    let failure = facts.failure()?;
+    let phrase = fetch_failure_phrase(failure.kind);
+    Some(match facts.last_success {
+        Some(at) => format!("⚠ fetch failed: {phrase}, as of {}", swept_label(at, now)),
+        None => format!("⚠ fetch failed: {phrase}, age unknown"),
+    })
+}
+
+/// The status line after fetches someone asked for, when any failed: the
+/// repo and why for a single fetch, a count for a batch.
+pub fn fetch_report_label(report: &crate::app::FetchReport) -> String {
+    match report.failed.as_slice() {
+        [(name, kind)] if report.total == 1 => {
+            format!("fetch failed: {name}, {}", fetch_failure_phrase(*kind))
+        }
+        [(name, _)] => format!("1 of {} fetches failed: {name}", report.total),
+        failed => format!("{} of {} fetches failed", failed.len(), report.total),
+    }
+}
+
 /// The header's GitHub freshness segment: the full text, the short form a
 /// narrow header falls back to, and its colour. `None` when the data is
 /// fresh, which is the ordinary case and says nothing.
@@ -1589,6 +1654,96 @@ mod tests {
 
     fn failure(kind: crate::github::FailureKind, message: &str) -> crate::github::Failure {
         crate::github::Failure::new(kind, message)
+    }
+
+    fn failed_fetch(
+        kind: crate::git::FetchFailureKind,
+        last_success: Option<chrono::DateTime<chrono::Local>>,
+    ) -> crate::model::FetchFacts {
+        let mut facts = crate::model::FetchFacts {
+            last_success,
+            ..Default::default()
+        };
+        let failure = crate::git::FetchFailure { kind, detail: None };
+        facts.record(
+            &crate::git::FetchOutcome::Failed(failure),
+            at(2026, 10, 1, 14, 30),
+        );
+        facts
+    }
+
+    /// Rule 5 in the detail pane: the failure, why, and how old the remote
+    /// refs behind the counts are, written the way the header writes it.
+    #[test]
+    fn the_fetch_failure_line_names_the_kind_and_the_last_success() {
+        let now = at(2026, 10, 1, 14, 30);
+        let facts = failed_fetch(
+            crate::git::FetchFailureKind::NoRemote,
+            Some(at(2026, 10, 1, 14, 2)),
+        );
+        assert_eq!(
+            fetch_failure_line(&facts, now).as_deref(),
+            Some("⚠ fetch failed: remote not found, as of 14:02")
+        );
+    }
+
+    /// Rule 3: unknown is said, never drawn as a time.
+    #[test]
+    fn an_unknown_last_success_is_said_to_be_unknown() {
+        let now = at(2026, 10, 1, 14, 30);
+        let facts = failed_fetch(crate::git::FetchFailureKind::Auth, None);
+        assert_eq!(
+            fetch_failure_line(&facts, now).as_deref(),
+            Some("⚠ fetch failed: authentication failed, age unknown")
+        );
+    }
+
+    /// Nothing extra while fetches work, or before any has run.
+    #[test]
+    fn a_fetch_that_did_not_fail_draws_nothing() {
+        let now = at(2026, 10, 1, 14, 30);
+        let mut ok = crate::model::FetchFacts::default();
+        assert_eq!(fetch_failure_line(&ok, now), None);
+        assert_eq!(fetch_marker(&ok), None);
+        ok.record(&crate::git::FetchOutcome::Succeeded, now);
+        assert_eq!(fetch_failure_line(&ok, now), None);
+        assert_eq!(fetch_marker(&ok), None);
+    }
+
+    /// Every kind has its own short word and phrase.
+    #[test]
+    fn every_fetch_failure_kind_has_its_own_words() {
+        use crate::git::FetchFailureKind::*;
+        let kinds = [TimedOut, Auth, Unreachable, NoRemote, Other];
+        let shorts: std::collections::HashSet<_> =
+            kinds.iter().map(|k| fetch_failure_short(*k)).collect();
+        let phrases: std::collections::HashSet<_> =
+            kinds.iter().map(|k| fetch_failure_phrase(*k)).collect();
+        assert_eq!(shorts.len(), kinds.len());
+        assert_eq!(phrases.len(), kinds.len());
+    }
+
+    /// Rule 9's status line, for each shape of result.
+    #[test]
+    fn the_fetch_report_says_how_many_failed() {
+        use crate::git::FetchFailureKind::*;
+        let report =
+            |total, failed: &[(&str, crate::git::FetchFailureKind)]| crate::app::FetchReport {
+                total,
+                failed: failed.iter().map(|(n, k)| (n.to_string(), *k)).collect(),
+            };
+        assert_eq!(
+            fetch_report_label(&report(1, &[("fleetz", TimedOut)])),
+            "fetch failed: fleetz, timed out"
+        );
+        assert_eq!(
+            fetch_report_label(&report(5, &[("fleetz", Auth)])),
+            "1 of 5 fetches failed: fleetz"
+        );
+        assert_eq!(
+            fetch_report_label(&report(5, &[("a", Auth), ("b", Unreachable)])),
+            "2 of 5 fetches failed"
+        );
     }
 
     /// The case that was invisible: a poll that failed offline with good data
