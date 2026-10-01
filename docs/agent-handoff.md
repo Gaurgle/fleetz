@@ -145,61 +145,63 @@ Andreas instructed Fable to run FZ-01 after FZ-02 on 2026-10-01.
 - Board: #14 is In progress with worker and reviewer fields set; the
   assignment is a comment on the issue.
 
-State when last written: the worker is dispatched and has not reported. The
-worktree holds whatever it has written so far, uncommitted. Next, in order:
+State when last written: the worker reported and the ticket is in Review.
+The worktree holds `docs/performance-baseline.md` (untracked) and one new row
+in `CLAUDE.md`, uncommitted. `fz-reviewer` is rerunning case A (large fleet,
+warm cache, intro off) from the document alone. Headline numbers as the
+worker reported them, not yet reviewed: first paint 6 ms; first useful row
+with a warm cache 257 ms for 14 rows and 1148 ms for 70; a cold cache costs
+about 6 s before anything but the frame shows; with no cache and no network
+no rows show at all, local ones included. Next, in order:
 
-1. Read the worker's report and the document; check that only the allowed
-   files changed and that `scripts/check-docs.sh` passes in the worktree.
-2. Dispatch `fz-reviewer` with the report. It reruns at least one case.
-3. On acceptance, commit the reviewed diff on the branch and push it. The
+1. On acceptance, commit the reviewed diff on the branch and push it. The
    push runs `docs.yml`, not `ci.yml`, because only prose changed.
-4. Merge under the safe-merge rule, move #14 to Done and record the commits.
-   Whether to close #14 has not been asked; leave it open unless Andreas
-   says otherwise.
+2. Merge under the safe-merge rule, move #14 to Done, record the commits and
+   close the issue.
+3. Add the `CLAUDE.md` index rows for the identity design and the two
+   contracts.
 
-## FZ-05: in progress
+Once the reviewer's timing rerun is over, nothing else needs a quiet
+machine: run the local checks for issue #1 and merge it, then dispatch FZ-03
+and FZ-06.
 
-Andreas instructed Fable to run FZ-05 alongside FZ-01 on 2026-10-01.
+## FZ-05: Done, design merged
 
-- Base: `6c729265d2214a55979c4ab7e8bf307941184667` (`main`, equal to
-  `origin/main`, clean tree at dispatch).
-- Branch `docs/fz-05-repository-identity`, worktree
-  `.claude/worktrees/fz-05` in the main checkout.
-- Worker `fz-worker`, requested `claude-opus-5-5`, effort medium. It traces
-  identity through the code and drafts `docs/repository-identity-design.md`
-  with alternatives and open decisions. The design decisions are the
-  coordinator's, as an architectural checkpoint, and want Astra's second
-  opinion when Astra is back.
-- Allowed files: `docs/repository-identity-design.md` only. The worker was
-  told not to build or run tests, because FZ-01 measures on the same machine;
-  claims that need execution are marked unconfirmed in the document.
-- Board: #18 is In progress, assignment recorded on the issue.
+[repository-identity-design.md](repository-identity-design.md) is on `main`:
+ticket commit `100cb6e`, merge `ee65eb7`, #18 Done and closed. Three review
+passes by `fz-reviewer`, final verdict accepted. Nothing was executed for it;
+its last section lists the claims that need a test to confirm.
 
-State when last written: the worker delivered the document (untracked in the
-worktree) and is revising it with the coordinator's decisions. The findings:
-`github::merge_sources` dedupes the dataset by bare name, so of two repos
-with one name the older-pushed one vanishes; the folder-name fallback in
-`Wanted::match_clone` lets a fork or a foreign-host clone claim a row; and
-the poll writes CI onto local-only rows by bare name. The coordinator
-spot-checked those against the code.
+Findings: `github::merge_sources` dedupes the dataset by bare name, so of two
+same-named repos the older-pushed one vanishes; the folder-name fallback in
+`Wanted::match_clone` lets a fork or a foreign-host clone claim another
+repo's row; the poll writes GitHub fields onto local-only rows by bare name.
 
-Decisions taken by the coordinator, Astra not consulted, Andreas may veto:
-rows keyed by remote identity derived from the existing `owner` and `name`
-(model A); host parsed and carried but matching stays host-agnostic; the
-folder-name fallback for a clone whose origin matches nothing is kept only
-when the origin's owner equals the wanted repo's owner and the origin is not
-itself a repo in the dataset (so a rename keeps matching, a fork does not);
-an ambiguous name claims no row and says so once; pass 3 dedupes by path
-only, as repoz does, which changes a `CLAUDE.md` invariant; GitHub fields on
-a local-only row only by exact origin; `owner/name` group members deferred;
-adding a neutral field value to existing test fixture literals is allowed
-when a struct gains a field, with no assertion changed.
+Design, decided by the coordinator, Astra not consulted, Andreas may veto:
+GitHub-owned fields keyed by remote identity derived from the existing
+`owner` and `name`, sweep-owned fields by checkout path, exactly one row per
+remote carrying the GitHub fields and marked by the load through `owner`.
 
-Next: read the revised document, dispatch `fz-reviewer` to trace scenarios S1
-(collision) and S3 (local-only), then commit, push and merge it. The
-implementation tickets FZ-05a to FZ-05f it defines run after FZ-03, serially
-where they share `main.rs`. Its index row in `CLAUDE.md` is left to the
-coordinator, since the FZ-01 branch also adds a row to that table.
+Implementation tickets it defines, serial, none created as issues yet:
+FZ-05a (`model.rs`), b (`discovery.rs` plus named `assemble_view` call
+sites), c (test seam around `assemble_view`, pure refactor), d (assembly and
+poll in one ticket), e (`merge_sources`), f (pass 3 by path only). Optional
+g, h, i, j. They run after FZ-03 and FZ-04; only FZ-05a can run beside
+FZ-03.
+
+Before those tickets run, Andreas must see two things, both in the document:
+four `CLAUDE.md` invariant texts change (section 3.10), and FZ-05f changes
+what pass 3 shows, which he may veto.
+
+**Constraint on the series:** between the merge of FZ-05b and the merge of
+FZ-05e a fleet with two same-named repos can lose a row it shows today,
+including one with uncommitted work. In that span nothing is tagged and
+Andreas is told in every report not to install from `main`. Lift it when
+FZ-05e is integrated.
+
+Its index row in `CLAUDE.md`, and rows for the two contracts, are added by
+the coordinator after the FZ-01 branch merges, since that branch adds a row
+to the same table.
 
 ## FZ-06: authorized, not started
 
