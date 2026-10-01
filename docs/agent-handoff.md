@@ -1,9 +1,9 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-01 20:33 by `claude-fable-5-1`. FZ-04 is merged and
-closed. **Two workers are running: FZ-06b (#38) in `.claude/worktrees/fz-06b`
-and the FZ-10 (#23) design revision in `.claude/worktrees/fz-10`. Neither has
-been reviewed.** Read this file, the repository
+Last written 2026-10-01 20:48 by `claude-fable-5-1`. FZ-04 is merged and
+closed. **Two agents are running: the FZ-06b (#38) worker in
+`.claude/worktrees/fz-06b`, and a reviewer on revision 2 of the FZ-10 (#23)
+design in `.claude/worktrees/fz-10`.** Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md),
 [release-plan.md](release-plan.md) and
 [first-wave-tickets.md](first-wave-tickets.md) before acting. GitHub (the
@@ -96,12 +96,18 @@ In order of weight:
   fails if the key stops reading from the common directory. On disk before
   the resume: `src/git.rs` +384, tests only, 16 of 20 failing on the base by
   design. E8a and E8d are outcomes, not pins.
-- **FZ-10 (#23) revision: worker running since 20:10.** The worktree was
-  fast-forwarded to `f8a54c0`; `docs/api-budget-design.md` is still
-  untracked there. The fresh worker has findings F1 to F7 and the smaller
-  points (in full on #23), keeps decisions A1 to A7 and marks any change it
-  needs as proposed, makes at most 4 live GraphQL requests and runs no
-  builds. Next: a reviewer re-reviews.
+- **FZ-10 (#23): revision 2 in review since 20:47.** The worker reported
+  every finding addressed (966 lines, untracked in `.claude/worktrees/fz-10`,
+  written against `f8a54c0`). The coordinator ruled on what it marked as
+  proposed, all accepted and recorded on #23: A6 rebuilds from the dataset
+  in memory as `DatasetSource::Local` with no attempt recorded; a connect
+  failure or connect timeout is `Offline` (A5); jitter applies on top of
+  the 600 s cap, so the longest wait is 720 s and owner-facing text must say
+  about twelve minutes, not ten; `Offline` and `Auth` keep the consecutive
+  count; `Auth` retries at the plain interval. The document still says
+  "proposed": the next worker pass applies the rulings together with the
+  reviewer's findings, then a narrow re-review. A fresh `fz-reviewer` is
+  running with at most 3 live requests and no builds.
 - **#45:** uncommitted `ci.yml` and `docs.yml` in
   `.claude/worktrees/issue-45`; reviewer verdict blocked on a repository
   setting, diff judged correct. Parked by Andreas until the repository is
