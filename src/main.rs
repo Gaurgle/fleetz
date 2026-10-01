@@ -38,8 +38,9 @@ use std::process::Command as StdCommand;
 /// meant to be complete rather than a glance.
 ///
 /// Affordable because these probes are already gated on `WorkKey`: a repo
-/// whose HEAD, index and stash log have not moved is skipped entirely, so
-/// the deeper log is paid once per actual change rather than once per sweep.
+/// whose refs, HEAD, index, shallow boundary and HEAD and stash reflogs have
+/// not moved is skipped entirely, so the deeper log is paid once per actual
+/// change rather than once per sweep.
 const HISTORY_COUNT: u32 = 200;
 
 /// How long a footer status message ("Refreshed", "Watch off", …) stays before
@@ -2112,6 +2113,13 @@ fn spawn_sweep(
     });
 }
 
+/// Whether a sweep may reuse the gated probes: only when it has a key and the
+/// key equals the snapshot's. A `None` key (a failed query, an unborn HEAD)
+/// never counts as unchanged, not even against another `None`.
+fn key_unchanged(new: &Option<git::WorkKey>, old: &Option<git::WorkKey>) -> bool {
+    new.is_some() && new == old
+}
+
 /// Full per-repo rebuild. Fields the sweep does not probe are copied from the
 /// snapshot only to complete the struct; `RepoStatus::apply_local_sweep`
 /// discards them when the result lands.
@@ -2126,17 +2134,20 @@ async fn rebuild_repo_status(
     let old = &target.old;
 
     // Cheap tier: always current. Untracked files never touch the WorkKey,
-    // so dirty_count must not be skipped.
-    let branches = git::branch_statuses(path).await;
+    // so dirty_count must not be skipped. Both ref queries feed the key, and
+    // a failed one stays a failure there rather than an empty list.
+    let local = git::try_branch_statuses(path).await;
     let dirty = git::dirty_count(path).await;
-    let remote = git::remote_branches(path).await;
+    let other = git::try_ref_listing(path).await;
+    let key = git::work_key_from(path, local.as_ref().ok(), other.as_ref().ok()).await;
+    let unchanged = key_unchanged(&key, &old.work_key);
+
+    let branches = local.map(|l| l.statuses).unwrap_or_default();
+    let remote = other.map(|o| o.remotes).unwrap_or_default();
     let branch_names: Vec<String> = branches.iter().map(|b| b.name.clone()).collect();
     let (total_behind, total_ahead) = branches
         .iter()
         .fold((0u32, 0u32), |(b, a), s| (b + s.behind, a + s.ahead));
-
-    let key = git::work_key(path).await;
-    let unchanged = key.is_some() && key == old.work_key;
 
     let (commits, reflog, graph, graph_expanded, stash_entries, worktrees) = if unchanged {
         (
@@ -2909,8 +2920,15 @@ async fn build_repo_status(
     location: RepoLocation,
 ) -> RepoStatus {
     let path = &found.path;
-    let branches = git::branch_statuses(path).await;
+    // Every key input is read before the probes the key gates, so a change
+    // landing while they run is in the probes' output or moves the next
+    // sweep's key, never recorded in the key alone.
+    let local = git::try_branch_statuses(path).await;
     let dirty = git::dirty_count(path).await;
+    let other = git::try_ref_listing(path).await;
+    let work_key = git::work_key_from(path, local.as_ref().ok(), other.as_ref().ok()).await;
+    let branches = local.map(|l| l.statuses).unwrap_or_default();
+    let remote = other.map(|o| o.remotes).unwrap_or_default();
 
     let mut total_behind = 0u32;
     let mut total_ahead = 0u32;
@@ -2959,7 +2977,6 @@ async fn build_repo_status(
     let worktrees = git::worktree_list(path).await;
 
     let remote_url = git::remote_url(path).await;
-    let remote = git::remote_branches(path).await;
     let remote_only_branches = git::unfetched_branches(&remote, &branches);
 
     RepoStatus {
@@ -2991,9 +3008,7 @@ async fn build_repo_status(
         remote_url,
         remote_only_branches,
         remote_branches: remote,
-        // Taken last, after every probe above, so the first sweep that finds
-        // it unchanged can safely reuse all of them.
-        work_key: git::work_key(path).await,
+        work_key,
         fetch: model::FetchFacts::from_disk(git::last_successful_fetch_at(path)),
     }
 }
@@ -3077,10 +3092,21 @@ mod tests {
             index_mtime: None,
             index_size: 0,
             stash_size: 0,
-            refs_mtime: None,
-            packed_refs_size: 0,
-            loose_tag_count: 0,
+            head_log_size: 0,
+            head_ref: None,
+            ref_signature: 0,
         }
+    }
+
+    /// A missing key is never "unchanged": two sweeps whose ref queries both
+    /// failed must both re-probe, not reuse each other's empty answer.
+    #[test]
+    fn two_missing_work_keys_never_count_as_unchanged() {
+        assert!(!key_unchanged(&None, &None));
+        assert!(!key_unchanged(&None, &Some(key("aaa"))));
+        assert!(!key_unchanged(&Some(key("aaa")), &None));
+        assert!(!key_unchanged(&Some(key("aaa")), &Some(key("bbb"))));
+        assert!(key_unchanged(&Some(key("aaa")), &Some(key("aaa"))));
     }
 
     // --- FZ-02: a local sweep result must not undo a newer GitHub poll ---
