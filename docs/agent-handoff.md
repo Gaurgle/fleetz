@@ -59,9 +59,9 @@ Status. Issue #7 has no milestone. Visual layout in the browser is the one
 setup check still open. GitHub is authoritative for current status and
 assignment.
 
-FZ-02 is integrated and #15 is closed. FZ-01 and FZ-05 are in flight; FZ-06
-and the pin for issue #1 are authorized and queued; the freshness contract
-for FZ-03 is accepted. All are described below. No release has started.
+Done and closed on 2026-10-01: FZ-02 (#15), FZ-01 (#14), FZ-05 (#18) and
+issue #1. In flight: FZ-03 (#16) and FZ-06 (#19). All are described below.
+No release has started.
 
 Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
 Andreas asked to lean on Claude for the day. The Claude-native workforce is
@@ -125,45 +125,21 @@ No rework and no review findings beyond the optional one above. The ticket
 size was right for one worker. With the pilot integrated, the limit is now
 two workers with disjoint files.
 
-## FZ-01: in progress
+## FZ-01: Done, baseline merged
 
-Andreas instructed Fable to run FZ-01 after FZ-02 on 2026-10-01.
+[performance-baseline.md](performance-baseline.md) is on `main`: ticket commit
+`1cfd89c`, merge `b084d21`, #14 Done and closed. Two review passes, final
+verdict accepted; the reviewer rebuilt case A from the document alone.
 
-- Base: `28ebba796ab6b1bea72e96f908e0082b61456ce9` (`main`, equal to
-  `origin/main`). The main checkout had one uncommitted file at dispatch,
-  this one.
-- Branch `docs/fz-01-performance-baseline`, worktree
-  `.claude/worktrees/fz-01` in the main checkout.
-- Worker `fz-worker`, requested `claude-opus-5-5`, effort medium. Reviewer
-  will be `fz-reviewer`, same model, separate invocation, and reruns at
-  least one measured case.
-- Allowed files: `docs/performance-baseline.md` (new) and one index row in
-  `CLAUDE.md`. No source, harness or instrumentation is committed.
-- Limits given to the worker: isolated `HOME` so the real cache, config and
-  Git configuration are untouched; synthetic repos with local bare remotes;
-  at most 8 live GraphQL fetches, none in a loop; no installs.
-- Board: #14 is In progress with worker and reviewer fields set; the
-  assignment is a comment on the issue.
-
-State when last written: the worker reported and the ticket is in Review.
-The worktree holds `docs/performance-baseline.md` (untracked) and one new row
-in `CLAUDE.md`, uncommitted. `fz-reviewer` is rerunning case A (large fleet,
-warm cache, intro off) from the document alone. Headline numbers as the
-worker reported them, not yet reviewed: first paint 6 ms; first useful row
-with a warm cache 257 ms for 14 rows and 1148 ms for 70; a cold cache costs
-about 6 s before anything but the frame shows; with no cache and no network
-no rows show at all, local ones included. Next, in order:
-
-1. On acceptance, commit the reviewed diff on the branch and push it. The
-   push runs `docs.yml`, not `ci.yml`, because only prose changed.
-2. Merge under the safe-merge rule, move #14 to Done, record the commits and
-   close the issue.
-3. Add the `CLAUDE.md` index rows for the identity design and the two
-   contracts.
-
-Once the reviewer's timing rerun is over, nothing else needs a quiet
-machine: run the local checks for issue #1 and merge it, then dispatch FZ-03
-and FZ-06.
+What later tickets need from it: first paint is 6 to 7 ms; first useful row
+with a warm cache is 257 ms for 14 rows and 1148 ms for 70; a cold cache
+costs about 6 s; with no cache and no network no rows show at all, local ones
+included, because the load waits on the GitHub fetch before discovery; all
+rows arrive in one event; a large startup spawns about 11 git processes per
+local repo. Wall time moved 4 to 5% between two sessions at equal CPU, so a
+later ticket compares a base and a candidate binary interleaved in one
+session and never against the table. The scratch fixtures under the session
+scratchpad may be gone; the document inlines every script.
 
 ## FZ-05: Done, design merged
 
@@ -203,14 +179,38 @@ Its index row in `CLAUDE.md`, and rows for the two contracts, are added by
 the coordinator after the FZ-01 branch merges, since that branch adds a row
 to the same table.
 
-## FZ-06: authorized, not started
+## FZ-06: in progress
 
-Andreas instructed Fable to start FZ-06 once FZ-01's measurements are done.
-Dispatch it after the FZ-01 reviewer has finished rerunning its case, so the
-mutation experiments do not disturb a timing run. Output is
-`docs/cache-invalidation-design.md`; production code is read-only; identity
-assumptions are coordinated with FZ-05. Nothing is created for it yet: no
-branch, no worktree, #19 still Ready.
+Dispatched on 2026-10-01 once FZ-01's timing runs were over.
+
+- Base `6dd260f9a253dc2ba37b0efe6c1315fecd0dde60`, branch
+  `docs/fz-06-cache-invalidation`, worktree `.claude/worktrees/fz-06`.
+- Worker `fz-worker` (`claude-opus-5-5`, medium). Allowed file:
+  `docs/cache-invalidation-design.md`. Production code is read-only; mutation
+  experiments run in temporary repositories under the session scratchpad.
+- Board: #19 In progress, assignment on the issue.
+- Next: read the report and the document, decide its open questions,
+  dispatch `fz-reviewer` to repeat one confirmed gap from the documented
+  steps, then commit, push, merge, Done and close.
+
+## FZ-03: in progress
+
+Dispatched on 2026-10-01 under the standing instruction.
+
+- Base `6dd260f9a253dc2ba37b0efe6c1315fecd0dde60`, branch
+  `fix/fz-03-github-freshness`, worktree `.claude/worktrees/fz-03`.
+- Worker `fz-worker` (`claude-opus-5-5`, medium). Allowed files:
+  `src/github.rs`, `src/cache.rs`, `src/app.rs`, `src/main.rs`,
+  `src/ui/mod.rs`, `README.md`. Contract: the section below.
+- Existing tests that set `github_poll_failing` or `last_github_poll`
+  directly stop compiling when those fields are replaced. The worker may
+  change how such a fixture sets the state and nothing else: no assertion,
+  expected value or test name. The reviewer checks those hunks line by line.
+- Board: #16 In progress, assignment on the issue.
+- Next: review, commit, push, combined checks, then **stop at Ready to
+  integrate**: the header's wording and look are Andreas's to accept on the
+  branch build (`cargo run --release --manifest-path
+  .claude/worktrees/fz-03/Cargo.toml`). Do not merge before he has.
 
 ## Freshness contract for FZ-03: accepted
 
@@ -227,37 +227,36 @@ poll that falls back to the cache is reported as a success, so offline shows
 no marker at all; and with watch off a cache-served launch never polls.
 
 Board: #16 is Ready, with the contract and file ownership in a comment.
-FZ-03 is next in line for an implementation worker under the standing
-instruction above. It waits until FZ-01's timing runs are over, because its
-worker builds and tests. It stops at Ready to integrate for Andreas to try
-the header, and it must not run beside FZ-04.
+FZ-04 follows FZ-03 and must not run beside it. Its per-repo contract is
+drafted in [fetch-outcome-contract.md](fetch-outcome-contract.md), not yet
+accepted. One finding in it was executed: a failed `git fetch` empties
+`FETCH_HEAD` and advances its mtime, so `git::last_fetch_at` counts a failed
+fetch as a fetch.
 
-## Issue #1: pin the Rust toolchain action, then close
+## Issue #1: Done
 
-Andreas instructed Fable on 2026-10-01 to close out #1: pin
-`dtolnay/rust-toolchain` in `ci.yml` and `release.yml`, then close the issue
-with a summary. He approved the CI change for this ticket, which the
-safe-merge rule requires.
+`dtolnay/rust-toolchain` is pinned to commit `6bed076` with `toolchain:
+stable` in `ci.yml` and `release.yml`: ticket commit `1c3701a`, merge
+`6dd260f`, CI green on the branch and on `main`, #1 Done and closed with a
+summary. Andreas approved the CI change for that ticket only. The summary
+names two things the issue's acceptance does not cover: the workflows have
+no `pull_request` trigger, and no test loads a config file that does not
+exist.
 
-- Pin: commit `6bed0761d98439e5a578e2877258200ad565ba87`, the tip of the
-  action's `stable` branch on 2026-09-03, with `toolchain: stable` stated
-  explicitly because the ref no longer names it.
-- Branch `ci/1-pin-rust-toolchain`, worktree `.claude/worktrees/issue-1`.
-  Worker `fz-small`, reviewer `fz-reviewer`.
-- Worker and reviewer are done: verdict accepted, no blockers. Committed as
-  `1c3701ad551d2499f32019823238381e3d63307b` on the branch and pushed; CI on
-  the branch is the real test of the pinned action.
-- Still to do: the local fmt, clippy and test run on the combined result,
-  which waits until FZ-01's timing runs are over; then merge, confirm CI on
-  `main`, and close #1 with a summary of how its acceptance is met.
-- `release.yml` only runs on a tag, so its pinned line is checked by reading;
-  the identical line in `ci.yml` is exercised by the branch push.
+## Open items that are Andreas's
 
-This file is committed and pushed through `89946f5`. A Claude session's
-permission check can refuse a docs commit to `main` that Andreas did not ask
-for in that session, whatever this file says. On 2026-10-01 he allowed
-coordination-doc commits and pushes to `main` for that session only; a new
-session asks him once before its first one.
+- Try FZ-02 on `main` (`cargo run --release`): M0's exit asks for his
+  verification.
+- Accept the FZ-03 header on its branch build when it reaches Ready to
+  integrate.
+- Before the FZ-05 implementation tickets: the four `CLAUDE.md` invariant
+  changes and the veto on FZ-05f, both in the identity design.
+- The `fz-02`, `fz-01`, `fz-05` and `issue-1` worktrees and their remote
+  branches are integrated and kept. Removing them is his call.
+- Not ticketed yet: the `repoz_parity` tests failing from a dirty checkout
+  outside `$HOME`; overlapping local sweeps; the FZ-02 failed-poll test that
+  also passes on the old code; a credential in an HTTPS remote URL being
+  drawn in the detail pane (unconfirmed); the two gaps named under issue #1.
 
 ## Running the next ticket
 
