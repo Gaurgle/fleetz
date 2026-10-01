@@ -1,9 +1,10 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-01 22:20 by `claude-fable-5-1`. Merged today in this
+Last written 2026-10-01 22:43 by `claude-fable-5-1`. Merged today in this
 session: FZ-04, FZ-06b and the FZ-10 design; FZ-06e closed as delivered by
-FZ-06b. **One worker is running: FZ-06c (#39) in `.claude/worktrees/fz-06c`,
-not yet reported, not reviewed.** Read this file, the repository
+FZ-06b. **Two agents are running: a reviewer on FZ-06c (#39) in
+`.claude/worktrees/fz-06c` and a worker drafting the FZ-09 (#22) design in
+`.claude/worktrees/fz-09`.** Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md),
 [release-plan.md](release-plan.md) and
 [first-wave-tickets.md](first-wave-tickets.md) before acting. GitHub (the
@@ -89,12 +90,21 @@ In order of weight:
 
 ## Last verdicts, and what is on disk uncommitted
 
-- **FZ-06c (#39): worker running since 22:07, nothing reviewed.** Base
-  `f3663e6`, branch `fix/fz-06c-worktree-list-freshness`, worktree
-  `.claude/worktrees/fz-06c`, allowed files `src/main.rs`, `src/git.rs`,
-  `src/model.rs` (doc comment only). It was told to stop and report if any
-  existing test must change; that question is Andreas's. When it reports:
-  a separate `fz-reviewer`, then commit, push, CI, combined checks, merge.
+- **FZ-06c (#39): in review since 22:42.** Uncommitted in
+  `.claude/worktrees/fz-06c` on `fix/fz-06c-worktree-list-freshness` (base
+  `f3663e6`): `src/git.rs`, `src/main.rs`, `src/model.rs` (doc comment),
+  +292 -10; 786 passed, 0 failed, 1 ignored by the worker's run; no existing
+  test touched, by its account. Its report and the coordinator's ruling (E4a
+  and E4d pass on the base since FZ-06b and stay as pins) are on #39. A
+  fresh `fz-reviewer` is running. On acceptance: commit the reviewed diff,
+  push, CI on the branch, combined checks, merge, Done.
+- **FZ-09 (#22): worker drafting since 22:35.** Worktree
+  `.claude/worktrees/fz-09` fast-forwarded to `769c1fd`; output
+  `docs/coverage-cache-design.md`, untracked; at most 6 live GraphQL
+  requests, the real cache read-only, no builds. It was told to leave the
+  architectural options to the coordinator and to name every existing test
+  a proposed ticket would force to change. Next: the coordinator rules on
+  the options, then a reviewer.
 - **#45:** uncommitted `ci.yml` and `docs.yml` in
   `.claude/worktrees/issue-45`; reviewer verdict blocked on a repository
   setting, diff judged correct. Parked by Andreas until the repository is
@@ -104,18 +114,14 @@ In order of weight:
 
 ## Next steps, in order
 
-1. FZ-06c: review, integrate and close as above.
+1. FZ-06c: integrate and close on the reviewer's acceptance, as above.
 2. FZ-06d (#40, the histogram's own reuse key), next on the `main.rs` line
    after FZ-06c. Then the identity series FZ-05b to f (#32 to #36), serial;
    then FZ-10a, b, c once Andreas has answered O1 to O5. #43 (`git.rs`) fits
    between any two. #46 needs Andreas's OK first.
-3. FZ-09 (#22): dispatch into the second slot. Nothing was written. Handoff
-   as recorded on the issue: output `docs/coverage-cache-design.md`, at most
-   6 live GraphQL requests, the real cache read-only, no cache schema change
-   authorized. Add what FZ-10 found: `repo_limit` 100 fails with a 502 near
-   an 11 s server deadline, so "what to do when the query no longer fits" is
-   FZ-09's to design; and FZ-10's A4 leaves cache-based coordination between
-   instances to a ticket after FZ-09's atomic, account-keyed cache.
+3. FZ-09 (#22): when the worker reports, rule on its options, send the
+   draft to a reviewer, and land it as FZ-10 was landed. Any cache format
+   change, config key or visible change in it goes to Andreas.
 4. FZ-10: on his answers, record them on #23's successor issues, amend
    [freshness-contract.md](freshness-contract.md) as O4 says (the design's
    "Contract and invariant changes" has the text), and create or request the
@@ -301,8 +307,8 @@ code.
 All under `.claude/worktrees/` in the main checkout. Removing a worktree or
 a remote branch is Andreas's call; none was removed.
 
-- **Active:** `fz-06c` (worker writing, base `f3663e6`), `fz-09` (clean,
-  nothing written), `issue-45` (uncommitted `ci.yml` and `docs.yml`, parked).
+- **Active:** `fz-06c` (in review, base `f3663e6`), `fz-09` (worker drafting,
+  base `769c1fd`), `issue-45` (uncommitted `ci.yml` and `docs.yml`, parked).
 - **Integrated and kept:** `fz-01`, `fz-02`, `fz-03`, `fz-04`, `fz-05`, `fz-05a`,
   `fz-06`, `fz-06a`, `fz-06b`, `fz-10`, `issue-1`, `issue-42`, `issue-44`, each with its branch
   pushed.
