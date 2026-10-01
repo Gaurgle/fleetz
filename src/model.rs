@@ -293,9 +293,10 @@ pub struct RepoStatus {
     /// repo that will never need it costs one pointer rather than 742 bytes.
     pub daily: Option<Box<crate::contributions::DailyCounts>>,
     /// Fingerprint of the repo state the expensive probes were taken from.
-    /// A sweep that finds the same key reuses commits/reflog/graph/stash/
-    /// worktrees instead of re-running those subprocesses. None means
-    /// "unknown", which always counts as changed.
+    /// A sweep that finds the same key reuses commits/reflog/graph/stash
+    /// instead of re-running those subprocesses; `worktrees` is re-read on
+    /// every sweep, since the key cannot see it. None means "unknown", which
+    /// always counts as changed.
     pub work_key: Option<crate::git::WorkKey>,
     /// Whether the remote refs behind `behind` and `ahead` are current: the
     /// fetch facts for this checkout.
