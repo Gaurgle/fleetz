@@ -61,6 +61,17 @@ Two rules he gave the 19:34 session that do carry over:
   and for FZ-10a (four test builders, O5). Tell every worker to look for
   forced test edits before writing the fix, and every design worker to name
   them per ticket.
+- **Where his testing matters.** At 23:30, in his words: "these 'small'
+  tickets like these cache fixes, coverage etc, are not much for me to test
+  in the actual software, i think you're tests tell a bigger and more true
+  picture of the situation. I think my opinions will matter more when we
+  start to look at the UI updates". So: do not ask him to try a build for a
+  ticket with nothing to see (cache, identity, budget policy, coverage
+  plumbing); the reviewer's run, the combined checks and CI are the evidence,
+  and reports for those stay short. Do bring him every ticket that changes
+  what is on screen or how a key behaves, with the branch build, before it
+  merges: FZ-10c is the next one, then M3. Design decisions, contract
+  changes and edits to existing tests still go to him.
 - **Writing files.** File contents are written with the Write or Edit tool,
   never with shell heredocs, `echo` or `printf` redirection, or an inline
   script. Text a command needs goes to a scratchpad file and is passed with
@@ -90,8 +101,9 @@ In order of weight:
 4. **Was Wi-Fi off or changing state** when he saw `⚠ timeout` on three rows
    in his first FZ-04 run? Still unanswered; it only matters for the ssh
    follow-up below.
-5. **Try `main`** (`cargo run --release`). It now holds FZ-02, FZ-03, FZ-04,
-   FZ-06b and FZ-06c. M0's exit asks for his verification of FZ-02; he has run the
+5. **Try `main`**: no longer asked of him for these tickets (see "Where his
+   testing matters" above). `main` holds FZ-02, FZ-03, FZ-04, FZ-06b and
+   FZ-06c. For the record, M0's exit asks for his verification of FZ-02; he has run the
    branch builds that contain it but has not said so about `main`.
 6. **#45: decided.** Leave it until the repository goes public.
 7. Not blocking: whether setting Status through `gh` belongs in FZ-08's
