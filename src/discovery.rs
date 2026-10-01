@@ -630,6 +630,10 @@ mod repoz_parity {
         let status = Command::new(args[0])
             .args(&args[1..])
             .current_dir(dir)
+            // As in `repoz_paths`: inherited from a git hook, these would
+            // aim the fixture's git calls at the checkout running the tests.
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
             .status()
             .expect("spawn");
         assert!(status.success(), "command failed: {args:?}");
@@ -652,9 +656,25 @@ mod repoz_parity {
     /// Absolute repo paths repoz reports in dirty mode. Rows are
     /// `<name> <path> ··· <status>`, colored, so the escapes come off first
     /// and the path is the field that starts with a slash.
+    ///
+    /// Run from the parent of `root`, outside any repository and outside the
+    /// scan root, because repoz adds the git toplevel of its working
+    /// directory to the scan. Inherited from `cargo test`, that was the fleetz
+    /// checkout running the tests, and a dirty one showed up next to the
+    /// fixture; under `$HOME` it was hidden only by luck, since repoz prints
+    /// such a path as `~/...` and the slash filter below drops it. Run from
+    /// `root` itself, the hidden-root test's `root` is a repo, and its
+    /// toplevel would give repoz a second route to the fixture, hiding a
+    /// repoz that stopped scanning a hidden `REPO_CHECK_DIR`. The parent is
+    /// the system temp directory or the plain fixture base, so
+    /// `REPO_CHECK_DIR` is repoz's only way in. `GIT_DIR` and `GIT_WORK_TREE`
+    /// go too: a git hook running `cargo test` would redirect repoz's git.
     fn repoz_paths(bin: &Path, root: &Path) -> Vec<PathBuf> {
         let out = Command::new(bin)
             .arg("-d")
+            .current_dir(root.parent().unwrap_or(root))
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
             .env("REPO_CHECK_DIR", root)
             // A real config would add the user's own EXTRA_DIRS to the scan.
             .env("XDG_CONFIG_HOME", root.join("no-config"))
