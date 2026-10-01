@@ -37,7 +37,9 @@ where the session runs.
 
 Used daily. All code is unit-tested in `#[cfg(test)]` modules in the same file
 as the code they cover. There is no integration test suite. CI is
-`.github/workflows/ci.yml` (fmt, clippy, tests on every push to `main`) and
+`.github/workflows/ci.yml` (fmt, clippy, tests on a push to any branch, skipped
+when only prose changed), `docs.yml` (runs `scripts/check-docs.sh` on a prose
+push: links, the index below, no dashes) and
 `release.yml`, which turns a pushed `v*` tag into a GitHub
 release: it checks the tag against `Cargo.toml`, runs fmt, clippy and tests,
 and writes commit-based notes with `scripts/release-notes.sh`. PRs are optional.

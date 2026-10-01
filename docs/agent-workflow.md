@@ -182,7 +182,8 @@ cargo test
 Use targeted tests during iteration. Never weaken, delete or disable an
 existing test to make the implementation pass. If a contract appears wrong,
 stop that change and explain it. Adding tests is allowed within ticket scope.
-Documentation-only tickets need link/content review, not unrelated Rust runs.
+Documentation-only tickets need `scripts/check-docs.sh` and a content review,
+not unrelated Rust runs.
 Performance claims need comparable measurements, not just passing tests.
 
 The baseline from the 2026-09-30 review was 643 tests passed and 1 ignored;

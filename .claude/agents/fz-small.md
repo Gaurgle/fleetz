@@ -27,8 +27,8 @@ given. The coordinator names the paths and the deliverable.
 
 For a code change run `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings` and `cargo test`, and quote the
-real results. A documentation-only task needs a link and content check, not
-a Rust run. A scan needs neither.
+real results. A documentation-only task needs `scripts/check-docs.sh` and a
+content check, not a Rust run. A scan needs neither.
 
 ## Report
 

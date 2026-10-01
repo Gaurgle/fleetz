@@ -1,9 +1,16 @@
-# The same gates release.yml applies before a tag, run on every push to main.
+# The same gates release.yml applies before a tag, run on every branch push
+# that touches more than prose, so a ticket branch is green before it merges.
 name: ci
 
 on:
   push:
-    branches: [main]
+    # Naming branches keeps tag pushes out: release.yml runs the gates there.
+    branches: ['**']
+    # Skipped only when every changed file matches. docs.yml checks these.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.claude/**'
 
 jobs:
   check:

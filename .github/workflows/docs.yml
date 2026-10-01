@@ -1,0 +1,25 @@
+# Mechanical checks on the Markdown: relative links resolve, the CLAUDE.md
+# index points at real files, no em or en dashes. ci.yml skips prose-only
+# pushes, so this is what a docs commit runs instead of the Rust gates.
+name: docs
+
+on:
+  push:
+    # Naming branches keeps tag pushes out, as in ci.yml.
+    branches: ['**']
+    paths:
+      - '**.md'
+      - 'docs/**'
+      - '.claude/**'
+      - 'scripts/check-docs.sh'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/check-docs.sh
