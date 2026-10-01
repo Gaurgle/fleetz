@@ -59,6 +59,7 @@ and blink, watch mode re-sweeps on an interval.
 | `docs/agent-handoff.md` | Coordinator state between leads: read first when taking over |
 | `docs/performance-baseline.md` | Measured startup, idle, refresh and input baseline, with fixtures and commands to rerun |
 | `docs/repository-identity-design.md` | Accepted design: remote and checkout identity, collision scenarios, ordered tickets FZ-05a to f |
+| `docs/cache-invalidation-design.md` | Accepted design: what the sweep's `WorkKey` misses, the ref-content signature, fix tickets FIX-A to E |
 | `docs/freshness-contract.md` | Accepted contract for GitHub data freshness: attempt, outcome, data time, header states |
 | `docs/fetch-outcome-contract.md` | Draft contract for per-repo `git fetch` outcomes (FZ-04) |
 | `.claude/agents/` | Claude-native workforce: `fz-coordinator`, `fz-worker`, `fz-reviewer`, `fz-small` |
