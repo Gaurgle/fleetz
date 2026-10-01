@@ -22,9 +22,26 @@ manual. A ticket remains usable without a custom orchestration service.
 ## Model and context budget
 
 The coordinator explicitly selects a model available in the running client.
-Use a capable workhorse for Rust and state/concurrency changes, a lighter model
-for bounded searches and documentation, and Astra for unresolved architecture,
-high-risk review and milestone decisions. Avoid hardcoded obsolete model names.
+Current routing, subject to verified availability:
+
+| Role | Model | Reasoning / effort |
+|---|---|---|
+| Architecture and final checkpoint | `gpt-6-astra` | Bounded decisions and owner-facing checkpoints |
+| Independent architectural review | `claude-fable-5-1` | `high`; one scoped review at an architectural checkpoint |
+| Rust implementation worker | `gpt-6.1-sol` | `medium`; raise only for a documented blocker |
+| Narrow scans and documentation | `gpt-6-luna` | `medium`; explicit paths and deliverable |
+| Claude implementation or independent review | `claude-opus-5-5` | `medium`; default for substantive Claude work |
+| Truly small Claude changes | `sonnet` | `medium`; record the resolved model from the result |
+
+Do not silently substitute models or escalate to Fable or Astra. If the selected model is unavailable
+or inadequate, report the evidence and request a routing decision. Refresh this
+table when available models change rather than substituting names silently.
+
+Native Codex children use the coordinator's agent tools. Set their model and
+reasoning explicitly; a child assignment does not switch the current root
+conversation's model. Claude runs through the separate installed `claude` CLI,
+with its own authentication, permissions and usage. It is not a native Codex
+child. No orchestration service or recursive delegation is needed for the pilot.
 
 Pass the ticket, repository rules, base commit and relevant file paths. Do not
 forward the entire planning conversation. Each task has a focused handoff and
@@ -33,6 +50,67 @@ record elapsed time and rework without inventing token or cost estimates.
 
 After two unsuccessful fix/validation cycles on the same blocker, report the
 evidence and ask the coordinator for a decision instead of widening scope.
+
+Fable acts as a co-architect at explicit checkpoints: repository identity,
+refresh scheduling, cache contracts and release readiness. Give it the proposal,
+constraints and relevant code, and request risks, alternatives and a verdict.
+Astra and Andreas resolve disagreements. Do not route routine status updates,
+board maintenance or every small patch through both architectural models.
+Implementation and review must use separate sessions, even on the same model.
+
+The requested Claude IDs are verified in official documentation, but account
+entitlement still requires a successful model request. On Max, Fable shares the
+weekly allowance and has a 50% weekly-use ceiling within the subscription;
+stop at the limit rather than automatically switching to paid usage credits.
+See [Fable plan usage](https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan)
+and [Opus 5.5](https://platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5).
+
+## Bounded Claude review pilot
+
+Use the existing Claude subscription, not automatic API billing. Before a model
+request, run `claude auth status --text` and check that no API-key, auth-token or
+third-party provider override is active. Inspect presence only, never print
+credentials. A sandbox may prevent macOS keychain access and report a false
+negative; verify status in the normal terminal or an approved status-only call
+outside the sandbox. Do not log in, alter authentication, or add billing as a
+side effect. `--bare` bypasses subscription OAuth/keychain and is unsuitable here.
+
+Prepare `/tmp/fz-02-review-handoff.txt` using the reviewer template below, with
+the ticket, base SHA, exact worktree path and relevant rules. Run from that
+checkout after subscription billing is confirmed:
+
+```sh
+claude -p \
+  --model claude-opus-5-5 \
+  --effort medium \
+  --restricted \
+  --tools 'Read,Glob,Grep' \
+  --allowedTools 'Read,Glob,Grep' \
+  --disallowedTools 'mcp__*' \
+  --strict-mcp-config \
+  --permission-mode dontAsk \
+  --permission-prompts none \
+  --max-turns 5 \
+  --output-format json \
+  < /tmp/fz-02-review-handoff.txt \
+  > /tmp/fz-02-claude-review.json
+```
+
+This permits file inspection only: no shell, edits, writes, MCP tools or
+permission bypass. Restricted mode ignores ordinary settings, so include the
+ticket rules explicitly in the handoff. The turn limit bounds the smoke test;
+it is not a token or subscription usage cap. Report permission denials and
+incomplete evidence. This reviewer cannot execute tests; distinguish inspected
+test code and supplied results from checks it actually ran.
+
+Record CLI versions, requested and resolved model, effort, base SHA, checkout,
+elapsed time, reported usage, permission denials and verdict. Local inspection
+on 2026-10-01 found Codex `0.159.2` and Claude Code `2.1.286`. The smoke test is
+pending subscription billing confirmation; no model request has run yet.
+
+References: [Claude CLI](https://code.claude.com/docs/en/cli-reference),
+[Claude authentication](https://code.claude.com/docs/en/authentication), and
+[Codex subagent configuration](https://learn.chatgpt.com/docs/agent-configuration/subagents).
 
 ## Isolation and integration
 

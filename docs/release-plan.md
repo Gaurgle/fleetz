@@ -39,42 +39,41 @@ records sequencing and scope rather than maintaining a competing status copy.
 Flow: Backlog -> Ready -> In progress -> Review -> Ready to integrate -> Done.
 Use a blocked flag with the exact dependency, reason and next action.
 
-| ID | Deliverable | State | Dependency / restriction | Worker | Reviewer |
-|---|---|---|---|---|---|
-| [FZ-01](https://github.com/Gaurgle/fleetz/issues/14) | Reproducible performance baseline | Ready | Measurement only; can accompany FZ-02 | Unassigned | Unassigned |
-| [FZ-02](https://github.com/Gaurgle/fleetz/issues/15) | Local refresh preserves newer GitHub state | Ready | First implementation pilot | Unassigned | Unassigned |
-| [FZ-03](https://github.com/Gaurgle/fleetz/issues/16) | Cached fallback remains visibly stale | Backlog | Blocked on integrated FZ-02 and freshness contract | Unassigned | Unassigned |
-| [FZ-04](https://github.com/Gaurgle/fleetz/issues/17) | Fetch failures remain explicit | Backlog | Blocked on integrated FZ-03; shares refresh state | Unassigned | Unassigned |
-| [FZ-05](https://github.com/Gaurgle/fleetz/issues/18) | Repository identity design and collision cases | Ready | Design only; implementation follows accepted design | Unassigned | Unassigned |
-| [FZ-06](https://github.com/Gaurgle/fleetz/issues/19) | Cache invalidation inventory and scenarios | Ready | Investigation only; coordinate with FZ-05 | Unassigned | Unassigned |
+| ID | Deliverable | Dependency / restriction |
+|---|---|---|
+| [FZ-01](https://github.com/Gaurgle/fleetz/issues/14) | Reproducible performance baseline | Measurement only; can accompany FZ-02 |
+| [FZ-02](https://github.com/Gaurgle/fleetz/issues/15) | Local refresh preserves newer GitHub state | First implementation pilot |
+| [FZ-03](https://github.com/Gaurgle/fleetz/issues/16) | Cached fallback remains visibly stale | Blocked on integrated FZ-02 and freshness contract |
+| [FZ-04](https://github.com/Gaurgle/fleetz/issues/17) | Fetch failures remain explicit | Blocked on integrated FZ-03; shares refresh state |
+| [FZ-05](https://github.com/Gaurgle/fleetz/issues/18) | Repository identity design and collision cases | Design only; implementation follows accepted design |
+| [FZ-06](https://github.com/Gaurgle/fleetz/issues/19) | Cache invalidation inventory and scenarios | Investigation only; coordinate with FZ-05 |
 
 Each active assignment also records its base commit, branch, worktree path, allowed
 files, chosen model and current blocker on the ticket. Only the coordinator
 updates the board. Workers report changes instead of editing shared status.
 
-## Resume checkpoint: 2026-10-01
+## Setup checkpoint: 2026-10-01
 
-The private Project, issues FZ-01 through FZ-17 (#14 through #30), milestones
-M0 through M5, repo link, description and custom fields are created. GitHub
-rate limiting interrupted item updates. No product implementation has started.
-The first-wave table above records intended initial states, not verified live
-board state. Use GitHub for subsequent status updates.
+Setup writes completed for the private
+[Fleetz release Project](https://github.com/users/Gaurgle/projects/1): all
+23 issue additions, status and priority fields, unassigned worker/reviewer
+fields, six milestones, and native dependencies (#16 blocked by #15;
+#17 blocked by #16). Existing issues remain open. No product implementation
+has started.
 
-Next session, check the live board before changing anything to avoid duplicates:
+Created [Release table](https://github.com/users/Gaurgle/projects/1/views/1)
+and [Release board](https://github.com/users/Gaurgle/projects/1/views/2), with
+Title, Status, Priority, Milestone, Worker and Ticket reviewer visible.
 
-- Finish adding and setting fields for the 17 new and six existing issues
-  (#1, #2, #3, #4, #5, #7), 23 total.
-- Set FZ-01, FZ-02, FZ-05 and FZ-06 to Ready; remaining work starts in Backlog.
-- Add native dependencies: #16 blocked by #15; #17 blocked by #16.
-- Finish the release board and table views; verify statuses and priorities.
-- Keep the Project private. Existing issues remain open for triage.
-- Only after setup is verified, dispatch FZ-02 from the committed planning base
-  in its own feature branch/worktree using a workhorse model and separate review.
+Final live reads confirmed the views, privacy, milestones and dependencies,
+but GitHub's project index had exposed only 21 of 23 items (#29 and #30 had
+not appeared yet). Their addition and field mutations succeeded. Recheck
+all 23 items and their fields after indexing catches up; avoid duplicating
+successful writes. The API verified Status grouping for the board. Visual
+layout remains unverified because browser automation failed to start.
 
-Do not retry rate-limited writes until permitted. The reported primary reset
-was 2026-10-01 01:10:06 CEST, but remaining points were also reported, so a
-secondary write limit may have caused the interruption. Recheck current limits
-next session rather than treating that historical timestamp as permission.
+See [agent-handoff.md](agent-handoff.md) for coordinator takeover and the
+next FZ-02 pilot. GitHub remains the live status source.
 
 ## First dispatch
 
