@@ -1,9 +1,9 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-01 20:48 by `claude-fable-5-1`. FZ-04 is merged and
-closed. **Two agents are running: the FZ-06b (#38) worker in
-`.claude/worktrees/fz-06b`, and a reviewer on revision 2 of the FZ-10 (#23)
-design in `.claude/worktrees/fz-10`.** Read this file, the repository
+Last written 2026-10-01 20:58 by `claude-fable-5-1`. FZ-04 is merged and
+closed. **Two reviewers are running: one on FZ-06b (#38) in
+`.claude/worktrees/fz-06b`, one on revision 2 of the FZ-10 (#23) design in
+`.claude/worktrees/fz-10`. No worker is running.** Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md),
 [release-plan.md](release-plan.md) and
 [first-wave-tickets.md](first-wave-tickets.md) before acting. GitHub (the
@@ -85,17 +85,17 @@ In order of weight:
 
 ## Last verdicts, and what is on disk uncommitted
 
-- **FZ-06b (#38): worker resumed at 20:32, nothing reviewed.** Base
-  `f8a54c0`, branch `fix/fz-06b-ref-content-key`, worktree
-  `.claude/worktrees/fz-06b`, allowed files `src/git.rs` and `src/main.rs`.
-  It stopped once because the ticket removes three `WorkKey` fields that
-  three FZ-06a tests and the `tests::key` helper read. Andreas said yes at
-  20:30 to rewriting those three tests to assert the same thing through the
-  new key and to updating the helper; no other existing test may change
-  (recorded on #38). The reviewer must check that each rewritten test still
-  fails if the key stops reading from the common directory. On disk before
-  the resume: `src/git.rs` +384, tests only, 16 of 20 failing on the base by
-  design. E8a and E8d are outcomes, not pins.
+- **FZ-06b (#38): in review since 20:57.** The worker reports the ticket
+  implemented: uncommitted in `.claude/worktrees/fz-06b` on
+  `fix/fz-06b-ref-content-key` (base `f8a54c0`), `src/git.rs` and
+  `src/main.rs`, +725 -113, 778 passed, 0 failed, 1 ignored by its own run.
+  Its report is on #38. Existing tests edited: only the three FZ-06a tests
+  with `shared_fields`, and `tests::key`, which Andreas allowed at 20:30;
+  the reviewer verifies that nothing else was touched and that each
+  rewritten test still fails when the key stops reading from the common
+  directory. A fresh `fz-reviewer` is running. On acceptance: commit the
+  reviewed diff, push, CI on the branch, combined checks, merge (no look or
+  format change in this ticket), Done.
 - **FZ-10 (#23): revision 2 in review since 20:47.** The worker reported
   every finding addressed (966 lines, untracked in `.claude/worktrees/fz-10`,
   written against `f8a54c0`). The coordinator ruled on what it marked as
