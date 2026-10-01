@@ -138,6 +138,21 @@ pub enum RepoLocation {
 }
 
 /// Aggregate status for a single repository.
+///
+/// Three writers own disjoint sets of fields, and each writes only its own:
+///
+/// - **GitHub poll** (`apply_github`): `pr_count`, `prs`, `ci_status`,
+///   `ci_workflow`, `ci_duration`, `repo_kind`.
+/// - **Local sweep** (`apply_local_sweep`): `branches`, `commits`, `behind`,
+///   `ahead`, `dirty`, `stash_count`, `stash_entries`, `worktrees`, `reflog`,
+///   `graph`, `graph_expanded`, `remote_branches`, `remote_only_branches`,
+///   `daily`, `work_key`.
+/// - **Load** (discovery and `assemble_view`, which rebuild the whole list):
+///   everything else, including `owner`, which comes from GitHub data but is
+///   only ever set at load.
+///
+/// Background results land on the row as it is when they arrive, so a slow
+/// writer never restores another writer's fields from an older snapshot.
 #[derive(Debug, Clone)]
 pub struct RepoStatus {
     /// When anything last moved in the local clone: the newer of the last
@@ -419,6 +434,99 @@ impl RepoStatus {
             return Some(owner.clone());
         }
         owner_from_remote_url(self.remote_url.as_deref()?)
+    }
+
+    /// Write a GitHub poll's answer for this repo: the GitHub-owned fields
+    /// and nothing else (see `RepoStatus` for the split).
+    ///
+    /// The destructure is exhaustive on purpose, so a field added to
+    /// `GithubRepo` does not compile until someone decides whether the poll
+    /// writes it.
+    pub fn apply_github(&mut self, gh: &crate::github::GithubRepo) {
+        let crate::github::GithubRepo {
+            // The match key, not data.
+            name: _,
+            // Read by `remotes_that_moved` from the dataset, never stored here.
+            pushed_at: _,
+            pr_count,
+            prs,
+            ci_status,
+            ci_workflow,
+            ci_duration,
+            repo_kind,
+            // Filled at load (`assemble_view`); the poll has never rewritten it.
+            owner: _,
+        } = gh;
+        self.pr_count = *pr_count;
+        self.prs = prs.clone();
+        self.ci_status = ci_status.clone();
+        self.ci_workflow = ci_workflow.clone();
+        self.ci_duration = ci_duration.clone();
+        self.repo_kind = *repo_kind;
+    }
+
+    /// Land a local sweep's rebuild on this row: take the sweep-owned fields
+    /// from `fresh`, keep every other field as the row has it *now*.
+    ///
+    /// `fresh` was built from a snapshot taken when the sweep started
+    /// (`SweepTarget::old`), so its non-local fields are as old as the sweep.
+    /// Replacing the row wholesale let a sweep that started while CI was
+    /// pending restore `Pending` over a poll that had since said passed.
+    /// Deciding ownership here, against the row as it is when the result
+    /// lands, makes the completion order of sweep and poll irrelevant.
+    ///
+    /// The destructure is exhaustive on purpose: a new `RepoStatus` field does
+    /// not compile until it is classified here as sweep-owned or not.
+    pub fn apply_local_sweep(&mut self, fresh: RepoStatus) {
+        let RepoStatus {
+            // Sweep-owned: probed by `rebuild_repo_status` every sweep.
+            branches,
+            commits,
+            behind,
+            ahead,
+            dirty,
+            stash_count,
+            stash_entries,
+            worktrees,
+            reflog,
+            graph,
+            graph_expanded,
+            remote_branches,
+            remote_only_branches,
+            daily,
+            work_key,
+            // GitHub-owned: written by the poll (`apply_github`).
+            pr_count: _,
+            prs: _,
+            ci_status: _,
+            ci_workflow: _,
+            ci_duration: _,
+            repo_kind: _,
+            // Load-owned: set by discovery and `assemble_view`, which replaces
+            // the whole list; a sweep only carries the snapshot's copy.
+            last_local: _,
+            name: _,
+            path: _,
+            location: _,
+            groups: _,
+            owner: _,
+            remote_url: _,
+        } = fresh;
+        self.branches = branches;
+        self.commits = commits;
+        self.behind = behind;
+        self.ahead = ahead;
+        self.dirty = dirty;
+        self.stash_count = stash_count;
+        self.stash_entries = stash_entries;
+        self.worktrees = worktrees;
+        self.reflog = reflog;
+        self.graph = graph;
+        self.graph_expanded = graph_expanded;
+        self.remote_branches = remote_branches;
+        self.remote_only_branches = remote_only_branches;
+        self.daily = daily;
+        self.work_key = work_key;
     }
 
     /// A short status string like "3↓", "2↑", "4!", or "✓" (synced). The
