@@ -743,81 +743,8 @@ async fn run_event_loop(
                 path,
                 status,
                 fetched,
-            } => {
-                app.settle_refresh_fetch(&path, fetched);
-                if let Some(repo) = app
-                    .repos
-                    .iter_mut()
-                    .find(|r| r.path.as_deref() == Some(path.as_str()))
-                {
-                    if repo_moved(repo, &status) {
-                        app.push_detected = true;
-                    }
-                    *repo = *status;
-                }
-                app.needs_redraw = true;
-            }
-            AppEvent::Github(result) => {
-                app.github_poll_inflight = false;
-                app.github_poll_started = None;
-                app.last_github_poll = Some(chrono::Local::now());
-                app.github_poll_failing = result.is_err();
-                match result {
-                    Ok(fetch) => {
-                        let github::GithubFetch {
-                            repos: dataset,
-                            calendar,
-                            has_pr_counts: _,
-                            // The poll always bypasses the cache, so this is
-                            // network data by construction.
-                            from_cache: _,
-                        } = *fetch;
-                        // The calendar rides the same payload as the repos, so
-                        // a poll that updated CI also refreshed the year at no
-                        // extra cost. A payload predating the field leaves the
-                        // last good calendar in place rather than blanking it.
-                        // A payload predating the field leaves the last good
-                        // calendar in place rather than blanking it.
-                        if calendar.is_some() {
-                            app.github_calendar = calendar;
-                        }
-                        // Overwrite only the GitHub-owned fields: the local
-                        // git state is the sweep's business, not this poll's.
-                        for repo in &mut app.repos {
-                            if let Some(gh) = dataset
-                                .iter()
-                                .find(|g| g.name.eq_ignore_ascii_case(&repo.name))
-                            {
-                                repo.pr_count = gh.pr_count;
-                                repo.prs = gh.prs.clone();
-                                repo.ci_status = gh.ci_status.clone();
-                                repo.ci_workflow = gh.ci_workflow.clone();
-                                repo.ci_duration = gh.ci_duration.clone();
-                                repo.repo_kind = gh.repo_kind;
-                            }
-                        }
-                        // One API call just told us which remotes moved, so
-                        // fetch only those instead of waiting for the next
-                        // blanket sweep to fetch all of them.
-                        let moved = remotes_that_moved(&app.dataset, &dataset, &app.repos);
-                        for &idx in &moved {
-                            start_single_sweep(app, &tx, idx, true, args.author.clone());
-                        }
-                        // A manual `r` keeps spinning until these land.
-                        let fetched_paths: Vec<String> = moved
-                            .iter()
-                            .filter_map(|&idx| app.repos[idx].path.clone())
-                            .collect();
-                        app.settle_refresh_poll(fetched_paths);
-                        app.dataset = dataset;
-                    }
-                    Err(e) => app.set_status(format!("GitHub refresh failed: {e}"), true),
-                }
-                // A failed poll fetched nothing, so a refresh waiting on it
-                // is over. No-op when the Ok arm already settled it.
-                app.settle_refresh_poll(std::iter::empty());
-                app.needs_redraw = true;
-            }
+            } => apply_repo_updated(app, &path, *status, fetched),
+            AppEvent::Github(result) => apply_github_poll(app, result, &tx, &args.author),
             AppEvent::SweepDone { at } => {
                 app.sweep_started = None;
                 app.last_refreshed = Some(at);
@@ -1676,7 +1603,9 @@ struct SweepTarget {
     /// Display path as stored in RepoStatus.path (tilde form), the update key.
     display_path: String,
     fs_path: std::path::PathBuf,
-    /// Existing status, carried so GitHub-only fields survive the rebuild.
+    /// The row as it was when the sweep started: the WorkKey baseline and
+    /// the source of reused probes. Its non-local fields are stale by the
+    /// time the result lands, which is why `apply_local_sweep` ignores them.
     old: Box<RepoStatus>,
 }
 
@@ -1724,6 +1653,91 @@ fn repo_moved(before: &RepoStatus, after: &RepoStatus) -> bool {
     };
     let pushed = before.ahead > 0 && after.ahead == 0;
     head_moved || pushed
+}
+
+/// Land one repo's sweep result (`AppEvent::RepoUpdated`). The full sweep and
+/// the single-repo sweep both arrive here, so they share one merge: only the
+/// sweep-owned fields are taken (`RepoStatus::apply_local_sweep`), so a poll
+/// that landed while the sweep ran keeps its CI and PR data.
+///
+/// A result whose path no longer has a row is dropped: the repo left the list
+/// while its sweep was in flight, and a late result must not bring it back.
+fn apply_repo_updated(app: &mut App, path: &str, status: RepoStatus, fetched: bool) {
+    app.settle_refresh_fetch(path, fetched);
+    if let Some(repo) = app
+        .repos
+        .iter_mut()
+        .find(|r| r.path.as_deref() == Some(path))
+    {
+        if repo_moved(repo, &status) {
+            app.push_detected = true;
+        }
+        repo.apply_local_sweep(status);
+    }
+    app.needs_redraw = true;
+}
+
+/// Land a GitHub poll's result (`AppEvent::Github`).
+fn apply_github_poll(
+    app: &mut App,
+    result: Result<Box<github::GithubFetch>, String>,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    author: &Option<String>,
+) {
+    app.github_poll_inflight = false;
+    app.github_poll_started = None;
+    app.last_github_poll = Some(chrono::Local::now());
+    app.github_poll_failing = result.is_err();
+    match result {
+        Ok(fetch) => {
+            let github::GithubFetch {
+                repos: dataset,
+                calendar,
+                has_pr_counts: _,
+                // The poll always bypasses the cache, so this is
+                // network data by construction.
+                from_cache: _,
+            } = *fetch;
+            // The calendar rides the same payload as the repos, so
+            // a poll that updated CI also refreshed the year at no
+            // extra cost. A payload predating the field leaves the
+            // last good calendar in place rather than blanking it.
+            // A payload predating the field leaves the last good
+            // calendar in place rather than blanking it.
+            if calendar.is_some() {
+                app.github_calendar = calendar;
+            }
+            // Overwrite only the GitHub-owned fields: the local
+            // git state is the sweep's business, not this poll's.
+            for repo in &mut app.repos {
+                if let Some(gh) = dataset
+                    .iter()
+                    .find(|g| g.name.eq_ignore_ascii_case(&repo.name))
+                {
+                    repo.apply_github(gh);
+                }
+            }
+            // One API call just told us which remotes moved, so
+            // fetch only those instead of waiting for the next
+            // blanket sweep to fetch all of them.
+            let moved = remotes_that_moved(&app.dataset, &dataset, &app.repos);
+            for &idx in &moved {
+                start_single_sweep(app, tx, idx, true, author.clone());
+            }
+            // A manual `r` keeps spinning until these land.
+            let fetched_paths: Vec<String> = moved
+                .iter()
+                .filter_map(|&idx| app.repos[idx].path.clone())
+                .collect();
+            app.settle_refresh_poll(fetched_paths);
+            app.dataset = dataset;
+        }
+        Err(e) => app.set_status(format!("GitHub refresh failed: {e}"), true),
+    }
+    // A failed poll fetched nothing, so a refresh waiting on it
+    // is over. No-op when the Ok arm already settled it.
+    app.settle_refresh_poll(std::iter::empty());
+    app.needs_redraw = true;
 }
 
 /// Indices into `repos` whose remote moved between two GitHub polls.
@@ -1940,7 +1954,9 @@ fn spawn_sweep(
     });
 }
 
-/// Full per-repo rebuild, preserving GitHub-only fields from the old status.
+/// Full per-repo rebuild. Fields the sweep does not probe are copied from the
+/// snapshot only to complete the struct; `RepoStatus::apply_local_sweep`
+/// discards them when the result lands.
 /// Two-tier: the cheap probes always run, the expensive ones only when the
 /// repo's WorkKey says something actually moved.
 async fn rebuild_repo_status(
@@ -2849,6 +2865,237 @@ mod tests {
             packed_refs_size: 0,
             loose_tag_count: 0,
         }
+    }
+
+    // --- FZ-02: a local sweep result must not undo a newer GitHub poll ---
+    //
+    // The race, driven with controlled events: a sweep snapshots the row
+    // (`sweep_targets`) while CI is pending, a poll lands and says passed,
+    // then the sweep's result lands carrying the snapshot's GitHub fields.
+
+    const SWEPT_PATH: &str = "~/repos/r";
+
+    /// An app with one cloned repo whose CI is pending, as at launch.
+    fn app_with_pending_repo() -> App {
+        let mut repo = test_repo();
+        repo.path = Some(SWEPT_PATH.to_string());
+        repo.ci_status = model::CiStatus::Pending;
+        repo.ci_workflow = Some("ci".to_string());
+        repo.ci_duration = None;
+        repo.pr_count = 0;
+        repo.repo_kind = model::RepoKind::Public;
+        repo.owner = Some("Gaurgle".to_string());
+        repo.remote_url = Some("git@github.com:Gaurgle/r.git".to_string());
+        repo.groups = vec!["work".to_string()];
+        repo.work_key = Some(key("aaa"));
+        App::new(vec![repo], "h".to_string(), 120, 44)
+    }
+
+    /// What `rebuild_repo_status` returns: the snapshot taken when the sweep
+    /// started, with every local probe re-run and moved on.
+    fn rebuilt_from(snapshot: &RepoStatus) -> RepoStatus {
+        let mut status = snapshot.clone();
+        status.dirty = 3;
+        status.ahead = 2;
+        status.behind = 1;
+        status.branches = vec![model::BranchStatus {
+            name: "feature".to_string(),
+            upstream: None,
+            behind: 1,
+            ahead: 2,
+            is_head: true,
+            tip: "bbb".to_string(),
+        }];
+        status.commits = vec![commit_template("bbb")];
+        status.stash_entries = vec!["stash@{0}: WIP".to_string()];
+        status.stash_count = 1;
+        status.worktrees = vec![model::Worktree {
+            path: "~/repos/r-wt".to_string(),
+            branch: "wt".to_string(),
+        }];
+        status.remote_only_branches = vec!["origin/other".to_string()];
+        status.work_key = Some(key("bbb"));
+        status
+    }
+
+    fn commit_template(hash: &str) -> model::Commit {
+        model::Commit {
+            hash: hash.to_string(),
+            message: "work".to_string(),
+            body: String::new(),
+            author: "a".to_string(),
+            date: None,
+            insertions: 0,
+            deletions: 0,
+            files: vec![],
+        }
+    }
+
+    /// A successful poll reporting `r` as passed with one open PR.
+    fn poll_says_passed() -> Result<Box<github::GithubFetch>, String> {
+        let pr = model::PullRequest {
+            number: 7,
+            title: "Fix it".to_string(),
+            author: "someone".to_string(),
+            created_at: chrono::Utc::now(),
+            review_status: model::ReviewStatus::Approved,
+            url: "https://github.com/Gaurgle/r/pull/7".to_string(),
+        };
+        Ok(Box::new(github::GithubFetch {
+            repos: vec![github::GithubRepo {
+                name: "r".to_string(),
+                pushed_at: chrono::Utc::now(),
+                pr_count: 1,
+                prs: vec![pr],
+                ci_status: model::CiStatus::Passed,
+                ci_workflow: Some("release".to_string()),
+                ci_duration: Some("1m 4s".to_string()),
+                repo_kind: model::RepoKind::Private,
+                owner: Some("Gaurgle".to_string()),
+            }],
+            calendar: None,
+            has_pr_counts: true,
+            from_cache: false,
+        }))
+    }
+
+    fn poll(app: &mut App, result: Result<Box<github::GithubFetch>, String>) {
+        // No previous dataset, so no remote "moved" and nothing is spawned:
+        // the receiver is never read and no runtime is needed.
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        apply_github_poll(app, result, &tx, &None);
+    }
+
+    fn assert_poll_fields(repo: &RepoStatus) {
+        assert_eq!(repo.ci_status, model::CiStatus::Passed);
+        assert_eq!(repo.ci_workflow.as_deref(), Some("release"));
+        assert_eq!(repo.ci_duration.as_deref(), Some("1m 4s"));
+        assert_eq!(repo.pr_count, 1);
+        assert_eq!(repo.prs.len(), 1);
+        assert_eq!(repo.prs[0].number, 7);
+        assert_eq!(repo.repo_kind, model::RepoKind::Private);
+    }
+
+    fn assert_sweep_fields(repo: &RepoStatus) {
+        assert_eq!(repo.dirty, 3);
+        assert_eq!(repo.ahead, 2);
+        assert_eq!(repo.behind, 1);
+        assert_eq!(repo.branches.len(), 1);
+        assert_eq!(repo.branches[0].name, "feature");
+        assert_eq!(repo.commits.len(), 1);
+        assert_eq!(repo.commits[0].hash, "bbb");
+        assert_eq!(repo.stash_count, 1);
+        assert_eq!(repo.stash_entries.len(), 1);
+        assert_eq!(repo.worktrees.len(), 1);
+        assert_eq!(repo.remote_only_branches, vec!["origin/other".to_string()]);
+        assert_eq!(
+            repo.work_key.as_ref().map(|k| k.head_sha.as_str()),
+            Some("bbb")
+        );
+    }
+
+    /// The regression: local start, GitHub update, local finish. The sweep's
+    /// result restored the snapshot's `Pending` over the poll's `Passed`.
+    #[test]
+    fn a_sweep_landing_after_a_poll_keeps_the_polls_github_fields() {
+        let mut app = app_with_pending_repo();
+        let snapshot = sweep_targets(&app, None).remove(0).old;
+        poll(&mut app, poll_says_passed());
+        apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), false);
+        let repo = &app.repos[0];
+        assert_poll_fields(repo);
+        assert_sweep_fields(repo);
+    }
+
+    /// The other completion order: the sweep lands first, then the poll.
+    /// Both halves must end up on the row either way.
+    #[test]
+    fn a_poll_landing_after_a_sweep_keeps_the_sweeps_local_fields() {
+        let mut app = app_with_pending_repo();
+        let snapshot = sweep_targets(&app, None).remove(0).old;
+        apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), false);
+        poll(&mut app, poll_says_passed());
+        let repo = &app.repos[0];
+        assert_poll_fields(repo);
+        assert_sweep_fields(repo);
+    }
+
+    /// A failed poll changes no GitHub field, so the row keeps the last good
+    /// values, and the sweep landing after it still updates the local half.
+    #[test]
+    fn a_failed_poll_mid_sweep_leaves_github_fields_and_lands_the_sweep() {
+        let mut app = app_with_pending_repo();
+        poll(&mut app, poll_says_passed());
+        let snapshot = sweep_targets(&app, None).remove(0).old;
+        poll(&mut app, Err("HTTP 502".to_string()));
+        apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), true);
+        assert!(app.github_poll_failing);
+        let repo = &app.repos[0];
+        assert_poll_fields(repo);
+        assert_sweep_fields(repo);
+    }
+
+    /// Rows the sweep does not probe keep their current values: identity,
+    /// groups and owner come from the load, not from the snapshot. The
+    /// selection is the app's, and a sweep result must not move it.
+    #[test]
+    fn a_sweep_result_keeps_identity_groups_and_selection() {
+        let mut app = app_with_pending_repo();
+        let snapshot = sweep_targets(&app, None).remove(0).old;
+        let selected = app.selected;
+        let mut status = rebuilt_from(&snapshot);
+        // Whatever a stale snapshot carried for fields the sweep does not
+        // own, the row as it is now wins.
+        status.groups = vec![];
+        status.owner = None;
+        status.remote_url = None;
+        apply_repo_updated(&mut app, SWEPT_PATH, status, false);
+        let repo = &app.repos[0];
+        assert_eq!(repo.name, "r");
+        assert_eq!(repo.path.as_deref(), Some(SWEPT_PATH));
+        assert_eq!(repo.groups, vec!["work".to_string()]);
+        assert_eq!(repo.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(
+            repo.remote_url.as_deref(),
+            Some("git@github.com:Gaurgle/r.git")
+        );
+        assert_eq!(app.selected, selected);
+        assert_eq!(app.repos.len(), 1);
+    }
+
+    /// The single-repo sweep (`f`, a moved remote) reports `fetched: true`
+    /// and the full watch sweep often does not; both land through the same
+    /// merge, so the poll's fields survive either.
+    #[test]
+    fn single_and_full_sweep_results_merge_alike() {
+        for fetched in [false, true] {
+            let mut app = app_with_pending_repo();
+            let single = sweep_targets(&app, Some(0)).remove(0).old;
+            let full = sweep_targets(&app, None).remove(0).old;
+            poll(&mut app, poll_says_passed());
+            let snapshot = if fetched { single } else { full };
+            apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), fetched);
+            assert_poll_fields(&app.repos[0]);
+            assert_sweep_fields(&app.repos[0]);
+        }
+    }
+
+    /// A late result for a path that no longer has a row is dropped: it must
+    /// not create a row, nor land on an unrelated one.
+    #[test]
+    fn a_late_result_for_a_removed_repo_adds_no_row() {
+        let mut app = app_with_pending_repo();
+        let snapshot = sweep_targets(&app, None).remove(0).old;
+        let mut other = test_repo();
+        other.name = "other".to_string();
+        other.path = Some("~/repos/other".to_string());
+        app.repos = vec![other];
+        apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), true);
+        assert_eq!(app.repos.len(), 1);
+        let repo = &app.repos[0];
+        assert_eq!(repo.name, "other");
+        assert_eq!(repo.dirty, 0);
+        assert!(repo.commits.is_empty());
     }
 
     #[test]
