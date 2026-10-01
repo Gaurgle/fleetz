@@ -25,8 +25,11 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           [ "$crate" = "$tag" ] || { echo "tag v$tag but Cargo.toml says $crate"; exit 1; }
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to a commit, not the moving `stable` branch. The ref used to
+      # name the toolchain, so it is now stated in `toolchain`.
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, 2026-09-03
         with:
+          toolchain: stable
           components: clippy, rustfmt
 
       # Never ship a red build.
