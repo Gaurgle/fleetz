@@ -1,9 +1,9 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-01 19:55 by `claude-fable-5-1`, in a new session that
-carried out the one authorized step (FZ-04 verified and handed to Andreas to
-try) and dispatched nothing. **Nothing is running: no worker, no reviewer, no
-background job, and none may start while Andreas tests the FZ-04 build.** Read this file, the repository
+Last written 2026-10-01 20:15 by `claude-fable-5-1`. FZ-04 is merged and
+closed. **Two workers are running: FZ-06b (#38) in `.claude/worktrees/fz-06b`
+and the FZ-10 (#23) design revision in `.claude/worktrees/fz-10`. Neither has
+reported and neither has been reviewed.** Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md),
 [release-plan.md](release-plan.md) and
 [first-wave-tickets.md](first-wave-tickets.md) before acting. GitHub (the
@@ -43,7 +43,10 @@ over. Each was said to one session; confirm it once before relying on it.
   held, closed issues at Done, created issues for defined tickets and
   follow-ups, and went to him only for design decisions, interaction or look
   acceptance, and what the safe-merge rule reserves for him.
-  `agent-workflow.md` still says to dispatch only what he names.
+  `agent-workflow.md` still says to dispatch only what he names. In the
+  19:34 session he renewed it for the tickets below with "if this is normal,
+  we can push? and get along with the rest", after which FZ-04 was merged
+  and FZ-06b and the FZ-10 revision were dispatched in plan order.
 - **Coordination docs** may be committed and pushed to `main` without asking,
   for that session. A Claude session's permission check can refuse such a
   commit otherwise.
@@ -54,153 +57,106 @@ usage limit and ask Andreas for routing.
 
 ## What needs Andreas
 
-Nothing else moves on the `main.rs` line until the first item is settled.
+Nothing blocks the running work. In order of weight:
 
-1. **FZ-04 (#17): a second look at the branch build.** The fix is committed,
-   pushed and verified (below) and the build was handed to him at 19:45. He
-   ran it with Wi-Fi off at 19:47 and sent a screenshot: the `fleetz` row
-   shows `⚠ unreachable` and the detail pane
-   `⚠ fetch failed: remote unreachable, as of 19:47` over the ssh line, as
-   specified. The status-line count and `F` on several rows were not in the
-   screenshot. A second screenshot with Wi-Fi back on shows the GitHub
-   header recovered and the fetch mark still on the row: that is contract
-   rule 6 (nothing retries because the network returned; `f`, `F`, a moved
-   remote or the next watch sweep clears it). **He has not said he accepts
-   it.** Asked at 19:55: accept as is, or have a recovered poll refetch the
-   repos whose fetch failed as unreachable or timed out, which changes
-   rule 6 and is its own ticket. Recorded on #17.
-2. **#45: decided.** He said to leave it until the repository goes public:
-   the setting stays off and nothing merges now. Recorded on #45. Nothing is
-   needed from him until then.
-3. **Was Wi-Fi off or just toggled** when he saw `⚠ timeout` on three rows
-   in his first FZ-04 run? Asked three times. His last message carried the
-   unfilled choice "[off / toggling]", so it is still not answered.
-4. **FZ-10 owner items**, to be presented together once the design review is
-   through: what the header says when polling is slowed, paused or rate
+1. **FZ-10 owner items**, to be presented together once the revised design
+   passes review: what the header says when polling is slowed, paused or rate
    limited (O1); manual `r` and `R` under a rate limit skipping the request
-   (O2 with A6); no new config key (O3); and amending freshness contract
-   rule 6 from "one normal interval later" to "at least one normal interval
-   later".
-5. **Try `main`** (`cargo run --release`). M0's exit asks for his
-   verification of FZ-02; he has run the FZ-03 and FZ-04 branch builds, which
-   contain it, but has not said so about `main`.
+   (O2 with A6); no new config key (O3); the effects on freshness contract
+   rules 6 and 9; and whatever the revision adds to the owner section.
+2. **Should a recovered network clear fetch marks sooner?** Today a failed
+   fetch stays marked until that repo is fetched again (`f`, `F`, a moved
+   remote, or the watch sweep every `refresh_interval`, 300 s in his config).
+   The alternative, refetching the repos that failed as unreachable or timed
+   out when the GitHub poll recovers, changes fetch contract rule 6 and is
+   its own ticket. Offered at 19:55; he merged without choosing it. Not
+   ticketed.
+3. **Was Wi-Fi off or changing state** when he saw `⚠ timeout` on three rows
+   in his first FZ-04 run? Still unanswered. His 19:51 run with Wi-Fi fully
+   off failed at once with no timeout, which fits a network in transition
+   the first time. It only matters for the ssh follow-up below.
+4. **Try `main`** (`cargo run --release`). It now holds FZ-02, FZ-03 and
+   FZ-04. M0's exit asks for his verification of FZ-02; he has run the branch
+   builds that contain it but has not said so about `main`.
+5. **#45: decided.** Leave it until the repository goes public: the setting
+   stays off and nothing merges now. Recorded on #45.
 6. Not blocking: whether setting Status through `gh` belongs in FZ-08's
    first version; whether #46 may change an existing test's setup order.
 
 ## Last verdicts, and what is on disk uncommitted
 
-Both reviews that were running when the pause was asked for have reported.
-Nothing was dispatched or integrated after them.
-
-- **FZ-04 fix: accepted by the reviewer, committed as `3469f67`, pushed,
-  verified, waiting for Andreas.** The commit (`src/git.rs` only, +70 -9, on
-  top of `4839891`): `classify_fetch_error` treats any line starting
-  `ssh: connect to host ` or `ssh: could not resolve hostname ` as
-  `Unreachable` (Auth still wins when both appear), and `first_error_line`
-  prefers an `ssh: ` line that comes before the first `fatal:` or `error:`
-  line. Worker and reviewer both ran fmt, clippy with warnings denied and
-  the suite: 754 passed, 0 failed, 1 ignored. The reviewer confirmed with a
-  copy of the old function that Andreas's pasted text was `Other` before
-  and is `Unreachable` now. Verdict and details are on #17.
-  **Who made the commit is not recorded.** It was created at 19:33:51 and
-  pushed, two minutes after the previous version of this file called the
-  change uncommitted and before the 19:34 session started. That session
-  found it, checked its content against the accepted hunk as described
-  (`src/git.rs` last modified 19:25:40, worktree clean) and did not commit
-  again. CI on the branch at `3469f67`: `ci` success (run 36900317935).
-  Combined with `main` at `e8433bc` in a throwaway clone: fmt and clippy
-  with warnings denied exit 0, 754 passed, 0 failed, 1 ignored,
-  `scripts/check-docs.sh` exit 0.
-- **FZ-10 design: changes requested, nothing blocking.** Worktree
-  `.claude/worktrees/fz-10` has the untracked `docs/api-budget-design.md`
-  with decisions A1 to A7 recorded. The reviewer confirmed the measurements
-  (cost 3 and 1030 nodes at `repo_limit` 50; its own run took about 7.3 s
-  where the draft says 6.3 s) and asked for seven changes: FZ-10a's file
-  ownership is too narrow and it must be serial after FZ-04; the contract
-  changes are understated (rule 9, rule 1 through A6, new failure kinds, the
-  client timeout moving from FZ-11); scenario S20 contradicts S3; four
-  unspecified transitions; server epoch against the local clock; overclaimed
-  wording about the server deadline; user-visible effects missing from the
-  owner section. **The findings are recorded in full on #23**, because the
-  worker's session will not be resumable.
+- **FZ-06b (#38): worker running since 20:10, nothing reviewed.** Base
+  `f8a54c0`, branch `fix/fz-06b-ref-content-key`, worktree
+  `.claude/worktrees/fz-06b`, allowed files `src/git.rs` and `src/main.rs`.
+  The worker leaves its change uncommitted. If its session is lost, check
+  the worktree first and resume it or dispatch a fresh worker with what is
+  on disk.
+- **FZ-10 (#23) revision: worker running since 20:10.** The worktree was
+  fast-forwarded to `f8a54c0`; `docs/api-budget-design.md` is still
+  untracked there. The fresh worker has findings F1 to F7 and the smaller
+  points (in full on #23), keeps decisions A1 to A7 and marks any change it
+  needs as proposed, makes at most 4 live GraphQL requests and runs no
+  builds. Next: a reviewer re-reviews.
 - **#45:** uncommitted `ci.yml` and `docs.yml` in
   `.claude/worktrees/issue-45`; reviewer verdict blocked on a repository
   setting, diff judged correct. Parked by Andreas until the repository is
   public; the files stay where they are.
-- **FZ-09:** worktree `.claude/worktrees/fz-09` clean, nothing written.
+- **FZ-09:** worktree `.claude/worktrees/fz-09` clean, nothing written, not
+  dispatched: two agents is the cap.
 
 ## Next steps, in order
 
-1. **The next authorized step: wait for Andreas on FZ-04.** He has the
-   build:
-   `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-04/Cargo.toml`.
-   With Wi-Fi off and `F` he should see `⚠ unreachable` on rows,
-   `⚠ fetch failed: remote unreachable, as of HH:MM` in the detail pane with
-   the ssh line under it, and a count in the status line. Keep every agent
-   idle while he tests. When he accepts: confirm `main` is still `e8433bc`
-   plus coordination docs only (rerun the combined checks if any source
-   changed), `git merge --no-ff fix/fz-04-fetch-outcomes`, push, confirm CI
-   on `main`, move #17 to Done and close it with the evidence. If he finds
-   something else, it goes back to a worker and a fresh review. Nothing past
-   this step was authorized in the 19:34 session.
-2. FZ-10: dispatch a fresh `fz-worker` to revise the draft against the
-   findings on #23 (the original worker's context is gone), then have a
-   reviewer re-review. On acceptance commit, push, merge the document, add
-   its row to the `CLAUDE.md` index, move #23 to Done and close it, and
-   create issues FZ-10a, b and c from its ticket section. Bring the owner
-   items to Andreas in plain language: they now include the effect on rule 9
-   and on A6, not only rule 6.
-3. #45: nothing until the repository goes public. Then the YAML needs a
-   reviewer acceptance before it merges: the verdict so far is blocked on
-   the setting, with the diff judged correct.
-4. FZ-09 (#22): dispatch again. Nothing was written. Handoff as recorded on
-   the issue: output `docs/coverage-cache-design.md`, at most 6 live GraphQL
-   requests, the real cache read-only, no cache schema change authorized.
-   Add what FZ-10 found: `repo_limit` 100 fails with a 502 at GitHub's server
-   deadline, so "what to do when the query no longer fits" is FZ-09's to
-   design.
-5. After FZ-04 merges, the `main.rs` line, one ticket at a time:
-   FZ-06b (#38), FZ-06e (#41), FZ-06c (#39), FZ-06d (#40); then the identity
-   series FZ-05b to f (#32 to #36); then FZ-10a, b, c. #43 (`git.rs`) fits
-   between any two. #46 needs Andreas's OK first.
+1. FZ-06b: when the worker reports, dispatch `fz-reviewer` as a separate
+   invocation with the report. On acceptance commit exactly the reviewed
+   diff, push, wait for CI on the branch, run the combined checks against
+   current `main` in a throwaway clone, and merge under the safe-merge rule
+   (no look or interaction to accept, no format change). Then Done and close
+   #38 with the evidence.
+2. FZ-10: when the worker reports, dispatch a reviewer for the re-review.
+   On acceptance commit, push, merge the document, add its row to the
+   `CLAUDE.md` index, move #23 to Done and close it, and create issues
+   FZ-10a, b and c from its ticket section. Bring the owner items to Andreas
+   in plain language. Rule on any "proposed change to A<n>" first.
+3. FZ-09 (#22): dispatch when a slot frees. Nothing was written. Handoff as
+   recorded on the issue: output `docs/coverage-cache-design.md`, at most 6
+   live GraphQL requests, the real cache read-only, no cache schema change
+   authorized. Add what FZ-10 found: `repo_limit` 100 fails with a 502 at
+   GitHub's server deadline, so "what to do when the query no longer fits"
+   is FZ-09's to design.
+4. The rest of the `main.rs` line, one ticket at a time after FZ-06b:
+   FZ-06e (#41), FZ-06c (#39), FZ-06d (#40); then the identity series
+   FZ-05b to f (#32 to #36); then FZ-10a, b, c. #43 (`git.rs`) fits between
+   any two. #46 needs Andreas's OK first.
+5. #45: nothing until the repository goes public. Then the YAML needs a
+   reviewer acceptance before it merges.
 
-## The FZ-04 story, because it is not finished
+## The FZ-04 story, for what it left behind
 
-FZ-04 makes a failed `git fetch` visible. Contract:
-[fetch-outcome-contract.md](fetch-outcome-contract.md), accepted by the
-coordinator and amended during review. Ticket commit
-`48398919d8d97afbd23c05e8481130ae8b1fef9c` on `fix/fz-04-fetch-outcomes`
-(base `3ca7ae5`, nine files, +1682 -47), pushed, CI green on the branch,
-combined result with `main` at `4fc5ff7` passing 753 tests. Not merged.
+FZ-04 (#17, closed) makes a failed `git fetch` visible. Contract:
+[fetch-outcome-contract.md](fetch-outcome-contract.md). Five review passes
+fixed four defects, and Andreas's own test with Wi-Fi off then found a fifth
+that no review had: macOS ssh printing
+`ssh: connect to host github.com port 22: Undefined error: 0`, which
+classified as a plain git error. The second commit `3469f67` fixed it.
 
-Five review passes found and fixed: the `ssh://` login name being stripped
-from the drawn URL, git's real "repository not found" text not recognised, a
-password containing `,` `)` or `'` reaching the screen, and a panic on a
-multi-byte character before the URL scheme (a remote pasted with smart
-quotes). Fetch facts are a row field (`RepoStatus.fetch`) owned by the fetch
-alone and carried by path across a load.
+What a later lead needs from it:
 
-Andreas's own testing then found what review had not:
-
-- With Wi-Fi off and `f` on `fleetz` (remote `git@github.com:...`), the row
-  showed `⚠ fetch` and the detail `fetch failed: git error` over git's
-  generic `fatal: Could not read from remote repository.`. His fetch by hand
-  printed `ssh: connect to host github.com port 22: Undefined error: 0`,
-  which no list of error texts contained. The fix is described above:
-  reviewed, accepted and committed as `3469f67`.
-- In an earlier run he saw `⚠ timeout` on three rows. Not reproduced: the
-  same hardened fetch on 44 repos outside the app took under 9 s each, and
-  two background runs of the build (one and five minutes) showed every fetch
-  completing in about a second. Reproduced separately: ssh to an address it
-  cannot reach hangs for over a minute with no output, fleetz's 30 s limit
-  then reports a timeout, and the ssh child outlives the killed git. So the
-  three rows were most likely SSH remotes while the network was down or just
-  toggled. Unconfirmed until he answers.
-- Only one row was marked in his screenshot because `f` fetches the selected
-  repo; `F` fetches all.
-
-The probe clone `~/repos/fz-probe` he made for the test was removed at his
-request after checking it held nothing of its own.
+- **One marked row is normal after `f`.** `f` fetches the selected repo
+  only; a full sweep (`F` or the watch timer) fetches every clone and marks
+  each row whose fetch fails. He asked about this twice.
+- **A mark outlives the outage.** Nothing retries because the network came
+  back (rule 6). In his run the mark set at 19:51 cleared by itself at the
+  19:56 watch sweep.
+- **The earlier `⚠ timeout` rows are unexplained but understood.** ssh to an
+  address it cannot reach hangs past fleetz's 30 s limit and the ssh child
+  outlives the killed git. With Wi-Fi fully off ssh fails at once instead.
+  The ssh follow-up below is the fix.
+- **Commit `3469f67` has no recorded author session.** It appeared at
+  19:33:51, after the 19:31 handoff called the change uncommitted and
+  before the 19:34 session started; Andreas says he did not make it. Its
+  content is the file as last modified at 19:25:40, before the reviewer's
+  acceptance was recorded, so it was merged. If a session other than the
+  one holding this file is committing, find out which before dispatching.
 
 ## Done on 2026-10-01
 
@@ -219,6 +175,7 @@ closed with the evidence in a comment.
 | FZ-06a | #37 | `520e77e` | `28fd17f` | `git::repo_dirs`, the git and common directories in one helper |
 | FZ-03 | #16 | `5217d30`, `963f575` | `407aa49` | GitHub freshness as three facts; header `github cached` and `⚠ github <kind>, as of HH:MM` |
 | Tests | #42 | `497ee62` | `d564fc7` | repoz parity tests run repoz from outside any repository |
+| FZ-04 | #17 | `4839891`, `3469f67` | `f8a54c0` | Fetch outcomes as three facts per checkout; `⚠ unreachable` and its kin on the row, the reason in the detail pane, no credential drawn |
 
 Facts from these that later tickets need:
 
@@ -254,7 +211,8 @@ Facts from these that later tickets need:
 
 ## Tickets that exist and wait
 
-On the board in Backlog, milestone M1 unless noted. None dispatched.
+On the board in Backlog, milestone M1 unless noted. None dispatched except
+FZ-06b, which is In progress.
 
 - **Identity series:** FZ-05b #32 (`discovery.rs` plus named
   `assemble_view` call sites, and the comparison key in `model.rs`), FZ-05c
@@ -268,8 +226,8 @@ On the board in Backlog, milestone M1 unless noted. None dispatched.
   #46 the FZ-02 failed-poll test also passes on the old code (edits an
   existing test, needs Andreas's OK).
 - **#45** (M5): described above.
-- **FZ-09 #22** is Ready, to be dispatched again. **FZ-10 #23** is in Review
-  with changes requested.
+- **FZ-09 #22** is Ready, to be dispatched again. **FZ-10 #23** is In
+  progress: the revision after a review that requested changes.
 - **FZ-08 #21** (M4) was reshaped at Andreas's request into a read-only
   GitHub Project board view: columns and table with status, priority,
   milestone, worker and ticket reviewer; `Enter` opens a ticket's details in
@@ -349,14 +307,15 @@ code.
 All under `.claude/worktrees/` in the main checkout. Removing a worktree or
 a remote branch is Andreas's call; none was removed.
 
-- **Active:** `fz-04` (clean at `3469f67`, pushed; Andreas runs the build
-  from it), `fz-10` (untracked `docs/api-budget-design.md`), `fz-09`
-  (clean, nothing written), `issue-45` (uncommitted `ci.yml` and `docs.yml`).
-- **Integrated and kept:** `fz-01`, `fz-02`, `fz-03`, `fz-05`, `fz-05a`,
+- **Active:** `fz-06b` (worker writing, base `f8a54c0`), `fz-10` (worker
+  revising the untracked `docs/api-budget-design.md`, fast-forwarded to
+  `f8a54c0`), `fz-09` (clean, nothing written), `issue-45` (uncommitted
+  `ci.yml` and `docs.yml`, parked).
+- **Integrated and kept:** `fz-01`, `fz-02`, `fz-03`, `fz-04`, `fz-05`, `fz-05a`,
   `fz-06`, `fz-06a`, `issue-1`, `issue-42`, `issue-44`, each with its branch
   pushed.
 - Not pushed: `docs/fz-09-coverage-cache-isolation`, `docs/fz-10-api-budget`,
-  `ci/45-pull-request-trigger`.
+  `ci/45-pull-request-trigger`, `fix/fz-06b-ref-content-key`.
 - The session scratchpad holds throwaway integration clones and diagnostic
   captures. Nothing there is needed.
 
@@ -373,6 +332,10 @@ before creating more.
   since overriding those would drop a user's key or agent wrapper. Its own
   ticket. The same reviewer noted the failure detail prefers any `ssh: `
   line while the kind looks only at connect and resolve lines.
+- **Refetch on recovery:** when the GitHub poll goes from failing to
+  healthy, refetch the repos whose last fetch failed as unreachable or
+  timed out, so a mark does not outlive the outage by a sweep interval.
+  Changes fetch contract rule 6; Andreas has not asked for it.
 - **From the FZ-04 review:** the fetch tally's 180 s expiry is not extended
   by a later batch; one failing repo widens the compact grid's badge column;
   old fetch facts stay on a path that now holds a different repo; bidi
