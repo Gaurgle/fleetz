@@ -1,8 +1,9 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-01 19:40 by `claude-fable-5-1`, on Andreas's instruction
-to pause at a safe point, dispatch nothing new, record the full state and
-stop. **Nothing is running: no worker, no reviewer, no background job.** Read this file, the repository
+Last written 2026-10-01 19:45 by `claude-fable-5-1`, in a new session that
+carried out the one authorized step (FZ-04 verified and handed to Andreas to
+try) and dispatched nothing. **Nothing is running: no worker, no reviewer, no
+background job, and none may start while Andreas tests the FZ-04 build.** Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md),
 [release-plan.md](release-plan.md) and
 [first-wave-tickets.md](first-wave-tickets.md) before acting. GitHub (the
@@ -55,16 +56,15 @@ usage limit and ask Andreas for routing.
 
 Nothing else moves on the `main.rs` line until the first item is settled.
 
-1. **FZ-04 (#17): a second look at the branch build**, once the fix below is
-   reviewed and committed. He tested it twice on 2026-10-01 and has not
-   accepted it.
-2. **#45: a repository setting.** Fork pull requests run no workflow while
-   the repository is private unless Settings > Actions > "Run workflows from
-   fork pull requests" is on. Turn it on, or leave it until the repository is
-   public; and say whether the YAML merges now as preparation. The
-   coordinator's recommendation: leave it off and merge the YAML now.
+1. **FZ-04 (#17): a second look at the branch build.** The fix is committed,
+   pushed and verified (below) and the build was handed to him at 19:45. He
+   tested the ticket twice before the fix and has not accepted it.
+2. **#45: decided.** He said to leave it until the repository goes public:
+   the setting stays off and nothing merges now. Recorded on #45. Nothing is
+   needed from him until then.
 3. **Was Wi-Fi off or just toggled** when he saw `⚠ timeout` on three rows
-   in his first FZ-04 run? Asked twice, not answered.
+   in his first FZ-04 run? Asked three times. His last message carried the
+   unfilled choice "[off / toggling]", so it is still not answered.
 4. **FZ-10 owner items**, to be presented together once the design review is
    through: what the header says when polling is slowed, paused or rate
    limited (O1); manual `r` and `R` under a rate limit skipping the request
@@ -82,9 +82,9 @@ Nothing else moves on the `main.rs` line until the first item is settled.
 Both reviews that were running when the pause was asked for have reported.
 Nothing was dispatched or integrated after them.
 
-- **FZ-04 fix: accepted by the reviewer, not committed.** Worktree
-  `.claude/worktrees/fz-04` has one uncommitted change in `src/git.rs` on
-  top of `4839891`: `classify_fetch_error` treats any line starting
+- **FZ-04 fix: accepted by the reviewer, committed as `3469f67`, pushed,
+  verified, waiting for Andreas.** The commit (`src/git.rs` only, +70 -9, on
+  top of `4839891`): `classify_fetch_error` treats any line starting
   `ssh: connect to host ` or `ssh: could not resolve hostname ` as
   `Unreachable` (Auth still wins when both appear), and `first_error_line`
   prefers an `ssh: ` line that comes before the first `fatal:` or `error:`
@@ -92,6 +92,15 @@ Nothing was dispatched or integrated after them.
   the suite: 754 passed, 0 failed, 1 ignored. The reviewer confirmed with a
   copy of the old function that Andreas's pasted text was `Other` before
   and is `Unreachable` now. Verdict and details are on #17.
+  **Who made the commit is not recorded.** It was created at 19:33:51 and
+  pushed, two minutes after the previous version of this file called the
+  change uncommitted and before the 19:34 session started. That session
+  found it, checked its content against the accepted hunk as described
+  (`src/git.rs` last modified 19:25:40, worktree clean) and did not commit
+  again. CI on the branch at `3469f67`: `ci` success (run 36900317935).
+  Combined with `main` at `e8433bc` in a throwaway clone: fmt and clippy
+  with warnings denied exit 0, 754 passed, 0 failed, 1 ignored,
+  `scripts/check-docs.sh` exit 0.
 - **FZ-10 design: changes requested, nothing blocking.** Worktree
   `.claude/worktrees/fz-10` has the untracked `docs/api-budget-design.md`
   with decisions A1 to A7 recorded. The reviewer confirmed the measurements
@@ -106,22 +115,24 @@ Nothing was dispatched or integrated after them.
   worker's session will not be resumable.
 - **#45:** uncommitted `ci.yml` and `docs.yml` in
   `.claude/worktrees/issue-45`; reviewer verdict blocked on a repository
-  setting, diff judged correct. Unchanged since.
+  setting, diff judged correct. Parked by Andreas until the repository is
+  public; the files stay where they are.
 - **FZ-09:** worktree `.claude/worktrees/fz-09` clean, nothing written.
 
 ## Next steps, in order
 
-1. **The next authorized step.** FZ-04: commit the accepted hunk
-   (`src/git.rs` only) on `fix/fz-04-fetch-outcomes` as a second commit,
-   push, wait for CI on the branch, rerun fmt, clippy
-   with warnings denied, the full suite and `scripts/check-docs.sh` on the
-   combined result with current `main` in a throwaway clone, then give
-   Andreas the build:
+1. **The next authorized step: wait for Andreas on FZ-04.** He has the
+   build:
    `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-04/Cargo.toml`.
    With Wi-Fi off and `F` he should see `⚠ unreachable` on rows,
    `⚠ fetch failed: remote unreachable, as of HH:MM` in the detail pane with
    the ssh line under it, and a count in the status line. Keep every agent
-   idle while he tests. Merge only after he accepts; then Done, close #17.
+   idle while he tests. When he accepts: confirm `main` is still `e8433bc`
+   plus coordination docs only (rerun the combined checks if any source
+   changed), `git merge --no-ff fix/fz-04-fetch-outcomes`, push, confirm CI
+   on `main`, move #17 to Done and close it with the evidence. If he finds
+   something else, it goes back to a worker and a fresh review. Nothing past
+   this step was authorized in the 19:34 session.
 2. FZ-10: dispatch a fresh `fz-worker` to revise the draft against the
    findings on #23 (the original worker's context is gone), then have a
    reviewer re-review. On acceptance commit, push, merge the document, add
@@ -129,9 +140,9 @@ Nothing was dispatched or integrated after them.
    create issues FZ-10a, b and c from its ticket section. Bring the owner
    items to Andreas in plain language: they now include the effect on rule 9
    and on A6, not only rule 6.
-3. #45: act on his decision. If the YAML merges, it needs a reviewer
-   acceptance first: the verdict so far is blocked on the setting, with the
-   diff judged correct.
+3. #45: nothing until the repository goes public. Then the YAML needs a
+   reviewer acceptance before it merges: the verdict so far is blocked on
+   the setting, with the diff judged correct.
 4. FZ-09 (#22): dispatch again. Nothing was written. Handoff as recorded on
    the issue: output `docs/coverage-cache-design.md`, at most 6 live GraphQL
    requests, the real cache read-only, no cache schema change authorized.
@@ -166,7 +177,7 @@ Andreas's own testing then found what review had not:
   generic `fatal: Could not read from remote repository.`. His fetch by hand
   printed `ssh: connect to host github.com port 22: Undefined error: 0`,
   which no list of error texts contained. The fix is described above:
-  reviewed and accepted, uncommitted.
+  reviewed, accepted and committed as `3469f67`.
 - In an earlier run he saw `⚠ timeout` on three rows. Not reproduced: the
   same hardened fetch on 44 repos outside the app took under 9 s each, and
   two background runs of the build (one and five minutes) showed every fetch
@@ -328,8 +339,8 @@ code.
 All under `.claude/worktrees/` in the main checkout. Removing a worktree or
 a remote branch is Andreas's call; none was removed.
 
-- **Active:** `fz-04` (commit `4839891` plus one uncommitted change in
-  `src/git.rs`), `fz-10` (untracked `docs/api-budget-design.md`), `fz-09`
+- **Active:** `fz-04` (clean at `3469f67`, pushed; Andreas runs the build
+  from it), `fz-10` (untracked `docs/api-budget-design.md`), `fz-09`
   (clean, nothing written), `issue-45` (uncommitted `ci.yml` and `docs.yml`).
 - **Integrated and kept:** `fz-01`, `fz-02`, `fz-03`, `fz-05`, `fz-05a`,
   `fz-06`, `fz-06a`, `issue-1`, `issue-42`, `issue-44`, each with its branch
