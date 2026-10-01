@@ -200,6 +200,15 @@ pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>,
         spans.push(Span::styled(worktree, Style::default().fg(colors::OVERLAY)));
     }
 
+    // The last fetch failed, so behind and ahead are counted against old
+    // remote refs. Beside the status it qualifies, and left of it so the
+    // status keeps the right edge.
+    if let Some(marker) = crate::ui::fetch_marker(&repo.fetch) {
+        let marker = format!("{marker} ");
+        width += marker.chars().count();
+        spans.push(Span::styled(marker, Style::default().fg(colors::PEACH)));
+    }
+
     // Last, and never optional: this is the token every row aligns on.
     let status = repo.short_status();
     width += status.chars().count();
@@ -246,6 +255,7 @@ mod tests {
             remote_only_branches: vec![],
             remote_branches: vec![],
             work_key: None,
+            fetch: crate::model::FetchFacts::default(),
         }
     }
 
@@ -271,6 +281,43 @@ mod tests {
         assert!(plain_text.ends_with('✓'));
         assert!(ci_text.ends_with('✓'), "CI must not trail the status");
         assert_eq!(ci_text, "◉ ✓");
+    }
+
+    fn with_failed_fetch(mut r: RepoStatus, kind: crate::git::FetchFailureKind) -> RepoStatus {
+        let failure = crate::git::FetchFailure { kind, detail: None };
+        r.fetch.record(
+            &crate::git::FetchOutcome::Failed(failure),
+            chrono::Local::now(),
+        );
+        r
+    }
+
+    /// Rule 5 on the row: a failed fetch is marked, with its kind, beside
+    /// the counts it makes stale, and the status keeps the right edge.
+    #[test]
+    fn a_failed_fetch_is_marked_beside_the_status() {
+        let mut behind = repo("behind");
+        behind.behind = 3;
+        let r = with_failed_fetch(behind, crate::git::FetchFailureKind::Unreachable);
+        let (text, width) = rendered(&r);
+        assert_eq!(text, "⚠ unreachable 3↓");
+        assert_eq!(width, text.chars().count(), "width matches what is drawn");
+        let (spans, _) = badge_spans(&r, false);
+        assert_eq!(spans[0].style.fg, Some(colors::PEACH));
+        assert_eq!(
+            spans[1].style.fg,
+            Some(status_color(&r)),
+            "status keeps its colour"
+        );
+    }
+
+    /// Nothing extra on the row while fetches work.
+    #[test]
+    fn a_successful_fetch_adds_nothing_to_the_row() {
+        let mut r = repo("ok");
+        r.fetch
+            .record(&crate::git::FetchOutcome::Succeeded, chrono::Local::now());
+        assert_eq!(rendered(&r).0, "✓");
     }
 
     #[test]

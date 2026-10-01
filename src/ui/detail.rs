@@ -616,6 +616,23 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         Style::default().fg(status_color),
     )];
 
+    // Under row 1, while the last fetch failed: the counts beside it are
+    // against the remote refs of the last fetch that worked, and when that
+    // was. Then git's own reason, already stripped of credentials.
+    let mut fetch_rows: Vec<Line> = Vec::new();
+    if let Some(text) = crate::ui::fetch_failure_line(&repo.fetch, chrono::Local::now()) {
+        fetch_rows.push(Line::from(Span::styled(
+            format!("  {text}"),
+            Style::default().fg(colors::PEACH),
+        )));
+        if let Some(detail) = repo.fetch.failure().and_then(|f| f.detail.as_deref()) {
+            fetch_rows.push(Line::from(Span::styled(
+                format!("    {detail}"),
+                Style::default().fg(colors::OVERLAY),
+            )));
+        }
+    }
+
     // Row 2 left: where it lives on this machine.
     let row2_left = vec![Span::styled(
         format!("  {path_str}"),
@@ -708,14 +725,18 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // Right halves. Owner on row 1, the remote locator on row 2, GitHub's own
     // state on row 3.
     let (owner_group, owner_w) = owner_spans(repo);
+    // Drawn without userinfo, so a token kept in an HTTPS remote never
+    // reaches the screen. Display only: matching and `owner_display` read
+    // the stored URL.
     let (remote_loc, remote_loc_w) = match repo.remote_url.as_deref() {
-        Some(url) => (
-            vec![Span::styled(
-                url.to_string(),
-                Style::default().fg(colors::OVERLAY),
-            )],
-            url.chars().count(),
-        ),
+        Some(url) => {
+            let shown = crate::git::redact_userinfo(url);
+            let shown_w = shown.chars().count();
+            (
+                vec![Span::styled(shown, Style::default().fg(colors::OVERLAY))],
+                shown_w,
+            )
+        }
         None => name_spans(repo),
     };
     let row3_right_w = span_width(&row3_right);
@@ -738,6 +759,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     lines.push(Line::from(row1));
+    lines.extend(fetch_rows);
     lines.push(Line::from(row2));
     if !row3.is_empty() {
         lines.push(Line::from(row3));
@@ -4186,6 +4208,7 @@ mod tests {
             remote_only_branches: vec![],
             remote_branches: vec![],
             work_key: None,
+            fetch: crate::model::FetchFacts::default(),
         }
     }
 
@@ -4337,6 +4360,96 @@ mod tests {
         r.path = Some("~/repos/fleetz".to_string());
         r.remote_url = Some("git@github.com:Gaurgle/fleetz.git".to_string());
         r
+    }
+
+    /// Every row of the detail pane as drawn, joined by newlines.
+    fn header_text(repo: RepoStatus, width: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = crate::app::App::new(vec![repo], "test".to_string(), width, 40);
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        terminal
+            .draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..24)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Rule 8: an HTTPS remote can carry a token in its userinfo, and the
+    /// remote row drew `remote_url` exactly as stored. Display only: the
+    /// owner is still read from the stored URL.
+    #[test]
+    fn a_remote_url_with_a_credential_is_drawn_without_it() {
+        let mut r = cloned_repo();
+        r.owner = None;
+        r.remote_url = Some("https://user:secret@github.com/Gaurgle/fleetz.git".to_string());
+        assert_eq!(r.owner_display().as_deref(), Some("Gaurgle"));
+        let text = header_text(r, 100);
+        assert!(!text.contains("secret"), "credential on screen:\n{text}");
+        assert!(!text.contains("user"), "userinfo on screen:\n{text}");
+        assert!(
+            text.contains("https://github.com/Gaurgle/fleetz.git"),
+            "{text}"
+        );
+    }
+
+    /// Rule 5 and rule 8 in the pane: under the counts, that the fetch
+    /// failed, why and since when, then git's line with no credential in it.
+    #[test]
+    fn a_failed_fetch_is_spelled_out_under_the_counts() {
+        let mut r = cloned_repo();
+        r.behind = 2;
+        let at = chrono::Local::now();
+        r.fetch.last_success = Some(at);
+        let failure = crate::git::FetchFailure {
+            kind: crate::git::FetchFailureKind::Unreachable,
+            detail: Some("fatal: unable to access 'https://host.invalid/o/r.git/'".to_string()),
+        };
+        r.fetch
+            .record(&crate::git::FetchOutcome::Failed(failure), at);
+        let text = header_text(r, 100);
+        let rows: Vec<&str> = text.lines().collect();
+        assert!(rows[3].contains("2 behind"), "{text}");
+        assert!(
+            rows[4].contains(&format!(
+                "⚠ fetch failed: remote unreachable, as of {}",
+                at.format("%H:%M")
+            )),
+            "{text}"
+        );
+        assert!(rows[5].contains("fatal: unable to access"), "{text}");
+    }
+
+    /// Nothing extra in the pane while fetches work.
+    #[test]
+    fn a_working_fetch_adds_no_row_to_the_pane() {
+        let mut r = cloned_repo();
+        r.fetch
+            .record(&crate::git::FetchOutcome::Succeeded, chrono::Local::now());
+        let text = header_text(r, 100);
+        assert!(!text.contains("fetch"), "{text}");
+    }
+
+    /// git accepts a remote pasted with smart quotes and returns it as
+    /// written. Drawing it must neither panic nor show the credential.
+    #[test]
+    fn a_smart_quoted_remote_url_draws_without_panicking_or_its_credential() {
+        let mut r = cloned_repo();
+        r.remote_url = Some("\u{2018}https://u:secret@github.com/o/r.git\u{2019}".to_string());
+        let text = header_text(r, 100);
+        assert!(!text.contains("secret"), "credential on screen:\n{text}");
+        assert!(
+            text.contains("\u{2018}https://github.com/o/r.git\u{2019}"),
+            "{text}"
+        );
     }
 
     /// The pinned readout row (row 2), border stripped.

@@ -122,8 +122,9 @@ pub enum AppEvent {
     RepoUpdated {
         path: String,
         status: Box<RepoStatus>,
-        /// Whether `git fetch` ran before this rebuild.
-        fetched: bool,
+        /// How the `git fetch` before this rebuild ended, or `NotAttempted`
+        /// when the sweep did not fetch. Requested is not successful.
+        fetch: git::FetchOutcome,
     },
     /// A background poll's answer. `attempt` is the id it was started with
     /// (`GithubFreshness::begin_attempt`), so an answer that arrives after a
@@ -550,7 +551,7 @@ fn apply_load_result(
     match result {
         Ok(lr) => {
             app.load_error = None;
-            app.repos = lr.repos;
+            app.repos = carry_fetch_facts(&app.repos, lr.repos);
             apply_groups(&mut app.repos, config);
             app.header = lr.header;
             if let Some(ds) = lr.dataset {
@@ -605,6 +606,22 @@ fn apply_load_result(
             app.load_error = Some(e.message);
         }
     }
+}
+
+/// Rows a load rebuilt, with what this session learned about each checkout's
+/// fetches carried over from the row it replaces (`FetchFacts::carried_into`).
+/// Matched by path, the key the fetch facts are kept under.
+fn carry_fetch_facts(old: &[RepoStatus], mut loaded: Vec<RepoStatus>) -> Vec<RepoStatus> {
+    let by_path: HashMap<&str, &model::FetchFacts> = old
+        .iter()
+        .filter_map(|r| Some((r.path.as_deref()?, &r.fetch)))
+        .collect();
+    for repo in &mut loaded {
+        if let Some(kept) = repo.path.as_deref().and_then(|p| by_path.get(p)) {
+            repo.fetch = kept.carried_into(&repo.fetch);
+        }
+    }
+    loaded
 }
 
 /// The event loop: one channel carries input, ticks, and the results of every
@@ -764,8 +781,8 @@ async fn run_event_loop(
             AppEvent::RepoUpdated {
                 path,
                 status,
-                fetched,
-            } => apply_repo_updated(app, &path, *status, fetched),
+                fetch,
+            } => apply_repo_updated(app, &path, *status, fetch),
             AppEvent::Github { attempt, result } => {
                 apply_github_poll(app, attempt, result, &tx, &args.author)
             }
@@ -1404,6 +1421,7 @@ async fn handle_normal_input(
             {
                 app.set_status(format!("\u{27f3} Fetching {}…", repo.name), false);
                 start_single_sweep(app, tx, idx, true, args.author.clone());
+                app.manual_fetches.expect(repo.path.clone());
             }
         }
         KeyCode::Char('F') => {
@@ -1688,8 +1706,14 @@ fn repo_moved(before: &RepoStatus, after: &RepoStatus) -> bool {
 ///
 /// A result whose path no longer has a row is dropped: the repo left the list
 /// while its sweep was in flight, and a late result must not bring it back.
-fn apply_repo_updated(app: &mut App, path: &str, status: RepoStatus, fetched: bool) {
-    app.settle_refresh_fetch(path, fetched);
+///
+/// The fetch outcome lands separately from the sweep's fields, on the row's
+/// `fetch` facts: only a sweep that fetched changes them, and a failure keeps
+/// every local field and the remote refs it had (rules 2 and 4 of the fetch
+/// contract). Any finished fetch settles a refresh waiting on it.
+fn apply_repo_updated(app: &mut App, path: &str, status: RepoStatus, fetch: git::FetchOutcome) {
+    app.settle_refresh_fetch(path, &fetch);
+    let mut name = None;
     if let Some(repo) = app
         .repos
         .iter_mut()
@@ -1699,6 +1723,12 @@ fn apply_repo_updated(app: &mut App, path: &str, status: RepoStatus, fetched: bo
             app.push_detected = true;
         }
         repo.apply_local_sweep(status);
+        repo.fetch.record(&fetch, chrono::Local::now());
+        name = Some(repo.name.clone());
+    }
+    let name = name.unwrap_or_else(|| path.to_string());
+    if let Some(report) = app.manual_fetches.land(path, &name, &fetch) {
+        app.set_status(ui::fetch_report_label(&report), true);
     }
     app.needs_redraw = true;
 }
@@ -2003,6 +2033,12 @@ fn start_sweep(
     }
     app.sweep_started = Some(std::time::Instant::now());
     app.sweep_manual = manual;
+    // `F`: report its fetches when the last one lands. A watch sweep fetches
+    // silently, and `r` does not fetch here at all.
+    if do_fetch && manual {
+        app.manual_fetches
+            .expect(targets.iter().map(|t| t.display_path.clone()));
+    }
     let probe = contrib_probe(app);
     spawn_sweep(tx.clone(), targets, do_fetch, author, true, probe);
 }
@@ -2052,16 +2088,18 @@ fn spawn_sweep(
             let author = author.clone();
             let probe = probe.clone();
             set.spawn(async move {
-                if do_fetch {
+                let fetch = if do_fetch {
                     let _permit = fetch_sem.acquire().await;
-                    git::fetch(&target.fs_path).await;
-                }
+                    git::fetch(&target.fs_path).await
+                } else {
+                    git::FetchOutcome::NotAttempted
+                };
                 let _permit = probe_sem.acquire().await;
                 let status = rebuild_repo_status(&target, author.as_deref(), probe.as_ref()).await;
                 let _ = tx.send(AppEvent::RepoUpdated {
                     path: target.display_path.clone(),
                     status: Box::new(status),
-                    fetched: do_fetch,
+                    fetch,
                 });
             });
         }
@@ -2355,6 +2393,7 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
         remote_only_branches,
         remote_branches: remote,
         work_key: None,
+        fetch: model::FetchFacts::from_disk(git::last_successful_fetch_at(path)),
     })
 }
 
@@ -2389,7 +2428,9 @@ async fn fetch_dataset(
 ///
 /// Unknowns fetch. No `pushed_at` means no GitHub match (a local-only clone,
 /// where the remote could be anywhere), and no `FETCH_HEAD` means this clone
-/// has never fetched at all; both have to be read as stale.
+/// has never fetched at all; both have to be read as stale. So does an empty
+/// `FETCH_HEAD`, which is what a failed fetch leaves behind
+/// (`git::last_successful_fetch_at`, rule 7 of the fetch contract).
 ///
 /// Clock skew is survivable in the one direction it can bite: a local clock
 /// running ahead can make a needed fetch look unnecessary, and the next poll
@@ -2409,7 +2450,7 @@ fn stale_remotes(
             let Some(pushed_at) = pushed.get(&found.name.to_lowercase()) else {
                 return true;
             };
-            match git::last_fetch_at(&found.path) {
+            match git::last_successful_fetch_at(&found.path) {
                 Some(fetched) => *pushed_at > chrono::DateTime::<chrono::Utc>::from(fetched),
                 None => true,
             }
@@ -2596,6 +2637,8 @@ async fn assemble_view(
         }));
     }
 
+    // How each fetch run here ended, by path, for the rows built below.
+    let mut load_fetches: HashMap<PathBuf, git::FetchOutcome> = HashMap::new();
     if git_fetch {
         let stale = stale_remotes(&targets, &active);
         let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(FETCH_CONCURRENCY));
@@ -2604,11 +2647,17 @@ async fn assemble_view(
             let sem = sem.clone();
             set.spawn(async move {
                 let _permit = sem.acquire().await;
-                git::fetch(&path).await
+                let outcome = git::fetch(&path).await;
+                (path, outcome)
             });
         }
-        while set.join_next().await.is_some() {}
+        while let Some(joined) = set.join_next().await {
+            if let Ok((path, outcome)) = joined {
+                load_fetches.insert(path, outcome);
+            }
+        }
     }
+    let fetched_at = chrono::Local::now();
 
     // Stat every target in parallel behind a semaphore, keyed by index so the
     // output order matches the discovery order regardless of finish order.
@@ -2637,6 +2686,12 @@ async fn assemble_view(
                     total: targets.len(),
                 }));
             }
+        }
+    }
+    // Slots are in target order, so each row's fetch is found by its target.
+    for (slot, (found, _)) in slots.iter_mut().zip(&targets) {
+        if let (Some(repo), Some(outcome)) = (slot, load_fetches.get(&found.path)) {
+            repo.fetch.record(outcome, fetched_at);
         }
     }
     let mut repos: Vec<RepoStatus> = slots.into_iter().flatten().collect();
@@ -2726,6 +2781,8 @@ async fn assemble_view(
             remote_only_branches: vec![],
             remote_branches: vec![],
             work_key: None,
+            // Nothing on disk to fetch into.
+            fetch: model::FetchFacts::default(),
         });
     }
 
@@ -2840,6 +2897,7 @@ async fn local_only_status(
         remote_only_branches,
         remote_branches: remote,
         work_key: None,
+        fetch: model::FetchFacts::from_disk(git::last_successful_fetch_at(path)),
     })
 }
 
@@ -2936,6 +2994,7 @@ async fn build_repo_status(
         // Taken last, after every probe above, so the first sweep that finds
         // it unchanged can safely reuse all of them.
         work_key: git::work_key(path).await,
+        fetch: model::FetchFacts::from_disk(git::last_successful_fetch_at(path)),
     }
 }
 
@@ -3008,6 +3067,7 @@ mod tests {
             remote_only_branches: vec![],
             remote_branches: vec![],
             work_key: None,
+            fetch: model::FetchFacts::default(),
         }
     }
 
@@ -3176,7 +3236,12 @@ mod tests {
         let mut app = app_with_pending_repo();
         let snapshot = sweep_targets(&app, None).remove(0).old;
         poll(&mut app, poll_says_passed());
-        apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), false);
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            rebuilt_from(&snapshot),
+            git::FetchOutcome::NotAttempted,
+        );
         let repo = &app.repos[0];
         assert_poll_fields(repo);
         assert_sweep_fields(repo);
@@ -3188,7 +3253,12 @@ mod tests {
     fn a_poll_landing_after_a_sweep_keeps_the_sweeps_local_fields() {
         let mut app = app_with_pending_repo();
         let snapshot = sweep_targets(&app, None).remove(0).old;
-        apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), false);
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            rebuilt_from(&snapshot),
+            git::FetchOutcome::NotAttempted,
+        );
         poll(&mut app, poll_says_passed());
         let repo = &app.repos[0];
         assert_poll_fields(repo);
@@ -3203,7 +3273,12 @@ mod tests {
         poll(&mut app, poll_says_passed());
         let snapshot = sweep_targets(&app, None).remove(0).old;
         poll(&mut app, Err("HTTP 502".to_string()));
-        apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), true);
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            rebuilt_from(&snapshot),
+            git::FetchOutcome::Succeeded,
+        );
         assert!(app.github_freshness.is_failing());
         let repo = &app.repos[0];
         assert_poll_fields(repo);
@@ -3658,7 +3733,12 @@ mod tests {
         status.groups = vec![];
         status.owner = None;
         status.remote_url = None;
-        apply_repo_updated(&mut app, SWEPT_PATH, status, false);
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            status,
+            git::FetchOutcome::NotAttempted,
+        );
         let repo = &app.repos[0];
         assert_eq!(repo.name, "r");
         assert_eq!(repo.path.as_deref(), Some(SWEPT_PATH));
@@ -3683,7 +3763,12 @@ mod tests {
             let full = sweep_targets(&app, None).remove(0).old;
             poll(&mut app, poll_says_passed());
             let snapshot = if fetched { single } else { full };
-            apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), fetched);
+            let fetch = if fetched {
+                git::FetchOutcome::Succeeded
+            } else {
+                git::FetchOutcome::NotAttempted
+            };
+            apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), fetch);
             assert_poll_fields(&app.repos[0]);
             assert_sweep_fields(&app.repos[0]);
         }
@@ -3699,12 +3784,230 @@ mod tests {
         other.name = "other".to_string();
         other.path = Some("~/repos/other".to_string());
         app.repos = vec![other];
-        apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), true);
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            rebuilt_from(&snapshot),
+            git::FetchOutcome::Succeeded,
+        );
         assert_eq!(app.repos.len(), 1);
         let repo = &app.repos[0];
         assert_eq!(repo.name, "other");
         assert_eq!(repo.dirty, 0);
         assert!(repo.commits.is_empty());
+    }
+
+    // --- FZ-04: fetch outcomes land as outcomes, not as "requested" ---
+
+    fn fetch_failed(kind: git::FetchFailureKind) -> git::FetchOutcome {
+        git::FetchOutcome::Failed(git::FetchFailure {
+            kind,
+            detail: Some("fatal: '/gone' does not appear to be a git repository".to_string()),
+        })
+    }
+
+    /// One fetch that worked: the row says so and has a success time.
+    #[test]
+    fn a_successful_fetch_lands_as_a_success() {
+        let mut app = app_with_pending_repo();
+        let snapshot = sweep_targets(&app, Some(0)).remove(0).old;
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            rebuilt_from(&snapshot),
+            git::FetchOutcome::Succeeded,
+        );
+        let facts = &app.repos[0].fetch;
+        assert_eq!(facts.outcome, git::FetchOutcome::Succeeded);
+        assert!(facts.last_success.is_some());
+    }
+
+    /// Rule 1 and rule 4: a fetch from a remote that is gone lands as a
+    /// failure, not as a fetch. The rebuilt local state still lands, the
+    /// last success stays where it was, and nothing claims the refs moved.
+    #[test]
+    fn a_failed_fetch_lands_as_a_failure_and_keeps_the_last_success() {
+        let mut app = app_with_pending_repo();
+        let earlier = chrono::Local::now() - chrono::Duration::hours(1);
+        app.repos[0].fetch = model::FetchFacts::from_disk(Some(earlier.into()));
+        let snapshot = sweep_targets(&app, Some(0)).remove(0).old;
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            rebuilt_from(&snapshot),
+            fetch_failed(git::FetchFailureKind::NoRemote),
+        );
+        let repo = &app.repos[0];
+        assert_sweep_fields(repo);
+        assert_eq!(
+            repo.fetch.failure().map(|f| f.kind),
+            Some(git::FetchFailureKind::NoRemote)
+        );
+        assert_eq!(repo.fetch.last_success, Some(earlier));
+        assert!(repo.fetch.last_attempt.is_some());
+    }
+
+    /// A timeout is a failure of its own kind, settled like any other.
+    #[test]
+    fn a_timed_out_fetch_lands_as_timed_out_and_settles() {
+        let mut app = app_with_pending_repo();
+        app.refresh_awaits_poll = true;
+        app.settle_refresh_poll([SWEPT_PATH.to_string()]);
+        let snapshot = sweep_targets(&app, Some(0)).remove(0).old;
+        let timed_out = git::FetchOutcome::Failed(git::FetchFailure {
+            kind: git::FetchFailureKind::TimedOut,
+            detail: None,
+        });
+        apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), timed_out);
+        assert_eq!(
+            app.repos[0].fetch.failure().map(|f| f.kind),
+            Some(git::FetchFailureKind::TimedOut)
+        );
+        assert!(
+            !app.is_refreshing(),
+            "a timed-out fetch left the spinner running"
+        );
+    }
+
+    /// Rule 2: a watch sweep that did not fetch lands its local fields and
+    /// leaves the failure, its time and the last success exactly as they were.
+    #[test]
+    fn a_sweep_that_did_not_fetch_leaves_the_fetch_facts_alone() {
+        let mut app = app_with_pending_repo();
+        let snapshot = sweep_targets(&app, Some(0)).remove(0).old;
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            rebuilt_from(&snapshot),
+            fetch_failed(git::FetchFailureKind::Auth),
+        );
+        let before = app.repos[0].fetch.clone();
+        // The snapshot predates the failure; its copy of the facts must not
+        // land either.
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            rebuilt_from(&snapshot),
+            git::FetchOutcome::NotAttempted,
+        );
+        assert_eq!(app.repos[0].fetch, before);
+    }
+
+    /// Recovery: the next fetch that works clears the failure.
+    #[test]
+    fn a_fetch_that_works_after_a_failure_recovers() {
+        let mut app = app_with_pending_repo();
+        let snapshot = sweep_targets(&app, Some(0)).remove(0).old;
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            rebuilt_from(&snapshot),
+            fetch_failed(git::FetchFailureKind::Unreachable),
+        );
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            rebuilt_from(&snapshot),
+            git::FetchOutcome::Succeeded,
+        );
+        let facts = &app.repos[0].fetch;
+        assert_eq!(facts.failure(), None);
+        assert!(facts.last_success.is_some());
+    }
+
+    /// An app with `n` cloned repos at `~/repos/repo-<i>`.
+    fn fleet_app(n: usize) -> App {
+        let repos = (0..n)
+            .map(|i| {
+                let mut r = test_repo();
+                r.name = format!("repo-{i}");
+                r.path = Some(format!("~/repos/repo-{i}"));
+                r
+            })
+            .collect();
+        App::new(repos, "h".to_string(), 120, 44)
+    }
+
+    fn land(app: &mut App, i: usize, fetch: git::FetchOutcome) {
+        let path = format!("~/repos/repo-{i}");
+        let status = app.repos[i].clone();
+        apply_repo_updated(app, &path, status, fetch);
+    }
+
+    /// Rule 9: a batch someone asked for, some of whose fetches failed, says
+    /// how many, and only once the last has landed.
+    #[test]
+    fn a_mixed_sweep_reports_how_many_fetches_failed() {
+        let mut app = fleet_app(3);
+        app.manual_fetches
+            .expect((0..3).map(|i| format!("~/repos/repo-{i}")));
+        land(&mut app, 0, git::FetchOutcome::Succeeded);
+        land(&mut app, 1, fetch_failed(git::FetchFailureKind::Auth));
+        assert!(
+            app.status_message.is_none(),
+            "reported before the last landed"
+        );
+        land(
+            &mut app,
+            2,
+            fetch_failed(git::FetchFailureKind::Unreachable),
+        );
+        let status = app.status_message.as_ref().expect("a report");
+        assert_eq!(status.text, "2 of 3 fetches failed");
+        assert!(status.is_error);
+        assert_eq!(app.repos[0].fetch.failure(), None);
+        assert!(app.repos[1].fetch.failure().is_some());
+        assert!(app.repos[2].fetch.failure().is_some());
+    }
+
+    /// Nothing extra when every fetch worked.
+    #[test]
+    fn a_sweep_whose_fetches_all_worked_reports_nothing() {
+        let mut app = fleet_app(2);
+        app.manual_fetches
+            .expect((0..2).map(|i| format!("~/repos/repo-{i}")));
+        land(&mut app, 0, git::FetchOutcome::Succeeded);
+        land(&mut app, 1, git::FetchOutcome::Succeeded);
+        assert!(app.status_message.is_none());
+    }
+
+    /// `f` on one repo whose fetch fails names the repo and why.
+    #[test]
+    fn a_single_fetch_that_fails_names_the_repo() {
+        let mut app = fleet_app(1);
+        app.manual_fetches.expect(["~/repos/repo-0".to_string()]);
+        land(&mut app, 0, fetch_failed(git::FetchFailureKind::NoRemote));
+        let status = app.status_message.as_ref().expect("a report");
+        assert_eq!(status.text, "fetch failed: repo-0, remote not found");
+    }
+
+    /// Rule 6: a failure starts nothing. No sweep, no poll, no push signal;
+    /// the repo is fetched again only when it would have been anyway.
+    #[test]
+    fn a_failed_fetch_schedules_nothing_new() {
+        let mut app = fleet_app(1);
+        let refreshed = app.last_refreshed;
+        land(
+            &mut app,
+            0,
+            fetch_failed(git::FetchFailureKind::Unreachable),
+        );
+        assert!(app.sweep_started.is_none());
+        assert!(!app.github_poll_inflight);
+        assert!(!app.push_detected);
+        assert_eq!(app.last_refreshed, refreshed);
+    }
+
+    /// A reload replaces every row; the session's fetch facts go across by
+    /// path, so a window apply cannot wipe a failure off a row.
+    #[test]
+    fn a_reload_carries_the_fetch_facts_by_path() {
+        let mut app = fleet_app(2);
+        land(&mut app, 1, fetch_failed(git::FetchFailureKind::Auth));
+        let reloaded = fleet_app(2).repos;
+        let carried = carry_fetch_facts(&app.repos, reloaded);
+        assert_eq!(carried[0].fetch, model::FetchFacts::default());
+        assert_eq!(carried[1].fetch, app.repos[1].fetch);
     }
 
     #[test]
@@ -3850,6 +4153,23 @@ mod tests {
             "a repo with no GitHub match was skipped"
         );
         let _ = std::fs::remove_dir_all(&unmatched);
+    }
+
+    /// Rule 7: a failed `git fetch` leaves `FETCH_HEAD` empty with a fresh
+    /// mtime (pinned by `git::a_failed_fetch_empties_fetch_head`). Reading
+    /// that mtime as "fetched just now" skipped exactly the repo whose remote
+    /// refs were known to be behind.
+    #[test]
+    fn an_empty_fetch_head_is_treated_as_never_fetched() {
+        let dir = fetch_fixture("emptyhead", &["alpha"], false);
+        std::fs::write(dir.join("alpha").join(".git").join("FETCH_HEAD"), b"").unwrap();
+        let active = vec![gh("alpha", "2001-01-01T00:00:00Z")];
+        assert_eq!(
+            stale_remotes(&found_targets(&dir, &["alpha"]), &active).len(),
+            1,
+            "a clone whose last fetch failed was skipped as already in hand"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The case that motivated this: a fleet opened again an hour later

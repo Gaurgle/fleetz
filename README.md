@@ -53,6 +53,30 @@ later; with watch off, none follows on its own, and `r` retries at once. The
 segment clears on the first success. A narrow header shortens it to
 `⚠ github` or `github cached` rather than dropping it.
 
+A `git fetch` that fails (from `f`, `F`, `r`, `R`, launch or a watch sweep) is
+marked on the repo rather than passed off as a fetch:
+
+- the row, in the list and the compact grid, gets an orange marker beside the
+  status, `⚠ unreachable 3↓`. The word says how: `timeout`, `auth`,
+  `unreachable` (network, DNS or host), `no remote` (missing, or not a
+  repository), or `fetch` for anything else;
+- the repo pane spells it out under the counts, `⚠ fetch failed: remote
+  unreachable, as of 14:02`, where the time is the last fetch that worked:
+  behind and ahead are counted against the remote refs it brought. When that
+  is not known it says `age unknown`. Below it, git's own first error line,
+  with any credential in a URL removed;
+- after `f`, `F` or `r`, the status line says what failed: `fetch failed:
+  fleetz, remote unreachable` for one repo, `2 of 12 fetches failed` for
+  several. Nothing extra is drawn when every fetch worked.
+
+A failure keeps the repo's local state and its existing remote refs, and
+starts nothing new: the repo is fetched again when it would have been anyway
+(the next watch sweep, a push GitHub reports, `f`, `F`, `r` or `R`). The marker
+clears on the next fetch that works. Credentials never reach the screen: the
+remote URL in the repo pane is drawn without credentials too (all userinfo,
+user and password, except for ssh remotes, whose login name stays and only a
+password goes).
+
 ## Install
 
 Requires the Rust toolchain (`cargo`).
@@ -149,8 +173,8 @@ in the header instead.
 | `e` | Open repo in `$EDITOR` |
 | `o` | Open shell in repo dir |
 | `O` | Open PR in browser |
-| `f` | Fetch selected repo (updates ahead/behind, no merge) |
-| `F` | Fetch all repos |
+| `f` | Fetch selected repo (updates ahead/behind, no merge). A failure is marked on the repo and named in the status line |
+| `F` | Fetch all repos. If any fail, the status line says how many |
 | `b` / `s` | Branches overlay: preview + switch (`Enter`), clean up merged (`space` to mark, `d` to delete) |
 | `t` | Time window: pick how far back to show activity (slot / hours / days / weeks / months / years) |
 | `g` | Cycle group filter |
@@ -161,9 +185,9 @@ in the header instead.
 | `<` / `>` | Narrow / widen the repo list |
 | `+` / `-` | Shrink / grow the inspector pane |
 | `=` | Reset both panes to their default sizes |
-| `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates. No rediscovery. A failed poll keeps the rows as they are and marks the header |
+| `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates, and fetch the repos whose remote moved. No rediscovery. A failed poll keeps the rows as they are and marks the header; failed fetches are marked on their repos and counted in the status line |
 | `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear. If GitHub cannot be reached it rebuilds from the cache and says `Reloaded from cache: GitHub offline` (or why) instead of `Reloaded` |
-| `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub. While it is on, a red eye (`󰈈 watch`) in the header pulses between two shades so the dashboard says it is live without anything moving; off, it is a grey crossed-out eye (`󰈉 watch`) |
+| `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub. A fetch that fails is marked on its repo, not in the status line. While it is on, a red eye (`󰈈 watch`) in the header pulses between two shades so the dashboard says it is live without anything moving; off, it is a grey crossed-out eye (`󰈉 watch`) |
 | `?` | Toggle help overlay |
 | `Esc` | Close search or help |
 | `q` | Quit |
