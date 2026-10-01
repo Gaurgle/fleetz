@@ -48,8 +48,9 @@ Status. Issue #7 has no milestone. Visual layout in the browser is the one
 setup check still open. GitHub is authoritative for current status and
 assignment.
 
-FZ-02 is integrated and #15 is closed. FZ-01 is the ticket in flight; both
-are described below. No release has started.
+FZ-02 is integrated and #15 is closed. FZ-01 and FZ-05 are in flight, FZ-06
+is authorized next and a freshness contract draft waits for Andreas. All are
+described below. No release has started.
 
 Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
 Andreas asked to lean on Claude for the day. The Claude-native workforce is
@@ -145,8 +146,53 @@ worktree holds whatever it has written so far, uncommitted. Next, in order:
    Whether to close #14 has not been asked; leave it open unless Andreas
    says otherwise.
 
-No other ticket is authorized. FZ-03 needs the freshness contract agreed
-before it is Ready.
+## FZ-05: in progress
+
+Andreas instructed Fable to run FZ-05 alongside FZ-01 on 2026-10-01.
+
+- Base: `6c729265d2214a55979c4ab7e8bf307941184667` (`main`, equal to
+  `origin/main`, clean tree at dispatch).
+- Branch `docs/fz-05-repository-identity`, worktree
+  `.claude/worktrees/fz-05` in the main checkout.
+- Worker `fz-worker`, requested `claude-opus-5-5`, effort medium. It traces
+  identity through the code and drafts `docs/repository-identity-design.md`
+  with alternatives and open decisions. The design decisions are the
+  coordinator's, as an architectural checkpoint, and want Astra's second
+  opinion when Astra is back.
+- Allowed files: `docs/repository-identity-design.md` only. The worker was
+  told not to build or run tests, because FZ-01 measures on the same machine;
+  claims that need execution are marked unconfirmed in the document.
+- Board: #18 is In progress, assignment recorded on the issue.
+
+State when last written: dispatched, no report yet. Next: read the report and
+the document, decide the open design questions, then dispatch `fz-reviewer`
+to trace a collision and a local-only path through the proposal. Its index
+row in `CLAUDE.md` is left to the coordinator, since the FZ-01 branch also
+adds a row to that table.
+
+## FZ-06: authorized, not started
+
+Andreas instructed Fable to start FZ-06 once FZ-01's measurements are done.
+Dispatch it after the FZ-01 reviewer has finished rerunning its case, so the
+mutation experiments do not disturb a timing run. Output is
+`docs/cache-invalidation-design.md`; production code is read-only; identity
+assumptions are coordinated with FZ-05. Nothing is created for it yet: no
+branch, no worktree, #19 still Ready.
+
+## Freshness contract for FZ-03: drafted, waiting for Andreas
+
+Andreas asked for a draft of the freshness contract FZ-03 needs. It is in
+`docs/freshness-contract.md`, uncommitted in the main checkout, marked as a
+draft. It defines attempt, outcome and data time as three separate facts,
+the transitions, what the header must say, file ownership for FZ-03 and six
+open decisions (D1 to D6). D1 (header wording and look) and D2 (whether a
+cache-served launch polls once when watch is off) are Andreas's. Two findings
+from reading the code, not executed: a background poll that falls back to
+the cache is reported as a success, so offline shows no marker at all; and
+with watch off a cache-served launch never polls.
+
+FZ-03 stays in Backlog until Andreas accepts the contract. It is not
+authorized to run, and it must not run beside FZ-04.
 
 This file is committed and pushed through `89946f5`. A Claude session's
 permission check can refuse a docs commit to `main` that Andreas did not ask
