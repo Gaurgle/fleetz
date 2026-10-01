@@ -1,10 +1,21 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-02 00:16 by `claude-fable-5-1`. Merged today in this
-session: FZ-04, FZ-06b, FZ-06c and the FZ-10 design; FZ-06e closed as
-delivered by FZ-06b. **Two reviewers are running: one on FZ-06d (#40) in
-`.claude/worktrees/fz-06d`, one on the FZ-09 (#22) design draft in
-`.claude/worktrees/fz-09`. No worker is running.** Read this file, the repository
+Last written 2026-10-01 21:15 by `claude-fable-5-1`. Merged today in this
+session: FZ-04, FZ-06b, FZ-06c, FZ-06d and the FZ-10 design; FZ-06e closed as
+delivered by FZ-06b. **Running: the FZ-05b (#32) worker in
+`.claude/worktrees/fz-05b`, the FZ-09 (#22) worker revising the design in
+`.claude/worktrees/fz-09`, and a read-only scan of the UI code for the FZ-13
+split.**
+
+**About times.** Between 20:05 and 21:09 this session wrote estimated clock
+times into this file and into its issue comments, and they ran ahead, up to
+"00:50 on 2026-10-02". They were wrong. Everything in this session happened
+on 2026-10-01 between 19:34 and the time above. Trust GitHub's own timestamp
+on a comment and `git log` for a commit, not a time quoted inside the text.
+The times in this file are corrected from the commit log. Read the clock
+(`date`) before writing a time.
+
+Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md),
 [release-plan.md](release-plan.md) and
 [first-wave-tickets.md](first-wave-tickets.md) before acting. GitHub (the
@@ -56,7 +67,7 @@ over. Each was said to one session; confirm it once before relying on it.
 Two rules he gave the 19:34 session that do carry over:
 
 - **Existing tests.** Editing an existing test is his decision, with one
-  standing exception he gave at 23:45: a compile-forced new field added to
+  standing exception he gave at about 20:56: a compile-forced new field added to
   an existing test builder, with no assertion changed and the reviewer
   confirming it, goes ahead without asking, even in a file outside the
   ticket's scope. It is written into
@@ -65,14 +76,14 @@ Two rules he gave the 19:34 session that do carry over:
   and goes to him; he said yes that way for FZ-06b's three FZ-06a tests.
   Tell every worker to list the test code it touched, and every design
   worker to name forced test edits per ticket.
-- **Pace and updates.** At 23:45, in his words: "keep me updated. backend
+- **Pace and updates.** At about 20:56, in his words: "keep me updated. backend
   is still vital, but its more important that we move forward in a good
   pace. But keep me updated, and ask me about decisions that are bigger".
   So: keep dispatching in plan order without waiting on him, rule on the
   small questions, tell him what landed and what is running in a few lines
   at each merge, and stop for him only on design decisions, contract
   changes, anything on screen, and test edits beyond the exception above.
-- **Where his testing matters.** At 23:30, in his words: "these 'small'
+- **Where his testing matters.** At about 20:53, in his words: "these 'small'
   tickets like these cache fixes, coverage etc, are not much for me to test
   in the actual software, i think you're tests tell a bigger and more true
   picture of the situation. I think my opinions will matter more when we
@@ -96,7 +107,7 @@ usage limit and ask Andreas for routing.
 In order of weight:
 
 1. **Nothing blocks the running work.** He accepted the FZ-10 owner items O1
-   to O5 as recommended at 22:55 ("ok, all sound good to me") and allowed
+   to O5 as recommended at about 20:43 ("ok, all sound good to me") and allowed
    the issues FZ-10a #47, FZ-10b #48 and FZ-10c #49, which now exist in
    Backlog. O2 and O4 are amendments 1 to 6 in
    [freshness-contract.md](freshness-contract.md). O1's words and look are
@@ -122,18 +133,23 @@ In order of weight:
 
 ## Last verdicts, and what is on disk uncommitted
 
-- **FZ-06d (#40): in review since 00:14 on 2026-10-02.** Uncommitted in
-  `.claude/worktrees/fz-06d` on `fix/fz-06d-histogram-reuse-key` (base
-  `24b2210`): `src/main.rs`, `src/model.rs`, and one `daily_key: None,` line
-  in each of six existing test builders (`model.rs` `make_repo`, `app.rs`
-  `make_app`, `main.rs` `test_repo`, and `repo` in `ui/badges.rs`,
-  `ui/compact.rs`, `ui/detail.rs`), which Andreas allowed at 23:45. +343 -8;
-  792 passed, 0 failed, 1 ignored by the worker's run. Its report is on #40.
-  A fresh `fz-reviewer` is running and confirms that those six lines are the
-  only change to existing test code. On acceptance: commit the reviewed
-  diff, push, CI on the branch, combined checks, merge, Done.
-- **FZ-09 (#22): draft in review since 00:10 on 2026-10-02.**
-  `docs/coverage-cache-design.md`, 886 lines, untracked in
+- **FZ-05b (#32): worker running since 21:13, nothing reviewed.** Base
+  `e4e3f42`, branch `fix/fz-05b-owner-aware-discovery`, worktree
+  `.claude/worktrees/fz-05b`. Allowed: `src/discovery.rs`, `assemble_view`'s
+  `Wanted` construction in `src/main.rs`, the comparison key on `RemoteRef`
+  in `src/model.rs`, and `owner: None` in existing `FoundRepo` test literals.
+  When it reports: a separate `fz-reviewer` who checks the fixture hunks line
+  by line; then commit, push, CI, combined checks, merge. **Its merge opens
+  the no-install span** (see Next steps), and the coordinator then edits
+  invariant change 1 into `CLAUDE.md`.
+- **FZ-09 (#22): worker writing revision 2 since 21:13.** The first review
+  (fresh `fz-reviewer`) requested changes: twelve corrections, among them a
+  temporary-file name that collides inside one process, a legacy-file rule
+  that voided per-account isolation, a launch that waited on `gh` with no
+  bound, and two tickets that would fail clippy as written. Findings and the
+  coordinator's ruling on each are on #22 in full. Next: the same reviewer
+  re-reviews narrowly.
+  `docs/coverage-cache-design.md` is untracked in
   `.claude/worktrees/fz-09` (fast-forwarded to `aa66577`, so it sees the
   amended freshness contract). The coordinator ruled on its options C1 to
   C9, all as the draft recommended, recorded in full on #22: the account key
@@ -143,15 +159,23 @@ In order of weight:
   superseded cache files go after 30 days unwritten (C4); no pagination by
   default (C5); order after FZ-05f is FZ-10a, FZ-09c, FZ-09b, FZ-10b,
   FZ-10c, FZ-09d, with FZ-09a (`cache.rs` only) free to run now (C8). The
-  document still says "for the coordinator". A fresh `fz-reviewer` is
-  running and was asked to attack C1. Next: one worker pass applies the
-  rulings and the findings, a narrow re-review, land it as FZ-10 was
-  landed, then the owner items go to Andreas together: one saved copy per
-  account with a token fingerprint in the file name (O1), the upgrade
-  migration (O2), the "50 of 95 repos" note (O3), dimmed rows the last poll
-  missed (O4), an account switch rebuilding the list (O5), the signed-out
-  launch (O7), the PR count (O8), and the `CLAUDE.md` and contract changes.
-  The worker's raw responses in the scratchpad hold private repo names.
+  reviewer found each ruling sound, C1 on conditions now applied. After the
+  re-review: land it as FZ-10 was landed, then the owner items go to Andreas
+  together: one saved copy per account, with his choice between a token
+  fingerprint in the file name, a cryptographic hash through a new
+  dependency, or keying by login (O1); the upgrade migration (O2); the "50
+  of 95 repos" note (O3); dimmed rows the last poll missed (O4); an account
+  switch rebuilding the list (O5); the signed-out launch (O7); the PR count
+  (O8); and the `CLAUDE.md` and contract changes. O6 was withdrawn: its test
+  edits fall under the standing exception. The worker's raw responses in
+  the scratchpad hold private repo names.
+- **FZ-13 (#26) split, asked for by Andreas at about 21:00:** break it into
+  small, bounded M3 tickets and propose an order starting with one or two
+  quick visible wins (he named the intro off by default and the normal-font
+  fallback), and bring them to him before dispatching anything. A read-only
+  scan of the UI code is running to ground the split; the split itself is
+  the coordinator's. No M3 ticket exists yet and none may be dispatched
+  before he has seen the list.
 - **#45:** uncommitted `ci.yml` and `docs.yml` in
   `.claude/worktrees/issue-45`; reviewer verdict blocked on a repository
   setting, diff judged correct. Parked by Andreas until the repository is
