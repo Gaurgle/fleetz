@@ -148,10 +148,11 @@ worktree holds whatever it has written so far, uncommitted. Next, in order:
 No other ticket is authorized. FZ-03 needs the freshness contract agreed
 before it is Ready.
 
-This file is uncommitted in the main checkout. In the session of 2026-10-01
-the commit of this file to `main` was refused by the client's permission
-check as an action Andreas had not asked for in that session, so it waits
-for him: either he commits it, or he tells the coordinator to.
+This file is committed and pushed through `89946f5`. A Claude session's
+permission check can refuse a docs commit to `main` that Andreas did not ask
+for in that session, whatever this file says. On 2026-10-01 he allowed
+coordination-doc commits and pushes to `main` for that session only; a new
+session asks him once before its first one.
 
 ## Running the next ticket
 
