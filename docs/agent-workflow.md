@@ -222,6 +222,17 @@ Documentation-only tickets need `scripts/check-docs.sh` and a content review,
 not unrelated Rust runs.
 Performance claims need comparable measurements, not just passing tests.
 
+Editing an existing test is Andreas's decision, with one standing exception
+he gave on 2026-10-01: when a new field on a struct stops an existing test
+builder or helper from compiling, the worker may add that field to it (set
+to `None`, a default, or bound as `_`), even in a file outside the ticket's
+scope. No assertion may be changed, removed or weakened, and nothing else in
+the test may move. The worker lists every existing test function it touched
+and the line added; the reviewer confirms from the diff that nothing else
+changed. Any other edit to an existing test (an assertion, a fixture's
+behaviour, a rename, a rewrite to fit a new API) still stops the ticket and
+goes to him.
+
 The baseline from the 2026-09-30 review was 643 tests passed and 1 ignored;
 this is historical evidence, not a substitute for validation at the new base.
 
