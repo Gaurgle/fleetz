@@ -69,12 +69,16 @@ everything else is unbuilt, and its line references drift.
 
 - **One feature branch and worktree per implementation ticket.** Branch from
   the agreed `main` commit, for example `fix/fz-02-preserve-github-state`.
-  PRs are optional. Andreas commits reviewed work on its branch and merges
-  into `main`; agents do not implement tickets directly in the main checkout.
-- **Ship policy:** prepare and review the branch changes, then validate the
-  combined result against current `main` (`cargo fmt --check`,
-  `cargo clippy --all-targets -- -D warnings`, `cargo test`). Present commit
-  and integration commands for Andreas to run. Do not commit, merge or push.
+  PRs are optional. Agents do not implement tickets directly in the main
+  checkout.
+- **Ship policy:** this specializes the house rule above for the release
+  effort. The coordinator commits the reviewed diff on the ticket branch,
+  pushes it, validates the combined result against current `main`
+  (`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+  `cargo test`) and merges under the safe-merge rule in
+  `docs/agent-workflow.md`. Workers and reviewers never commit. When a
+  condition of that rule fails, or outside the release effort, present the
+  commands for Andreas. `cargo install`, tags and releases stay his.
 - **Release policy:** prepare the requested version bump and What's Changed
   notes, run the release checks, and present commands for Andreas. The
   `release.yml` workflow publishes when he pushes the version tag. Never

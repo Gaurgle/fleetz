@@ -80,9 +80,9 @@ next FZ-02 pilot. GitHub remains the live status source.
    including its ticket and rules.
 2. One implementation agent reproduces and fixes FZ-02 with regression tests.
 3. A separate reviewer checks the exact result against the same base.
-4. Andreas commits accepted work on the feature branch. Coordinator verifies
-   the combined result against current `main` in an isolated checkout and
-   runs required checks. Andreas reviews and performs the merge and push.
+4. Coordinator commits the accepted diff on the feature branch and pushes it,
+   verifies the combined result against current `main` in an isolated checkout,
+   and merges under the safe-merge rule in [agent-workflow.md](agent-workflow.md).
 5. Record what the pilot cost in time, usage where available, review findings
    and rework. Adjust task size before allowing two implementation workers.
 
@@ -140,9 +140,9 @@ planning issues link related work rather than duplicating those scopes.
 ## Completion rule
 
 An agent finishing a turn is not a completed ticket. Done requires accepted
-criteria, independent review, combined checks, the owner's feature-branch
-commit and integration into `main`. Record the commit and verification evidence.
-No agent commits, merges,
-pushes, publishes issues, changes CI, or releases as a side effect of this plan.
+criteria, independent review, combined checks, the feature-branch commit and
+integration into `main`. Record the commit and verification evidence. Commits,
+pushes and merges follow the safe-merge rule; no agent publishes issues,
+changes CI, tags or releases as a side effect of this plan.
 
 See [agent-workflow.md](agent-workflow.md) for handoff templates and controls.

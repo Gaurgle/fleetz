@@ -2,14 +2,17 @@
 
 This is a project-specific working agreement for the tickets in
 [release-plan.md](release-plan.md). It does not authorize implementation,
-external publication, dependencies, CI changes, commits or pushes by itself.
+external publication, dependencies or CI changes by itself. Commits, pushes and
+merges follow the safe-merge rule below.
 The [Fleetz public release Project](https://github.com/users/Gaurgle/projects/1)
 is authoritative for live status, priority, worker and reviewer assignment.
 
 ## Roles and limits
 
-- Andreas owns priorities, interaction acceptance, commits, merges, pushes and release.
-- Coordinator owns architecture, ticket readiness, assignments and integration.
+- Andreas owns priorities, interaction acceptance, what he installs and runs,
+  tags and releases.
+- Coordinator owns architecture, ticket readiness, assignments and integration,
+  including commits, pushes and merges under the safe-merge rule.
 - Worker implements one assigned ticket and supplies evidence.
 - Reviewer independently evaluates that ticket's exact diff and criteria.
 
@@ -156,10 +159,11 @@ contract, handoff templates and limits in this document apply unchanged.
    transport new files. Do not commit as a shortcut for handing off work.
 6. Review the exact diff, including added files. If changes follow review,
    re-review the changed portion and affected acceptance criteria.
-7. Andreas commits accepted work on its feature branch. Coordinator verifies
+7. After the reviewer accepts, the coordinator commits exactly the reviewed
+   diff on the ticket branch and pushes the branch, which runs CI. It verifies
    integration against current `main` in an isolated checkout, reports conflicts
-   and runs checks on the combined result. Andreas performs the final merge and
-   push. If `main` moves, revalidate the changed integration result before merging.
+   and runs checks on the combined result, then merges under the safe-merge
+   rule. If `main` moves, revalidate the changed integration result before merging.
    Worktree checks alone do not establish integration safety.
 8. Retain the worktree until the result is integrated or explicitly discarded.
    Do not remove files/worktrees without authorization.
@@ -167,6 +171,38 @@ contract, handoff templates and limits in this document apply unchanged.
 PRs are optional. The release Project and planning tickets are published. New
 external publication remains a separate explicit action unless already
 authorized for the current task.
+
+## Safe-merge rule
+
+Andreas delegated commits, pushes and merges to the coordinator on 2026-10-01.
+A merge does not change the `fleetz` he runs: that binary changes only when he
+runs `cargo install --path .`, which stays his. `main` is the staging line; the
+installed binary and version tags are the release line.
+
+The coordinator may merge a ticket branch into `main` and push when all hold:
+
+- A separate reviewer session accepted the exact diff that was committed.
+- CI is green on the pushed ticket branch at that commit.
+- fmt, clippy with warnings denied and the full suite pass on the combined
+  result with current `main`.
+- The ticket changes no dependency, CI config, persistence or cache format, or
+  external contract, unless Andreas approved that for this ticket.
+- The ticket's acceptance does not rest on Andreas's judgment. Interaction,
+  layout and look need him to try the branch build first.
+
+Merge with `git merge --no-ff` so one ticket is one revertable unit. Stage only
+the ticket's files, never `git add -A`. After the push, confirm CI on `main`;
+if it is red, revert the merge, push the revert and report. If a condition
+fails or is unclear, stop at Ready to integrate and ask.
+
+The coordinator commits coordination docs (the handoff, the plan, this file)
+straight to `main`. Workers and reviewers never commit. No agent tags,
+releases, runs `cargo install`, force-pushes, rewrites pushed history or
+deletes remote branches.
+
+At Ready to integrate and after each merge, tell Andreas how to try the build:
+`cargo run --release --manifest-path <worktree>/Cargo.toml` before the merge,
+`cargo run --release` from `main` after it.
 
 ## Validation contract
 
@@ -250,5 +286,5 @@ Decision needed: none.
 
 Use actual evidence, not optimistic percentages. Keep the board current when
 an assignment, blocker or review verdict changes. Ready to integrate is still
-unfinished; Done includes the owner's commit, integration into main and
-combined verification.
+unfinished; Done includes the commit, integration into main and combined
+verification.

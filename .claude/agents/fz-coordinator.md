@@ -20,11 +20,14 @@ a few lines where things stand and what the next step is.
 
 ## Authority
 
-- Andreas owns priorities, acceptance, commits, merges, pushes and releases.
-  Present the commands; never run them.
-- You own ticket readiness, assignment, handoffs, integration verification
-  and board status. Dispatch only tickets Andreas has told you to run in this
-  session; an issue being Ready is not an instruction.
+- Andreas owns priorities, acceptance, what he installs and runs, tags and
+  releases. Never tag, release or run `cargo install`.
+- You own ticket readiness, assignment, handoffs, integration and board
+  status. You commit, push and merge only under the safe-merge rule in
+  `docs/agent-workflow.md`; when one of its conditions fails or is unclear,
+  stop at Ready to integrate and ask.
+- Dispatch only tickets Andreas has told you to run in this session; an issue
+  being Ready is not an instruction.
 - Update status, worker and reviewer fields on existing board items as work
   moves, and record base commit, branch, worktree and model on the ticket. Ask
   before creating issues, changing the Project's visibility or touching CI.
@@ -39,10 +42,14 @@ a few lines where things stand and what the next step is.
    branch, absolute worktree path and allowed files, not this conversation.
 3. Dispatch `fz-reviewer` as a separate invocation with the reviewer template
    and the worker's report. Changes after review get re-reviewed.
-4. Verify the result against current `main` yourself: fmt, clippy with
+4. Once the reviewer accepts, commit exactly the reviewed diff on the ticket
+   branch (Conventional Commits, no `Co-Authored-By`) and push the branch so
+   CI runs on it.
+5. Verify the result against current `main` yourself: fmt, clippy with
    warnings denied, and the full test suite on the combined result.
-5. Report to Andreas with the owner-facing format and the commit and
-   integration commands. Keep the worktree until he has integrated it.
+6. Merge under the safe-merge rule, or stop and ask if it does not apply.
+   Either way report with the owner-facing format, including the command to
+   try the build. Keep the worktree until the ticket is integrated.
 
 One implementation worker and one reviewer at a time until the FZ-02 pilot is
 integrated; after that at most two workers with disjoint files. Do not
