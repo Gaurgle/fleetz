@@ -259,6 +259,25 @@ Dispatched on 2026-10-01 under the standing instruction.
   merged nothing else that touches `src/main.rs`, `src/git.rs`, `src/app.rs`,
   `src/model.rs` or the status display can start.
 
+## FZ-08: reshaped, not started
+
+On 2026-10-01 Andreas asked for FZ-08 (#21) to be reshaped into a read-only
+GitHub Project board view inside fleetz: columns and table, with status,
+priority, milestone, worker and ticket reviewer per item; `Enter` opens a
+ticket's details (body, comments, fields, labels, linked PRs, dependencies)
+in the inspector with an expand to the full pane; summary fields for the
+list, body and comments fetched on open ("Enrich-on-select" in `ideas.md`);
+editing through the `gh` CLI, the browser only as a fallback; a slower poll
+than repo state. **He said not to start it.**
+
+The issue body is rewritten with the scope, the measured GraphQL cost (every
+query costs the floor of one point; field values through `fieldValueByName`
+keep the list at 100 nodes), six proposed tickets and the dependencies. The
+coordinator's proposed placement, which he has not confirmed: the design
+ticket right after M1 alongside M2, data and the table as the first item of
+M4, columns and ticket details after M3's pane work, the `gh` handoffs after
+FZ-16. No sub-issues are created and nothing is dispatched.
+
 ## Freshness contract for FZ-03: accepted
 
 [freshness-contract.md](freshness-contract.md) is the contract FZ-03

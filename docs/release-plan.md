@@ -118,7 +118,7 @@ direction without acting as implementation contracts:
 | ID | Planning issue | Milestone |
 |---|---|---|
 | [FZ-07](https://github.com/Gaurgle/fleetz/issues/20) | Monitor assigned GitHub issues across repositories | M4 |
-| [FZ-08](https://github.com/Gaurgle/fleetz/issues/21) | Preview GitHub Project status across the fleet | M4 |
+| [FZ-08](https://github.com/Gaurgle/fleetz/issues/21) | Read-only GitHub Project board view (columns, table, ticket details) | M4 |
 | [FZ-09](https://github.com/Gaurgle/fleetz/issues/22) | Make GitHub coverage and cache isolation explicit | M1 |
 | [FZ-10](https://github.com/Gaurgle/fleetz/issues/23) | Define GitHub API budget and retry behavior | M1 |
 | [FZ-11](https://github.com/Gaurgle/fleetz/issues/24) | Coordinate refresh work with a shared scheduler | M2 |
