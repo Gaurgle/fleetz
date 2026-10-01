@@ -1,12 +1,14 @@
 # GitHub API budget and retry design (FZ-10)
 
 Status: design for [FZ-10 / #23](https://github.com/Gaurgle/fleetz/issues/23),
-**revision 3**, answering the first review (findings F1 to F7 and its smaller
-list) and the re-review. **Architectural decisions A1 to A7 taken by the
+**revision 4**, answering the first review (findings F1 to F7 and its smaller
+list) and the re-reviews; accepted by the reviewer on 2026-10-01. **Architectural decisions A1 to A7 taken by the
 coordinator (`claude-fable-5-1`) on 2026-10-01**, including its rulings of the
 same day on A3, A5 and A6, which revision 2 had raised
-([Decisions](#decisions)). Astra has not reviewed. The owner's items are
-open and are presented to Andreas together ([Owner: open](#owner-open)).
+([Decisions](#decisions)). Astra has not reviewed. **The owner's items O1 to
+O5 were accepted by Andreas on 2026-10-01 as recommended**
+([Owner: open](#owner-open), which keeps its heading and its text as they
+were put to him).
 
 Written against `main` at `f8a54c0`
 (`f8a54c0bfabaf1161f042d08893121f1173f4469`), with FZ-03 and FZ-04
@@ -1007,6 +1009,12 @@ Every later query change (FZ-05 series, FZ-07, FZ-08, FZ-09) follows
 - **A7 `R` while a load runs.** Ignored, in FZ-10b.
 
 ### Owner: open
+
+**Answered on 2026-10-01: Andreas accepted O1 to O5 as recommended** ("all
+sound good to me"). O1 is accepted for its information content; its words and
+look are still his on the FZ-10c branch build. O2 and O4 are recorded as
+amendments in [freshness-contract.md](freshness-contract.md). O5 clears
+FZ-10a's four test edits. The items are kept below as they were put to him.
 
 Presented to Andreas together. Each says what he would see or wait for.
 

@@ -7,6 +7,13 @@ the end. Written by the coordinator (`claude-fable-5-1`) against `main` at
 has not reviewed it; a second opinion is still welcome, and a disagreement
 goes to Andreas rather than into the code.
 
+**Amended on 2026-10-01** by Andreas's acceptance of owner items O2 and O4 of
+[api-budget-design.md](api-budget-design.md) (FZ-10). The amendments are
+listed in [Amendments](#amendments) and each takes effect when the ticket
+named there lands. Until then the code implements the text as first written,
+which the amended text also allows. Rules 6, 9 and 10 and the vocabulary
+carry a pointer.
+
 Scope: the one GitHub dataset (repos, PRs, CI, contribution calendar) that a
 single GraphQL call returns. Per-repo `git fetch` outcomes are FZ-04 and reuse
 the vocabulary here. Nothing in this contract changes the cache file format,
@@ -43,7 +50,8 @@ Read from the code, not executed. Line numbers are at `6c72926` and drift.
 - **Outcome**: how the most recent attempt ended. `Success`, or `Failed` with
   a kind: `Offline` (transport: DNS, TLS, no route), `Http` (non-2xx status),
   `Api` (GraphQL `errors`, the rate limit among them), `Auth` (no token from
-  `gh`), `Malformed` (unreadable body), `TimedOut` (given up on).
+  `gh`), `Malformed` (unreadable body), `TimedOut` (given up on). Two kinds
+  are added by [amendment 3](#amendments).
 - **Data time**: when the data now on screen left GitHub. For a network answer
   it is the moment the answer was accepted. For a cached payload it is the
   cache file's write time, which is the same thing because only an accepted
@@ -90,6 +98,7 @@ Rules that follow, each one a test:
 6. **Every finished attempt advances the retry clock, including a failure and
    a give-up.** The next automatic attempt comes one normal interval later.
    No immediate retry and no backoff scheme: backoff and budget are FZ-10.
+   Amended: see [amendment 1](#amendments).
 7. **A success clears the failure.** `outcome` becomes `Success`, `data_time`
    becomes now, and the header marker goes away on the same frame.
 8. **A cache-served launch is always followed by one attempt**, with watch on
@@ -98,10 +107,12 @@ Rules that follow, each one a test:
 9. **While `outcome` is `Failed`, the poll interval is the configured one.**
    The 15 second floor for a `Pending` repo applies only while polls succeed,
    since a frozen `Pending` says nothing about what CI is doing now.
+   Amended: see [amendment 2](#amendments).
 10. **Data time never goes backwards.** A poll given up on after 60 seconds is
     recorded as `Failed(TimedOut)`. If its answer arrives later, it is applied
     only when no newer attempt has been applied since; otherwise it is
     discarded. Cancelling the hung request and a client timeout are FZ-11.
+    Amended: see [amendment 4](#amendments).
 
 ## Transitions
 
@@ -189,8 +200,56 @@ coordinator's recommendations.
 - **D6. Per-row staleness.** Header only in FZ-03. The blinking `Pending` lamp
   on stale data is raised under FZ-13.
 
+## Amendments
+
+Accepted by Andreas on 2026-10-01 as owner items O2 and O4 of
+[api-budget-design.md](api-budget-design.md), which holds the reasoning, the
+numbers and the scenarios. Each amendment names the ticket that puts it into
+the code.
+
+1. **Rule 6: at least one interval.** "The next automatic attempt comes one
+   normal interval later" becomes "at least one normal interval later": it
+   may be longer under backoff, a rate limit or a low budget. Both guarantees
+   stay: every finished attempt advances the retry clock, and there is never
+   an immediate retry. Backoff is floored at the interval. Takes effect with
+   FZ-10b.
+2. **Rule 9: at least the configured interval.** "While `outcome` is `Failed`,
+   the poll interval is the configured one" becomes "at least the configured
+   one". The first failure still waits exactly the configured interval; after
+   that the wait doubles per consecutive failure up to a cap of 8 to 12
+   minutes. `Offline` and `Auth` are the exception and keep the configured
+   interval. The rule's purpose, no `Pending` floor while failing, is kept and
+   extended: a stretched or paused pace also suspends the floor and the push
+   shortcut. Takes effect with FZ-10b.
+3. **Vocabulary: two failure kinds.** `Server` (a 5xx answer) and `Refused`
+   (credentials or permissions refused: a 401, or a 403 that is not a limit)
+   join the kinds. "A rate limit is never reported as offline" holds; a rate
+   limit can now be an `Http` failure (a 403 or 429) as well as an `Api` one,
+   and both read as rate limited. A connection that cannot be opened,
+   including a connect timeout, is `Offline`. Takes effect with FZ-10a.
+4. **Rule 10 and D4: the client timeout is FZ-10's.** "Cancelling the hung
+   request and a client timeout are FZ-11" becomes "cancelling the hung
+   request is FZ-11; the client timeout (30 s in total, 10 s to connect) is
+   FZ-10". The 60 second give-up stays as the backstop. Takes effect with
+   FZ-10a.
+5. **Transitions: a manual refresh under a known rate limit sends nothing.**
+   One row is added. Rule 1 and the definition of an attempt are unchanged:
+   nothing was sent, so nothing is recorded. Takes effect with FZ-10b.
+
+   | Event | Rows | `data_time` | `last_attempt` | `outcome` | Cache file |
+   |---|---|---|---|---|---|
+   | `r` or `R` under a known limit, no poll in flight | `r`: local state only. `R`: rebuilt from the dataset in memory | Unchanged | Unchanged | Unchanged | Untouched |
+
+6. **What the user sees: one line.** `r` or `R` under a known limit says in
+   its status line that GitHub is rate limited and when it resumes, instead
+   of `Refreshing…` or `Reloaded`. The wording, and the header's words for a
+   slowed, paused or rate limited poll (O1), are settled on the FZ-10c branch
+   build.
+
 ## Not in this contract
 
-Budget and backoff (FZ-10), cache isolation by account and host (FZ-09), a
-shared scheduler and cancellation (FZ-11), per-repo fetch outcomes (FZ-04),
-and partial coverage of the dataset (FZ-09).
+Budget and backoff beyond the amendments above
+([api-budget-design.md](api-budget-design.md)), cache isolation by account
+and host (FZ-09), a shared scheduler and cancellation (FZ-11), per-repo fetch
+outcomes ([fetch-outcome-contract.md](fetch-outcome-contract.md)), and
+partial coverage of the dataset (FZ-09).
