@@ -61,9 +61,9 @@ assignment.
 
 Done and closed on 2026-10-01: FZ-02 (#15), FZ-01 (#14), FZ-05 (#18),
 FZ-06 (#19), FZ-03 (#16), FZ-05a (#31), FZ-06a (#37), issue #1 and issue
-#44. Ready to integrate and waiting for Andreas: FZ-04 (#17) and #45. In
-progress: #42 (resumed). Interrupted and waiting to be dispatched again:
-FZ-10 (#23) and FZ-09 (#22). All are described below.
+#44 and #42. Waiting for Andreas: FZ-04 (#17, his test found a bug, see
+below) and #45 (a setting decision). In review: FZ-10 (#23). Waiting to be
+dispatched again: FZ-09 (#22). All are described below.
 No release has started.
 
 Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
@@ -244,10 +244,38 @@ time. Order chosen by the coordinator: FZ-04 first (P0, and it needs Andreas
 to look at the result, which is easiest while he is active), then FZ-06b,
 e, c, d, then the FZ-05 series once he has signed off its invariant changes.
 
-## FZ-04: Ready to integrate, waiting for Andreas
+## FZ-04: Ready to integrate, owner testing found a classification bug
 
-Reviewed, committed and pushed, **not merged**: how a failed fetch looks on a
-row and in the detail pane is Andreas's to accept on the branch build.
+Reviewed, committed and pushed, **not merged**. Andreas tried the branch
+build on 2026-10-01 and it is **not accepted yet**:
+
+- With Wi-Fi off and `f` on `fleetz` (an SSH remote), the row showed
+  `⚠ fetch` and the detail `fetch failed: git error` over git's generic
+  `fatal: Could not read from remote repository.`. It should read
+  `unreachable`: `git::classify_fetch_error` did not recognise what ssh
+  printed. He was asked to paste `git -C ~/repos/fleetz fetch 2>&1 | head -5`
+  with Wi-Fi off so the exact text can be added, together with a general
+  rule that any `ssh: connect to host ...` or `ssh: Could not resolve
+  hostname ...` line means unreachable. That is a change after review: the
+  worker edits on top of `4839891`, the reviewer re-reviews the hunk, a
+  second commit follows, then he looks again.
+- In an earlier run he saw `⚠ timeout` on three rows. Not reproduced: the
+  same hardened fetch on 44 repos outside the app took under 9 s each, and
+  two background runs of the build (one and five minutes) showed fetches
+  completing in about a second with no warnings. Reproduced separately:
+  ssh to a host it cannot reach hangs for over a minute with no error, and
+  fleetz's 30 s limit then reports a timeout. So the three rows were most
+  likely SSH remotes while the network was down or just toggled; he was
+  asked whether that was the case.
+- Candidate follow-up, not ticketed: pass ssh a connect timeout and batch
+  mode for fetches, so an unreachable SSH remote fails fast and never waits
+  on a prompt nobody can see. It changes how ssh is invoked and may clash
+  with a user's own `GIT_SSH_COMMAND`, so it is its own ticket.
+- The probe clone `~/repos/fz-probe` he created for the test was removed at
+  his request after checking it held nothing of its own.
+
+How a failed fetch looks on a row and in the detail pane stays his to
+accept on the branch build.
 
 - Ticket commit `48398919d8d97afbd23c05e8481130ae8b1fef9c` on
   `fix/fz-04-fetch-outcomes`, base `3ca7ae5`, worktree
@@ -299,10 +327,17 @@ What each left behind, checked on disk:
 - FZ-04 worker (fix R4): nothing applied. `git::redact_userinfo` still had
   the byte-index scheme scan that panics on a multi-byte character before
   the scheme. Resumed with the same instruction.
-- FZ-10 and FZ-09 workers: nothing written. Their worktrees are clean at
-  base `6794962`. To be dispatched again, one at a time, after FZ-04.
-- #42 worker: nothing in the worktree; a scratch reproduction clone exists
-  under the session scratchpad. To be dispatched again.
+- FZ-10 worker: nothing written at the cut-off. Resumed later; its draft
+  `docs/api-budget-design.md` is untracked in `.claude/worktrees/fz-10`,
+  the coordinator's decisions A1 to A7 are recorded in it, and it is with
+  `fz-reviewer`. Owner items O1, O2 with A6, O3 and an amendment to
+  freshness rule 6 go to Andreas together after the review.
+- FZ-09 worker: nothing written; worktree clean at base `6794962`. To be
+  dispatched again, after FZ-10 is through review.
+- #42 worker: resumed and finished. #42 is Done and closed: ticket commit
+  `497ee62`, merge `d564fc7`. repoz now runs from the parent of the scan
+  root in the parity tests; the first revision ran it from inside the scan
+  root, which the reviewer showed would hide a repoz regression.
 - #45 worker (`fz-small`): finished before the limit. Its change is
   uncommitted in `.claude/worktrees/issue-45` and is with `fz-reviewer`.
 
