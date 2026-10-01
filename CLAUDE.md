@@ -57,6 +57,7 @@ and blink, watch mode re-sweeps on an interval.
 | `docs/release-plan.md` | Release milestones, ticket status and dispatch order |
 | `docs/agent-workflow.md` | Shared worker/reviewer instructions and integration rules |
 | `docs/agent-handoff.md` | Coordinator state between leads: read first when taking over |
+| `docs/performance-baseline.md` | Measured startup, idle, refresh and input baseline, with fixtures and commands to rerun |
 | `.claude/agents/` | Claude-native workforce: `fz-coordinator`, `fz-worker`, `fz-reviewer`, `fz-small` |
 | `docs/superpowers/` | Dated plans and specs, paired, for landed work |
 
