@@ -2,9 +2,9 @@
 
 Last written 2026-10-01 23:20 by `claude-fable-5-1`. Merged today in this
 session: FZ-04, FZ-06b, FZ-06c and the FZ-10 design; FZ-06e closed as
-delivered by FZ-06b. **Two workers are running: FZ-06d (#40) in
-`.claude/worktrees/fz-06d` and the FZ-09 (#22) design draft in
-`.claude/worktrees/fz-09`. Neither has reported.** Read this file, the repository
+delivered by FZ-06b. **One worker is running: the FZ-09 (#22) design draft in
+`.claude/worktrees/fz-09`, not yet reported. FZ-06d (#40) is stopped, blocked
+on a decision from Andreas about test builders.** Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md),
 [release-plan.md](release-plan.md) and
 [first-wave-tickets.md](first-wave-tickets.md) before acting. GitHub (the
@@ -111,14 +111,19 @@ In order of weight:
 
 ## Last verdicts, and what is on disk uncommitted
 
-- **FZ-06d (#40): worker running since 23:13, nothing reviewed.** Base
+- **FZ-06d (#40): worker stopped at 23:35, blocked on Andreas.** Base
   `24b2210`, branch `fix/fz-06d-histogram-reuse-key`, worktree
-  `.claude/worktrees/fz-06d`, allowed files `src/main.rs`, `src/model.rs`,
-  `src/contributions.rs` if needed. The ticket adds a field next to `daily`
-  on `RepoStatus`; the worker was told to look for a form that forces no
-  edit to existing tests and to stop and report if none exists. When it
-  reports: a separate `fz-reviewer`, then commit, push, CI, combined checks,
-  merge.
+  `.claude/worktrees/fz-06d`. The new field next to `daily` on `RepoStatus`
+  forces one `None` line into six existing test builders (`model.rs`
+  `make_repo`, `app.rs` `make_app`, `main.rs` `test_repo`, and `repo` in
+  `ui/badges.rs`, `ui/compact.rs`, `ui/detail.rs`), four of them outside the
+  ticket's files; no assertion changes. Asked at 23:37, together with the
+  standing form: may a compile-forced new field in a test builder, with no
+  assertion changed and the reviewer confirming it, go ahead without asking
+  each time. On disk, uncommitted: `src/main.rs`, five new tests, E7 and E14
+  failing on the base by design (789 passed, 2 failed, 1 ignored). Details
+  on #40. On a yes: resume the same worker with the six builders allowed,
+  then a separate `fz-reviewer`, commit, push, CI, combined checks, merge.
 - **FZ-09 (#22): worker drafting since 22:35.** Worktree
   `.claude/worktrees/fz-09` fast-forwarded to `769c1fd`; output
   `docs/coverage-cache-design.md`, untracked; at most 6 live GraphQL
