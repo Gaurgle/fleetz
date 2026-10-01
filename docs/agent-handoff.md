@@ -60,8 +60,9 @@ setup check still open. GitHub is authoritative for current status and
 assignment.
 
 Done and closed on 2026-10-01: FZ-02 (#15), FZ-01 (#14), FZ-05 (#18) and
-issue #1. FZ-03 (#16) is Ready to integrate and waits for Andreas to try its header.
-In review: FZ-06 (#19) and FZ-05a (#31). All are described below.
+issue #1. Also done and closed: FZ-06 (#19) and FZ-05a (#31). FZ-03 (#16) is Ready to
+integrate and waits for Andreas to try its header; he was given the command
+and a list of what to look for. All are described below.
 No release has started.
 
 Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
@@ -167,11 +168,13 @@ ticket), e #35 (`merge_sources`), f #36 (pass 3 by path only). Optional g,
 h, i, j have no issues. b to f run after FZ-03 is integrated and serially
 with FZ-04; only FZ-05a can run beside FZ-03.
 
-FZ-05a (#31) is in progress: base `69df13300bbda2ee322e07065af61b9de7f71250`,
-branch `feat/fz-05a-remote-ref`, worktree `.claude/worktrees/fz-05a`, worker
-`fz-worker` (`claude-opus-5-5`, medium), allowed file `src/model.rs`. Next:
-review, commit, push, combined checks, merge under the safe-merge rule, Done
-and close. It needs nothing from Andreas.
+FZ-05a (#31) is Done and closed: ticket commit `5972d50`, merge `8c1546c`,
+`src/model.rs` only. `RemoteRef { host, owner, name }` and its parser exist;
+`repo_from_remote_url` is built on it and returns what it always did (the
+reviewer compared old and new over ten million inputs). The lowercased
+comparison key moved to FZ-05b (#32), because clippy with warnings denied
+rejects an uncalled method in a binary crate; #32 has a comment adding
+`src/model.rs` to its files for that method.
 
 Before those tickets run, Andreas must see two things, both in the document:
 four `CLAUDE.md` invariant texts change (section 3.10), and FZ-05f changes
@@ -187,25 +190,23 @@ Its index row in `CLAUDE.md`, and rows for the two contracts, are added by
 the coordinator after the FZ-01 branch merges, since that branch adds a row
 to the same table.
 
-## FZ-06: in progress
+## FZ-06: Done, design merged
 
-Dispatched on 2026-10-01 once FZ-01's timing runs were over.
+[cache-invalidation-design.md](cache-invalidation-design.md) is on `main`:
+ticket commit `f2f3aa7`, merge `ff56a0d`, #19 Done and closed. Two review
+passes, final verdict accepted; the reviewer reran the documented
+reproduction and found two gaps the worker had missed.
 
-- Base `6dd260f9a253dc2ba37b0efe6c1315fecd0dde60`, branch
-  `docs/fz-06-cache-invalidation`, worktree `.claude/worktrees/fz-06`.
-- Worker `fz-worker` (`claude-opus-5-5`, medium). Allowed file:
-  `docs/cache-invalidation-design.md`. Production code is read-only; mutation
-  experiments run in temporary repositories under the session scratchpad.
-- State when last written: in Review. The document (untracked in the
-  worktree) confirms eleven gaps where a gated product's answer changed and
-  the `WorkKey` did not, the everyday `git push` among them, and adopts a
-  ref-content signature built from the `for-each-ref` calls the sweep
-  already makes. The coordinator's decisions OD1 to OD7 are recorded in it;
-  none needs Andreas. `fz-reviewer` is repeating gap G1 from the document.
-- Board: #19 Review, assignment on the issue.
-- Next: on acceptance commit, push, merge, Done and close; then create the
-  fix tickets FIX-A to FIX-E as issues. FIX-C (`src/git.rs` only) can run
-  first, but not beside FZ-04.
+It confirms thirteen gaps where a gated product's answer changed and the
+`WorkKey` did not (the everyday `git push` among them) and adopts a
+ref-content signature built from the `for-each-ref` calls the sweep already
+makes, widened to every ref namespace, plus the shallow file's content. The
+coordinator's decisions OD1 to OD7 are in the document; none needs Andreas.
+
+Fix tickets, issue drafts in progress (IDs FZ-06a to FZ-06e in landing
+order): a is FIX-C, the common-directory helper, `src/git.rs` only, and can
+run now; b FIX-A, c FIX-B, d FIX-D and e FIX-E touch `src/main.rs` and wait
+for FZ-03. None runs beside FZ-04, which will also own `src/git.rs`.
 
 ## FZ-03: Ready to integrate, waiting for Andreas
 
@@ -219,9 +220,9 @@ look are Andreas's to accept on the branch build.
 - Review: two passes, final verdict accepted. The first found that an `R`
   did not supersede an outstanding poll; fixed with regressions.
 - CI green on the branch (`ci` and `docs`). Combined result with `main` at
-  `0ab1890`: fmt, clippy with warnings denied, 688 tests passed, docs check.
-  **Rerun the combined checks if `main` has gained source changes since**,
-  which it will once FZ-05a merges.
+  `8c1546c` (after the FZ-05a merge): fmt, clippy with warnings denied, 693
+  tests passed, docs check. **Rerun the combined checks if `main` has gained
+  source changes since.**
 - Board: #16 Ready to integrate, with the evidence, the try command and a
   table of how to see each header state.
 - Try: `cargo run --release --manifest-path
@@ -274,8 +275,8 @@ exist.
   integrate.
 - Before the FZ-05 implementation tickets: the four `CLAUDE.md` invariant
   changes and the veto on FZ-05f, both in the identity design.
-- The `fz-02`, `fz-01`, `fz-05` and `issue-1` worktrees and their remote
-  branches are integrated and kept. Removing them is his call.
+- The `fz-02`, `fz-01`, `fz-05`, `fz-06`, `fz-05a` and `issue-1` worktrees
+  and their remote branches are integrated and kept. Removing them is his call.
 - Not ticketed yet: the `repoz_parity` tests failing from a dirty checkout
   outside `$HOME`; overlapping local sweeps; the FZ-02 failed-poll test that
   also passes on the old code; a credential in an HTTPS remote URL being
