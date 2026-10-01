@@ -6,7 +6,14 @@ Prepared 2026-10-01. Read this file, applicable repository instructions,
 
 ## Authority and routing
 
-Andreas owns priorities, acceptance, commits, merges, pushes and release.
+Andreas owns priorities, acceptance, what he installs and runs, tags and
+releases. Since commit `7005579` on 2026-10-01 the coordinator commits the
+reviewed diff on the ticket branch, pushes it and merges into `main` under the
+safe-merge rule in [agent-workflow.md](agent-workflow.md), and commits
+coordination docs straight to `main`. When a condition of that rule fails or
+is unclear, stop at Ready to integrate and ask. Workers and reviewers never
+commit. No agent tags, releases, runs `cargo install`, force-pushes, rewrites
+pushed history or deletes remote branches.
 Astra is the preferred lead. Fable 5.1 may take over coordination when Astra
 is unavailable or its usage needs preserving. This is an authorized manual
 handoff; there is no automatic coordinator switch or background service.
@@ -41,35 +48,129 @@ Status. Issue #7 has no milestone. Visual layout in the browser is the one
 setup check still open. GitHub is authoritative for current status and
 assignment.
 
-No product implementation, merge or release has started. Existing issues
-remain open.
+FZ-02 is integrated and #15 is closed. FZ-01 is the ticket in flight; both
+are described below. No release has started.
 
 Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
 Andreas asked to lean on Claude for the day. The Claude-native workforce is
 defined in `.claude/agents/` and described in `agent-workflow.md`. Under it,
-FZ-02 runs on `fz-worker` with a separate `fz-reviewer` session instead of
+tickets run on `fz-worker` with a separate `fz-reviewer` session instead of
 Sol. Capture `git status --short` and the actual base SHA before dispatch.
-Andreas commits and pushes himself.
 
-## Next implementation pilot
+## FZ-02: Done, integrated into `main`
 
-The first pilot is [FZ-02 / #15](https://github.com/Gaurgle/fleetz/issues/15):
-preserve newer GitHub state during a local refresh. Follow its acceptance
-contract in the issue and `docs/first-wave-tickets.md`.
+Andreas instructed Fable to run FZ-02 on 2026-10-01 and, in a later session
+the same day, to finish it from this file and close #15 at Done.
 
-1. Prepare branch `fix/fz-02-preserve-github-state` in an isolated worktree
-   from the agreed planning base; record its absolute path and base SHA.
-   Planning documents not yet committed need deliberate inclusion in the
-   worker checkout. Do not commit them on Andreas's behalf.
-2. Dispatch Sol with the ticket, rules, allowed files and exact base.
+- Base: `27abb030a024e5d6c5ef3d0618188cb86292d928`. Worker `fz-worker` and
+  reviewer `fz-reviewer`, both `claude-opus-5-5`, separate invocations.
+  Verdict accepted, no blockers, no changes after the review.
+- Ticket commit `8027d3b7437c3a39b8bd064bafe31fe91707c120` on
+  `fix/fz-02-preserve-github-state`: exactly the reviewed diff, `src/main.rs`
+  and `src/model.rs`, 432 insertions, 77 deletions. Pushed; CI green on it
+  ([run](https://github.com/Gaurgle/fleetz/actions/runs/36866002614)).
+- Combined result with `main` at `7005579`, in a throwaway clone: `cargo fmt
+  --check` exit 0, `cargo clippy --all-targets -- -D warnings` exit 0,
+  `cargo test` exit 0 with 649 passed, 0 failed, 1 ignored.
+- Merge commit `28ebba796ab6b1bea72e96f908e0082b61456ce9` on `main`
+  (`git merge --no-ff`), pushed. Its tree is identical to the one checked.
+  CI on `main` at that commit: `ci` and `docs` both green. The push also
+  published `7005579`.
+- Board: #15 is Done and the issue is closed, with the commits and evidence
+  in a comment. Closing it lifted the native block on #16; #16 is still
+  Backlog and still needs the freshness contract before it is Ready.
+- Worktree `.claude/worktrees/fz-02` and the remote branch are kept. Removing
+  either is Andreas's call.
+- Try it: `cargo run --release` from `main`. The installed `fleetz` is
+  unchanged until Andreas runs `cargo install --path .`.
+
+What the change does: the `RepoUpdated` and `Github` loop arms became
+`apply_repo_updated` and `apply_github_poll`. A sweep result now lands
+through `RepoStatus::apply_local_sweep`, which takes only the fields the sweep
+probes onto the row as it is at that moment, and the poll writes through
+`RepoStatus::apply_github`. Both destructure exhaustively, so a new field
+does not compile until its owner is decided. The split is documented on
+`RepoStatus`.
+
+Follow-ups found, not ticketed (creating issues needs Andreas's approval):
+
+- Overlapping local sweeps can still put older local fields over newer ones.
+  A single-repo sweep (`f`, or a moved remote) can overlap a full sweep.
+- A late sweep result after a reload merges by path. A path reused by a
+  different repo is FZ-05 identity work.
+- Optional test tightening: the failed-poll regression takes its snapshot
+  after the good poll, so it also passes on the old code.
+- The two `discovery::repoz_parity` tests fail when the suite runs from a
+  dirty checkout outside `$HOME`: repoz adds the current repo's toplevel to
+  its scan, and the test picks up that absolute path. Seen in the throwaway
+  integration clone while the merge was staged but not recorded; the same
+  tree passes once clean, and CI is unaffected. Keep an integration checkout
+  clean before running the suite.
+
+Pilot cost, as the client reported it: worker about 5 minutes, 29 tool uses,
+about 79k tokens; reviewer about 1.5 minutes, 14 tool uses, about 45k tokens.
+No rework and no review findings beyond the optional one above. The ticket
+size was right for one worker. With the pilot integrated, the limit is now
+two workers with disjoint files.
+
+## FZ-01: in progress
+
+Andreas instructed Fable to run FZ-01 after FZ-02 on 2026-10-01.
+
+- Base: `28ebba796ab6b1bea72e96f908e0082b61456ce9` (`main`, equal to
+  `origin/main`). The main checkout had one uncommitted file at dispatch,
+  this one.
+- Branch `docs/fz-01-performance-baseline`, worktree
+  `.claude/worktrees/fz-01` in the main checkout.
+- Worker `fz-worker`, requested `claude-opus-5-5`, effort medium. Reviewer
+  will be `fz-reviewer`, same model, separate invocation, and reruns at
+  least one measured case.
+- Allowed files: `docs/performance-baseline.md` (new) and one index row in
+  `CLAUDE.md`. No source, harness or instrumentation is committed.
+- Limits given to the worker: isolated `HOME` so the real cache, config and
+  Git configuration are untouched; synthetic repos with local bare remotes;
+  at most 8 live GraphQL fetches, none in a loop; no installs.
+- Board: #14 is In progress with worker and reviewer fields set; the
+  assignment is a comment on the issue.
+
+State when last written: the worker is dispatched and has not reported. The
+worktree holds whatever it has written so far, uncommitted. Next, in order:
+
+1. Read the worker's report and the document; check that only the allowed
+   files changed and that `scripts/check-docs.sh` passes in the worktree.
+2. Dispatch `fz-reviewer` with the report. It reruns at least one case.
+3. On acceptance, commit the reviewed diff on the branch and push it. The
+   push runs `docs.yml`, not `ci.yml`, because only prose changed.
+4. Merge under the safe-merge rule, move #14 to Done and record the commits.
+   Whether to close #14 has not been asked; leave it open unless Andreas
+   says otherwise.
+
+No other ticket is authorized. FZ-03 needs the freshness contract agreed
+before it is Ready.
+
+This file is uncommitted in the main checkout. In the session of 2026-10-01
+the commit of this file to `main` was refused by the client's permission
+check as an action Andreas had not asked for in that session, so it waits
+for him: either he commits it, or he tells the coordinator to.
+
+## Running the next ticket
+
+The pilot was [FZ-02 / #15](https://github.com/Gaurgle/fleetz/issues/15). For
+any later ticket the flow is the one in `agent-workflow.md`:
+
+1. Prepare the ticket branch in an isolated worktree under
+   `.claude/worktrees/<ticket>` from current `main`; record its path and base
+   SHA on the issue.
+2. Dispatch the worker with the ticket, rules, allowed files and exact base.
 3. Use a separate reviewer session against the exact diff and base.
-4. Run the workflow's required checks and report evidence. Andreas reviews
-   and commits accepted changes. Verify integration separately before he
-   merges and pushes.
+4. After the reviewer accepts, commit the reviewed diff on the branch, push
+   it, check the combined result against current `main` and merge under the
+   safe-merge rule. Stop at Ready to integrate and ask when a condition fails,
+   which always includes tickets whose acceptance is about interaction,
+   layout or look.
 
-Do not start implementation simply because an issue is Ready. This setup
-turn authorizes board completion and a handoff only. Confirm the current
-session's implementation instruction before dispatching the pilot.
+Do not start implementation simply because an issue is Ready. Dispatch only
+a ticket Andreas has told the current session to run.
 
 ## Start Fable manually
 
