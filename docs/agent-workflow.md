@@ -166,7 +166,15 @@ contract, handoff templates and limits in this document apply unchanged.
    rule. If `main` moves, revalidate the changed integration result before merging.
    Worktree checks alone do not establish integration safety.
 8. Retain the worktree until the result is integrated or explicitly discarded.
-   Do not remove files/worktrees without authorization.
+9. Cleanup is part of Done. Once the ticket is merged and CI on `main` is
+   green at the merge, the coordinator removes the ticket's worktree and
+   deletes its local branch, after checking three things: the worktree has
+   nothing uncommitted or untracked, the branch tip is an ancestor of `main`,
+   and the branch is on `origin` at that same commit. Use
+   `git worktree remove <path>` and `git branch -d <branch>` without force;
+   if either refuses, stop and report instead of forcing. Remote branches
+   stay on GitHub. A worktree whose ticket is not merged (blocked, parked,
+   discarded) is removed only when Andreas says so.
 
 PRs are optional. The release Project and planning tickets are published. New
 external publication remains a separate explicit action unless already
@@ -236,6 +244,14 @@ goes to him.
 The baseline from the 2026-09-30 review was 643 tests passed and 1 ignored;
 this is historical evidence, not a substitute for validation at the new base.
 
+## Writing files
+
+Coordinator, workers and reviewers write file contents with the Write or Edit
+tool, never with shell heredocs, `echo` or `printf` redirection, or an inline
+script that rewrites a file. The shell is for commands. Text a command needs
+(an issue or comment body, a commit message body) is written to a file in the
+session scratchpad first and passed to the command (`--body-file`, `-F`).
+
 ## Worker handoff template
 
 ```text
@@ -297,5 +313,6 @@ Decision needed: none.
 
 Use actual evidence, not optimistic percentages. Keep the board current when
 an assignment, blocker or review verdict changes. Ready to integrate is still
-unfinished; Done includes the commit, integration into main and combined
-verification.
+unfinished; Done includes the commit, integration into main, combined
+verification, green CI on `main` and the removal of the ticket's worktree and
+local branch.

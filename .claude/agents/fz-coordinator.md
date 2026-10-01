@@ -50,6 +50,10 @@ a few lines where things stand and what the next step is.
 6. Merge under the safe-merge rule, or stop and ask if it does not apply.
    Either way report with the owner-facing format, including the command to
    try the build. Keep the worktree until the ticket is integrated.
+7. After the merge, once CI on `main` is green, remove the ticket's worktree
+   and delete its local branch as part of Done, as `docs/agent-workflow.md`
+   describes (clean, merged and pushed first; never forced; remote branches
+   stay).
 
 One implementation worker and one reviewer at a time until the FZ-02 pilot is
 integrated; after that at most two workers with disjoint files. Do not
