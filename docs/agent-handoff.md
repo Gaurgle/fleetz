@@ -34,20 +34,22 @@ blocking links are #16 blocked by #15 and #17 blocked by #16.
 - [Release board](https://github.com/users/Gaurgle/projects/1/views/2)
 
 Both views show Title, Status, Priority, Milestone, Worker and Ticket reviewer.
-The final project read exposed 21 items; #29 and #30 had not appeared in the
-index despite successful additions and field writes. Recheck all 23 items
-and their fields after indexing catches up. Do not duplicate successful writes.
-The API verified board grouping by Status. Visual layout remains unverified
-because browser automation failed to start. Final item indexing and visual
-inspection are the remaining setup checks. GitHub is authoritative for current
-status and assignment.
+A later read on 2026-10-01 by Fable found all 23 items on the Project,
+including #29 and #30, with Status, Priority, Worker and Ticket reviewer set,
+both dependencies in place, the Project private and the board grouped by
+Status. Issue #7 has no milestone. Visual layout in the browser is the one
+setup check still open. GitHub is authoritative for current status and
+assignment.
 
-No product implementation, commit, push, merge or release started in this
-setup turn. Existing issues remain open.
+No product implementation, merge or release has started. Existing issues
+remain open.
 
-Uncommitted planning changes include `docs/agent-workflow.md`,
-`docs/release-plan.md` and this file. Preserve them. Capture `git status --short`
-and the actual base SHA before dispatch. Andreas commits and pushes himself.
+Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
+Andreas asked to lean on Claude for the day. The Claude-native workforce is
+defined in `.claude/agents/` and described in `agent-workflow.md`. Under it,
+FZ-02 runs on `fz-worker` with a separate `fz-reviewer` session instead of
+Sol. Capture `git status --short` and the actual base SHA before dispatch.
+Andreas commits and pushes himself.
 
 ## Next implementation pilot
 
@@ -74,17 +76,12 @@ session's implementation instruction before dispatching the pilot.
 From this repository, run:
 
 ```sh
-claude --model claude-fable-5-1
+claude --agent fz-coordinator
 ```
 
-Then give it this prompt:
-
-```text
-Read docs/agent-handoff.md and follow docs/agent-workflow.md.
-Take over as acting Fleetz coordinator. Inspect the live board and working
-tree, preserve uncommitted planning changes, and report the next authorized
-step before dispatch. Use the recorded workforce and separate review.
-```
+The agent definition pins the model and effort and carries the takeover
+instructions: it reads this file, inspects the live board and working tree,
+and reports the next step before any dispatch. Tell it which ticket to run.
 
 Use normal permissions with no bypass. Claude subscription Max authentication
 was verified through macOS keychain outside the sandbox, with no active API-key,

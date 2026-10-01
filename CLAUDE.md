@@ -54,6 +54,8 @@ and blink, watch mode re-sweeps on an interval.
 | `docs/ideas.md` | Design backlog: problem, options, rejected alternatives per feature |
 | `docs/release-plan.md` | Release milestones, ticket status and dispatch order |
 | `docs/agent-workflow.md` | Shared worker/reviewer instructions and integration rules |
+| `docs/agent-handoff.md` | Coordinator state between leads: read first when taking over |
+| `.claude/agents/` | Claude-native workforce: `fz-coordinator`, `fz-worker`, `fz-reviewer`, `fz-small` |
 | `docs/superpowers/` | Dated plans and specs, paired, for landed work |
 
 Read the relevant `docs/ideas.md` section before building anything it covers:

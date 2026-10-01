@@ -112,6 +112,33 @@ References: [Claude CLI](https://code.claude.com/docs/en/cli-reference),
 [Claude authentication](https://code.claude.com/docs/en/authentication), and
 [Codex subagent configuration](https://learn.chatgpt.com/docs/agent-configuration/subagents).
 
+## Claude-native workforce
+
+When Fable coordinates, the coordinator is the main session
+(`claude --agent fz-coordinator`) and Claude workers are native subagents
+defined in `.claude/agents/`, not `claude -p` child processes. The roles, ticket
+contract, handoff templates and limits in this document apply unchanged.
+
+| Agent | Model | Effort | Edits | Use |
+|---|---|---|---|---|
+| `fz-coordinator` | `claude-fable-5-1` | `high` | Coordination docs only | Main session: readiness, dispatch, integration checks, board |
+| `fz-worker` | `claude-opus-5-5` | `medium` | Assigned worktree, allowed files | Implementation, measurement, investigation |
+| `fz-reviewer` | `claude-opus-5-5` | `medium` | None | Independent review of the exact diff |
+| `fz-small` | `sonnet` | `medium` | Named paths only | Narrow scans, documentation, truly small changes |
+
+- The coordinator creates the ticket branch and worktree and passes its
+  absolute path. The harness's `isolation: worktree` is not used: it branches
+  from the default branch under a generated name, so it cannot follow the
+  ticket branch convention or an agreed base commit.
+- Each worker definition lists its tools explicitly, which leaves out the agent
+  and MCP tools: the hierarchy stops one level below the coordinator.
+- `fz-reviewer` has a shell and runs the three checks itself, unlike the
+  restricted `claude -p` pilot above. It has no edit tools.
+- Worker and reviewer are separate invocations, never one agent continued.
+- `.claude/` is covered by the owner's global gitignore, so the definitions are
+  machine-local unless force-added. A new `agents/` directory is picked up on
+  the next session start, not mid-session.
+
 ## Isolation and integration
 
 1. Record `git status --short` and the agreed `main` base commit before dispatch.

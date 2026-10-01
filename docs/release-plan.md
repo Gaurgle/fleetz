@@ -65,12 +65,10 @@ Created [Release table](https://github.com/users/Gaurgle/projects/1/views/1)
 and [Release board](https://github.com/users/Gaurgle/projects/1/views/2), with
 Title, Status, Priority, Milestone, Worker and Ticket reviewer visible.
 
-Final live reads confirmed the views, privacy, milestones and dependencies,
-but GitHub's project index had exposed only 21 of 23 items (#29 and #30 had
-not appeared yet). Their addition and field mutations succeeded. Recheck
-all 23 items and their fields after indexing catches up; avoid duplicating
-successful writes. The API verified Status grouping for the board. Visual
-layout remains unverified because browser automation failed to start.
+Live reads confirmed the views, privacy, milestones, dependencies and Status
+grouping for the board, and a later read found all 23 items with their fields
+set. Visual layout remains unverified because browser automation failed to
+start.
 
 See [agent-handoff.md](agent-handoff.md) for coordinator takeover and the
 next FZ-02 pilot. GitHub remains the live status source.
