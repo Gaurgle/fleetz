@@ -1,6 +1,6 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-01 19:45 by `claude-fable-5-1`, in a new session that
+Last written 2026-10-01 19:55 by `claude-fable-5-1`, in a new session that
 carried out the one authorized step (FZ-04 verified and handed to Andreas to
 try) and dispatched nothing. **Nothing is running: no worker, no reviewer, no
 background job, and none may start while Andreas tests the FZ-04 build.** Read this file, the repository
@@ -58,7 +58,17 @@ Nothing else moves on the `main.rs` line until the first item is settled.
 
 1. **FZ-04 (#17): a second look at the branch build.** The fix is committed,
    pushed and verified (below) and the build was handed to him at 19:45. He
-   tested the ticket twice before the fix and has not accepted it.
+   ran it with Wi-Fi off at 19:47 and sent a screenshot: the `fleetz` row
+   shows `⚠ unreachable` and the detail pane
+   `⚠ fetch failed: remote unreachable, as of 19:47` over the ssh line, as
+   specified. The status-line count and `F` on several rows were not in the
+   screenshot. A second screenshot with Wi-Fi back on shows the GitHub
+   header recovered and the fetch mark still on the row: that is contract
+   rule 6 (nothing retries because the network returned; `f`, `F`, a moved
+   remote or the next watch sweep clears it). **He has not said he accepts
+   it.** Asked at 19:55: accept as is, or have a recovered poll refetch the
+   repos whose fetch failed as unreachable or timed out, which changes
+   rule 6 and is its own ticket. Recorded on #17.
 2. **#45: decided.** He said to leave it until the repository goes public:
    the setting stays off and nothing merges now. Recorded on #45. Nothing is
    needed from him until then.
