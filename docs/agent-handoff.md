@@ -1,9 +1,9 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-01 20:58 by `claude-fable-5-1`. FZ-04 is merged and
-closed. **Two reviewers are running: one on FZ-06b (#38) in
-`.claude/worktrees/fz-06b`, one on revision 2 of the FZ-10 (#23) design in
-`.claude/worktrees/fz-10`. No worker is running.** Read this file, the repository
+Last written 2026-10-01 21:13 by `claude-fable-5-1`. FZ-04 is merged and
+closed. **Two agents are running: a reviewer on FZ-06b (#38) in
+`.claude/worktrees/fz-06b`, and the worker writing revision 3 of the FZ-10
+(#23) design in `.claude/worktrees/fz-10`.** Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md),
 [release-plan.md](release-plan.md) and
 [first-wave-tickets.md](first-wave-tickets.md) before acting. GitHub (the
@@ -96,18 +96,20 @@ In order of weight:
   directory. A fresh `fz-reviewer` is running. On acceptance: commit the
   reviewed diff, push, CI on the branch, combined checks, merge (no look or
   format change in this ticket), Done.
-- **FZ-10 (#23): revision 2 in review since 20:47.** The worker reported
-  every finding addressed (966 lines, untracked in `.claude/worktrees/fz-10`,
-  written against `f8a54c0`). The coordinator ruled on what it marked as
-  proposed, all accepted and recorded on #23: A6 rebuilds from the dataset
-  in memory as `DatasetSource::Local` with no attempt recorded; a connect
-  failure or connect timeout is `Offline` (A5); jitter applies on top of
-  the 600 s cap, so the longest wait is 720 s and owner-facing text must say
-  about twelve minutes, not ten; `Offline` and `Auth` keep the consecutive
-  count; `Auth` retries at the plain interval. The document still says
-  "proposed": the next worker pass applies the rulings together with the
-  reviewer's findings, then a narrow re-review. A fresh `fz-reviewer` is
-  running with at most 3 live requests and no builds.
+- **FZ-10 (#23): revision 3 being written since 21:12.** The re-review of
+  revision 2 (fresh `fz-reviewer`) confirmed F1 to F7 resolved and the
+  rulings on A3, A5 and A6 sound, and requested four corrections plus
+  optional items; nothing blocked. Verdict and the coordinator's rulings are
+  on #23 in full. The ones that shape tickets: backoff step 1 is exactly
+  the interval with no jitter (an existing test asserts due at +90 s);
+  FZ-10c checks the typed rate-limit flag as well as the word match (an
+  existing test sets only the text); a discarded answer's budget reading
+  applies only for the held token; `Offline` and `Auth` neither change the
+  count nor set or clear a not-before; the A6 rebuild starts only when no
+  poll is in flight; the longest wait is about twelve minutes. The same
+  worker session is applying all of it to the untracked
+  `docs/api-budget-design.md` in `.claude/worktrees/fz-10`. Next: continue
+  the same reviewer for a narrow re-review of its own findings.
 - **#45:** uncommitted `ci.yml` and `docs.yml` in
   `.claude/worktrees/issue-45`; reviewer verdict blocked on a repository
   setting, diff judged correct. Parked by Andreas until the repository is
