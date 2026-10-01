@@ -1,9 +1,10 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-01 20:15 by `claude-fable-5-1`. FZ-04 is merged and
-closed. **Two workers are running: FZ-06b (#38) in `.claude/worktrees/fz-06b`
-and the FZ-10 (#23) design revision in `.claude/worktrees/fz-10`. Neither has
-reported and neither has been reviewed.** Read this file, the repository
+Last written 2026-10-01 20:27 by `claude-fable-5-1`. FZ-04 is merged and
+closed. **One worker is running: the FZ-10 (#23) design revision in
+`.claude/worktrees/fz-10`, not yet reported. FZ-06b (#38) is stopped,
+blocked on a decision from Andreas, with tests on disk in
+`.claude/worktrees/fz-06b`.** Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md),
 [release-plan.md](release-plan.md) and
 [first-wave-tickets.md](first-wave-tickets.md) before acting. GitHub (the
@@ -57,8 +58,13 @@ usage limit and ask Andreas for routing.
 
 ## What needs Andreas
 
-Nothing blocks the running work. In order of weight:
+In order of weight:
 
+0. **FZ-06b (#38) is blocked on him.** The ticket removes three `WorkKey`
+   fields that three FZ-06a tests in `src/git.rs` and a test helper in
+   `src/main.rs` read. Asked at 20:25: may those tests be rewritten to
+   assert the same thing through the new key, and the helper updated?
+   Details on #38. On a yes, resume the same worker with the decision.
 1. **FZ-10 owner items**, to be presented together once the revised design
    passes review: what the header says when polling is slowed, paused or rate
    limited (O1); manual `r` and `R` under a rate limit skipping the request
@@ -85,12 +91,14 @@ Nothing blocks the running work. In order of weight:
 
 ## Last verdicts, and what is on disk uncommitted
 
-- **FZ-06b (#38): worker running since 20:10, nothing reviewed.** Base
-  `f8a54c0`, branch `fix/fz-06b-ref-content-key`, worktree
-  `.claude/worktrees/fz-06b`, allowed files `src/git.rs` and `src/main.rs`.
-  The worker leaves its change uncommitted. If its session is lost, check
-  the worktree first and resume it or dispatch a fresh worker with what is
-  on disk.
+- **FZ-06b (#38): worker stopped at 20:25, blocked on Andreas (item 0
+  above).** Base `f8a54c0`, branch `fix/fz-06b-ref-content-key`, worktree
+  `.claude/worktrees/fz-06b`. On disk, uncommitted: `src/git.rs` +384, test
+  code only, 20 new tests of which 16 fail on the base by design (758
+  passed, 16 failed, 1 ignored). No production code changed. The worker's
+  session can be resumed; if it cannot, a fresh worker gets #38's last
+  comment and what is on disk. E8a and E8d fail on the base and are
+  outcomes, not pins: the dispatch said otherwise and was wrong.
 - **FZ-10 (#23) revision: worker running since 20:10.** The worktree was
   fast-forwarded to `f8a54c0`; `docs/api-budget-design.md` is still
   untracked there. The fresh worker has findings F1 to F7 and the smaller
