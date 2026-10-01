@@ -228,7 +228,7 @@ impl FetchFacts {
 /// - **Local sweep** (`apply_local_sweep`): `branches`, `commits`, `behind`,
 ///   `ahead`, `dirty`, `stash_count`, `stash_entries`, `worktrees`, `reflog`,
 ///   `graph`, `graph_expanded`, `remote_branches`, `remote_only_branches`,
-///   `daily`, `work_key`.
+///   `daily`, `daily_key`, `work_key`.
 /// - **Fetch** (`FetchFacts::record`, when a fetch lands): `fetch`. A sweep
 ///   that did not fetch leaves it alone (rule 2 of the fetch contract).
 /// - **Load** (discovery and `assemble_view`, which rebuild the whole list):
@@ -292,6 +292,10 @@ pub struct RepoStatus {
     /// None when the local calendar has never been asked for. Boxed so a
     /// repo that will never need it costs one pointer rather than 742 bytes.
     pub daily: Option<Box<crate::contributions::DailyCounts>>,
+    /// What `daily` was computed under, set only alongside it. A sweep reuses
+    /// `daily` only when its own key equals this one; a sweep without the
+    /// histogram probe keeps both as they are. In memory only.
+    pub daily_key: Option<HistogramKey>,
     /// Fingerprint of the repo state the expensive probes were taken from.
     /// A sweep that finds the same key reuses commits/reflog/graph/stash
     /// instead of re-running those subprocesses; `worktrees` is re-read on
@@ -301,6 +305,29 @@ pub struct RepoStatus {
     /// Whether the remote refs behind `behind` and `ahead` are current: the
     /// fetch facts for this checkout.
     pub fetch: FetchFacts,
+}
+
+/// The inputs a local contribution histogram (`RepoStatus::daily`) depends
+/// on, so a sweep can tell whether the one it has is still the answer.
+///
+/// Separate from `WorkKey`: the histogram's slots are offsets from the grid
+/// start, so a week rollover changes the answer with nothing in the repo
+/// moving, and a sweep without the probe must not record a new `WorkKey`
+/// against an old histogram. When `contributions_author` is unset the
+/// resolved `user.email` is deliberately not part of the key: it is
+/// re-resolved on every re-probe, and an email change alone is an accepted
+/// limitation that `R` clears.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistogramKey {
+    /// Grid start the slots are offsets from.
+    pub start: chrono::NaiveDate,
+    /// `contributions_author` as configured, `None` when unset.
+    pub author: Option<String>,
+    /// `WorkKey::ref_signature` from the same sweep.
+    pub ref_signature: u64,
+    /// `WorkKey::head_sha` from the same sweep. `--all` walks HEAD, and the
+    /// signature only records that HEAD is detached, not where.
+    pub head_sha: String,
 }
 
 /// An active git worktree.
@@ -633,6 +660,7 @@ impl RepoStatus {
             remote_branches,
             remote_only_branches,
             daily,
+            daily_key,
             work_key,
             // GitHub-owned: written by the poll (`apply_github`).
             pr_count: _,
@@ -668,6 +696,7 @@ impl RepoStatus {
         self.remote_branches = remote_branches;
         self.remote_only_branches = remote_only_branches;
         self.daily = daily;
+        self.daily_key = daily_key;
         self.work_key = work_key;
     }
 
@@ -1015,6 +1044,7 @@ mod tests {
         RepoStatus {
             last_local: None,
             daily: None,
+            daily_key: None,
             name: name.to_string(),
             path: Some(format!("~/repos/{name}")),
             location: RepoLocation::Primary,

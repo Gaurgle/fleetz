@@ -2711,6 +2711,7 @@ mod tests {
         let repos: Vec<RepoStatus> = (0..n)
             .map(|i| RepoStatus {
                 daily: None,
+                daily_key: None,
                 last_local: None,
                 name: format!("repo-{i}"),
                 path: Some(format!("~/repos/repo-{i}")),

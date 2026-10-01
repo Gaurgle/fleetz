@@ -2187,24 +2187,44 @@ async fn rebuild_repo_status(
     };
 
     // The local calendar is a year of log per repo, so it is gated twice:
-    // only when the strip is actually showing it, and only when the WorkKey
-    // says this repo moved. An idle fleet costs nothing.
-    let daily = match probe {
-        None => old.daily.clone(),
-        Some(_) if unchanged && old.daily.is_some() => old.daily.clone(),
+    // only when the strip is actually showing it, and only when the
+    // histogram's own key (grid start, configured author, ref signature,
+    // HEAD) differs from the one the kept histogram was computed under. An
+    // idle fleet costs nothing. Without the probe both are kept as they are,
+    // so a later Local sweep still compares against what `daily` really saw.
+    let wanted_daily_key = match (probe, &key) {
+        (Some(probe), Some(key)) => Some(model::HistogramKey {
+            start: probe.start,
+            author: probe.author.clone(),
+            ref_signature: key.ref_signature,
+            head_sha: key.head_sha.clone(),
+        }),
+        _ => None,
+    };
+    let (daily, daily_key) = match probe {
+        None => (old.daily.clone(), old.daily_key.clone()),
+        Some(_)
+            if old.daily.is_some()
+                && wanted_daily_key.is_some()
+                && wanted_daily_key == old.daily_key =>
+        {
+            (old.daily.clone(), old.daily_key.clone())
+        }
         Some(probe) => {
             let author = match &probe.author {
                 Some(a) => Some(a.clone()),
                 None => git::user_email(path).await,
             };
-            match author {
+            let daily = match author {
                 Some(author) => git::daily_commits(path, probe.start, &author)
                     .await
                     .map(Box::new),
                 // No identity configured: better to show nothing than to
                 // count everyone's commits as if they were yours.
                 None => None,
-            }
+            };
+            let daily_key = daily.as_ref().and(wanted_daily_key);
+            (daily, daily_key)
         }
     };
 
@@ -2214,6 +2234,7 @@ async fn rebuild_repo_status(
 
     RepoStatus {
         daily,
+        daily_key,
         branches,
         dirty,
         behind: total_behind,
@@ -2387,6 +2408,7 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
     Some(RepoStatus {
         // No local calendar until the strip asks for one.
         daily: None,
+        daily_key: None,
         last_local: None,
         name,
         path: Some(display),
@@ -2775,6 +2797,7 @@ async fn assemble_view(
         repos.push(RepoStatus {
             // No local calendar until the strip asks for one.
             daily: None,
+            daily_key: None,
             last_local: None,
             name: gh_repo.name.clone(),
             path: None,
@@ -2889,6 +2912,7 @@ async fn local_only_status(
     Some(RepoStatus {
         // No local calendar until the strip asks for one.
         daily: None,
+        daily_key: None,
         last_local,
         name,
         path: Some(display),
@@ -2992,6 +3016,7 @@ async fn build_repo_status(
     RepoStatus {
         // No local calendar until the strip asks for one.
         daily: None,
+        daily_key: None,
         last_local: None,
         name: found.name.clone(),
         path: Some(display),
@@ -3065,6 +3090,7 @@ mod tests {
     fn test_repo() -> RepoStatus {
         RepoStatus {
             daily: None,
+            daily_key: None,
             last_local: None,
             name: "r".to_string(),
             path: None,
@@ -4935,5 +4961,280 @@ mod tests {
         let after = sweep_once(&wt, &before).await;
 
         assert_eq!(worktree_branches(&after), ["main", "other"]);
+    }
+
+    // --- FZ-06d: the local histogram has its own reuse key ---
+    //
+    // Every commit is dated explicitly and every probe passes its grid start
+    // in, so no assertion depends on today's date.
+
+    const HIST_EMAIL: &str = "hist@example.com";
+
+    fn hist_date(text: &str) -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap()
+    }
+
+    /// A histogram probe for `start`, counting `author` (None resolves each
+    /// repo's `user.email`, as an unset `contributions_author` does).
+    fn hist_probe(start: &str, author: Option<&str>) -> ContribProbe {
+        ContribProbe {
+            start: hist_date(start),
+            author: author.map(str::to_string),
+        }
+    }
+
+    /// Commit an empty change at noon local time on `day`, as whatever
+    /// identity the repo is configured with.
+    fn hist_commit(dir: &Path, day: &str, message: &str) {
+        let when = format!("{day}T12:00:00");
+        let status = std::process::Command::new("git")
+            .args(["commit", "-q", "--allow-empty", "-m", message])
+            .env("GIT_AUTHOR_DATE", &when)
+            .env("GIT_COMMITTER_DATE", &when)
+            .current_dir(dir)
+            .status()
+            .expect("spawn");
+        assert!(status.success(), "commit failed in {}", dir.display());
+    }
+
+    /// An empty repo at `<scratch>/<name>` with `email` as its local identity.
+    fn hist_repo(scratch: &Path, name: &str, email: &str) -> PathBuf {
+        let dir = scratch.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        wt_sh(&dir, &["git", "init", "-q", "-b", "main"]);
+        wt_sh(&dir, &["git", "config", "user.email", email]);
+        wt_sh(&dir, &["git", "config", "user.name", "h"]);
+        dir
+    }
+
+    /// One sweep of `path` against `old`, with or without the probe.
+    async fn hist_sweep(path: &Path, old: &RepoStatus, probe: Option<&ContribProbe>) -> RepoStatus {
+        let target = SweepTarget {
+            display_path: path_arg(path),
+            fs_path: path.to_path_buf(),
+            old: Box::new(old.clone()),
+        };
+        rebuild_repo_status(&target, None, probe).await
+    }
+
+    /// A row for `path` that no sweep has seen yet.
+    fn hist_row(path: &Path) -> RepoStatus {
+        let mut row = test_repo();
+        row.path = Some(path_arg(path));
+        row
+    }
+
+    /// The non-empty slots of a row's histogram, as (day, count), dated by
+    /// the grid `start` the caller expects the slots to be offsets from.
+    fn hist_days(row: &RepoStatus, start: &str) -> Vec<(chrono::NaiveDate, u16)> {
+        let daily = row.daily.as_ref().expect("the sweep left no histogram");
+        let start = hist_date(start);
+        daily
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| **n > 0)
+            .map(|(slot, n)| (start + chrono::Duration::days(slot as i64), *n))
+            .collect()
+    }
+
+    fn hist_total(row: &RepoStatus) -> u32 {
+        let daily = row.daily.as_ref().expect("the sweep left no histogram");
+        daily.0.iter().map(|n| u32::from(*n)).sum()
+    }
+
+    /// E7: the grid start rolls over a week while the repo stays put. The
+    /// slots are offsets from the start they were built with, so reusing them
+    /// under the new start draws every commit a week late.
+    #[tokio::test]
+    async fn a_new_grid_start_reprobes_an_unchanged_repo() {
+        let scratch = wt_scratch("hist_e7");
+        let repo = hist_repo(&scratch, "r", HIST_EMAIL);
+        hist_commit(&repo, "2024-01-10", "one");
+
+        let first = hist_sweep(
+            &repo,
+            &hist_row(&repo),
+            Some(&hist_probe("2023-10-01", Some(HIST_EMAIL))),
+        )
+        .await;
+        assert_eq!(
+            hist_days(&first, "2023-10-01"),
+            [(hist_date("2024-01-10"), 1)]
+        );
+
+        let rolled = hist_sweep(
+            &repo,
+            &first,
+            Some(&hist_probe("2023-10-08", Some(HIST_EMAIL))),
+        )
+        .await;
+        let days = hist_days(&rolled, "2023-10-08");
+        let _ = std::fs::remove_dir_all(&scratch);
+
+        assert_eq!(
+            days,
+            [(hist_date("2024-01-10"), 1)],
+            "the histogram built for the old grid start was reused"
+        );
+    }
+
+    /// E14: a sweep without the probe (the strip showing GitHub data) must
+    /// not record the repo as seen by the histogram, or the next Local sweep
+    /// reuses a histogram that predates the commit.
+    #[tokio::test]
+    async fn a_sweep_without_the_probe_does_not_bless_a_stale_histogram() {
+        let scratch = wt_scratch("hist_e14");
+        let repo = hist_repo(&scratch, "r", HIST_EMAIL);
+        hist_commit(&repo, "2024-01-10", "one");
+        let probe = hist_probe("2023-10-01", Some(HIST_EMAIL));
+
+        let local = hist_sweep(&repo, &hist_row(&repo), Some(&probe)).await;
+        assert_eq!(hist_total(&local), 1);
+
+        hist_commit(&repo, "2024-01-11", "two");
+        let github = hist_sweep(&repo, &local, None).await;
+        assert_eq!(
+            hist_total(&github),
+            1,
+            "a sweep without the probe keeps the histogram it had"
+        );
+
+        let back = hist_sweep(&repo, &github, Some(&probe)).await;
+        let total = hist_total(&back);
+        let _ = std::fs::remove_dir_all(&scratch);
+
+        assert_eq!(
+            total, 2,
+            "the Local sweep reused a histogram from before the commit"
+        );
+    }
+
+    /// `--all` walks HEAD, so a commit on a detached HEAD counts. The
+    /// histogram key must carry HEAD's object id, since the ref signature
+    /// only records that HEAD is detached.
+    #[tokio::test]
+    async fn a_commit_on_a_detached_head_reaches_the_histogram() {
+        let scratch = wt_scratch("hist_detached");
+        let repo = hist_repo(&scratch, "r", HIST_EMAIL);
+        hist_commit(&repo, "2024-01-10", "one");
+        let probe = hist_probe("2023-10-01", Some(HIST_EMAIL));
+
+        let before = hist_sweep(&repo, &hist_row(&repo), Some(&probe)).await;
+        assert_eq!(hist_total(&before), 1);
+
+        wt_sh(&repo, &["git", "checkout", "-q", "--detach"]);
+        hist_commit(&repo, "2024-01-11", "detached");
+        let after = hist_sweep(&repo, &before, Some(&probe)).await;
+        let total = hist_total(&after);
+        let _ = std::fs::remove_dir_all(&scratch);
+
+        assert_eq!(total, 2, "the detached commit was not counted");
+    }
+
+    /// The configured author is part of the key: changing
+    /// `contributions_author` on an unchanged repo must count the new one.
+    #[tokio::test]
+    async fn a_changed_configured_author_reprobes_an_unchanged_repo() {
+        let scratch = wt_scratch("hist_author");
+        let repo = hist_repo(&scratch, "r", "a@example.com");
+        hist_commit(&repo, "2024-01-10", "as a");
+        wt_sh(&repo, &["git", "config", "user.email", "b@example.com"]);
+        hist_commit(&repo, "2024-01-12", "as b");
+
+        let as_a = hist_sweep(
+            &repo,
+            &hist_row(&repo),
+            Some(&hist_probe("2023-10-01", Some("a@example.com"))),
+        )
+        .await;
+        assert_eq!(
+            hist_days(&as_a, "2023-10-01"),
+            [(hist_date("2024-01-10"), 1)]
+        );
+
+        let as_b = hist_sweep(
+            &repo,
+            &as_a,
+            Some(&hist_probe("2023-10-01", Some("b@example.com"))),
+        )
+        .await;
+        let days = hist_days(&as_b, "2023-10-01");
+        let _ = std::fs::remove_dir_all(&scratch);
+
+        assert_eq!(
+            days,
+            [(hist_date("2024-01-12"), 1)],
+            "the histogram counted for the previous author was reused"
+        );
+    }
+
+    /// OD4: with no configured author the histogram counts the repo's
+    /// `user.email` as resolved at the re-probe, not one remembered from an
+    /// earlier probe.
+    #[tokio::test]
+    async fn an_unset_author_counts_the_email_resolved_at_the_reprobe() {
+        let scratch = wt_scratch("hist_od4");
+        let repo = hist_repo(&scratch, "r", "a@example.com");
+        hist_commit(&repo, "2024-01-10", "as a");
+        let probe = hist_probe("2023-10-01", None);
+
+        let as_a = hist_sweep(&repo, &hist_row(&repo), Some(&probe)).await;
+        assert_eq!(
+            hist_days(&as_a, "2023-10-01"),
+            [(hist_date("2024-01-10"), 1)]
+        );
+
+        wt_sh(&repo, &["git", "config", "user.email", "b@example.com"]);
+        hist_commit(&repo, "2024-01-12", "as b");
+        let mut snapshot = as_a.clone();
+        snapshot.work_key = None;
+        let as_b = hist_sweep(&repo, &snapshot, Some(&probe)).await;
+        let days = hist_days(&as_b, "2023-10-01");
+        let _ = std::fs::remove_dir_all(&scratch);
+
+        assert_eq!(
+            days,
+            [(hist_date("2024-01-12"), 1)],
+            "the re-probe did not count the newly resolved email alone"
+        );
+    }
+
+    /// E2c, a check rather than this ticket's evidence: a commit of yours
+    /// fetched from another clone moves a remote-tracking ref, which `--all`
+    /// walks, so the next Local sweep must count it.
+    #[tokio::test]
+    async fn a_fetched_commit_of_yours_reaches_the_histogram() {
+        let scratch = wt_scratch("hist_e2c");
+        let origin = hist_repo(&scratch, "origin", HIST_EMAIL);
+        hist_commit(&origin, "2024-01-10", "one");
+        let clone = |name: &str| {
+            let dir = scratch.join(name);
+            wt_sh(
+                &scratch,
+                &["git", "clone", "-q", &path_arg(&origin), &path_arg(&dir)],
+            );
+            wt_sh(&dir, &["git", "config", "user.email", HIST_EMAIL]);
+            wt_sh(&dir, &["git", "config", "user.name", "h"]);
+            dir
+        };
+        let mine = clone("mine");
+        let other = clone("other");
+        let probe = hist_probe("2023-10-01", Some(HIST_EMAIL));
+
+        let before = hist_sweep(&mine, &hist_row(&mine), Some(&probe)).await;
+        assert_eq!(hist_total(&before), 1);
+
+        hist_commit(&other, "2024-01-11", "elsewhere");
+        wt_sh(
+            &other,
+            &["git", "push", "-q", "origin", "HEAD:refs/heads/side"],
+        );
+        wt_sh(&mine, &["git", "fetch", "-q", "origin"]);
+        let after = hist_sweep(&mine, &before, Some(&probe)).await;
+        let total = hist_total(&after);
+        let _ = std::fs::remove_dir_all(&scratch);
+
+        assert_eq!(total, 2, "the fetched commit was not counted");
     }
 }
