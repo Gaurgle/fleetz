@@ -25,6 +25,17 @@ handoff; there is no automatic coordinator switch or background service.
 - Truly small work: Sonnet or `gpt-6-luna`, effort `medium`; record the
   resolved model instead of silently substituting.
 
+Standing instruction from Andreas, 2026-10-01, in his words: "i dont want to
+have to tell you what to run. we have a harness and the reviewers, keep on
+going as planned as long as I dont have to make a design decition or
+similar." The coordinator of that session therefore dispatches the next
+ticket in [release-plan.md](release-plan.md) order when its dependencies
+hold, closes issues at Done, and goes to Andreas only for design decisions,
+interaction or look acceptance, and what the safe-merge rule reserves for
+him. It was said to one session; a new lead confirms it once with Andreas
+before relying on it, since `agent-workflow.md` still says to dispatch only
+what he names.
+
 Start with one implementation worker and a separate reviewer. Do not recursively
 expand delegation. Use architectural review at bounded checkpoints, not routine
 board updates. Do not automatically switch to API billing or paid usage credits.
@@ -164,11 +175,31 @@ Andreas instructed Fable to run FZ-05 alongside FZ-01 on 2026-10-01.
   claims that need execution are marked unconfirmed in the document.
 - Board: #18 is In progress, assignment recorded on the issue.
 
-State when last written: dispatched, no report yet. Next: read the report and
-the document, decide the open design questions, then dispatch `fz-reviewer`
-to trace a collision and a local-only path through the proposal. Its index
-row in `CLAUDE.md` is left to the coordinator, since the FZ-01 branch also
-adds a row to that table.
+State when last written: the worker delivered the document (untracked in the
+worktree) and is revising it with the coordinator's decisions. The findings:
+`github::merge_sources` dedupes the dataset by bare name, so of two repos
+with one name the older-pushed one vanishes; the folder-name fallback in
+`Wanted::match_clone` lets a fork or a foreign-host clone claim a row; and
+the poll writes CI onto local-only rows by bare name. The coordinator
+spot-checked those against the code.
+
+Decisions taken by the coordinator, Astra not consulted, Andreas may veto:
+rows keyed by remote identity derived from the existing `owner` and `name`
+(model A); host parsed and carried but matching stays host-agnostic; the
+folder-name fallback for a clone whose origin matches nothing is kept only
+when the origin's owner equals the wanted repo's owner and the origin is not
+itself a repo in the dataset (so a rename keeps matching, a fork does not);
+an ambiguous name claims no row and says so once; pass 3 dedupes by path
+only, as repoz does, which changes a `CLAUDE.md` invariant; GitHub fields on
+a local-only row only by exact origin; `owner/name` group members deferred;
+adding a neutral field value to existing test fixture literals is allowed
+when a struct gains a field, with no assertion changed.
+
+Next: read the revised document, dispatch `fz-reviewer` to trace scenarios S1
+(collision) and S3 (local-only), then commit, push and merge it. The
+implementation tickets FZ-05a to FZ-05f it defines run after FZ-03, serially
+where they share `main.rs`. Its index row in `CLAUDE.md` is left to the
+coordinator, since the FZ-01 branch also adds a row to that table.
 
 ## FZ-06: authorized, not started
 
@@ -194,9 +225,10 @@ poll that falls back to the cache is reported as a success, so offline shows
 no marker at all; and with watch off a cache-served launch never polls.
 
 Board: #16 is Ready, with the contract and file ownership in a comment.
-FZ-03 is **not authorized to run**: Andreas has not told a session to
-dispatch it. When he does, it stops at Ready to integrate for him to try the
-header, and it must not run beside FZ-04.
+FZ-03 is next in line for an implementation worker under the standing
+instruction above. It waits until FZ-01's timing runs are over, because its
+worker builds and tests. It stops at Ready to integrate for Andreas to try
+the header, and it must not run beside FZ-04.
 
 ## Issue #1: pin the Rust toolchain action, then close
 
@@ -210,9 +242,12 @@ safe-merge rule requires.
   explicitly because the ref no longer names it.
 - Branch `ci/1-pin-rust-toolchain`, worktree `.claude/worktrees/issue-1`.
   Worker `fz-small`, reviewer `fz-reviewer`.
-- Queued behind two constraints: the limit of two workers (FZ-01 and FZ-05
-  are running), and the local fmt, clippy and test run on the combined
-  result, which must not overlap an FZ-01 timing run.
+- Worker and reviewer are done: verdict accepted, no blockers. Committed as
+  `1c3701ad551d2499f32019823238381e3d63307b` on the branch and pushed; CI on
+  the branch is the real test of the pinned action.
+- Still to do: the local fmt, clippy and test run on the combined result,
+  which waits until FZ-01's timing runs are over; then merge, confirm CI on
+  `main`, and close #1 with a summary of how its acceptance is met.
 - `release.yml` only runs on a tag, so its pinned line is checked by reading;
   the identical line in `ci.yml` is exercised by the branch push.
 
