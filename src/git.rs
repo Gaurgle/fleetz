@@ -97,9 +97,21 @@ pub async fn user_email(repo_path: &Path) -> Option<String> {
     (!email.is_empty()).then_some(email)
 }
 
-/// A cheap fingerprint of everything the expensive probes depend on. Equal
-/// keys across two sweeps mean log, reflog, graph, stash, and worktree output
-/// cannot have changed, so those subprocesses can be skipped entirely.
+/// A cheap fingerprint of what the expensive probes (log, reflog, graph,
+/// stash, worktree) read. A sweep that finds it equal to the last one reuses
+/// their output instead of running them.
+///
+/// Refs are keyed by content, never by file metadata: every ref's full
+/// object id, as `for-each-ref` reports it, goes into `ref_signature`. File
+/// times and sizes missed nested tags, remote-tracking refs and other
+/// branches, and moved on `pack-refs` and `gc`, which change no ref.
+///
+/// Not seen: anything that changes a probe's answer without moving a ref,
+/// HEAD, the index, the shallow boundary or a reflog size, such as config
+/// that alters `git log` output. Working-tree state is never gated by this
+/// key: `dirty_count` runs on every sweep.
+///
+/// In memory only; never persisted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkKey {
     /// Output of rev-parse HEAD: one cheap subprocess buys exact commit identity.
@@ -108,49 +120,62 @@ pub struct WorkKey {
     pub index_size: u64,
     /// Size of the stash reflog (common dir aware); 0 when absent.
     pub stash_size: u64,
-    /// Fingerprint of the refs the graph decorates: the newer mtime of
-    /// `packed-refs` and the loose `refs/tags` directory, that file's size,
-    /// and how many loose tags there are.
-    ///
-    /// Tags are why this exists. Creating one moves no commit, no index and no
-    /// stash, so without this the fingerprint was identical across the sweep
-    /// and all six probes were skipped -- and the tag never reached the pane.
-    /// That is precisely what the release flow does: the `chore: release`
-    /// commit lands first, the tag is created after it, and nothing else
-    /// moves. Every release tag was invisible until something unrelated
-    /// happened to move HEAD.
-    ///
-    /// Three parts because one is not enough on a coarse filesystem: the size
-    /// catches a `packed-refs` rewrite whose mtime did not tick, and the count
-    /// catches a loose tag added or deleted inside the same mtime granule.
-    ///
-    /// Filesystem only, no subprocess: this is paid for every repo on every
-    /// sweep, and the whole point of the key is to be cheaper than what it
-    /// gates.
-    ///
-    /// Known limit: a tag nested under a subdirectory that already exists
-    /// (`refs/tags/rc/2` when `refs/tags/rc/1` is there) moves neither the
-    /// directory mtime nor the top-level count. Flat tag names, which is
-    /// every convention in normal use, are covered.
-    pub refs_mtime: Option<std::time::SystemTime>,
-    pub packed_refs_size: u64,
-    pub loose_tag_count: usize,
+    /// Size of this checkout's HEAD reflog (`<git_dir>/logs/HEAD`); 0 when
+    /// absent. Catches `reflog expire`, which moves no ref.
+    pub head_log_size: u64,
+    /// The full refname of the branch HEAD names, `None` when detached. Per
+    /// checkout: a linked worktree and its main clone differ here.
+    pub head_ref: Option<String>,
+    /// Hash of every ref's (full refname, full object id) pair (local
+    /// branches, remote-tracking refs, tags at any depth, `refs/stash`,
+    /// notes, replace refs and any other namespace), plus the bytes of
+    /// `<common>/shallow` when it exists. Shared by every checkout of one
+    /// clone. Nothing derived (no ahead or behind, no upstream, no short
+    /// names) goes in.
+    pub ref_signature: u64,
 }
 
-/// The ref fingerprint for `WorkKey`. Takes the *common* dir: a linked
-/// worktree keeps its refs with the main checkout, not beside its own HEAD.
-fn refs_fingerprint(common_dir: &Path) -> (Option<std::time::SystemTime>, u64, usize) {
-    let packed = std::fs::metadata(common_dir.join("packed-refs")).ok();
-    let packed_size = packed.as_ref().map(|m| m.len()).unwrap_or(0);
-    let packed_mtime = packed.as_ref().and_then(|m| m.modified().ok());
+/// One ref as `for-each-ref` lists it: the full refname and the full object
+/// id. The pair the key hashes.
+pub type RefId = (String, String);
 
-    let tags_dir = common_dir.join("refs").join("tags");
-    let tags_mtime = std::fs::metadata(&tags_dir)
-        .ok()
-        .and_then(|m| m.modified().ok());
-    let loose_tags = std::fs::read_dir(&tags_dir).map(|d| d.count()).unwrap_or(0);
+/// A cheap-tier ref query that did not answer: the process failed to run,
+/// timed out, or exited non-zero. Distinct from "no refs", which is an empty
+/// list, so the key can refuse to compare instead of matching another empty
+/// answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefQueryFailed;
 
-    (packed_mtime.max(tags_mtime), packed_size, loose_tags)
+/// The local-branch query: the branch statuses the panes show, and the
+/// `refs/heads/` content and HEAD symref the key hashes.
+#[derive(Debug, Clone, Default)]
+pub struct LocalBranches {
+    pub statuses: Vec<BranchStatus>,
+    /// Every `refs/heads/` ref with its full object id.
+    pub refs: Vec<RefId>,
+    /// The full refname HEAD names, `None` when detached.
+    pub head: Option<String>,
+}
+
+/// The widened ref query: remote-tracking branches for the panes, and every
+/// ref outside `refs/heads/` for the key.
+#[derive(Debug, Clone, Default)]
+pub struct OtherRefs {
+    pub remotes: Vec<RemoteBranch>,
+    /// Every ref outside `refs/heads/`, with its full object id.
+    pub refs: Vec<RefId>,
+}
+
+/// Hash the ref content and the shallow file into `WorkKey::ref_signature`.
+/// `DefaultHasher::new()` uses fixed keys, so equal input hashes equal for
+/// the life of the process, which is as long as a key lives.
+fn ref_signature(local: &[RefId], other: &[RefId], shallow: Option<&[u8]>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    local.hash(&mut hasher);
+    other.hash(&mut hasher);
+    shallow.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// The repo's real git directory: `.git` itself, or the target of a
@@ -233,36 +258,55 @@ pub fn last_successful_fetch_at(repo_path: &Path) -> Option<std::time::SystemTim
     written.then_some(at)
 }
 
-/// Cheap change detector: if none of these moved, the expensive probes
-/// (log, reflog, graph, stash, worktree) cannot have new answers. Untracked
-/// files do not touch the index, so dirty_count is always probed regardless.
+/// The key for a checkout, running both cheap-tier ref queries itself. The
+/// sweep already has their output and calls `work_key_from` instead.
+#[cfg(test)]
 pub async fn work_key(repo_path: &Path) -> Option<WorkKey> {
+    let local = try_branch_statuses(repo_path).await;
+    let other = try_ref_listing(repo_path).await;
+    work_key_from(repo_path, local.as_ref().ok(), other.as_ref().ok()).await
+}
+
+/// Cheap change detector over the cheap tier's ref queries: when none of
+/// HEAD's sha, the HEAD symref, any ref's content, the shallow boundary, the
+/// index or the HEAD and stash reflog sizes moved, the expensive probes (log,
+/// reflog, graph, stash, worktree) are reused. See `WorkKey` for what this
+/// cannot see. Untracked files do not touch the index, so dirty_count is
+/// always probed regardless.
+///
+/// `None` when a ref query failed (pass `None` for it), HEAD is unborn or
+/// unreadable, or the git dir cannot be resolved. The sweep treats `None` as
+/// changed, so two failures never compare as unchanged.
+pub async fn work_key_from(
+    repo_path: &Path,
+    local: Option<&LocalBranches>,
+    other: Option<&OtherRefs>,
+) -> Option<WorkKey> {
+    let (local, other) = (local?, other?);
     let head = run_git(repo_path, &["rev-parse", "HEAD"]).await?;
     if !head.status.success() {
         return None; // unborn HEAD etc: treat as always-changed
     }
     let head_sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
 
-    // Stash log lives in the COMMON dir for linked worktrees.
+    // Per checkout: index and HEAD reflog. Shared with the main clone, in
+    // the common dir: the stash log and the shallow file.
     let RepoDirs {
         git_dir,
         common_dir,
     } = repo_dirs(repo_path)?;
     let index_meta = std::fs::metadata(git_dir.join("index")).ok();
-    let stash_size = std::fs::metadata(common_dir.join("logs/refs/stash"))
-        .map(|m| m.len())
-        .unwrap_or(0);
-
-    let (refs_mtime, packed_refs_size, loose_tag_count) = refs_fingerprint(&common_dir);
+    let file_size = |p: std::path::PathBuf| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    let shallow = std::fs::read(common_dir.join("shallow")).ok();
 
     Some(WorkKey {
         head_sha,
         index_mtime: index_meta.as_ref().and_then(|m| m.modified().ok()),
         index_size: index_meta.map(|m| m.len()).unwrap_or(0),
-        stash_size,
-        refs_mtime,
-        packed_refs_size,
-        loose_tag_count,
+        stash_size: file_size(common_dir.join("logs/refs/stash")),
+        head_log_size: file_size(git_dir.join("logs/HEAD")),
+        head_ref: local.head.clone(),
+        ref_signature: ref_signature(&local.refs, &other.refs, shallow.as_deref()),
     })
 }
 
@@ -506,27 +550,38 @@ pub fn redact_userinfo(text: &str) -> String {
 }
 
 /// Get all branch statuses for a repo (behind/ahead relative to upstream).
+/// Empty when the query fails; `try_branch_statuses` tells the two apart.
 pub async fn branch_statuses(repo_path: &Path) -> Vec<BranchStatus> {
-    let Some(output) = run_git(
+    try_branch_statuses(repo_path)
+        .await
+        .map(|local| local.statuses)
+        .unwrap_or_default()
+}
+
+/// The branch query, keeping a failure distinct from "no branches" and the
+/// full ids and HEAD symref `work_key_from` hashes.
+pub async fn try_branch_statuses(repo_path: &Path) -> Result<LocalBranches, RefQueryFailed> {
+    let output = run_git(
         repo_path,
         &[
             "for-each-ref",
             // `%(HEAD)` is `*` on the checked-out branch and a space on every
             // other, so which branch you are on rides the query that was
             // already being made rather than costing a second subprocess.
-            "--format=%(HEAD)\t%(refname:short)\t%(upstream:short)\t%(upstream:track)\t%(objectname:short)",
+            // The full refname and object id at the end are for the key;
+            // `tip` stays abbreviated to match the graph's `%h`.
+            "--format=%(HEAD)\t%(refname:short)\t%(upstream:short)\t%(upstream:track)\t%(objectname:short)\t%(refname)\t%(objectname)",
             "refs/heads/",
         ],
     )
     .await
-    else {
-        return Vec::new();
-    };
+    .ok_or(RefQueryFailed)?;
     if !output.status.success() {
-        return Vec::new();
+        return Err(RefQueryFailed);
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let (refs, head) = parse_branch_refs(&stdout);
     let mut statuses = parse_branch_output(&stdout);
 
     // `upstream:track` only measures divergence from a branch's own upstream,
@@ -556,7 +611,29 @@ pub async fn branch_statuses(repo_path: &Path) -> Vec<BranchStatus> {
         }
     }
 
-    statuses
+    Ok(LocalBranches {
+        statuses,
+        refs,
+        head,
+    })
+}
+
+/// The key's half of the branch query: each branch's (full refname, full
+/// object id), from the last two fields, and the full refname marked `*`.
+fn parse_branch_refs(output: &str) -> (Vec<RefId>, Option<String>) {
+    let mut refs = Vec::new();
+    let mut head = None;
+    for line in output.lines().filter(|l| !l.is_empty()) {
+        let parts: Vec<&str> = line.split('\t').collect();
+        let (Some(full), Some(id)) = (parts.get(5), parts.get(6)) else {
+            continue;
+        };
+        if parts.first().is_some_and(|h| h.trim() == "*") {
+            head = Some(full.to_string());
+        }
+        refs.push((full.to_string(), id.trim().to_string()));
+    }
+    (refs, head)
 }
 
 /// Whether the repo has at least one remote configured.
@@ -1190,27 +1267,60 @@ pub async fn all_branches(repo_path: &Path) -> Vec<String> {
 }
 
 /// Get all remote-tracking branch names (e.g. "origin/feature-x"), excluding
-/// symbolic refs like `origin/HEAD`.
+/// symbolic refs like `origin/HEAD`. Empty when the query fails.
 pub async fn remote_branches(repo_path: &Path) -> Vec<RemoteBranch> {
+    try_ref_listing(repo_path)
+        .await
+        .map(|other| other.remotes)
+        .unwrap_or_default()
+}
+
+/// Every ref, in one query: the remote-tracking branches the panes show,
+/// and every ref outside `refs/heads/` for the key.
+///
+/// No pattern, because `for-each-ref --exclude` is not in git 2.39, so the
+/// local branches are listed here too and dropped by the parser: they come
+/// from the branch query, whose list is the one the history probes walk.
+/// That costs text, not a process.
+pub async fn try_ref_listing(repo_path: &Path) -> Result<OtherRefs, RefQueryFailed> {
     let output = run_git(
         repo_path,
         &[
             "for-each-ref",
             // Both forms: the full refname to filter on, the short one to
             // show. Filtering on the short name alone missed the symref --
-            // see `parse_remote_branch_output`.
-            "--format=%(refname)\t%(refname:short)\t%(objectname:short)",
-            "refs/remotes/",
+            // see `parse_remote_branch_output`. The full object id is for
+            // the key; `tip` stays abbreviated.
+            "--format=%(refname)\t%(refname:short)\t%(objectname:short)\t%(objectname)",
         ],
     )
-    .await;
-
-    match output {
-        Some(o) if o.status.success() => {
-            parse_remote_branch_output(&String::from_utf8_lossy(&o.stdout))
-        }
-        _ => Vec::new(),
+    .await
+    .ok_or(RefQueryFailed)?;
+    if !output.status.success() {
+        return Err(RefQueryFailed);
     }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(OtherRefs {
+        remotes: parse_remote_branch_output(&stdout),
+        refs: parse_other_refs(&stdout),
+    })
+}
+
+/// The key's half of the widened query: (full refname, full object id) for
+/// every ref outside `refs/heads/`, the remotes' `HEAD` symrefs included.
+fn parse_other_refs(stdout: &str) -> Vec<RefId> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\t').collect();
+            let full = *parts.first()?;
+            if full.is_empty() || full.starts_with("refs/heads/") {
+                return None;
+            }
+            let id = parts.get(3).map_or("", |s| s.trim());
+            Some((full.to_string(), id.to_string()))
+        })
+        .collect()
 }
 
 /// Short names of the remote-tracking branches, dropping each remote's
@@ -1222,6 +1332,10 @@ pub async fn remote_branches(repo_path: &Path) -> Vec<RemoteBranch> {
 /// was a phantom branch called `origin` sitting in the branches list marked
 /// "not fetched", when it is not a branch at all and points at `origin/main`,
 /// which is fetched.
+///
+/// The query lists every ref, so anything outside `refs/remotes/` (local
+/// branches, tags, the stash, notes) is dropped here: it would otherwise
+/// show up in the branches view.
 fn parse_remote_branch_output(stdout: &str) -> Vec<RemoteBranch> {
     stdout
         .lines()
@@ -1229,7 +1343,7 @@ fn parse_remote_branch_output(stdout: &str) -> Vec<RemoteBranch> {
             let mut parts = line.split('\t');
             let full = parts.next()?;
             let short = parts.next()?.trim();
-            if full.ends_with("/HEAD") || short.is_empty() {
+            if !full.starts_with("refs/remotes/") || full.ends_with("/HEAD") || short.is_empty() {
                 return None;
             }
             Some(RemoteBranch {
@@ -1604,6 +1718,59 @@ mod tests {
         );
         let names: Vec<&str> = remotes.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["origin/main"]);
+    }
+
+    /// The widened query lists every ref. The branches view gets only the
+    /// remote-tracking ones; the key gets everything outside `refs/heads/`.
+    #[test]
+    fn the_widened_ref_query_splits_by_prefix() {
+        let stdout = "refs/heads/main\tmain\taaa\taaaa1\n\
+                      refs/notes/commits\tnotes/commits\tbbb\tbbbb2\n\
+                      refs/remotes/origin/HEAD\torigin\tccc\tcccc3\n\
+                      refs/remotes/origin/main\torigin/main\tccc\tcccc3\n\
+                      refs/stash\tstash\tddd\tdddd4\n\
+                      refs/tags/rc/1\trc/1\teee\teeee5\n";
+        let remotes = parse_remote_branch_output(stdout);
+        assert_eq!(
+            remotes,
+            vec![RemoteBranch {
+                name: "origin/main".to_string(),
+                tip: "ccc".to_string(),
+            }]
+        );
+        let other = parse_other_refs(stdout);
+        let names: Vec<&str> = other.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "refs/notes/commits",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+                "refs/stash",
+                "refs/tags/rc/1",
+            ]
+        );
+        assert_eq!(other[3].1, "dddd4", "the full id");
+    }
+
+    /// The key's half of the branch query: full refnames and ids, and the
+    /// branch marked `*` as the HEAD symref.
+    #[test]
+    fn parse_branch_refs_keeps_full_ids_and_the_head_symref() {
+        let output = " \tside\t\t\taaa\trefs/heads/side\taaaa1\n\
+                      *\tmain\torigin/main\t\tbbb\trefs/heads/main\tbbbb2\n";
+        let (refs, head) = parse_branch_refs(output);
+        assert_eq!(
+            refs,
+            vec![
+                ("refs/heads/side".to_string(), "aaaa1".to_string()),
+                ("refs/heads/main".to_string(), "bbbb2".to_string()),
+            ]
+        );
+        assert_eq!(head.as_deref(), Some("refs/heads/main"));
+
+        let detached = " \tmain\t\t\tbbb\trefs/heads/main\tbbbb2\n";
+        assert_eq!(parse_branch_refs(detached).1, None);
     }
 
     /// A branch legitimately called `.../HEAD-something` must survive: the
@@ -2085,14 +2252,40 @@ mod real_repo_tests {
         std::fs::canonicalize(path).expect("path exists")
     }
 
-    /// The parts of `WorkKey` read from the common dir.
-    fn shared_fields(key: &WorkKey) -> (u64, Option<std::time::SystemTime>, u64, usize) {
-        (
-            key.stash_size,
-            key.refs_mtime,
-            key.packed_refs_size,
-            key.loose_tag_count,
-        )
+    /// The parts of `WorkKey` shared by every checkout of one clone: the
+    /// stash log and shallow file read from the common dir, and the refs.
+    fn shared_fields(key: &WorkKey) -> (u64, u64) {
+        (key.stash_size, key.ref_signature)
+    }
+
+    /// Tag and stash in `main_dir`, then check that `checkout`, another
+    /// checkout of the same clone, reads them through the common dir: the
+    /// tag moves its ref signature and the stash log has a size there.
+    async fn assert_reads_the_common_dir(main_dir: &Path, checkout: &Path) {
+        let before = work_key(checkout).await.expect("checkout key");
+        sh(main_dir, &["git", "tag", "v1"]);
+        std::fs::write(main_dir.join("a.txt"), "stash me\n").unwrap();
+        sh(main_dir, &["git", "stash", "-q"]);
+        let main_key = work_key(main_dir).await.expect("main key");
+        let key = work_key(checkout).await.expect("checkout key");
+        assert_eq!(shared_fields(&main_key), shared_fields(&key));
+        assert_ne!(
+            before.ref_signature, key.ref_signature,
+            "a tag made in the main checkout did not reach this one"
+        );
+        assert!(
+            key.stash_size > 0,
+            "the stash log was not read from the common dir"
+        );
+
+        // The shallow file lives in the common dir too.
+        let common = repo_dirs(checkout).expect("resolves").common_dir;
+        std::fs::write(common.join("shallow"), format!("{}\n", key.head_sha)).unwrap();
+        let shallow = work_key(checkout).await.expect("checkout key");
+        assert_ne!(
+            key.ref_signature, shallow.ref_signature,
+            "the shallow file was not read from the common dir"
+        );
     }
 
     #[tokio::test]
@@ -2133,11 +2326,7 @@ mod real_repo_tests {
         );
 
         // The key reads refs and the stash log from the common dir.
-        sh(&main_dir, &["git", "tag", "v1"]);
-        let main_key = work_key(&main_dir).await.expect("main key");
-        let wt_key = work_key(&wt).await.expect("worktree key");
-        assert_eq!(shared_fields(&main_key), shared_fields(&wt_key));
-        assert_eq!(wt_key.loose_tag_count, 1);
+        assert_reads_the_common_dir(&main_dir, &wt).await;
 
         // FETCH_HEAD is per worktree.
         std::fs::write(main_dir.join(".git/FETCH_HEAD"), "").unwrap();
@@ -2163,11 +2352,7 @@ mod real_repo_tests {
         assert_eq!(dirs.git_dir, git_dir);
         assert_eq!(dirs.common_dir, common);
 
-        sh(&main_dir, &["git", "tag", "v1"]);
-        let main_key = work_key(&main_dir).await.expect("main key");
-        let wt_key = work_key(&wt).await.expect("worktree key");
-        assert_eq!(shared_fields(&main_key), shared_fields(&wt_key));
-        assert_eq!(wt_key.loose_tag_count, 1);
+        assert_reads_the_common_dir(&main_dir, &wt).await;
 
         std::fs::remove_dir_all(&wt).ok();
         std::fs::remove_dir_all(&main_dir).ok();
@@ -2231,9 +2416,9 @@ mod real_repo_tests {
         assert_eq!(canonical(&dirs.git_dir), canonical(&store));
         assert_eq!(dirs.common_dir, dirs.git_dir);
 
-        sh(&checkout, &["git", "tag", "v1"]);
+        // Refs, stash log and index all come from the one dir.
+        assert_reads_the_common_dir(&checkout, &checkout).await;
         let key = work_key(&checkout).await.expect("a key");
-        assert_eq!(key.loose_tag_count, 1, "refs read from the one dir");
         assert!(key.index_size > 0, "index read from the one dir");
 
         std::fs::remove_dir_all(&root).ok();
@@ -2647,6 +2832,407 @@ mod real_repo_tests {
         );
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    // --- FZ-06b: the key follows ref content (scenario ids from
+    // docs/cache-invalidation-design.md, 3.1) ---
+
+    /// A commit touching a file, so the history really moves.
+    fn commit(dir: &Path, msg: &str) {
+        std::fs::write(dir.join("a.txt"), format!("{msg}\n")).unwrap();
+        sh(dir, &["git", "add", "."]);
+        sh(dir, &["git", "commit", "-q", "-m", msg]);
+    }
+
+    /// A bare repository under a unique name, for pushes and fetches.
+    fn bare_remote(tag: &str) -> PathBuf {
+        let bare =
+            std::env::temp_dir().join(format!("fleetz_it_{tag}_bare_{}.git", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bare);
+        std::fs::create_dir_all(&bare).unwrap();
+        sh(&bare, &["git", "init", "-q", "--bare", "-b", "main"]);
+        bare
+    }
+
+    /// `temp_repo` with `origin` set to a fresh bare remote and `main`
+    /// pushed with an upstream. Returns the clone and the remote.
+    fn repo_with_remote(tag: &str) -> (PathBuf, PathBuf) {
+        let dir = temp_repo(tag);
+        let bare = bare_remote(tag);
+        sh(
+            &dir,
+            &["git", "remote", "add", "origin", &bare.to_string_lossy()],
+        );
+        sh(&dir, &["git", "push", "-q", "-u", "origin", "main"]);
+        (dir, bare)
+    }
+
+    async fn key_of(dir: &Path) -> WorkKey {
+        work_key(dir).await.expect("a key for a real repo")
+    }
+
+    /// E2b, the everyday push: it moves `refs/remotes/origin/main` and
+    /// nothing else, and the graph's `origin/main` decoration stayed one
+    /// commit behind until HEAD moved again.
+    #[tokio::test]
+    async fn a_push_changes_the_work_key() {
+        let (dir, bare) = repo_with_remote("fz06b_push");
+        commit(&dir, "two");
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "push", "-q", "origin", "main"]);
+        let after = key_of(&dir).await;
+        assert_ne!(before, after, "a push moved origin/main, the key did not");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&bare).ok();
+    }
+
+    /// E2c: a fetch bringing another clone's push.
+    #[tokio::test]
+    async fn fetching_another_clones_push_changes_the_work_key() {
+        let (dir, bare) = repo_with_remote("fz06b_fetch");
+        let other = std::env::temp_dir().join(format!(
+            "fleetz_it_fz06b_fetch_other_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&other);
+        sh(
+            &std::env::temp_dir(),
+            &[
+                "git",
+                "clone",
+                "-q",
+                &bare.to_string_lossy(),
+                &other.to_string_lossy(),
+            ],
+        );
+        sh(&other, &["git", "config", "user.email", "o@example.com"]);
+        sh(&other, &["git", "config", "user.name", "o"]);
+        commit(&other, "from the other clone");
+        sh(&other, &["git", "push", "-q", "origin", "main"]);
+
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "fetch", "-q", "--prune"]);
+        let after = key_of(&dir).await;
+        assert_ne!(before, after, "a fetch moved origin/main, the key did not");
+        for d in [&dir, &bare, &other] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// E1a: another branch moved while HEAD stays put.
+    #[tokio::test]
+    async fn moving_another_branch_changes_the_work_key() {
+        let dir = temp_repo("fz06b_branchf");
+        sh(&dir, &["git", "branch", "side"]);
+        commit(&dir, "two");
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "branch", "-f", "side", "main"]);
+        let after = key_of(&dir).await;
+        assert_ne!(before, after, "side moved, the key did not");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// E1b: a branch created at an older commit.
+    #[tokio::test]
+    async fn creating_a_branch_changes_the_work_key() {
+        let dir = temp_repo("fz06b_branchnew");
+        commit(&dir, "two");
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "branch", "feat", "HEAD~1"]);
+        let after = key_of(&dir).await;
+        assert_ne!(before, after, "a new branch left the key unchanged");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// E8b: a packed branch moved, which writes a loose ref beside it.
+    #[tokio::test]
+    async fn moving_a_packed_branch_changes_the_work_key() {
+        let dir = temp_repo("fz06b_packedmove");
+        sh(&dir, &["git", "branch", "side"]);
+        commit(&dir, "two");
+        sh(&dir, &["git", "pack-refs", "--all"]);
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "branch", "-f", "side", "main"]);
+        let after = key_of(&dir).await;
+        assert_ne!(before, after, "a packed branch moved, the key did not");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// E8a: packing moves no ref, so it must not cost a re-probe.
+    #[tokio::test]
+    async fn packing_refs_keeps_the_work_key() {
+        let dir = temp_repo("fz06b_pack");
+        sh(&dir, &["git", "branch", "side"]);
+        sh(&dir, &["git", "tag", "v1"]);
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "pack-refs", "--all"]);
+        let after = key_of(&dir).await;
+        assert_eq!(before, after, "pack-refs alone moved the key");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// E8d: nor does `gc`.
+    #[tokio::test]
+    async fn gc_keeps_the_work_key() {
+        let dir = temp_repo("fz06b_gc");
+        sh(&dir, &["git", "branch", "side"]);
+        sh(&dir, &["git", "tag", "v1"]);
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "gc", "-q"]);
+        let after = key_of(&dir).await;
+        assert_eq!(before, after, "gc alone moved the key");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// E3d: a nested tag added beside an existing one in its directory.
+    #[tokio::test]
+    async fn a_nested_tag_changes_the_work_key() {
+        let dir = temp_repo("fz06b_nestedtag");
+        sh(&dir, &["git", "tag", "rc/1"]);
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "tag", "rc/2"]);
+        let after = key_of(&dir).await;
+        assert_ne!(before, after, "rc/2 was created, the key did not move");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// E3e: a nested tag moved to another commit.
+    #[tokio::test]
+    async fn moving_a_nested_tag_changes_the_work_key() {
+        let dir = temp_repo("fz06b_nestedmove");
+        commit(&dir, "two");
+        sh(&dir, &["git", "tag", "rc/1"]);
+        sh(&dir, &["git", "tag", "rc/2"]);
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "tag", "-f", "rc/2", "HEAD~1"]);
+        let after = key_of(&dir).await;
+        assert_ne!(before, after, "rc/2 moved, the key did not");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// E9a: a commit on `main` in the main checkout, seen from a linked
+    /// worktree's row. Its HEAD, index and stash are untouched.
+    #[tokio::test]
+    async fn a_commit_in_the_main_checkout_changes_a_linked_worktrees_key() {
+        let main_dir = temp_repo("fz06b_e9a");
+        let wt = linked_worktree(&main_dir, "fz06b_e9a");
+        let before = key_of(&wt).await;
+        commit(&main_dir, "two");
+        let after = key_of(&wt).await;
+        assert_ne!(before, after, "main moved, the worktree's key did not");
+        std::fs::remove_dir_all(&wt).ok();
+        std::fs::remove_dir_all(&main_dir).ok();
+    }
+
+    /// E9d: a commit in the linked worktree, seen from the main checkout.
+    #[tokio::test]
+    async fn a_commit_in_a_linked_worktree_changes_the_main_checkouts_key() {
+        let main_dir = temp_repo("fz06b_e9d");
+        let wt = linked_worktree(&main_dir, "fz06b_e9d");
+        sh(&wt, &["git", "config", "user.email", "t@example.com"]);
+        sh(&wt, &["git", "config", "user.name", "t"]);
+        let before = key_of(&main_dir).await;
+        commit(&wt, "on the worktree branch");
+        let after = key_of(&main_dir).await;
+        assert_ne!(
+            before, after,
+            "the worktree's branch moved, main's key did not"
+        );
+        std::fs::remove_dir_all(&wt).ok();
+        std::fs::remove_dir_all(&main_dir).ok();
+    }
+
+    /// E1e: HEAD repointed at another branch on the same commit, with no
+    /// index write. The reflog and the HEAD decoration both change.
+    #[tokio::test]
+    async fn repointing_head_changes_the_work_key() {
+        let dir = temp_repo("fz06b_symref");
+        sh(&dir, &["git", "branch", "same"]);
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "symbolic-ref", "HEAD", "refs/heads/same"]);
+        let after = key_of(&dir).await;
+        assert_ne!(
+            before, after,
+            "HEAD names another branch, the key did not move"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// E15a: the HEAD reflog emptied by expiry, which the reflog pane draws.
+    #[tokio::test]
+    async fn expiring_the_reflog_changes_the_work_key() {
+        let dir = temp_repo("fz06b_expire");
+        commit(&dir, "two");
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "reflog", "expire", "--expire=now", "--all"]);
+        let after = key_of(&dir).await;
+        assert_ne!(
+            before, after,
+            "the reflog was emptied, the key did not move"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// E5f: a stash replaced at the same size in the main checkout, seen
+    /// from a linked worktree, whose own index does not move.
+    #[tokio::test]
+    async fn a_stash_replaced_at_equal_size_changes_a_linked_worktrees_key() {
+        let main_dir = temp_repo("fz06b_e5f");
+        let wt = linked_worktree(&main_dir, "fz06b_e5f");
+        std::fs::write(main_dir.join("a.txt"), "first\n").unwrap();
+        sh(&main_dir, &["git", "stash", "push", "-q", "-m", "aaaa"]);
+        let stash_log = main_dir.join(".git/logs/refs/stash");
+        let size_before = std::fs::metadata(&stash_log).unwrap().len();
+        let before = key_of(&wt).await;
+
+        sh(&main_dir, &["git", "stash", "drop", "-q"]);
+        std::fs::write(main_dir.join("a.txt"), "other\n").unwrap();
+        sh(&main_dir, &["git", "stash", "push", "-q", "-m", "bbbb"]);
+        assert_eq!(
+            std::fs::metadata(&stash_log).unwrap().len(),
+            size_before,
+            "the fixture must replace the stash at equal size"
+        );
+        let after = key_of(&wt).await;
+        assert_ne!(
+            before, after,
+            "the stash was replaced, the key did not move"
+        );
+        std::fs::remove_dir_all(&wt).ok();
+        std::fs::remove_dir_all(&main_dir).ok();
+    }
+
+    /// E16a: a note, which `log --graph` prints and `--all` walks.
+    #[tokio::test]
+    async fn adding_a_note_changes_the_work_key() {
+        let dir = temp_repo("fz06b_notes");
+        let before = key_of(&dir).await;
+        sh(&dir, &["git", "notes", "add", "-m", "hello", "HEAD"]);
+        let after = key_of(&dir).await;
+        assert_ne!(before, after, "a note was added, the key did not move");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// E16b: `fetch --unshallow` moves no ref, only the shallow boundary,
+    /// and the history gains rows.
+    #[tokio::test]
+    async fn unshallowing_changes_the_work_key() {
+        let (upstream, bare) = repo_with_remote("fz06b_shallow");
+        commit(&upstream, "two");
+        commit(&upstream, "three");
+        sh(&upstream, &["git", "push", "-q", "origin", "main"]);
+        let clone = std::env::temp_dir().join(format!(
+            "fleetz_it_fz06b_shallow_clone_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&clone);
+        let url = format!("file://{}", bare.to_string_lossy());
+        sh(
+            &std::env::temp_dir(),
+            &[
+                "git",
+                "clone",
+                "-q",
+                "--depth",
+                "1",
+                &url,
+                &clone.to_string_lossy(),
+            ],
+        );
+        assert!(clone.join(".git/shallow").exists(), "a shallow clone");
+
+        let before = key_of(&clone).await;
+        sh(&clone, &["git", "fetch", "-q", "--unshallow"]);
+        assert!(!clone.join(".git/shallow").exists(), "unshallowed");
+        let after = key_of(&clone).await;
+        assert_ne!(before, after, "the shallow boundary moved, the key did not");
+        for d in [&upstream, &bare, &clone] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// E12a: working-tree edits never touch the key, and are still seen,
+    /// because `dirty_count` is not gated by it.
+    #[tokio::test]
+    async fn a_dirty_tree_keeps_the_key_and_still_reports_dirty() {
+        let dir = temp_repo("fz06b_dirty");
+        let before = key_of(&dir).await;
+        std::fs::write(dir.join("a.txt"), "edited\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "untracked\n").unwrap();
+        let after = key_of(&dir).await;
+        assert_eq!(before, after, "working-tree edits moved the key");
+        assert_eq!(dirty_count(&dir).await, 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `.git` git cannot read yields no key, which the sweep reads as
+    /// changed.
+    #[tokio::test]
+    async fn an_unreadable_git_dir_has_no_work_key() {
+        let dir = temp_repo("fz06b_unreadable");
+        let dot = dir.join(".git");
+        sh(&dir, &["chmod", "000", &dot.to_string_lossy()]);
+        let key = work_key(&dir).await;
+        sh(&dir, &["chmod", "755", &dot.to_string_lossy()]);
+        assert_eq!(key, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A ref query that failed composes into no key, so the sweep cannot
+    /// mistake it for an answer with no refs in it.
+    #[tokio::test]
+    async fn a_failed_ref_query_yields_no_work_key() {
+        let dir = temp_repo("fz06b_failedquery");
+        let local = try_branch_statuses(&dir).await.expect("branch query");
+        let other = try_ref_listing(&dir).await.expect("ref query");
+        assert!(
+            work_key_from(&dir, Some(&local), Some(&other))
+                .await
+                .is_some()
+        );
+        assert_eq!(work_key_from(&dir, None, Some(&other)).await, None);
+        assert_eq!(work_key_from(&dir, Some(&local), None).await, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The widened query lists every ref, but the branches view must still
+    /// get only remote-tracking branches: no tag, stash or note.
+    #[tokio::test]
+    async fn remote_branches_list_only_remote_tracking_refs() {
+        let (dir, bare) = repo_with_remote("fz06b_onlyremotes");
+        sh(&dir, &["git", "tag", "v1"]);
+        sh(&dir, &["git", "notes", "add", "-m", "n", "HEAD"]);
+        std::fs::write(dir.join("a.txt"), "stash me\n").unwrap();
+        sh(&dir, &["git", "stash", "-q"]);
+        let names: Vec<String> = remote_branches(&dir)
+            .await
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+        assert_eq!(names, vec!["origin/main".to_string()]);
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&bare).ok();
+    }
+
+    /// `tip` stays abbreviated: the branches view matches it against the
+    /// graph's `%h` hashes (`App::inspected_hash`).
+    #[tokio::test]
+    async fn branch_and_remote_tips_stay_abbreviated() {
+        let (dir, bare) = repo_with_remote("fz06b_shorttip");
+        let short = {
+            let out = StdCommand::new("git")
+                .args(["rev-parse", "--short", "HEAD"])
+                .current_dir(&dir)
+                .output()
+                .expect("spawn");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let local = branch_statuses(&dir).await;
+        assert_eq!(local[0].tip, short);
+        let remote = remote_branches(&dir).await;
+        assert_eq!(remote[0].tip, short);
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&bare).ok();
     }
 }
 
