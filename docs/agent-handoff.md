@@ -175,9 +175,14 @@ comparison key moved to FZ-05b (#32), because clippy with warnings denied
 rejects an uncalled method in a binary crate; #32 has a comment adding
 `src/model.rs` to its files for that method.
 
-Before those tickets run, Andreas must see two things, both in the document:
-four `CLAUDE.md` invariant texts change (section 3.10), and FZ-05f changes
-what pass 3 shows, which he may veto.
+Andreas signed off on 2026-10-01 ("its a yes from me"): the four `CLAUDE.md`
+invariant changes in section 3.10, and FZ-05f's pass 3 change without a
+veto. He was told plainly that nothing has been executed yet, that two cases
+get slightly worse on purpose (a clone whose origin is the upstream, a
+transferred repo) and that the series has a no-install window. The sign-off
+is recorded on #32, #34 and #36. The coordinator edits the invariant text in
+`CLAUDE.md` as the ticket that makes it true lands: change 1 with FZ-05b,
+changes 3 and 4 with FZ-05d, change 2 with FZ-05f.
 
 **Constraint on the series:** between the merge of FZ-05b and the merge of
 FZ-05e a fleet with two same-named repos can lose a row it shows today,
@@ -281,8 +286,6 @@ exist.
   verification. He has run the FZ-03 branch build, which contains it.
 - Accept the FZ-04 failed-fetch display on its branch build when it reaches
   Ready to integrate.
-- Before the FZ-05 implementation tickets: the four `CLAUDE.md` invariant
-  changes and the veto on FZ-05f, both in the identity design.
 - The `fz-02`, `fz-01`, `fz-03`, `fz-05`, `fz-05a`, `fz-06`, `fz-06a`,
   `issue-1` and `issue-44` worktrees and their remote branches are
   integrated and kept. Removing them is his call.
