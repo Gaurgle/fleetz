@@ -61,7 +61,7 @@ assignment.
 
 Done and closed on 2026-10-01: FZ-02 (#15), FZ-01 (#14), FZ-05 (#18),
 FZ-06 (#19), FZ-03 (#16), FZ-05a (#31), FZ-06a (#37), issue #1 and issue
-#44. In progress: FZ-04 (#17). All are described below.
+#44. In progress: FZ-04 (#17, in review), FZ-10 (#23) and FZ-09 (#22). All are described below.
 No release has started.
 
 Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
@@ -254,10 +254,40 @@ Dispatched on 2026-10-01 under the standing instruction.
 - Branch `fix/fz-04-fetch-outcomes`, worktree `.claude/worktrees/fz-04`,
   worker `fz-worker` (`claude-opus-5-5`, medium). The base and the allowed
   files are in the assignment comment on #17.
+- State when last written: implemented, in its third review pass. Pass one
+  asked for two fixes; pass two found a credential leak in
+  `git::redact_userinfo` (a password containing `,` `)` or `'` was drawn in
+  full), now fixed and back with the reviewer. 751 tests pass in the
+  worktree; the change is uncommitted. Board: #17 Review.
+- Decisions taken in review are in the contract: fetch facts are a row
+  field carried by path across a load; the drawn remote URL loses all
+  userinfo except an ssh login name; the row badge says `unreachable`.
+- Follow-ups from the review, not ticketed: the fetch tally's 180 second
+  expiry is not extended by a later batch; one failing repo widens the
+  compact grid's badge column; bidi characters are not stripped from the
+  failure detail.
 - It **stops at Ready to integrate**: how a failed fetch looks on a row and
   in the detail pane is Andreas's to accept on the branch build. Until it is
   merged nothing else that touches `src/main.rs`, `src/git.rs`, `src/app.rs`,
   `src/model.rs` or the status display can start.
+
+## FZ-10 and FZ-09: design drafts in progress
+
+The last two M1 planning issues, both documentation only, dispatched on
+2026-10-01 beside FZ-04 because they share no files with it.
+
+- FZ-10 (#23), API budget and retry: base `67949620512b20419c0b71a9ed9b147f3eb1bdb2`,
+  branch `docs/fz-10-api-budget`, worktree `.claude/worktrees/fz-10`, output
+  `docs/api-budget-design.md`. At most 10 live GraphQL requests.
+- FZ-09 (#22), coverage and cache isolation: same base, branch
+  `docs/fz-09-coverage-cache-isolation`, worktree `.claude/worktrees/fz-09`,
+  output `docs/coverage-cache-design.md`. At most 6 live requests; the real
+  cache is read-only; no cache schema change is authorized.
+- Both: worker `fz-worker` (`claude-opus-5-5`, medium) maps and drafts with
+  options; the coordinator decides the architecture; anything that changes a
+  cache format, a config key or what the user sees goes to Andreas. Then
+  `fz-reviewer`, commit, push, merge, Done and close.
+- Board: #23 and #22 In progress, assignments on the issues.
 
 ## FZ-08: reshaped, not started
 
