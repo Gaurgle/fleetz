@@ -60,7 +60,8 @@ setup check still open. GitHub is authoritative for current status and
 assignment.
 
 Done and closed on 2026-10-01: FZ-02 (#15), FZ-01 (#14), FZ-05 (#18) and
-issue #1. In flight: FZ-03 (#16) and FZ-06 (#19). All are described below.
+issue #1. In flight: FZ-03 (#16) and FZ-06 (#19) in review, FZ-05a (#31) in
+progress. All are described below.
 No release has started.
 
 Fable is acting coordinator on 2026-10-01 while Astra's usage recovers, and
@@ -158,12 +159,19 @@ GitHub-owned fields keyed by remote identity derived from the existing
 `owner` and `name`, sweep-owned fields by checkout path, exactly one row per
 remote carrying the GitHub fields and marked by the load through `owner`.
 
-Implementation tickets it defines, serial, none created as issues yet:
-FZ-05a (`model.rs`), b (`discovery.rs` plus named `assemble_view` call
-sites), c (test seam around `assemble_view`, pure refactor), d (assembly and
-poll in one ticket), e (`merge_sources`), f (pass 3 by path only). Optional
-g, h, i, j. They run after FZ-03 and FZ-04; only FZ-05a can run beside
-FZ-03.
+Implementation tickets it defines, serial, created as issues on 2026-10-01
+and on the board in Backlog (M1, P1): FZ-05a #31 (`model.rs`), b #32
+(`discovery.rs` plus named `assemble_view` call sites), c #33 (test seam
+around `assemble_view`, pure refactor), d #34 (assembly and poll in one
+ticket), e #35 (`merge_sources`), f #36 (pass 3 by path only). Optional g,
+h, i, j have no issues. b to f run after FZ-03 is integrated and serially
+with FZ-04; only FZ-05a can run beside FZ-03.
+
+FZ-05a (#31) is in progress: base `69df13300bbda2ee322e07065af61b9de7f71250`,
+branch `feat/fz-05a-remote-ref`, worktree `.claude/worktrees/fz-05a`, worker
+`fz-worker` (`claude-opus-5-5`, medium), allowed file `src/model.rs`. Next:
+review, commit, push, combined checks, merge under the safe-merge rule, Done
+and close. It needs nothing from Andreas.
 
 Before those tickets run, Andreas must see two things, both in the document:
 four `CLAUDE.md` invariant texts change (section 3.10), and FZ-05f changes
@@ -188,10 +196,16 @@ Dispatched on 2026-10-01 once FZ-01's timing runs were over.
 - Worker `fz-worker` (`claude-opus-5-5`, medium). Allowed file:
   `docs/cache-invalidation-design.md`. Production code is read-only; mutation
   experiments run in temporary repositories under the session scratchpad.
-- Board: #19 In progress, assignment on the issue.
-- Next: read the report and the document, decide its open questions,
-  dispatch `fz-reviewer` to repeat one confirmed gap from the documented
-  steps, then commit, push, merge, Done and close.
+- State when last written: in Review. The document (untracked in the
+  worktree) confirms eleven gaps where a gated product's answer changed and
+  the `WorkKey` did not, the everyday `git push` among them, and adopts a
+  ref-content signature built from the `for-each-ref` calls the sweep
+  already makes. The coordinator's decisions OD1 to OD7 are recorded in it;
+  none needs Andreas. `fz-reviewer` is repeating gap G1 from the document.
+- Board: #19 Review, assignment on the issue.
+- Next: on acceptance commit, push, merge, Done and close; then create the
+  fix tickets FIX-A to FIX-E as issues. FIX-C (`src/git.rs` only) can run
+  first, but not beside FZ-04.
 
 ## FZ-03: in progress
 
@@ -206,8 +220,13 @@ Dispatched on 2026-10-01 under the standing instruction.
   directly stop compiling when those fields are replaced. The worker may
   change how such a fixture sets the state and nothing else: no assertion,
   expected value or test name. The reviewer checks those hunks line by line.
-- Board: #16 In progress, assignment on the issue.
-- Next: review, commit, push, combined checks, then **stop at Ready to
+- State when last written: in Review. First review found one real gap
+  (a late poll answer could land over a successful `R` and rewind rows and
+  data time); the worker fixed it and three small items, 688 tests pass in
+  the worktree, and `fz-reviewer` is on its final pass. The change is
+  uncommitted in the worktree.
+- Board: #16 Review, assignment on the issue.
+- Next: on acceptance commit, push, combined checks, then **stop at Ready to
   integrate**: the header's wording and look are Andreas's to accept on the
   branch build (`cargo run --release --manifest-path
   .claude/worktrees/fz-03/Cargo.toml`). Do not merge before he has.
