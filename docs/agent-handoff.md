@@ -14,16 +14,17 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 21:40: two workers are running**, both dispatched
-  21:38 from base `82c75c5`: `fz-worker` on FZ-05f (#36, worktree
-  `fz-05f`, branch `fix/fz-05f-pass3-canonical-path`, `src/main.rs`) and
-  `fz-worker` on FZ-13e (#54, worktree `fz-13e`, branch
-  `fix/fz-13e-measure-drawn-width`, `src/ui/mod.rs` and
-  `src/ui/footer.rs`). Neither is reviewed. Everything else dispatched
-  today is merged and cleaned up: FZ-05b, FZ-05c, FZ-05d, FZ-05e, FZ-13a,
-  FZ-13b, FZ-13c, FZ-13t and #43. Nothing waits at Ready to integrate. A
-  lead that finds a later state recorded on an issue and not here trusts
-  the issue, and checks #36 and #54 for a report before dispatching again.
+- **State at 2026-10-02 21:47: two reviewers and one worker are
+  running.** `fz-reviewer` on FZ-05f (#36, worktree `fz-05f`, uncommitted
+  diff hash `95715991` against `82c75c5`); `fz-reviewer` on FZ-13e (#54,
+  worktree `fz-13e`, uncommitted diff hash `622307cf` against `82c75c5`);
+  `fz-worker` on FZ-09a (#57, worktree `fz-09a`, branch
+  `fix/fz-09a-atomic-cache-writes`, base `841a2e2`, `src/cache.rs`),
+  dispatched 21:47. Everything else dispatched today is merged and cleaned
+  up: FZ-05b, FZ-05c, FZ-05d, FZ-05e, FZ-13a, FZ-13b, FZ-13c, FZ-13t and
+  #43. Nothing waits at Ready to integrate. A lead that finds a later
+  state recorded on an issue and not here trusts the issue, and checks
+  #36, #54 and #57 before dispatching again.
 
 > **The no-install span is closed.** FZ-05b opened it (`f37c6b9`,
 > 2026-10-02 19:00) and FZ-05e closed it (`40a2c73`, 2026-10-02 21:31; CI
@@ -141,7 +142,7 @@ file's commit.
 | FZ-10 | #23 | `9494938` | `f627a84` | [api-budget-design.md](api-budget-design.md); owner items accepted; tickets #47 to #49 |
 | FZ-06c | #39 | `5c83fb0` | `24b2210` | The worktree list is read on every sweep |
 | FZ-06d | #40 | `92cf932` | `e4e3f42` | The local histogram carries its own reuse key |
-| FZ-09 | #22 | `ce557e1` | `d0f23af` | [coverage-cache-design.md](coverage-cache-design.md); owner items open |
+| FZ-09 | #22 | `ce557e1` | `d0f23af` | [coverage-cache-design.md](coverage-cache-design.md); owner items accepted on 2026-10-02 |
 
 The first eleven rows are from earlier sessions that day; the last six, the
 FZ-04 fix and merge, and the FZ-13 split are this session's.
@@ -179,10 +180,10 @@ first held the ticket at Ready to integrate for his look; he tried the
 build and saw nothing, because the coordinator had told him to choose
 "all" in the `t` overlay, which has no such choice. The `-a` flag shows
 those rows. He then gave the "small look changes" instruction and it
-merged under the safe-merge rule. **Still open with him, not blocking:**
-whether the ambiguity status line stays red (FZ-05d's worker's choice; it
-lasts 1.5 s, replaces the "Reloaded from cache" failure message, and a
-narrow footer can drop it).
+merged under the safe-merge rule. He has since confirmed the result on his
+fleet and that the ambiguity status line stays red (FZ-05d's worker's
+choice; it lasts 1.5 s, replaces the "Reloaded from cache" failure message,
+and a narrow footer can drop it).
 
 FZ-13c: Andreas asked for color after the first build and accepted the
 second on 2026-10-02 ("the colored help section looks good").
@@ -221,20 +222,29 @@ invariant change 1 of the identity design's section 3.10.
 Worktrees are under `.claude/worktrees/`.
 
 - **FZ-05f (#36), `fz-05f`, branch `fix/fz-05f-pass3-canonical-path`,
-  base `82c75c5`.** Worker dispatched 2026-10-02 21:38: pass 3 dedupes by
-  canonical path only, so dirty extra checkouts and same-named local-only
-  repos get rows. The veto in its body is settled (Andreas approved the
-  change with the design on 2026-10-01). It stops on its own if an
-  existing test encodes the name dedupe: that question is his. Then a
-  reviewer, then the safe-merge rule; on the merge the coordinator edits
-  `CLAUDE.md` invariant change 2 and tells him what rows are new.
+  base `82c75c5`.** Implemented (`src/main.rs` only, +268 -22, diff hash
+  `95715991`, 877 tests by the worker's run, no existing test edited; the
+  report is on #36), in review. Pass 3 dedupes by canonical
+  path only; the `checked_names` parameter of `unclaimed_local` is kept
+  for the signature and ignored. The veto in its body is settled (Andreas
+  approved the change with the design on 2026-10-01). On acceptance:
+  commit, push, CI, combined checks, merge under the safe-merge rule, edit
+  `CLAUDE.md` invariant change 2, and tell him what rows are new (dirty
+  extra checkouts, same-named local-only repos). The identity series is
+  then complete.
 - **FZ-13e (#54), `fz-13e`, branch `fix/fz-13e-measure-drawn-width`, base
-  `82c75c5`.** Worker dispatched 2026-10-02 21:38: the header and footer
-  measure what is drawn, not bytes. It stops on its own if characters and
-  ratatui's width disagree for a glyph on those lines, or if an existing
-  test asserts today's early drop. Then a reviewer, then the safe-merge
-  rule under the "small look changes" instruction. FZ-13f (#55) waits for
-  it: both edit the header in `src/ui/mod.rs`.
+  `82c75c5`.** Implemented (`src/ui/mod.rs` and `src/ui/footer.rs`, +238
+  -3, diff hash `622307cf`, 878 tests by the worker's run; the report is
+  on #54), in review. The header and footer count characters
+  instead of bytes. The reviewer is asked whether these two lines should
+  use ratatui's own width. On acceptance it merges under the "small look
+  changes" instruction. FZ-13f (#55) waits for it: both edit the header in
+  `src/ui/mod.rs`.
+- **FZ-09a (#57), `fz-09a`, branch `fix/fz-09a-atomic-cache-writes`, base
+  `841a2e2`.** Worker dispatched 2026-10-02 21:47: `ApiCache::write`
+  through a temporary file and a rename, new files mode 0600; `src/cache.rs`
+  only, standard library only. Then a reviewer, then the safe-merge rule
+  (no format or key change).
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked
   by Andreas until the repository goes public.
@@ -244,29 +254,25 @@ No other worktree or local ticket branch exists. Merged branches remain on
 
 ## What waits on Andreas
 
-1. **FZ-09 owner items**, put to him on 2026-10-02 at 18:40 with the
-   recommendations; **not answered yet**. He allowed the issues ("you may
-   create th FZ-09a to f issues", 2026-10-02): FZ-09a #57, FZ-09b #58,
-   FZ-09c #59, FZ-09d #60, FZ-09e #61 (not promoted), FZ-09f #62
-   (optional), all Backlog. Each body names the owner items it waits on and
-   says it is not ready for dispatch until he has answered them. They
-   are in plain language under "Owner items" in
-   [coverage-cache-design.md](coverage-cache-design.md). The ones that
-   matter: one saved GitHub copy per account, and what its file name is made
-   of (a 16-character fingerprint of the `gh` token, recommended; the same
-   through a cryptographic hash and a new dependency; or the username, which
-   shows the previous account's data until the first refresh after a
-   switch) (O1); the upgrade migration (O2); a "50 of 95 repos" header note,
-   since the existing warning almost never shows (O3); dimmed values on
-   repos the last refresh missed (O4); an account switch rebuilding the list
-   (O5); the signed-out launch (O7); saved files readable only by him (O14);
-   and the `CLAUDE.md` and freshness contract changes in its section 6.
-   Smaller: O8, O10, O11, O12. Later: O9, O13.
-2. **Small questions asked on 2026-10-02 and not answered**, none
-   blocking: whether the ambiguity status line stays red; whether the
-   `LoadingFrame` redraw bug (follow-ups below) may become an issue;
-   whether his idea of switching the icon set from inside the app should
-   become a ticket.
+1. **Nothing about FZ-09: the owner items are answered.** On 2026-10-02 at
+   about 21:43 he answered "yes to all. it looks good" to a message that
+   offered "all as recommended" for them. Recorded on #22 and at the top
+   of "Owner items" in
+   [coverage-cache-design.md](coverage-cache-design.md): O1 as the token
+   fingerprint, O2, O3, O4, O5, O7 as the most recent saved copy, O8, O10,
+   O11, O12, O14 and the section 6 contract changes accepted; O9 and O13
+   later. That approves the cache format change of FZ-09c (#59). The
+   issues FZ-09a #57, FZ-09b #58, FZ-09c #59, FZ-09d #60, FZ-09e #61 (not
+   promoted) and FZ-09f #62 (optional) each carry a comment saying so.
+2. **Answered the same way, the same "yes to all":** the ambiguity status
+   line stays red; the `LoadingFrame` redraw bug is issue #64 (Backlog,
+   P2); switching the icon set from the settings overlay is FZ-13u, #65
+   (Backlog, P2), and for that ticket only he released the mechanical
+   edit of existing test calls to `SettingsOverlay::new` (one argument
+   added with a neutral value, no assertion changed). He also confirmed
+   the two-owner rows on his own fleet: he understands the other owner's
+   copies now and finds it good (his words name that owner, so they are
+   not quoted in this repository).
 3. **FZ-13 wave 4** (maximize and restore, hints that follow focus,
    economical folds): each needs a decision from him before it is a ticket.
    The questions are in the split on #26.
@@ -293,11 +299,11 @@ the header.
    and the identity series is complete.
 2. **After FZ-05f, FZ-10a (#47)** takes the `main.rs` line; **after
    FZ-13e, FZ-13f (#55)** takes the header, then FZ-13d (#53).
-3. **FZ-09:** the owner items are with him, unanswered. On his answers:
-   record them in the design and on the closed #22, amend `CLAUDE.md` and
-   [freshness-contract.md](freshness-contract.md) as its section 6 says
-   when the tickets land. FZ-09a (#57, atomic cache writes, `src/cache.rs`
-   only) can run beside the `main.rs` line once O14 is answered.
+3. **FZ-09:** the owner items are accepted. FZ-09a (#57) is in flight.
+   FZ-09f (#62, the PR section label in `src/ui/detail.rs`) can run in any
+   free slot. As each FZ-09 ticket lands, amend `CLAUDE.md` and
+   [freshness-contract.md](freshness-contract.md) as the design's section
+   6 says.
 4. **The `main.rs` line after the identity series**, one worker at a time,
    in the order ruled for FZ-09 (C8): FZ-10a #47, FZ-09c #59, FZ-09b #58,
    FZ-10b #48, FZ-10c #49, FZ-09d #60. #47 carries a note from FZ-09:
