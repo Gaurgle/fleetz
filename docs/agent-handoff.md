@@ -14,8 +14,9 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 21:47: two reviewers and one worker are
-  running.** `fz-reviewer` on FZ-05f (#36, worktree `fz-05f`, uncommitted
+- **State at 2026-10-02 21:50: two reviewers and two workers are
+  running** (the second worker is `fz-small` on FZ-09f, #62, worktree
+  `fz-09f`, dispatched 21:50; see "In flight"). `fz-reviewer` on FZ-05f (#36, worktree `fz-05f`, uncommitted
   diff hash `95715991` against `82c75c5`); `fz-reviewer` on FZ-13e (#54,
   worktree `fz-13e`, uncommitted diff hash `622307cf` against `82c75c5`);
   `fz-worker` on FZ-09a (#57, worktree `fz-09a`, branch
@@ -245,6 +246,11 @@ Worktrees are under `.claude/worktrees/`.
   through a temporary file and a rename, new files mode 0600; `src/cache.rs`
   only, standard library only. Then a reviewer, then the safe-merge rule
   (no format or key change).
+- **FZ-09f (#62), `fz-09f`, branch `feat/fz-09f-pr-section-count`, base
+  `b2b583e`.** `fz-small` dispatched 2026-10-02 21:50: the `-p` PR
+  section says "5 of 8 open PRs" when fewer are listed than are open;
+  `src/ui/detail.rs` only. Then a reviewer, then the safe-merge rule under
+  the "small look changes" instruction.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked
   by Andreas until the repository goes public.
