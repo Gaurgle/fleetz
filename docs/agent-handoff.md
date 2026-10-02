@@ -14,14 +14,13 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 19:22: two workers are running.** `fz-worker` on
-  FZ-05d (#34, worktree `fz-05d`, branch
-  `fix/fz-05d-owner-aware-assembly-poll`, base `d6604cb`), dispatched
-  19:15. `fz-worker` on FZ-13c's fix cycle 1 (#52, worktree `fz-13c`, now
-  at base `ed225d5`), continued 19:21 after a changes-requested review.
-  FZ-05b, FZ-05c and FZ-13a are merged and cleaned up. A lead that finds a
-  later state recorded on an issue and not here trusts the issue, and
-  checks #34 and #52 for a report before dispatching either again.
+- **State at 2026-10-02 19:33: one worker is running.** `fz-worker` on
+  FZ-05d's fix cycle 1 (#34, worktree `fz-05d`, branch
+  `fix/fz-05d-owner-aware-assembly-poll`, base `d6604cb`), continued 19:31
+  with the rulings recorded on #34. FZ-13c (#52) is at Ready to integrate
+  and waits for Andreas. FZ-05b, FZ-05c and FZ-13a are merged and cleaned
+  up. A lead that finds a later state recorded on an issue and not here
+  trusts the issue, and checks #34 for a report before dispatching again.
 
 > **No-install span, open since the merge of FZ-05b (`f37c6b9`, 2026-10-02
 > 19:00).** Until FZ-05e (#35) is merged, nothing is tagged and Andreas does
@@ -166,16 +165,23 @@ Worktrees are under `.claude/worktrees/`.
   after this worker's base, changed the `Loaded` arm of `run_event_loop`
   in the same file: the combined checks decide, and a textual conflict
   goes back to a worker and a re-review.
-- **FZ-13c (#52), `fz-13c`, branch `feat/fz-13c-two-column-help`.** The
-  branch was fast-forwarded by the coordinator from `c281a36` to `main` at
-  `ed225d5` with the uncommitted `src/ui/help.rs` kept, so its base is now
-  `ed225d5`. First review: **changes requested** (verdict on #52): no test
-  guards "whole rows only" (a mutant survives), plus wording fixes (search
-  Enter, `J/K` scroll, the fold click in the mouse row) and the `,` row
-  following FZ-13a's relabel to "loading screen". The same worker was
-  continued at 19:21 for fix cycle 1. Then a re-review by a separate
-  reviewer, then Ready to integrate: the grouping and look are Andreas's,
-  and **he asked to be told when it is ready to inspect.**
+  **Worker report and rulings are on #34:** implemented (18 new tests, 843
+  passed), stopped on a clippy `dead_code` failure in `src/discovery.rs`.
+  The coordinator opened that file for two things only: `#[cfg(test)]` on
+  `find_in_primary` and `find_elsewhere`, and exposing the existing
+  primary-checkout rank so `src/main.rs` does not keep a copy of the order.
+  Next: the worker's report, then a reviewer.
+- **FZ-13c (#52), `fz-13c`, branch `feat/fz-13c-two-column-help`, base
+  `ed225d5`, commit `b494248`, pushed. Ready to integrate.** One fix cycle
+  after a changes-requested review; the re-review accepted (diff hash
+  `8db6078e` against `ed225d5`, on #52) and killed four mutants. CI green
+  on the branch; combined checks with `main` at `7b4337a` passed (818
+  tests). **It waits for Andreas to try the branch build (he asked to be
+  told, and was told at 19:33); merge only after he accepts.** Build:
+  `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-13c/Cargo.toml`,
+  then `?`. His calls: the grouping, the merged `< > + -` row, the
+  shortened `J/K` row. If `main` moves in code first, rerun the combined
+  checks.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked
   by Andreas until the repository goes public.
@@ -186,8 +192,11 @@ No other worktree or local ticket branch exists. Merged branches remain on
 ## What waits on Andreas
 
 1. **FZ-09 owner items**, put to him on 2026-10-02 at 18:40 with the
-   recommendations, together with the question whether issues FZ-09a to f
-   may be created; **not answered yet**. They
+   recommendations; **not answered yet**. He allowed the issues ("you may
+   create th FZ-09a to f issues", 2026-10-02): FZ-09a #57, FZ-09b #58,
+   FZ-09c #59, FZ-09d #60, FZ-09e #61 (not promoted), FZ-09f #62
+   (optional), all Backlog. Each body names the owner items it waits on and
+   says it is not ready for dispatch until he has answered them. They
    are in plain language under "Owner items" in
    [coverage-cache-design.md](coverage-cache-design.md). The ones that
    matter: one saved GitHub copy per account, and what its file name is made
@@ -288,6 +297,9 @@ Keep to two workers with disjoint ownership, plus their reviewers.
 - **Identity:** FZ-05d #34 (in flight), FZ-05e #35, FZ-05f #36. Serial.
 - **API budget:** FZ-10a #47, FZ-10b #48, FZ-10c #49. Serial, after the
   identity series.
+- **Coverage and cache:** FZ-09a #57, FZ-09b #58, FZ-09c #59, FZ-09d #60,
+  FZ-09e #61 (not promoted), FZ-09f #62 (optional). None is ready for
+  dispatch until Andreas has answered the owner items its body names.
 - **M3:** FZ-13s #56 (Backlog, waits for Andreas), FZ-13b #51, FZ-13c #52, FZ-13d #53,
   FZ-13e #54, FZ-13f #55.
 - **Follow-ups (P2):** #43; #46 (needs Andreas's OK).
