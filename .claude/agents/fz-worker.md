@@ -33,6 +33,9 @@ allowed files.
 - For a behavior change, write the regression test first and see it fail
   against the old behavior. Tests live beside the code in
   `#[cfg(test)] mod tests`, never in `tests/`.
+- Use relevant Superpowers task skills, such as test-first development or
+  debugging, within this ticket's scope. Do not start another agent workflow
+  or delegate; Relay owns dispatch and review.
 - Deliver the smallest change that satisfies the acceptance criteria. No
   drive-by refactors, no speculative options.
 - Never edit, delete or disable an existing test to make code pass. If a test

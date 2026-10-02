@@ -50,6 +50,8 @@ cargo test
 ## Verdict
 
 Return exactly one of: accepted / changes requested / blocked.
+Identify the reviewed commit or saved diff evidence, including new files.
+Acceptance applies to that revision; later changes require re-review.
 
 For each finding give severity, file and symbol, the triggering scenario and
 the required correction. Separate blockers from optional follow-ups. State

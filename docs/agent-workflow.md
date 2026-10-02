@@ -7,6 +7,33 @@ merges follow the safe-merge rule below.
 The [Fleetz public release Project](https://github.com/users/Gaurgle/projects/1)
 is authoritative for live status, priority, worker and reviewer assignment.
 
+## Lead ownership and carried authorization
+
+Relay setup and lead takeover are separate from authorization to run tickets.
+Only one coordinator may be active. Before taking over, verify the previous
+lead stopped or Andreas retired it; a stale handoff alone is not evidence.
+Check the handoff against live branches, worktrees, pending reviews and CI,
+and account for any running workers before dispatching replacements.
+
+Run only tickets Andreas named or a clearly recorded standing scope. Record
+his instruction and source, date, stop conditions and integration permissions
+in `docs/agent-handoff.md`. A handoff preserves that evidence; another agent
+cannot create or expand it. Honor any recorded confirmation requirement or
+stop instruction. Do not re-request settled authorization merely because the
+lead or session changed; ask if its scope or applicability is unclear.
+
+The safe-merge delegation below applies to the authorized release effort,
+not every session inspecting this repository. Taking over does not resume
+work Andreas has stopped. Runtime permission refusals remain binding; report
+the action and reason rather than changing tools or permission mode to bypass
+them.
+
+On takeover, record the lead's session identity and time. Before stopping,
+update the handoff with the next authorized step, open worktrees, pending
+reviews and whether workers remain running, then mark the baton released.
+Do not overwrite the handoff with a blank template or change historical
+authorization while migrating these instructions.
+
 ## Roles and limits
 
 - Andreas owns priorities, interaction acceptance, what he installs and runs,
@@ -21,6 +48,29 @@ allow at most two simultaneous implementation workers with disjoint ownership.
 Do not create another management layer or recursively delegate by default.
 Claude and Codex use the same ticket contract; cross-provider dispatch may be
 manual. A ticket remains usable without a custom orchestration service.
+
+## Task method and Superpowers
+
+Relay owns authority, staffing, durable state and integration. Superpowers can
+guide discovery, design, planning, test-first work and debugging within that
+structure. Choose a proportionate path:
+
+- **Spike:** answer a narrow feasibility question with a disposable probe.
+- **Bounded ticket:** state the outcome and acceptance criteria, then use a
+  concise plan and the normal checks. Add a formal design only when risk or
+  uncertainty warrants it.
+- **Design-heavy work:** clarify the goal and tradeoffs, record the approved
+  spec and plan, then link them from the corresponding release tickets. Fleetz
+  keeps these artifacts in `docs/superpowers/specs/` and
+  `docs/superpowers/plans/`.
+
+Approval of a spec or plan accepts that artifact; it does not add tickets to
+the authorized scope. Use the owner's named tickets or standing instruction
+to determine what Relay may execute. When Relay is active, its coordinator is
+the only dispatcher. Do not run Superpowers' subagent-driven implementation
+workflow alongside Relay's worker and reviewer assignments. Workers may use
+relevant task skills within their ticket but cannot delegate. The independent
+Relay review remains required.
 
 ## Model and context budget
 
@@ -159,6 +209,8 @@ contract, handoff templates and limits in this document apply unchanged.
    transport new files. Do not commit as a shortcut for handing off work.
 6. Review the exact diff, including added files. If changes follow review,
    re-review the changed portion and affected acceptance criteria.
+   Record the accepted commit or saved diff evidence including new files, so
+   a replacement lead can verify which revision was reviewed.
 7. After the reviewer accepts, the coordinator commits exactly the reviewed
    diff on the ticket branch and pushes the branch, which runs CI. It verifies
    integration against current `main` in an isolated checkout, reports conflicts
@@ -298,6 +350,8 @@ Return one verdict: accepted / changes requested / blocked.
 For each finding give severity, file and symbol, triggering scenario and
 required correction. Separate blockers from optional follow-ups. State which
 checks you independently ran and which evidence you only inspected.
+Identify the reviewed commit or saved diff evidence, including new files.
+Acceptance applies to that revision; later changes need re-review.
 ```
 
 ## Owner-facing progress

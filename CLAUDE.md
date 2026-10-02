@@ -53,6 +53,7 @@ and blink, watch mode re-sweeps on an interval.
 | Path | What it holds |
 |---|---|
 | `README.md` | User-facing: install, flags, keybindings, config keys |
+| `AGENTS.md` | Codex entrypoint to these project rules and the shared Relay workflow |
 | `docs/ideas.md` | Design backlog: problem, options, rejected alternatives per feature |
 | `docs/release-plan.md` | Release milestones, ticket status and dispatch order |
 | `docs/agent-workflow.md` | Shared worker/reviewer instructions and integration rules |
@@ -74,6 +75,9 @@ everything else is unbuilt, and its line references drift.
 
 ## Working conventions
 
+- Claude and Codex follow this file and `docs/agent-workflow.md`. On a Relay
+  takeover, read the live handoff and honor its stop and confirmation
+  conditions; entering a lead session is not authorization to resume tickets.
 - **One feature branch and worktree per implementation ticket.** Branch from
   the agreed `main` commit, for example `fix/fz-02-preserve-github-state`.
   PRs are optional. Agents do not implement tickets directly in the main
