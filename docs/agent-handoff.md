@@ -14,15 +14,13 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 19:38: one reviewer and one small worker are
-  running.** `fz-reviewer` on FZ-05d (#34, worktree `fz-05d`, uncommitted
-  diff hash `082e09e6` against `d6604cb`), dispatched 19:35. `fz-small` on
-  FZ-13t (#63, worktree `fz-13t`, branch `feat/fz-13t-worktree-badge`,
-  base `dd90291`), dispatched 19:37. FZ-13c (#52) is at Ready to integrate
-  and waits for Andreas. FZ-05b, FZ-05c and FZ-13a are merged and cleaned
-  up. A lead that finds a later state recorded on an issue and not here
-  trusts the issue, and checks #34 and #63 for a report before dispatching
-  again.
+- **State at 2026-10-02 19:45: one reviewer is running.** `fz-reviewer`
+  on FZ-05d (#34, worktree `fz-05d`, uncommitted diff hash `082e09e6`
+  against `d6604cb`), dispatched 19:35. FZ-13c (#52) and FZ-13t (#63) are
+  at Ready to integrate and wait for Andreas. FZ-05b, FZ-05c and FZ-13a
+  are merged and cleaned up. A lead that finds a later state recorded on
+  an issue and not here trusts the issue, and checks #34 for a verdict
+  before dispatching again.
 
 > **No-install span, open since the merge of FZ-05b (`f37c6b9`, 2026-10-02
 > 19:00).** Until FZ-05e (#35) is merged, nothing is tagged and Andreas does
@@ -180,11 +178,16 @@ Worktrees are under `.claude/worktrees/`.
 - **FZ-13t (#63), `fz-13t`, branch `feat/fz-13t-worktree-badge`, base
   `dd90291`.** Andreas asked for it on 2026-10-02: the list row's worktree
   count as `WT` in a color that is information, not an alarm and not gray.
-  Issue created at his request; `fz-small` dispatched 19:37 with
-  `LAVENDER` behind a named constant (`MAUVE` is the alternative). His
-  direction releases the one existing assertion on `1wt`. Then a reviewer,
-  then Ready to integrate for his look. FZ-13b (#51) waits for it: both
-  edit `src/ui/badges.rs`.
+  Issue created at his request; done by `fz-small` with `LAVENDER` behind
+  the named constant `WORKTREE_CLR` (`MAUVE` is the alternative, a one-line
+  change). His direction released the one existing assertion on `1wt`.
+  One fix cycle (a test comment); the re-review accepted (diff hash
+  `695fd4ae` against `dd90291`, on #63). **Commit `70e84c9`, pushed, CI
+  green, combined checks with `main` at `7047e40` passed (809 tests).
+  Ready to integrate: it waits for Andreas's look at the color; merge only
+  after he accepts.** Build:
+  `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-13t/Cargo.toml`.
+  FZ-13b (#51) waits for it: both edit `src/ui/badges.rs`.
 - **FZ-13c (#52), `fz-13c`, branch `feat/fz-13c-two-column-help`, base
   `ed225d5`, commit `b494248`, pushed. Ready to integrate.** One fix cycle
   after a changes-requested review; the re-review accepted (diff hash
