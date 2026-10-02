@@ -14,15 +14,14 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 19:05: two workers are running**, dispatched at
-  19:03 from base `c281a36`: `fz-worker` on FZ-05c (#33, worktree `fz-05c`,
-  branch `refactor/fz-05c-assemble-view-seam`, `src/main.rs`) and
-  `fz-worker` on FZ-13c (#52, worktree `fz-13c`, branch
-  `feat/fz-13c-two-column-help`, `src/ui/help.rs`). Neither is reviewed.
-  FZ-05b is merged (`f37c6b9`). FZ-13a is reviewed, committed and pushed,
-  and waits at Ready to integrate for Andreas's look. A lead that finds a
+- **State at 2026-10-02 19:22: two workers are running.** `fz-worker` on
+  FZ-05d (#34, worktree `fz-05d`, branch
+  `fix/fz-05d-owner-aware-assembly-poll`, base `d6604cb`), dispatched
+  19:15. `fz-worker` on FZ-13c's fix cycle 1 (#52, worktree `fz-13c`, now
+  at base `ed225d5`), continued 19:21 after a changes-requested review.
+  FZ-05b, FZ-05c and FZ-13a are merged and cleaned up. A lead that finds a
   later state recorded on an issue and not here trusts the issue, and
-  checks #33 and #52 for a worker report before dispatching either again.
+  checks #34 and #52 for a report before dispatching either again.
 
 > **No-install span, open since the merge of FZ-05b (`f37c6b9`, 2026-10-02
 > 19:00).** Until FZ-05e (#35) is merged, nothing is tagged and Andreas does
@@ -136,6 +135,16 @@ FZ-04 fix and merge, and the FZ-13 split are this session's.
 | Ticket | Issue | Ticket commit | Merge | What landed |
 |---|---|---|---|---|
 | FZ-05b | #32 | `47ce339` | `f37c6b9` | Discovery matches by owner and name; a stable six-step primary checkout; ambiguities as data |
+| FZ-05c | #33 | `24f2436` | `d6604cb` | `assemble_view_in` takes `home` and the scan roots; an S8a smoke test through the seam |
+| FZ-13a | #50 | `62598b8` | `ed225d5` | The intro wave is deleted; the loading field stays; `intro` switches the loading screen |
+
+FZ-13a: Andreas tried the branch build on 2026-10-02 and accepted it as a
+step ("lets go with A"): the wave is gone, and replacing the noise field
+with `LOADING`, a bar and status lines is its own ticket, FZ-13s (#56,
+Backlog, P2), created with his OK. His words: "loading screen animations
+are not prioritized right now ... get to it at a later stage. well answer
+the loading text's when we get to that ticket." Do not dispatch #56 until
+he takes it up; its owner decisions are listed in the issue.
 
 FZ-05b took two test-only fix cycles after the first review. The second was
 the coordinator's ruling: the path tie-break had no test that failed without
@@ -148,25 +157,25 @@ invariant change 1 of the identity design's section 3.10.
 
 Worktrees are under `.claude/worktrees/`.
 
-- **FZ-13a (#50), `fz-13a`, branch `feat/fz-13a-remove-intro-wave`, base
-  `ed85856`, commit `62598b8`, pushed. Ready to integrate.** Review
-  accepted (diff hash `269f88ae` against `ed85856`, on #50); CI green on
-  the branch; combined checks with `main` at `aef7ca3` passed (775 tests).
-  **It waits for Andreas to try the branch build; merge only after he
-  accepts.** `main` has since gained FZ-05b, which touches `src/main.rs` in
-  other functions: rerun the combined checks on the new result before the
-  merge. Build:
-  `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-13a/Cargo.toml`.
-- **FZ-05c (#33), `fz-05c`, branch `refactor/fz-05c-assemble-view-seam`,
-  base `c281a36`.** Worker dispatched 2026-10-02 19:03: a pure refactor
-  that gives `assemble_view` a core taking `home` and the scan roots, plus
-  one S8a smoke test. Then a reviewer (pure refactor), then the safe-merge
-  rule; nothing in it rests on Andreas.
-- **FZ-13c (#52), `fz-13c`, branch `feat/fz-13c-two-column-help`, base
-  `c281a36`.** Worker dispatched 2026-10-02 19:03, `src/ui/help.rs` only.
-  Then a reviewer, then Ready to integrate: the grouping and look are
-  Andreas's. Its `,` row must be reconciled with FZ-13a's relabel of the
-  settings row ("loading screen") at integration.
+- **FZ-05d (#34), `fz-05d`, branch `fix/fz-05d-owner-aware-assembly-poll`,
+  base `d6604cb`.** Worker dispatched 2026-10-02 19:15. The largest ticket
+  of the series: carrier rows, the poll following the `owner` mark, the D4
+  status line. Its reviewer traces both the load and the poll. Nothing in
+  it rests on Andreas (he signed off the design); on the merge the
+  coordinator edits `CLAUDE.md` invariant changes 3 and 4. FZ-13a, merged
+  after this worker's base, changed the `Loaded` arm of `run_event_loop`
+  in the same file: the combined checks decide, and a textual conflict
+  goes back to a worker and a re-review.
+- **FZ-13c (#52), `fz-13c`, branch `feat/fz-13c-two-column-help`.** The
+  branch was fast-forwarded by the coordinator from `c281a36` to `main` at
+  `ed225d5` with the uncommitted `src/ui/help.rs` kept, so its base is now
+  `ed225d5`. First review: **changes requested** (verdict on #52): no test
+  guards "whole rows only" (a mutant survives), plus wording fixes (search
+  Enter, `J/K` scroll, the fold click in the mouse row) and the `,` row
+  following FZ-13a's relabel to "loading screen". The same worker was
+  continued at 19:21 for fix cycle 1. Then a re-review by a separate
+  reviewer, then Ready to integrate: the grouping and look are Andreas's,
+  and **he asked to be told when it is ready to inspect.**
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked
   by Andreas until the repository goes public.
@@ -191,11 +200,9 @@ No other worktree or local ticket branch exists. Merged branches remain on
    (O5); the signed-out launch (O7); saved files readable only by him (O14);
    and the `CLAUDE.md` and freshness contract changes in its section 6.
    Smaller: O8, O10, O11, O12. Later: O9, O13.
-2. **FZ-13a's branch build**, reviewed and offered to him on 2026-10-02 at
-   18:50; no answer yet:
-   `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-13a/Cargo.toml`.
-   Asked with it: may the `LoadingFrame` redraw bug (follow-ups below)
-   become an issue?
+2. **FZ-13c's branch build**, once its review and the `,` row fix are
+   done; he asked to be told. Asked on 2026-10-02 and not answered: may
+   the `LoadingFrame` redraw bug (follow-ups below) become an issue?
 3. **FZ-13 wave 4** (maximize and restore, hints that follow focus,
    economical folds): each needs a decision from him before it is a ticket.
    The questions are in the split on #26.
@@ -218,9 +225,7 @@ the header.
 
 1. **FZ-05b:** done on 2026-10-02 (see "Done on 2026-10-02"). The
    no-install span is open; say so in every report until FZ-05e merges.
-2. **FZ-13a:** on Andreas's accept, rerun the combined checks against
-   current `main`, merge, close #50, remove the worktree. On a reject, his
-   words go on #50 and a worker gets them.
+2. **FZ-13a:** done on 2026-10-02. FZ-13b (#51) is unblocked by it.
 3. **FZ-09:** put the owner items to him. On his answers: record them in the
    design and on the closed #22, amend `CLAUDE.md` and
    [freshness-contract.md](freshness-contract.md) as its section 6 says when
@@ -280,11 +285,10 @@ Keep to two workers with disjoint ownership, plus their reviewers.
 
 ## Tickets that exist and wait
 
-- **Identity:** FZ-05c #33 (next), FZ-05d #34, FZ-05e #35, FZ-05f #36.
-  Serial.
+- **Identity:** FZ-05d #34 (in flight), FZ-05e #35, FZ-05f #36. Serial.
 - **API budget:** FZ-10a #47, FZ-10b #48, FZ-10c #49. Serial, after the
   identity series.
-- **M3:** FZ-13a #50 (Ready to integrate), FZ-13b #51, FZ-13c #52, FZ-13d #53,
+- **M3:** FZ-13s #56 (Backlog, waits for Andreas), FZ-13b #51, FZ-13c #52, FZ-13d #53,
   FZ-13e #54, FZ-13f #55.
 - **Follow-ups (P2):** #43; #46 (needs Andreas's OK).
 - **#45** (M5), parked.
