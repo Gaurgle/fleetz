@@ -20,6 +20,21 @@ pub struct GithubRepo {
     pub owner: Option<String>,
 }
 
+impl GithubRepo {
+    /// The key two dataset entries are the same remote by: lowercased owner
+    /// and name, as `main.rs::remote_key` and discovery's `repo_key` build it.
+    /// No owner is the legacy key of a payload without `login`, so such an
+    /// entry is the same as another only by name, and never the same as an
+    /// owned one. Logins and repo names are ASCII, so this agrees with the
+    /// `eq_ignore_ascii_case` in `main.rs::names_remote` too.
+    ///
+    /// Takes the parts rather than `&self` so `merge_sources` can key the raw
+    /// nodes before they are parsed into entries.
+    pub fn identity_key(owner: Option<&str>, name: &str) -> (Option<String>, String) {
+        (owner.map(str::to_lowercase), name.to_lowercase())
+    }
+}
+
 /// One GitHub poll's results. Boxed calendar because it is ~1.5KB and this
 /// travels through an `AppEvent` enum whose other variants are pointer-sized.
 pub struct GithubFetch {
@@ -546,7 +561,13 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate, rotation: i64) -> Stri
 }
 
 /// Flatten both repo sources into one list, newest push first, keeping the
-/// first entry per name so a repo returned by both sources appears once.
+/// first entry per owner and name (`GithubRepo::identity_key`) so a repo
+/// returned by both sources appears once.
+///
+/// Keyed by the bare name, `alice/api` and `company/api` were one repo and
+/// the older push was dropped from the dataset, not even shown as not cloned.
+/// repoz dedupes by `nameWithOwner` for the same reason. An entry without an
+/// owner (a payload cached before `login` was asked for) dedupes by name.
 fn merge_sources(viewer: Viewer) -> Vec<RepoNode> {
     let mut nodes = viewer.repositories.nodes;
     if let Some(orgs) = viewer.organizations {
@@ -555,9 +576,13 @@ fn merge_sources(viewer: Viewer) -> Vec<RepoNode> {
         }
     }
     // Sort before dedup so the survivor of a duplicate pair is the freshest.
+    // The sort is stable, so on an equal push the viewer's copy is kept.
     nodes.sort_by(|a, b| b.pushed_at.cmp(&a.pushed_at));
     let mut seen = std::collections::HashSet::new();
-    nodes.retain(|n| seen.insert(n.name.to_lowercase()));
+    nodes.retain(|n| {
+        let owner = n.owner.as_ref().and_then(|o| o.login.as_deref());
+        seen.insert(GithubRepo::identity_key(owner, &n.name))
+    });
     nodes
 }
 
@@ -1927,5 +1952,178 @@ mod tests {
     fn the_pr_page_is_not_shrunk_for_cost() {
         let q = build_query(50, day("2026-08-18"), 0);
         assert!(q.contains("pullRequests(states: OPEN, first: 5,"));
+    }
+
+    /// One repo node as the payload spells it. `owner` None leaves the key
+    /// out, as a payload written before `login` was asked for does.
+    fn node_json(owner: Option<&str>, name: &str, pushed: &str, prs: u32) -> String {
+        let owner = owner.map_or(String::new(), |login| {
+            format!(r#""owner":{{"__typename":"User","login":"{login}"}},"#)
+        });
+        format!(
+            r#"{{"name":"{name}",{owner}"pushedAt":"{pushed}","pullRequests":{{"totalCount":{prs}}}}}"#
+        )
+    }
+
+    /// A payload with the viewer's repos and one org page.
+    fn two_source_payload(viewer: &[String], org: &[String]) -> String {
+        format!(
+            r#"{{"data":{{"viewer":{{
+                "repositories":{{"nodes":[{}]}},
+                "organizations":{{"nodes":[{{"repositories":{{"nodes":[{}]}}}}]}}
+            }}}}}}"#,
+            viewer.join(","),
+            org.join(",")
+        )
+    }
+
+    /// The full dataset a payload parses to, as `(owner, name, pr_count)`.
+    fn dataset_of(payload: &str) -> Vec<(Option<String>, String, u32)> {
+        parse_cached(Some(payload.to_string()), day("2026-08-18"))
+            .unwrap()
+            .repos
+            .into_iter()
+            .map(|r| (r.owner, r.name, r.pr_count))
+            .collect()
+    }
+
+    fn entry(owner: Option<&str>, name: &str, prs: u32) -> (Option<String>, String, u32) {
+        (owner.map(str::to_string), name.to_string(), prs)
+    }
+
+    /// S1 and S3. `alice/api` comes from the viewer, `company/api` from an org
+    /// page. Deduped by bare name, the older push was dropped from the
+    /// dataset: company's clone had no row and company's CI was nowhere.
+    #[test]
+    fn same_named_repos_of_two_owners_both_stay_in_the_dataset() {
+        let payload = two_source_payload(
+            &[node_json(Some("alice"), "api", "2026-08-06T10:00:00Z", 1)],
+            &[node_json(Some("company"), "api", "2026-08-06T09:00:00Z", 2)],
+        );
+        assert_eq!(
+            dataset_of(&payload),
+            vec![
+                entry(Some("alice"), "api", 1),
+                entry(Some("company"), "api", 2)
+            ],
+            "newest push first, and neither owner's repo dropped"
+        );
+    }
+
+    /// S3b. The window shows only `alice/api`, but the full dataset must
+    /// still hold `company/api`, pushed 60 days ago: ambiguity is judged on
+    /// the full dataset (M1), and with the name dedupe it saw one owner.
+    #[test]
+    fn the_full_dataset_keeps_a_same_named_repo_the_window_leaves_out() {
+        let payload = two_source_payload(
+            &[node_json(Some("alice"), "api", "2026-08-18T10:00:00Z", 0)],
+            &[node_json(Some("company"), "api", "2026-06-19T10:00:00Z", 0)],
+        );
+        let full = parse_cached(Some(payload), day("2026-08-18"))
+            .unwrap()
+            .repos;
+        let owners: Vec<_> = full.iter().map(|r| r.owner.as_deref()).collect();
+        assert_eq!(owners, vec![Some("alice"), Some("company")]);
+
+        let cutoff = DateTime::parse_from_rfc3339("2026-08-17T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let window: Vec<_> = filter_since(&full, cutoff)
+            .into_iter()
+            .map(|r| r.owner)
+            .collect();
+        assert_eq!(window, vec![Some("alice".to_string())]);
+    }
+
+    /// S12. A fork `Gaurgle/tool` and its upstream `acme/tool`, pushed later.
+    /// By name the fork was dropped, so a clone whose origin is the fork had
+    /// nothing to match and was shown as acme's.
+    #[test]
+    fn a_fork_and_its_upstream_both_survive() {
+        let payload = two_source_payload(
+            &[node_json(
+                Some("Gaurgle"),
+                "tool",
+                "2026-08-06T08:00:00Z",
+                0,
+            )],
+            &[node_json(Some("acme"), "tool", "2026-08-06T10:00:00Z", 3)],
+        );
+        assert_eq!(
+            dataset_of(&payload),
+            vec![
+                entry(Some("acme"), "tool", 3),
+                entry(Some("Gaurgle"), "tool", 0)
+            ]
+        );
+    }
+
+    /// S16. Two same-named repos, both reached through the viewer, stay two
+    /// entries and each keeps its own GitHub fields, so each NotCloned row
+    /// the load builds from them gets its own CI.
+    #[test]
+    fn two_same_named_repos_from_one_source_stay_two_entries() {
+        let payload = two_source_payload(
+            &[
+                node_json(Some("alice"), "api", "2026-08-06T10:00:00Z", 4),
+                node_json(Some("company"), "api", "2026-08-06T09:00:00Z", 5),
+            ],
+            &[],
+        );
+        assert_eq!(
+            dataset_of(&payload),
+            vec![
+                entry(Some("alice"), "api", 4),
+                entry(Some("company"), "api", 5)
+            ]
+        );
+    }
+
+    /// A repo the viewer lists and an org page lists again is one repo. The
+    /// owner and name compare case-insensitively, and on an equal push the
+    /// viewer's copy is the one kept, as it was under the name dedupe.
+    #[test]
+    fn a_repo_in_both_the_viewer_and_an_org_page_stays_one_entry() {
+        let payload = two_source_payload(
+            &[node_json(Some("acme"), "tool", "2026-08-06T10:00:00Z", 1)],
+            &[node_json(Some("Acme"), "Tool", "2026-08-06T10:00:00Z", 9)],
+        );
+        assert_eq!(dataset_of(&payload), vec![entry(Some("acme"), "tool", 1)]);
+    }
+
+    /// A payload without `login` (written before it was asked for) has no
+    /// owner anywhere. Those entries dedupe by name, case-insensitively, the
+    /// newest push winning.
+    #[test]
+    fn entries_without_an_owner_fall_back_to_the_name() {
+        let payload = two_source_payload(
+            &[node_json(None, "api", "2026-08-06T09:00:00Z", 1)],
+            &[
+                node_json(None, "API", "2026-08-06T10:00:00Z", 2),
+                node_json(None, "web", "2026-08-06T08:00:00Z", 3),
+            ],
+        );
+        assert_eq!(
+            dataset_of(&payload),
+            vec![entry(None, "API", 2), entry(None, "web", 3)]
+        );
+    }
+
+    /// An entry with an owner and one without are different keys, as they are
+    /// in `main.rs::remote_key` and discovery's `repo_key`: the owner-less one
+    /// dedupes by name only against other owner-less entries. The query asks
+    /// for `owner { login }` on both connections and `login` is non-null, so
+    /// one payload never mixes the two; this pins what happens if one does,
+    /// rather than letting an owner-less entry delete an owned repo.
+    #[test]
+    fn an_owned_entry_and_an_owner_less_one_are_kept_apart() {
+        let payload = two_source_payload(
+            &[node_json(Some("alice"), "api", "2026-08-06T10:00:00Z", 1)],
+            &[node_json(None, "api", "2026-08-06T09:00:00Z", 2)],
+        );
+        assert_eq!(
+            dataset_of(&payload),
+            vec![entry(Some("alice"), "api", 1), entry(None, "api", 2)]
+        );
     }
 }
