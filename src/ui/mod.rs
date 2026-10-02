@@ -1014,8 +1014,10 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             right.extend(t.iter().cloned());
         }
 
-        let left_w: usize = left.iter().map(|s| s.content.len()).sum();
-        let right_w: usize = right.iter().map(|s| s.content.len()).sum();
+        // Characters, not bytes: every glyph here is one column wide, and a
+        // byte count charged the separator, arrows and eye up to four each.
+        let left_w: usize = left.iter().map(|s| s.content.chars().count()).sum();
+        let right_w: usize = right.iter().map(|s| s.content.chars().count()).sum();
         let exhausted = !include_version
             && !include_ts
             && !include_group
@@ -1861,6 +1863,92 @@ mod tests {
         assert!(
             row.contains("⚠ github"),
             "marker dropped by the fit loop: {row:?}"
+        );
+    }
+
+    /// A header carrying every piece the fit loop can drop: the version, a
+    /// window label with an arrow, a group, a fixed sweep time, and the
+    /// Nerd Font watch eye. Several of these are multi-byte but one column.
+    fn full_header_app(app: &mut crate::app::App) {
+        app.group_names = vec!["work".to_string()];
+        app.active_group = Some(0);
+        app.last_refreshed = Some(at(2026, 1, 2, 3, 4));
+    }
+
+    const ARROW_HEADER: &str = "since 2 weeks → before 2026-09-01";
+
+    /// The columns a header row draws: everything but the border filler.
+    fn drawn_columns(row: &str) -> usize {
+        row.chars().filter(|c| *c != '─').count()
+    }
+
+    /// Regression: the fit was measured in bytes, so the arrow, the
+    /// separator and the watch eye cost two to four columns each and the
+    /// version went while there was room for it. At the width the pieces
+    /// draw, plus the one column the loop keeps between them, everything is
+    /// kept; one column less, the version goes first.
+    #[test]
+    fn the_header_keeps_every_piece_that_fits_as_drawn() {
+        let wide = header_row_with(ARROW_HEADER, 200, full_header_app);
+        let drawn = drawn_columns(&wide);
+        let pieces = wide.replace('─', "");
+        assert!(pieces.len() > drawn + 1, "no multi-byte glyph: {pieces:?}");
+        let width = (drawn + 1) as u16;
+
+        let row = header_row_with(ARROW_HEADER, width, full_header_app);
+        assert!(row.contains(VERSION), "version dropped: {row:?}");
+        assert!(row.contains(&format!("{ARROW_HEADER} [t]")), "{row:?}");
+        assert!(row.contains("[work]"), "{row:?}");
+        assert!(row.contains("swept Jan 2 03:04"), "{row:?}");
+        assert!(
+            row.contains(&format!("{} watch", watch_icon(false))),
+            "{row:?}"
+        );
+
+        let tighter = header_row_with(ARROW_HEADER, width - 1, full_header_app);
+        assert!(!tighter.contains(VERSION), "{tighter:?}");
+        assert!(tighter.contains("swept Jan 2 03:04"), "{tighter:?}");
+    }
+
+    /// The drop order, read from the drawn header at every width from wide
+    /// to narrow: version, then the sweep time, then the group, then the
+    /// window label, then the GitHub segment's long form. A reordering, or a
+    /// step that is skipped, fails.
+    #[test]
+    fn the_header_drops_its_pieces_in_order() {
+        let setup = |app: &mut crate::app::App| {
+            full_header_app(app);
+            fail_github(app);
+        };
+        let state = |row: &str| {
+            (
+                row.contains(VERSION),
+                row.contains("swept"),
+                row.contains("[work]"),
+                row.contains("since 2 weeks"),
+                row.contains("http error"),
+            )
+        };
+        let mut states = Vec::new();
+        for width in (10u16..=200).rev() {
+            let s = state(&header_row_with(ARROW_HEADER, width, setup));
+            if states.last() != Some(&s) {
+                states.push(s);
+            }
+            if s == (false, false, false, false, false) {
+                break;
+            }
+        }
+        assert_eq!(
+            states,
+            vec![
+                (true, true, true, true, true),
+                (false, true, true, true, true),
+                (false, false, true, true, true),
+                (false, false, false, true, true),
+                (false, false, false, false, true),
+                (false, false, false, false, false),
+            ]
         );
     }
 
