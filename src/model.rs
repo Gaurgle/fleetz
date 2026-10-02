@@ -510,8 +510,7 @@ pub fn repo_from_remote_url(url: &str) -> Option<(String, String)> {
 /// Carrying it lets a later caller prefer `github.com` among several clones,
 /// or scope by host, without parsing the URL again.
 ///
-/// No case folding happens here. A lowercased comparison key arrives in
-/// FZ-05b, with its first caller.
+/// Parsing folds no case; compare through `key`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteRef {
     /// Without user or port: `github.com` for `ssh://git@github.com:22/...`,
@@ -558,6 +557,17 @@ impl RemoteRef {
             owner: owner.to_string(),
             name: name.to_string(),
         })
+    }
+
+    /// The comparison key: host, owner and name, each lowercased, since GitHub
+    /// treats owners and names case-insensitively. Compare keys, never the
+    /// parsed spelling, which is kept for display.
+    pub fn key(&self) -> Self {
+        Self {
+            host: self.host.to_lowercase(),
+            owner: self.owner.to_lowercase(),
+            name: self.name.to_lowercase(),
+        }
     }
 }
 
@@ -972,6 +982,29 @@ mod tests {
                 mixed.name.as_str()
             ),
             ("GitHub.com", "gaurgle", "FLEETZ")
+        );
+    }
+
+    #[test]
+    fn remote_ref_key_folds_case_and_leaves_the_spelling_alone() {
+        let mixed = RemoteRef::parse("https://GitHub.com/gaurgle/FLEETZ/").unwrap();
+        let lower = RemoteRef::parse("git@github.com:Gaurgle/fleetz.git").unwrap();
+        assert_eq!(
+            mixed.key(),
+            RemoteRef {
+                host: "github.com".to_string(),
+                owner: "gaurgle".to_string(),
+                name: "fleetz".to_string(),
+            }
+        );
+        assert_eq!(mixed.key(), lower.key(), "one repo, one key");
+        assert_eq!(mixed.name, "FLEETZ", "the parsed spelling is kept");
+        assert_ne!(
+            mixed.key(),
+            RemoteRef::parse("git@github.com:someone/fleetz.git")
+                .unwrap()
+                .key(),
+            "the owner is part of the key"
         );
     }
 

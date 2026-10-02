@@ -2641,14 +2641,20 @@ async fn assemble_view(
         active = github::filter_before(&active, b);
     }
 
-    let wanted =
-        discovery::Wanted::new(active.iter().map(|r| (r.owner.as_deref(), r.name.as_str())));
+    // The full dataset rides along: whether a folder name is ambiguous, or an
+    // origin names a known repo, must not depend on the window.
+    let wanted = discovery::Wanted::with_full_dataset(
+        active.iter().map(|r| (r.owner.as_deref(), r.name.as_str())),
+        dataset
+            .iter()
+            .map(|r| (r.owner.as_deref(), r.name.as_str())),
+    );
 
     // Pass 1: find under every scan root (repo_dir + extra_dirs)
     let primary_found = discovery::find_in_primary(&scan_roots, &wanted);
     let found_set: HashSet<String> = primary_found
         .iter()
-        .map(|f| f.name.to_lowercase())
+        .map(discovery::FoundRepo::key)
         .collect();
 
     // Pass 2: find elsewhere
@@ -4163,6 +4169,7 @@ mod tests {
                     discovery::FoundRepo {
                         name: (*n).to_string(),
                         path: dir.join(n),
+                        owner: None,
                     },
                     RepoLocation::Primary,
                 )
@@ -4698,6 +4705,7 @@ mod tests {
                 discovery::FoundRepo {
                     name: "a".to_string(),
                     path: dir.join("a"),
+                    owner: None,
                 },
                 RepoLocation::Elsewhere,
             ),
@@ -4705,6 +4713,7 @@ mod tests {
                 discovery::FoundRepo {
                     name: "b".to_string(),
                     path: dir.join("b"),
+                    owner: None,
                 },
                 RepoLocation::Primary,
             ),
