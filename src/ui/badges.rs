@@ -93,7 +93,7 @@ pub const STASH_GLYPH: &str = "\u{f411}";
 /// U+2387 is the Alt key, adopted by shell prompts to mean *branch*, so it
 /// would read as "branch" in a column sitting beside actual branch counts.
 /// Two unambiguous letters beat a symbol a reader has to be taught.
-const WORKTREE_ABBR: &str = "wt";
+const WORKTREE_ABBR: &str = "WT";
 
 fn pr_text(repo: &RepoStatus) -> String {
     if repo.pr_count > 0 {
@@ -197,7 +197,10 @@ pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>,
     let worktree = worktree_text(repo);
     if !worktree.is_empty() {
         width += worktree.chars().count();
-        spans.push(Span::styled(worktree, Style::default().fg(colors::OVERLAY)));
+        spans.push(Span::styled(
+            worktree,
+            Style::default().fg(colors::WORKTREE_CLR),
+        ));
     }
 
     // The last fetch failed, so behind and ahead are counted against old
@@ -350,8 +353,9 @@ mod tests {
         }];
 
         let (text, _) = rendered(&busy);
-        // Whole tokens, not substrings: `1wt` legitimately contains `1w`, and
-        // asserting on the substring would forbid the very fix being tested.
+        // Whole tokens, not substrings: what matters is what a complete badge
+        // reads as, and a longer token may share a prefix with a duration
+        // without being one (`1wt` contained `1w` before it was capitalised).
         // The real property is that no complete badge token is digits
         // followed by a lone duration letter.
         for token in text.split_whitespace() {
@@ -366,10 +370,43 @@ mod tests {
             );
         }
         assert!(text.contains(&format!("3{STASH_GLYPH}")), "got {text:?}");
-        assert!(text.contains("1wt"), "got {text:?}");
+        assert!(text.contains("1WT"), "got {text:?}");
         // `2PR` is letters, but `PR` is not a duration, so it was never the
         // problem the other two were.
         assert!(text.contains("2PR"), "got {text:?}");
+    }
+
+    #[test]
+    fn a_linked_worktree_draws_its_count_in_the_worktree_color() {
+        let mut with_worktree = repo("wt");
+        with_worktree.worktrees = vec![crate::model::Worktree {
+            path: "~/repos/x-hotfix".to_string(),
+            branch: "hotfix".to_string(),
+        }];
+        let (spans, _) = badge_spans(&with_worktree, false);
+        let span = spans
+            .iter()
+            .find(|s| s.content == "1WT ")
+            .expect("a 1WT span");
+        assert_eq!(span.style.fg, Some(colors::WORKTREE_CLR));
+        for excluded in [
+            colors::OVERLAY,
+            colors::SUBTEXT,
+            colors::SURFACE,
+            colors::RED,
+            colors::PEACH,
+            colors::YELLOW,
+            colors::GREEN,
+        ] {
+            assert_ne!(
+                span.style.fg,
+                Some(excluded),
+                "the count is information: not gray, not an alarm, not the synced green"
+            );
+        }
+
+        let (spans, _) = badge_spans(&repo("plain"), false);
+        assert!(spans.iter().all(|s| !s.content.contains("WT")));
     }
 
     /// The badge column is right-aligned off `badge_spans`' own width, so a
