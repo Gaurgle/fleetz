@@ -14,13 +14,16 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 21:12: nothing is running.** No worker, no
-  reviewer, no build. FZ-05e (#35) and FZ-13b (#51) are reviewed,
-  committed, pushed and at Ready to integrate, waiting for Andreas to try
-  their branch builds. FZ-05b, FZ-05c, FZ-05d, FZ-13a, FZ-13c and FZ-13t
-  are merged and cleaned up. Nothing new is dispatched while two builds
-  wait for him and the next identity ticket depends on FZ-05e. A lead that
-  finds a later state recorded on an issue and not here trusts the issue.
+- **State at 2026-10-02 21:13: one worker is running.** `fz-worker` on
+  #43 (worktree `issue-43`, branch `fix/43-local-count-excludes-stash`,
+  base `3dfbd4a`, `src/git.rs` only), dispatched 21:12. FZ-05e (#35) and
+  FZ-13b (#51) are reviewed, committed, pushed and at Ready to integrate,
+  waiting for Andreas to try their branch builds. FZ-05b, FZ-05c, FZ-05d,
+  FZ-13a, FZ-13c and FZ-13t are merged and cleaned up. No further UI
+  ticket is dispatched while two builds wait for him, and the next
+  identity ticket depends on FZ-05e. A lead that finds a later state
+  recorded on an issue and not here trusts the issue, and checks #43 for a
+  report before dispatching it again.
 
 > **No-install span, open since the merge of FZ-05b (`f37c6b9`, 2026-10-02
 > 19:00).** Until FZ-05e (#35) is merged, nothing is tagged and Andreas does
@@ -216,6 +219,11 @@ Worktrees are under `.claude/worktrees/`.
   anyway. It is sound because `#[tokio::main]` polls the main future on
   the calling thread and every draw happens in the event loop inside it.
   **Rendering must stay on the thread that set it.**
+- **#43, `issue-43`, branch `fix/43-local-count-excludes-stash`, base
+  `3dfbd4a`.** Worker dispatched 2026-10-02 21:12: `git::daily_commits`
+  stops counting stash commits. Coordinator's ruling on the body's open
+  point: notes commits do not count either. Then a reviewer, then the
+  safe-merge rule; nothing in it rests on Andreas.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked
   by Andreas until the repository goes public.
