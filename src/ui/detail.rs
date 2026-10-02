@@ -1045,11 +1045,19 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // Gated on `-p`: the header row already names the open PRs by number, so
     // this section is the opt-in detail rather than the news itself.
     if view == HistoryView::Info && app.show_pr_detail && !repo.prs.is_empty() {
-        let pr_label = if repo.prs.len() == 1 { "PR" } else { "PRs" };
-        lines.push(Line::from(section_label(&format!(
-            "{} open {pr_label}",
-            repo.prs.len()
-        ))));
+        // The query lists a few PRs but counts them all, so name both when the
+        // list is the shorter. The noun follows the total: it says how many are
+        // open. A list longer than the count (should not happen) keeps today's
+        // plain "N open PRs" rather than printing "8 of 5".
+        let listed = repo.prs.len();
+        let total = repo.pr_count as usize;
+        let pr_label = if total.max(listed) == 1 { "PR" } else { "PRs" };
+        let heading = if listed < total {
+            format!("{listed} of {total} open {pr_label}")
+        } else {
+            format!("{listed} open {pr_label}")
+        };
+        lines.push(Line::from(section_label(&heading)));
         for pr in &repo.prs {
             let age = format_age(pr.created_at);
             let review = pr.review_status.label();
@@ -4091,6 +4099,87 @@ mod tests {
 
         let none = facts(0, vec![]);
         assert!(!none.contains("open PR"), "silent when there are none");
+    }
+
+    /// Every row of the detail pane under `-p`, for the PR section's heading.
+    fn pane_rows_with_pr_detail(total: u32, listed: Vec<u32>) -> Vec<String> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut repo = cloned_repo();
+        repo.pr_count = total;
+        repo.prs = listed.into_iter().map(pr_numbered).collect();
+        let mut app = crate::app::App::new(vec![repo], "test".to_string(), 120, 60);
+        app.show_pr_detail = true;
+        let mut terminal = Terminal::new(TestBackend::new(120, 60)).unwrap();
+        terminal
+            .draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..60)
+            .map(|y| {
+                (0..120)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// CV14: five listed of eight open. Fails if the heading goes back to
+    /// counting the list alone ("5 open PRs").
+    #[test]
+    fn pr_section_says_five_of_eight_when_the_list_is_capped() {
+        let rows = pane_rows_with_pr_detail(8, vec![13, 9, 7, 4, 2]);
+        assert!(
+            rows.iter().any(|r| r.contains("5 of 8 open PRs")),
+            "got {rows:?}"
+        );
+        assert!(!rows.iter().any(|r| r.contains(" 5 open PRs")));
+    }
+
+    /// Fails if the equal case grows an "of" or loses the singular.
+    #[test]
+    fn pr_section_wording_is_unchanged_when_every_open_pr_is_listed() {
+        let five = pane_rows_with_pr_detail(5, vec![13, 9, 7, 4, 2]);
+        assert!(five.iter().any(|r| r.contains("5 open PRs")));
+        assert!(!five.iter().any(|r| r.contains(" of 5 open")));
+
+        let one = pane_rows_with_pr_detail(1, vec![13]);
+        assert!(one.iter().any(|r| r.contains("1 open PR")));
+        assert!(!one.iter().any(|r| r.contains("1 open PRs")));
+        assert!(!one.iter().any(|r| r.contains("1 of 1")));
+    }
+
+    /// The noun follows the total. Fails if it follows the listed count
+    /// ("1 of 3 open PR").
+    #[test]
+    fn pr_section_pluralises_by_the_total_when_one_of_three_is_listed() {
+        let rows = pane_rows_with_pr_detail(3, vec![13]);
+        assert!(
+            rows.iter().any(|r| r.contains("1 of 3 open PRs")),
+            "got {rows:?}"
+        );
+    }
+
+    /// A list longer than the count must not print "8 of 5". Fails if the
+    /// comparison is dropped.
+    #[test]
+    fn pr_section_never_prints_a_listed_count_above_the_total() {
+        let rows = pane_rows_with_pr_detail(2, vec![13, 9, 7]);
+        assert!(rows.iter().any(|r| r.contains("3 open PRs")));
+        assert!(!rows.iter().any(|r| r.contains(" of 2 open")));
+    }
+
+    /// The header row already uses the total and must keep doing so beside
+    /// the section's new wording.
+    #[test]
+    fn header_row_keeps_the_total_when_the_pr_section_is_capped() {
+        let mut r = cloned_repo();
+        r.pr_count = 8;
+        r.prs = vec![13, 9, 7, 4, 2].into_iter().map(pr_numbered).collect();
+        let facts = header_rows(r, 120).2;
+        assert!(facts.contains("8 open PRs #13 #9+"), "got {facts:?}");
+        assert!(!facts.contains(" of 8"), "got {facts:?}");
     }
 
     /// One colour per concept: the badge, the footer count, the PR number in
