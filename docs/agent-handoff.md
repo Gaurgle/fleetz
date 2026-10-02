@@ -14,13 +14,15 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 20:54: one reviewer is running.** `fz-reviewer`
-  on FZ-13b (#51, worktree `fz-13b`, uncommitted diff hash `9bb5d691`
-  against `5b4d4c1`). FZ-13c (#52) is at Ready to integrate again and
-  waits for Andreas. FZ-05b, FZ-05c, FZ-05d, FZ-13a and FZ-13t are merged
-  and cleaned up. FZ-05e (#35) is next and not dispatched yet. A lead that
-  finds a later state recorded on an issue and not here trusts the issue,
-  and checks #35 and #51 before dispatching again.
+- **State at 2026-10-02 20:56: one worker and one reviewer are running.**
+  `fz-worker` on FZ-05e (#35, worktree `fz-05e`, branch
+  `fix/fz-05e-merge-sources-by-owner`, base `95edd58`), dispatched 20:55.
+  `fz-reviewer` on FZ-13b (#51, worktree `fz-13b`, uncommitted diff hash
+  `9bb5d691` against `5b4d4c1`). FZ-13c (#52) is at Ready to integrate
+  again and waits for Andreas. FZ-05b, FZ-05c, FZ-05d, FZ-13a and FZ-13t
+  are merged and cleaned up. A lead that finds a later state recorded on
+  an issue and not here trusts the issue, and checks #35 and #51 for a
+  report before dispatching again.
 
 > **No-install span, open since the merge of FZ-05b (`f37c6b9`, 2026-10-02
 > 19:00).** Until FZ-05e (#35) is merged, nothing is tagged and Andreas does
@@ -172,13 +174,14 @@ invariant change 1 of the identity design's section 3.10.
 
 Worktrees are under `.claude/worktrees/`.
 
-- **FZ-05e (#35): next in the `src/main.rs` line, owns `merge_sources` in
-  `src/github.rs`.** It closes the no-install span. Carried into it from
-  FZ-05d's review: once two same-named owned entries reach a poll after a
-  legacy launch, `remotes_that_moved` can return one row index twice
-  (deduplicate it, a small addition in `src/main.rs`); it must not add a
-  fourth independent "same remote" key beside `remote_key`, `names_remote`
-  and discovery's `repo_key`. **For Andreas with FZ-05e,** because the
+- **FZ-05e (#35), `fz-05e`, branch `fix/fz-05e-merge-sources-by-owner`,
+  base `95edd58`.** Worker dispatched 2026-10-02 20:55; it owns
+  `merge_sources` in `src/github.rs`. It closes the no-install span. Scope
+  additions from FZ-05d's review, recorded on #35: `remotes_that_moved`
+  returns each row index once (the one change allowed in `src/main.rs`),
+  and no fourth independent "same remote" key beside `remote_key`,
+  `names_remote` and discovery's `repo_key`. Then a reviewer, then the
+  safe-merge rule. **For Andreas with FZ-05e (asked 20:53, not answered),** because the
   ambiguity status line becomes reachable then: it is red by the FZ-05d
   worker's choice where other load messages are green, lasts 1.5 s like
   every status message, replaces the "Reloaded from cache" failure
