@@ -1,8 +1,31 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-01 21:40 by `claude-fable-5-1`, when Andreas stopped the
-session for the day with usage at 85%. **Nothing is running: no worker, no
-reviewer, no build, no background job.** Read this file, the repository
+## Baton
+
+**Held** by `claude-fable-5-1` (`claude --agent fz-coordinator`, session
+`60a43b88-e448-4466-be9c-e93c226b8f44`), taken 2026-10-02 18:34 CEST.
+
+- **Previous lead stopped.** Andreas answered "Retired, take over" in this
+  session about the two older sessions still open in this repository (a
+  `claude` started 2026-10-01 13:54 and a `codex` started 2026-09-30 23:25).
+  Live state agreed: no build or worker process, no CI run and no issue
+  comment since 2026-10-01 21:36, worktree files last written 21:18
+  (`fz-05b`), 21:32 (`fz-13a`) and 18:34 (`issue-45`) that day.
+- **Standing scope confirmed.** Andreas answered "Both hold" in this session
+  on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
+  instructions below. Their limits are unchanged.
+- **Dispatched at takeover (2026-10-02 18:36), both running:** `fz-worker`
+  on FZ-05b's two test fixes (#32, worktree `fz-05b`) and `fz-reviewer` on
+  FZ-13a (#50, worktree `fz-13a`). A lead that finds this line with the baton
+  still held checks #32 and #50 for a later comment before dispatching
+  either again.
+
+The rest of this file is the state as written at the end of 2026-10-01; the
+sections "In flight" and "Next steps" are updated as tickets move.
+
+Last full rewrite 2026-10-01 21:40 by `claude-fable-5-1`, when Andreas stopped
+that session for the day with usage at 85%. Nothing was running then: no
+worker, no reviewer, no build, no background job. Read this file, the repository
 instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
@@ -36,8 +59,9 @@ Andreas for routing; no API billing or paid credits.
 
 ## What Andreas told this session, and still holds
 
-Said to the 19:34 session. A new lead confirms the first two once before
-relying on them; the rest are written into the repository.
+Said to the 19:34 session on 2026-10-01. A new lead confirms the first two
+once before relying on them; the rest are written into the repository.
+Confirmed to the 2026-10-02 18:34 session ("Both hold").
 
 - **Pace and dispatch.** "keep me updated. backend is still vital, but its
   more important that we move forward in a good pace. But keep me updated,
