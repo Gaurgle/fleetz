@@ -1,8 +1,37 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
+use crate::app::Icons;
 use crate::model::{CiStatus, RepoKind, RepoStatus};
 use crate::ui::colors;
+
+thread_local! {
+    /// The glyph set every glyph choice (`kind_icon`, `stash_icon`,
+    /// `ui::watch_icon`) draws from: the single source, written only by
+    /// `set_active_icons`. Ambient rather than an argument because those are
+    /// reached from functions whose signatures many tests pin.
+    ///
+    /// A thread-local, not a process global: libtest runs each test on its
+    /// own thread, so a test that selects `Plain` cannot change what another
+    /// test draws. Correct in production because the startup call and the
+    /// event loop both run inside the future `#[tokio::main]` polls on the
+    /// main thread, every draw happens in that loop, and spawned tasks only
+    /// send events. The rule that follows: rendering must stay on the thread
+    /// that set the icons, so the event loop must not move into a spawned task
+    /// without this setting moving with it.
+    static ACTIVE_ICONS: std::cell::Cell<Icons> = const { std::cell::Cell::new(Icons::Nerd) };
+}
+
+/// The glyph set this thread draws with. `Nerd` until `set_active_icons`.
+pub fn active_icons() -> Icons {
+    ACTIVE_ICONS.with(std::cell::Cell::get)
+}
+
+/// Select the glyph set this thread draws with: the `icons` config key, once
+/// at startup.
+pub fn set_active_icons(icons: Icons) {
+    ACTIVE_ICONS.with(|active| active.set(icons));
+}
 
 /// Width of the org/private/public glyph column: the glyph itself plus a
 /// trailing space, always reserved -- even for repos with no GitHub
@@ -23,7 +52,7 @@ pub const MARKER_W: usize = 2;
 /// (e.g. local-only repos), so the name column starts at the same place on
 /// every row regardless.
 pub fn glyph_span(repo: &RepoStatus) -> Span<'static> {
-    let Some(glyph) = kind_glyph(repo.repo_kind) else {
+    let Some(glyph) = kind_icon(repo.repo_kind) else {
         return Span::raw(" ".repeat(GLYPH_W));
     };
     Span::styled(
@@ -40,6 +69,32 @@ pub fn kind_glyph(kind: RepoKind) -> Option<&'static str> {
         RepoKind::Private => Some("\u{f023}"), // lock
         RepoKind::Public => Some("\u{f0ac}"),  // globe
         RepoKind::Unknown => None,
+    }
+}
+
+/// The plain-font stand-in for a repo kind, or None for `Unknown`. ASCII, so
+/// one column in every monospace font and never East Asian Ambiguous. The
+/// colour (`kind_color`) still carries most of the meaning; the shapes only
+/// have to differ from each other and from every mark a row already draws.
+/// `@` is how an org is written on GitHub; `+` and `-` read as open and
+/// closed.
+fn plain_kind_glyph(kind: RepoKind) -> Option<&'static str> {
+    match kind {
+        RepoKind::Org => Some("@"),
+        RepoKind::Private => Some("-"),
+        RepoKind::Public => Some("+"),
+        RepoKind::Unknown => None,
+    }
+}
+
+/// The repo kind's glyph in the active set (`active_icons`): the one
+/// place that decides between `kind_glyph` and its plain stand-in, so the
+/// list row, the compact grid and the detail pane's owner line cannot
+/// disagree.
+pub fn kind_icon(kind: RepoKind) -> Option<&'static str> {
+    match active_icons() {
+        Icons::Nerd => kind_glyph(kind),
+        Icons::Plain => plain_kind_glyph(kind),
     }
 }
 
@@ -88,6 +143,21 @@ fn ci_text(repo: &RepoStatus) -> String {
 /// invented -- which is the whole test for putting a symbol on screen.
 pub const STASH_GLYPH: &str = "\u{f411}";
 
+/// The plain-font stash mark: `$` is what git's own prompt
+/// (`git-prompt.sh`, `GIT_PS1_SHOWSTASHSTATE`) prints when something is
+/// stashed, so it is borrowed rather than invented, like `STASH_GLYPH`.
+const PLAIN_STASH_GLYPH: &str = "$";
+
+/// The stash mark in the active set (`active_icons`). The list badge and
+/// the detail pane's stash row both draw it, so the same symbol means the
+/// same thing in both panes.
+pub fn stash_icon() -> &'static str {
+    match active_icons() {
+        Icons::Nerd => STASH_GLYPH,
+        Icons::Plain => PLAIN_STASH_GLYPH,
+    }
+}
+
 /// Worktrees get letters, not a glyph, because git worktrees have no
 /// conventional symbol at all. `⎇` was the obvious candidate and is wrong:
 /// U+2387 is the Alt key, adopted by shell prompts to mean *branch*, so it
@@ -105,7 +175,7 @@ fn pr_text(repo: &RepoStatus) -> String {
 
 fn stash_text(repo: &RepoStatus) -> String {
     if repo.stash_count > 0 {
-        format!("{}{STASH_GLYPH} ", repo.stash_count)
+        format!("{}{} ", repo.stash_count, stash_icon())
     } else {
         String::new()
     }
@@ -449,6 +519,100 @@ mod tests {
                 "{status:?} changed colour on the blink"
             );
         }
+    }
+
+    /// The six plain glyphs, through the choice functions with the plain set
+    /// selected: the three kinds, the stash, and the watch eye open and shut.
+    fn plain_glyphs() -> Vec<&'static str> {
+        set_active_icons(Icons::Plain);
+        let mut glyphs: Vec<&str> = [RepoKind::Org, RepoKind::Private, RepoKind::Public]
+            .into_iter()
+            .filter_map(kind_icon)
+            .collect();
+        glyphs.push(stash_icon());
+        glyphs.push(crate::ui::watch_icon(true));
+        glyphs.push(crate::ui::watch_icon(false));
+        glyphs
+    }
+
+    /// Each plain glyph is one printable ASCII character: one column as
+    /// ratatui measures it, and East Asian Narrow, never Ambiguous (the
+    /// `●○•◆⊙` trap the graph's node tests describe) and never private-use.
+    /// Fails if a stand-in is swapped for a wider, Ambiguous or Nerd Font
+    /// character, or if one goes missing.
+    #[test]
+    fn the_plain_glyphs_are_one_column_ascii() {
+        let glyphs = plain_glyphs();
+        assert_eq!(glyphs.len(), 6);
+        for glyph in glyphs {
+            let mut chars = glyph.chars();
+            let c = chars.next().expect("a glyph");
+            assert!(chars.next().is_none(), "{glyph:?} is one character");
+            assert!(c.is_ascii_graphic(), "{glyph:?} is printable ASCII");
+            assert_eq!(Span::raw(glyph).width(), 1, "{glyph:?}");
+        }
+    }
+
+    /// The plain glyphs cannot be mistaken for each other or for a mark a row
+    /// already draws: the counters, the CI lamp, the fetch warning, the
+    /// selection marker, the dot fill, the `WT` and `PR` letters and digits.
+    /// Fails if a stand-in collides with any of them.
+    #[test]
+    fn the_plain_glyphs_differ_from_every_mark_on_a_row() {
+        let row_marks = ['↓', '↑', '!', '✓', '◉', '⚠', '▸', '·', 'W', 'T', 'P', 'R'];
+        let glyphs = plain_glyphs();
+        let row_glyphs = &glyphs[..4];
+        for glyph in row_glyphs {
+            let c = glyph.chars().next().unwrap();
+            assert!(!row_marks.contains(&c), "{glyph:?} is already a row mark");
+            assert!(!c.is_ascii_alphanumeric(), "{glyph:?} reads as text");
+        }
+        for (i, a) in row_glyphs.iter().enumerate() {
+            for b in &row_glyphs[i + 1..] {
+                assert_ne!(a, b, "two row glyphs share a character");
+            }
+        }
+        assert_ne!(glyphs[4], glyphs[5], "watch on and off look the same");
+    }
+
+    /// Without a call to `set_active_icons`, every choice is the Nerd Font
+    /// set: `icons = "nerd"` is the default and draws what fleetz always drew.
+    /// Reads the fresh test thread's state on purpose; that is its subject.
+    #[test]
+    fn the_default_set_is_the_nerd_font_set() {
+        for kind in [
+            RepoKind::Org,
+            RepoKind::Private,
+            RepoKind::Public,
+            RepoKind::Unknown,
+        ] {
+            assert_eq!(kind_icon(kind), kind_glyph(kind));
+        }
+        assert_eq!(stash_icon(), STASH_GLYPH);
+    }
+
+    /// In `plain` the kind glyph keeps `GLYPH_W` and the badge group reports
+    /// the width it draws, which the dot fill right-aligns the status by.
+    /// Fails if a plain glyph measured more than one column.
+    #[test]
+    fn plain_badges_report_the_width_they_draw() {
+        set_active_icons(Icons::Plain);
+        let mut busy = repo("busy");
+        busy.repo_kind = RepoKind::Private;
+        busy.pr_count = 2;
+        busy.stash_count = 3;
+        busy.worktrees = vec![crate::model::Worktree {
+            path: "~/repos/x-hotfix".to_string(),
+            branch: "hotfix".to_string(),
+        }];
+        let (text, width) = rendered(&busy);
+        assert!(text.contains(&format!("3{PLAIN_STASH_GLYPH}")), "{text:?}");
+        assert_eq!(width, text.chars().count(), "{text:?}");
+        assert_eq!(width, Span::raw(text.clone()).width(), "{text:?}");
+
+        let glyph = glyph_span(&busy);
+        assert_eq!(glyph.width(), GLYPH_W);
+        assert_eq!(glyph.content.chars().count(), GLYPH_W);
     }
 
     /// Only the colour moves. The detail pane right-aligns the group this sits

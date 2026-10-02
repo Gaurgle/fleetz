@@ -398,7 +398,7 @@ fn owner_spans(repo: &RepoStatus) -> (Vec<Span<'static>>, usize) {
     let color = badges::kind_color(repo.repo_kind);
     let mut spans = Vec::new();
 
-    if let Some(glyph) = badges::kind_glyph(repo.repo_kind) {
+    if let Some(glyph) = badges::kind_icon(repo.repo_kind) {
         spans.push(Span::styled(
             format!("{glyph} "),
             Style::default().fg(color),
@@ -667,7 +667,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             "stashes"
         };
         local_extra.push((
-            format!("{} {} {noun}", badges::STASH_GLYPH, repo.stash_count),
+            format!("{} {} {noun}", badges::stash_icon(), repo.stash_count),
             colors::STASH_CLR,
         ));
     }

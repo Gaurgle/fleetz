@@ -24,7 +24,7 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
   in the working tree
 - Open pull requests per repo
 - CI status as a `◉` status lamp: green passed, red failed, blinking orange while running. It pulses on the same phase in the repo row and in the repo pane, since both are reading one repo's CI. From GitHub's `statusCheckRollup`, kept live in watch mode
-- Active worktrees (`wt` badge) and stashes (archive-glyph badge)
+- Active worktrees (`WT` badge) and stashes (archive-glyph badge)
 - Open PR count and numbers on the repo row, in the repo pane, and in the footer
 - Repo pane header reads local-to-remote: local path, branch and stashes on the left of each row, remote URL, PRs and CI flush right
 - Repo groups defined in your config (cycle with `g`)
@@ -92,6 +92,10 @@ You also need:
 - `git`
 - `gh` (GitHub CLI, authenticated via `gh auth login`)
 - `lazygit` (optional, for the `Enter` keybind)
+- a [Nerd Font](https://www.nerdfonts.com/) in your terminal, unless you set
+  `icons = "plain"` in the config, which draws the repo kind, stash and watch
+  marks as plain ASCII instead (the contribution strip's day squares still
+  need one)
 
 ## Usage
 
@@ -187,7 +191,7 @@ in the header instead.
 | `=` | Reset both panes to their default sizes |
 | `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates, and fetch the repos whose remote moved. No rediscovery. A failed poll keeps the rows as they are and marks the header; failed fetches are marked on their repos and counted in the status line |
 | `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear. If GitHub cannot be reached it rebuilds from the cache and says `Reloaded from cache: GitHub offline` (or why) instead of `Reloaded` |
-| `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub. A fetch that fails is marked on its repo, not in the status line. While it is on, a red eye (`󰈈 watch`) in the header pulses between two shades so the dashboard says it is live without anything moving; off, it is a grey crossed-out eye (`󰈉 watch`) |
+| `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub. A fetch that fails is marked on its repo, not in the status line. While it is on, a red eye (`󰈈 watch`) in the header pulses between two shades so the dashboard says it is live without anything moving; off, it is a grey crossed-out eye (`󰈉 watch`). With `icons = "plain"` the eye is `o watch` on and `- watch` off |
 | `?` | Toggle help overlay |
 | `Esc` | Close search or help |
 | `q` | Quit |
@@ -247,6 +251,12 @@ contributions_author = "me@work.com\\|me@home.com"
 # "large". Three Nerd Font icons of measured size, all sitting level with the
 # weekday labels. Also in the `,` menu, where it applies live.
 contributions_cell_size = "medium"
+
+# Glyph set for the repo kind, stash and watch marks: "nerd" (default) draws
+# Nerd Font icons, "plain" draws ASCII any monospace font has: `@` org, `-`
+# private, `+` public, `$` stash (as git's own prompt marks one), and `o` / `-`
+# for watch on / off. An unknown value keeps "nerd". Read at launch.
+icons = "nerd"
 
 # Start in watch mode. On by default: a dashboard you leave open should keep
 # itself current. --watch / --no-watch override for one session, `w` toggles live.

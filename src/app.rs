@@ -174,6 +174,29 @@ impl CellSize {
     }
 }
 
+/// Which glyph set the repo kind, stash and watch marks are drawn from,
+/// from the `icons` config key. `Nerd` is the default and draws the Nerd
+/// Font icons; `Plain` draws ASCII stand-ins every monospace font has, for a
+/// terminal without a Nerd Font, where those icons are tofu. The contribution
+/// strip's day squares are not covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Icons {
+    #[default]
+    Nerd,
+    Plain,
+}
+
+impl Icons {
+    /// "plain" selects `Plain`; anything else, a typo included, keeps the
+    /// default, as the other enum-like keys do.
+    pub fn from_config(value: &str) -> Self {
+        match value {
+            "plain" => Self::Plain,
+            _ => Self::Nerd,
+        }
+    }
+}
+
 /// One quick-filter a repo can be toggled against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterKind {
@@ -5106,5 +5129,308 @@ mod tests {
         let second = g.begin_attempt();
         assert!(g.accept_answer(first), "nothing newer had landed");
         assert!(g.accept_answer(second));
+    }
+
+    use crate::ui::badges::{active_icons, set_active_icons};
+
+    /// One repo of each kind, every one carrying a stash, a linked worktree
+    /// and an owner, so each glyph the `icons` key covers is on screen.
+    /// `extra` more repos cycle through the kinds, for a grid of several rows.
+    fn icon_fleet(extra: usize) -> App {
+        use crate::model::RepoKind;
+        let kinds = [
+            RepoKind::Org,
+            RepoKind::Private,
+            RepoKind::Public,
+            RepoKind::Unknown,
+        ];
+        let mut app = make_app(kinds.len() + extra);
+        for (i, repo) in app.repos.iter_mut().enumerate() {
+            repo.repo_kind = kinds[i % kinds.len()];
+            repo.owner = Some("acme".to_string());
+            repo.stash_count = 2;
+            repo.worktrees = vec![crate::model::Worktree {
+                path: format!("~/repos/repo-{i}-wt"),
+                branch: "wt".to_string(),
+            }];
+            // Uneven badge groups, so a right edge that lines up is evidence.
+            repo.pr_count = i as u32 % 2;
+        }
+        app
+    }
+
+    const SCREEN_W: u16 = 120;
+    const SCREEN_H: u16 = 40;
+
+    fn draw_screen(app: &App, width: u16) -> ratatui::buffer::Buffer {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(width, SCREEN_H)).unwrap();
+        terminal.draw(|f| crate::ui::render(f, app)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn is_private_use(c: char) -> bool {
+        matches!(c as u32, 0xE000..=0xF8FF | 0xF0000..)
+    }
+
+    /// Every cell holding a private-use codepoint, as `(x, y, symbol)`,
+    /// outside the contribution strip: its day squares are FZ-13h, not part
+    /// of the `icons` key. The strip's rectangle comes from `panel_rects`, the
+    /// same function the renderer lays out with.
+    fn private_use_cells(app: &App, buffer: &ratatui::buffer::Buffer) -> Vec<(u16, u16, String)> {
+        let area = buffer.area;
+        let strip = crate::ui::panel_rects(area, app).contributions;
+        let mut found = Vec::new();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                if strip.is_some_and(|s| s.contains(ratatui::layout::Position { x, y })) {
+                    continue;
+                }
+                let symbol = buffer[(x, y)].symbol();
+                if symbol.chars().any(is_private_use) {
+                    found.push((x, y, symbol.to_string()));
+                }
+            }
+        }
+        found
+    }
+
+    /// Where `text` starts on row `y` inside `area`, matched cell by cell.
+    fn find_in_row(
+        buffer: &ratatui::buffer::Buffer,
+        area: ratatui::layout::Rect,
+        y: u16,
+        text: &str,
+    ) -> Option<u16> {
+        let wanted: Vec<String> = text.chars().map(String::from).collect();
+        (area.left()..area.right()).find(|&x| {
+            wanted.iter().enumerate().all(|(i, c)| {
+                let cx = x + i as u16;
+                cx < area.right() && buffer[(cx, y)].symbol() == c
+            })
+        })
+    }
+
+    /// `(x, y)` of each repo's name inside `area`, first match from the top.
+    fn name_cells(
+        app: &App,
+        buffer: &ratatui::buffer::Buffer,
+        area: ratatui::layout::Rect,
+    ) -> Vec<(u16, u16)> {
+        app.repos
+            .iter()
+            .map(|r| {
+                (area.top()..area.bottom())
+                    .find_map(|y| {
+                        find_in_row(buffer, area, y, &format!(" {} ", r.name)).map(|x| (x + 1, y))
+                    })
+                    .unwrap_or_else(|| panic!("{} not drawn", r.name))
+            })
+            .collect()
+    }
+
+    /// The list, every detail pane and the header, in both watch states,
+    /// draw nothing from the private-use area under `icons = "plain"`.
+    /// Fails if any of the six glyphs, or a call site drawing one, still
+    /// reaches for a Nerd Font codepoint in `plain`.
+    #[test]
+    fn plain_icons_draw_no_private_use_glyph_in_the_detail_view() {
+        let mut app = icon_fleet(0);
+        app.view = View::Detail;
+        set_active_icons(Icons::Plain);
+        for selected in 0..app.repos.len() {
+            app.selected = selected;
+            for watch in [true, false] {
+                app.watch_mode = watch;
+                let buffer = draw_screen(&app, SCREEN_W);
+                let found = private_use_cells(&app, &buffer);
+                assert!(
+                    found.is_empty(),
+                    "repo {selected}, watch {watch}: private-use glyphs at {found:?}"
+                );
+            }
+        }
+    }
+
+    /// The compact grid, the same way.
+    #[test]
+    fn plain_icons_draw_no_private_use_glyph_in_the_compact_grid() {
+        let mut app = icon_fleet(4);
+        app.view = View::Compact;
+        set_active_icons(Icons::Plain);
+        let buffer = draw_screen(&app, SCREEN_W);
+        let found = private_use_cells(&app, &buffer);
+        assert!(found.is_empty(), "private-use glyphs at {found:?}");
+    }
+
+    /// The control for the two scans above: the same screens under the Nerd
+    /// set do draw Nerd Font glyphs, so an empty scan in `plain` is the
+    /// setting at work and not a scan that cannot see them. Fails if the Nerd
+    /// set stops drawing them or the fixture stops carrying them.
+    #[test]
+    fn the_nerd_set_draws_the_nerd_font_glyphs() {
+        let mut app = icon_fleet(0);
+        set_active_icons(Icons::Nerd);
+        app.watch_mode = true;
+        app.view = View::Detail;
+        let detail = draw_screen(&app, SCREEN_W);
+        let drawn: Vec<String> = private_use_cells(&app, &detail)
+            .into_iter()
+            .map(|(_, _, s)| s)
+            .collect();
+        for kind in [
+            crate::model::RepoKind::Org,
+            crate::model::RepoKind::Private,
+            crate::model::RepoKind::Public,
+        ] {
+            let glyph = crate::ui::badges::kind_glyph(kind).unwrap();
+            assert!(drawn.iter().any(|s| s == glyph), "{kind:?} glyph missing");
+        }
+        assert!(drawn.iter().any(|s| s == crate::ui::badges::STASH_GLYPH));
+        let eye = crate::ui::watch_icon(true);
+        assert!(eye.chars().all(is_private_use), "{eye:?}");
+        assert!(drawn.iter().any(|s| s == eye));
+
+        app.view = View::Compact;
+        let compact = draw_screen(&app, SCREEN_W);
+        assert!(!private_use_cells(&app, &compact).is_empty());
+    }
+
+    /// In `plain` the list rows keep one name column and one right edge for
+    /// the status token, a repo of unknown kind (blank glyph) included. Fails
+    /// if a plain glyph measures other than one column, which would break
+    /// `badges::GLYPH_W` or the badge width the dot fill is computed from.
+    #[test]
+    fn plain_icons_keep_the_repo_list_aligned() {
+        let mut app = icon_fleet(0);
+        app.view = View::Detail;
+        set_active_icons(Icons::Plain);
+        let buffer = draw_screen(&app, SCREEN_W);
+        let list = crate::ui::panel_rects(buffer.area, &app).repo_list;
+        let names = name_cells(&app, &buffer, list);
+
+        let name_x = names[0].0;
+        assert!(
+            names.iter().all(|(x, _)| *x == name_x),
+            "names at {names:?}"
+        );
+
+        // The status token is the last thing before the border on every row.
+        let right_edges: Vec<u16> = names
+            .iter()
+            .map(|&(_, y)| {
+                (list.left()..list.right() - 1)
+                    .rev()
+                    .find(|&x| buffer[(x, y)].symbol() != " ")
+                    .unwrap()
+            })
+            .collect();
+        assert!(
+            right_edges.iter().all(|x| *x == right_edges[0]),
+            "status tokens end at {right_edges:?}"
+        );
+
+        // And the name column is where the Nerd set puts it. The control
+        // selects its set itself and proves it drew it, so it cannot quietly
+        // compare plain with plain.
+        let mut nerd = icon_fleet(0);
+        nerd.view = View::Detail;
+        set_active_icons(Icons::Nerd);
+        let nerd_buffer = draw_screen(&nerd, SCREEN_W);
+        let nerd_names = name_cells(&nerd, &nerd_buffer, list);
+        let org = crate::ui::badges::kind_glyph(crate::model::RepoKind::Org).unwrap();
+        let (org_x, org_y) = nerd_names[0];
+        assert_eq!(
+            nerd_buffer[(org_x - 2, org_y)].symbol(),
+            org,
+            "the control did not draw the Nerd set"
+        );
+        assert_eq!(nerd_names[0].0, name_x);
+    }
+
+    /// In `plain` the compact grid's rows share their columns: each name in
+    /// the second row starts under the one above it. Fails if a plain glyph
+    /// or badge measured differently from what `compact.rs` reserves for it.
+    #[test]
+    fn plain_icons_keep_the_compact_grid_aligned() {
+        let mut app = icon_fleet(4);
+        app.view = View::Compact;
+        set_active_icons(Icons::Plain);
+        let buffer = draw_screen(&app, SCREEN_W);
+        let names = name_cells(&app, &buffer, buffer.area);
+
+        let mut rows: Vec<u16> = names.iter().map(|(_, y)| *y).collect();
+        rows.sort();
+        rows.dedup();
+        assert!(rows.len() >= 2, "the fixture must wrap: {names:?}");
+        let columns = |y: u16| -> Vec<u16> {
+            let mut xs: Vec<u16> = names
+                .iter()
+                .filter(|(_, ny)| *ny == y)
+                .map(|(x, _)| *x)
+                .collect();
+            xs.sort();
+            xs
+        };
+        let first = columns(rows[0]);
+        for &y in &rows[1..] {
+            let row = columns(y);
+            assert_eq!(row[..], first[..row.len()], "row {y} drifted: {names:?}");
+        }
+    }
+
+    /// The org glyph on the first list row and the header's watch mark, as
+    /// drawn under whatever set is active.
+    fn row_and_header_marks(app: &App) -> (String, String) {
+        let buffer = draw_screen(app, SCREEN_W);
+        let list = crate::ui::panel_rects(buffer.area, app).repo_list;
+        let (x, y) = name_cells(app, &buffer, list)[0];
+        let header: String = (0..buffer.area.width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect();
+        let watch = header
+            .split_whitespace()
+            .take_while(|word| *word != "watch")
+            .last()
+            .unwrap_or_default()
+            .to_string();
+        (buffer[(x - 2, y)].symbol().to_string(), watch)
+    }
+
+    /// One source: selecting a set changes what the rows and the header draw
+    /// together, and a thread that never selected one draws the Nerd set.
+    /// Fails if the header and the rows read different settings, or if a
+    /// fresh thread starts on anything but Nerd.
+    #[test]
+    fn selecting_a_set_changes_the_rows_and_the_header_together() {
+        use crate::model::RepoKind;
+        let mut app = icon_fleet(0);
+        app.view = View::Detail;
+        app.watch_mode = true;
+        let nerd_org = crate::ui::badges::kind_glyph(RepoKind::Org).unwrap();
+
+        set_active_icons(Icons::Plain);
+        let (org, watch) = row_and_header_marks(&app);
+        assert_eq!(org, "@");
+        assert_eq!(watch, "o");
+
+        set_active_icons(Icons::Nerd);
+        let (org, watch) = row_and_header_marks(&app);
+        assert_eq!(org, nerd_org);
+        assert!(watch.chars().all(is_private_use), "{watch:?}");
+
+        set_active_icons(Icons::Plain);
+        let fresh = std::thread::spawn(|| {
+            let mut app = icon_fleet(0);
+            app.view = View::Detail;
+            app.watch_mode = true;
+            (active_icons(), row_and_header_marks(&app))
+        })
+        .join()
+        .unwrap();
+        assert_eq!(fresh.0, Icons::Nerd);
+        assert_eq!(fresh.1.0, nerd_org);
+        assert!(fresh.1.1.chars().all(is_private_use), "{:?}", fresh.1.1);
     }
 }

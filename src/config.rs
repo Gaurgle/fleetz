@@ -32,6 +32,12 @@ pub struct Config {
     /// `app::CellSize`.
     #[serde(default)]
     pub contributions_cell_size: Option<String>,
+    /// Which glyphs mark a repo's kind, its stashes and the header's watch
+    /// state: "nerd" (the default) draws Nerd Font icons, "plain" draws ASCII
+    /// characters any monospace font has. An unknown value keeps the default.
+    /// See `app::Icons`.
+    #[serde(default)]
+    pub icons: Option<String>,
     #[serde(default)]
     pub groups: HashMap<String, Vec<String>>,
     /// Pin the startup view: "detail", "compact", or "auto" (the default,
@@ -101,6 +107,7 @@ impl Default for Config {
             contributions: None,
             contributions_author: None,
             contributions_cell_size: None,
+            icons: None,
             work_start: 9,
             work_end: 18,
             repo_limit: 50,
@@ -595,6 +602,26 @@ mod tests {
             crate::app::ContributionsMode::from_config("gitub"),
             crate::app::ContributionsMode::Off
         );
+    }
+
+    /// The `icons` key: absent means the Nerd Font set, "plain" selects the
+    /// plain set, and a typo keeps the default rather than failing the whole
+    /// config. Fails if the key stops parsing, the default changes, or an
+    /// unknown value picks `plain`.
+    #[test]
+    fn the_icons_key_defaults_to_nerd_and_falls_back_on_a_typo() {
+        let icons = |toml: &str| {
+            let cfg: Config = toml::from_str(toml).expect("config parses");
+            cfg.icons
+                .as_deref()
+                .map(crate::app::Icons::from_config)
+                .unwrap_or_default()
+        };
+        assert_eq!(Config::default().icons, None);
+        assert_eq!(icons(""), crate::app::Icons::Nerd);
+        assert_eq!(icons(r#"icons = "nerd""#), crate::app::Icons::Nerd);
+        assert_eq!(icons(r#"icons = "plain""#), crate::app::Icons::Plain);
+        assert_eq!(icons(r#"icons = "plian""#), crate::app::Icons::Nerd);
     }
 
     #[test]

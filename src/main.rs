@@ -358,6 +358,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .map(app::CellSize::from_config)
         .unwrap_or_default();
+    ui::badges::set_active_icons(
+        config
+            .icons
+            .as_deref()
+            .map(app::Icons::from_config)
+            .unwrap_or_default(),
+    );
     app.show_pr_detail = args.prs;
     // Pane sizes start at their defaults every launch. Only an explicit
     // persist_pane_sizes opt-in restores the ones saved on last exit.
