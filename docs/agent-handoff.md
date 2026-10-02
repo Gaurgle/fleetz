@@ -14,13 +14,15 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 19:47: one worker is running.** `fz-worker` on
-  FZ-05d's fix cycle 2 (#34, worktree `fz-05d`, base `d6604cb`), continued
-  19:46 after a changes-requested review (verdict and rulings on #34).
-  FZ-13c (#52) and FZ-13t (#63) are at Ready to integrate and wait for
-  Andreas. FZ-05b, FZ-05c and FZ-13a are merged and cleaned up. A lead
-  that finds a later state recorded on an issue and not here trusts the
-  issue, and checks #34 for a report before dispatching again.
+- **State at 2026-10-02 19:56: two workers are running.** `fz-worker` on
+  FZ-05d's fix cycle 3 (#34, worktree `fz-05d`, base `d6604cb`), continued
+  19:56 after a second changes-requested verdict (one item, on #34).
+  `fz-worker` on FZ-13b (#51, worktree `fz-13b`, branch
+  `feat/fz-13b-plain-icons`, base `5b4d4c1`), dispatched 19:54. FZ-13c
+  (#52) is at Ready to integrate again and waits for Andreas. FZ-05b,
+  FZ-05c, FZ-13a and FZ-13t are merged and cleaned up. A lead that finds a
+  later state recorded on an issue and not here trusts the issue, and
+  checks #34 and #51 for a report before dispatching again.
 
 > **No-install span, open since the merge of FZ-05b (`f37c6b9`, 2026-10-02
 > 19:00).** Until FZ-05e (#35) is merged, nothing is tagged and Andreas does
@@ -136,6 +138,11 @@ FZ-04 fix and merge, and the FZ-13 split are this session's.
 | FZ-05b | #32 | `47ce339` | `f37c6b9` | Discovery matches by owner and name; a stable six-step primary checkout; ambiguities as data |
 | FZ-05c | #33 | `24f2436` | `d6604cb` | `assemble_view_in` takes `home` and the scan roots; an S8a smoke test through the seam |
 | FZ-13a | #50 | `62598b8` | `ed225d5` | The intro wave is deleted; the loading field stays; `intro` switches the loading screen |
+| FZ-13t | #63 | `70e84c9` | `5b4d4c1` | The list row's worktree count is `WT` in `colors::WORKTREE_CLR` (lavender) |
+
+FZ-13t: Andreas asked for it and accepted the branch build on 2026-10-02
+("WT badge is good"). The detail pane's "N worktrees" line stays in
+`SUBTEXT`, by the wording of his direction.
 
 FZ-13a: Andreas tried the branch build on 2026-10-02 and accepted it as a
 step ("lets go with A"): the wave is gone, and replacing the noise field
@@ -177,8 +184,13 @@ Worktrees are under `.claude/worktrees/`.
   carrier order, and `carries` writes an owned row from an owner-less
   entry against design 3.5 and D1. Coordinator's ruling: the code follows
   the design (an owned row matches only its own owner; an owner-less row
-  keeps matching by name). Fix cycle 2 runs since 19:46 with the same
-  worker; then the same reviewer re-reviews the changed portion. On
+  keeps matching by name). Fix cycle 2 did that (848 tests, diff hash
+  `5937f778`); the re-review accepted it except one case the strict rule
+  made worse than the base: the previous-entry lookup in
+  `remotes_that_moved` after a launch from a cache payload that predates
+  the `owner` field. Fix cycle 3 (19:56) keeps the legacy direction in
+  that one lookup and adds an order test that does not depend on the
+  filesystem; then the same reviewer re-reviews the delta. On
   acceptance: commit, push, CI, combined checks with `main` (which has
   gained FZ-13a in the same file), merge, `CLAUDE.md` invariant changes 3
   and 4. **For Andreas once FZ-05e makes the ambiguity status line
@@ -186,30 +198,28 @@ Worktrees are under `.claude/worktrees/`.
   the "Reloaded from cache" failure message, and can be dropped by a narrow
   footer. For FZ-05e: three "same remote" keys (`remote_key`,
   `names_remote`, discovery's `repo_key`) should become one.
-- **FZ-13t (#63), `fz-13t`, branch `feat/fz-13t-worktree-badge`, base
-  `dd90291`.** Andreas asked for it on 2026-10-02: the list row's worktree
-  count as `WT` in a color that is information, not an alarm and not gray.
-  Issue created at his request; done by `fz-small` with `LAVENDER` behind
-  the named constant `WORKTREE_CLR` (`MAUVE` is the alternative, a one-line
-  change). His direction released the one existing assertion on `1wt`.
-  One fix cycle (a test comment); the re-review accepted (diff hash
-  `695fd4ae` against `dd90291`, on #63). **Commit `70e84c9`, pushed, CI
-  green, combined checks with `main` at `7047e40` passed (809 tests).
-  Ready to integrate: it waits for Andreas's look at the color; merge only
-  after he accepts.** Build:
-  `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-13t/Cargo.toml`.
-  FZ-13b (#51) waits for it: both edit `src/ui/badges.rs`.
+- **FZ-13b (#51), `fz-13b`, branch `feat/fz-13b-plain-icons`, base
+  `5b4d4c1`.** Worker dispatched 2026-10-02 19:54: the config key `icons`
+  (`nerd` default, `plain`), six plain one-column characters for the repo
+  kind, stash and watch glyphs. Then a reviewer, then Ready to integrate:
+  the six characters are Andreas's. If it adds a `SettingField` variant,
+  the help's `,` row on FZ-13c's branch (tied to the settings by an
+  exhaustive match in a test) needs a follow-up by whichever lands second.
 - **FZ-13c (#52), `fz-13c`, branch `feat/fz-13c-two-column-help`, base
-  `ed225d5`, commit `b494248`, pushed. Ready to integrate.** One fix cycle
-  after a changes-requested review; the re-review accepted (diff hash
-  `8db6078e` against `ed225d5`, on #52) and killed four mutants. CI green
-  on the branch; combined checks with `main` at `7b4337a` passed (818
-  tests). **It waits for Andreas to try the branch build (he asked to be
-  told, and was told at 19:33); merge only after he accepts.** Build:
+  `ed225d5`, commits `b494248` and `b36d1f3`, pushed. Ready to integrate.**
+  First round: one fix cycle after a changes-requested review, then
+  accepted (diff hash `8db6078e`). Andreas tried it on 2026-10-02 and
+  asked for color: "not many, but just something to distinguish the
+  keywoards from info". Second round: keys in `colors::SAPPHIRE` through
+  named constants; the delta review accepted (whole-ticket diff hash
+  `94145e9e` against `ed225d5`, on #52). CI green on the branch at
+  `b36d1f3`; combined checks with `main` at `5b4d4c1` passed (820 tests).
+  **It waits for Andreas to try the build again (told at 19:57); merge
+  only after he accepts.** Build:
   `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-13c/Cargo.toml`,
-  then `?`. His calls: the grouping, the merged `< > + -` row, the
-  shortened `J/K` row. If `main` moves in code first, rerun the combined
-  checks.
+  then `?`. He raised nothing about the grouping, the merged `< > + -` row
+  or the shortened `J/K` row. If `main` moves in code first, rerun the
+  combined checks.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked
   by Andreas until the repository goes public.
@@ -237,9 +247,9 @@ No other worktree or local ticket branch exists. Merged branches remain on
    (O5); the signed-out launch (O7); saved files readable only by him (O14);
    and the `CLAUDE.md` and freshness contract changes in its section 6.
    Smaller: O8, O10, O11, O12. Later: O9, O13.
-2. **FZ-13c's branch build**, once its review and the `,` row fix are
-   done; he asked to be told. Asked on 2026-10-02 and not answered: may
-   the `LoadingFrame` redraw bug (follow-ups below) become an issue?
+2. **FZ-13c's branch build**, second round with colored keys (see "In
+   flight"). Asked on 2026-10-02 and not answered: may the `LoadingFrame`
+   redraw bug (follow-ups below) become an issue?
 3. **FZ-13 wave 4** (maximize and restore, hints that follow focus,
    economical folds): each needs a decision from him before it is a ticket.
    The questions are in the split on #26.
