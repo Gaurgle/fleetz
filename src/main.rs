@@ -2606,6 +2606,46 @@ async fn assemble_view(
     git_fetch: bool,
     progress: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
 ) -> Result<(Vec<RepoStatus>, String), String> {
+    // Local scan roots: the primary repo_dir plus any configured extra dirs
+    // (e.g. ~/.dotfiles) -- the fleetz equivalent of repoz's EXTRA_DIRS. Used
+    // by all three passes, so a repo outside the main tree gets a full
+    // GitHub-matched row in pass 1 rather than only surfacing under "local
+    // changes" when it happens to be dirty.
+    let mut scan_roots = vec![repo_dir.to_path_buf()];
+    scan_roots.extend(config.resolved_extra_dirs());
+    let home = dirs::home_dir().unwrap_or_default();
+
+    assemble_view_in(
+        dataset,
+        cutoff,
+        header,
+        args,
+        config,
+        &home,
+        &scan_roots,
+        git_fetch,
+        progress,
+    )
+    .await
+}
+
+/// The body of `assemble_view`, with the two filesystem anchors it used to
+/// read for itself passed in: `home` is where pass 2 sweeps, and `scan_roots`
+/// (the repo dir first, then the configured extra dirs) is what passes 1 and 3
+/// walk. This is the test seam: a test can run the whole assembly against a
+/// temp home and temp roots instead of the real `$HOME`.
+#[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
+async fn assemble_view_in(
+    dataset: &[github::GithubRepo],
+    cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    header: String,
+    args: &Args,
+    config: &config::Config,
+    home: &Path,
+    scan_roots: &[PathBuf],
+    git_fetch: bool,
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+) -> Result<(Vec<RepoStatus>, String), String> {
     // name -> org/private/public, from the *full* fetch (before the activity
     // cutoff filters it down), so a local-only repo can still show its glyph
     // even though it wasn't pushed recently enough to be "active". Mirrors
@@ -2614,14 +2654,6 @@ async fn assemble_view(
         .iter()
         .map(|r| (r.name.to_lowercase(), r.repo_kind))
         .collect();
-
-    // Local scan roots: the primary repo_dir plus any configured extra dirs
-    // (e.g. ~/.dotfiles) -- the fleetz equivalent of repoz's EXTRA_DIRS. Used
-    // by all three passes, so a repo outside the main tree gets a full
-    // GitHub-matched row in pass 1 rather than only surfacing under "local
-    // changes" when it happens to be dirty.
-    let mut scan_roots = vec![repo_dir.to_path_buf()];
-    scan_roots.extend(config.resolved_extra_dirs());
 
     // Apply --before filter
     let before_cutoff = match &args.before {
@@ -2651,15 +2683,14 @@ async fn assemble_view(
     );
 
     // Pass 1: find under every scan root (repo_dir + extra_dirs)
-    let primary_found = discovery::find_in_primary(&scan_roots, &wanted);
+    let primary_found = discovery::find_in_primary(scan_roots, &wanted);
     let found_set: HashSet<String> = primary_found
         .iter()
         .map(discovery::FoundRepo::key)
         .collect();
 
     // Pass 2: find elsewhere
-    let home = dirs::home_dir().unwrap_or_default();
-    let elsewhere_found = discovery::find_elsewhere(&home, &scan_roots, &wanted, &found_set);
+    let elsewhere_found = discovery::find_elsewhere(home, scan_roots, &wanted, &found_set);
 
     // Dedupe up front: a repo found in both passes is one stat target, so the
     // gauge total is the real amount of work rather than a count that has to
@@ -2755,7 +2786,7 @@ async fn assemble_view(
     // above. Runs *before* the not-cloned loop so a dirty local clone claims
     // the repo as LocalOnly rather than being mislabeled "not cloned" when
     // it lives at a hidden path passes 1/2 don't reach.
-    let all_local = discovery::find_all_local(&scan_roots);
+    let all_local = discovery::find_all_local(scan_roots);
     let claimed_paths: HashSet<&Path> = targets.iter().map(|(f, _)| f.path.as_path()).collect();
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
     let mut set = tokio::task::JoinSet::new();
@@ -4503,6 +4534,50 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// S8a of the repository identity design, through the assembly seam: a
+    /// repo with no remote and a modified tracked file, under the scan root,
+    /// with nothing in the dataset naming it, is one LocalOnly row named for
+    /// its folder. Runs against a temp home and root, so the real `$HOME` is
+    /// never walked; no dataset and `git_fetch: false`, so nothing reaches
+    /// the network or the cache.
+    #[tokio::test]
+    async fn a_remoteless_dirty_repo_under_the_root_is_one_local_only_row() {
+        let home = wt_scratch("seam_s8a");
+        let root = home.join("R");
+        let repo = root.join("scratch");
+        std::fs::create_dir_all(&repo).unwrap();
+        wt_sh(&repo, &["git", "init", "-q", "-b", "main"]);
+        wt_sh(&repo, &["git", "config", "user.email", "t@example.com"]);
+        wt_sh(&repo, &["git", "config", "user.name", "t"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        wt_sh(&repo, &["git", "add", "."]);
+        wt_sh(&repo, &["git", "commit", "-q", "-m", "init"]);
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        let (repos, _) = assemble_view_in(
+            &[],
+            None,
+            String::new(),
+            &args,
+            &config,
+            &home,
+            std::slice::from_ref(&root),
+            false,
+            None,
+        )
+        .await
+        .expect("assembly");
+
+        assert_eq!(repos.len(), 1, "exactly one row: {repos:?}");
+        assert_eq!(repos[0].name, "scratch");
+        assert_eq!(repos[0].location, RepoLocation::LocalOnly);
+        assert_eq!(repos[0].dirty, 1);
+
+        std::fs::remove_dir_all(&home).ok();
     }
 
     /// `c` switches the strip's source and ctrl-c quits. Match arms are
