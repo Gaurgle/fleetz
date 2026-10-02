@@ -1621,6 +1621,9 @@ belongs next to "how long did it take to compute" whenever anything animates.
 
 ### Still open: it lags again on a full-screen terminal
 
+Moot since 2026-10-01: the intro wave was removed (FZ-13a). Kept for the
+reasoning about output bandwidth, which applies to any future animation.
+
 Reported after the fix landed: smooth on half a screen, lagging maximised. The
 numbers say exactly that should happen. `CELL_UPDATE` is a fixed divisor, so it
 pins the *ratio* of the screen that changes and not the *rate*, and the rate is
@@ -1738,7 +1741,16 @@ pane. Only the shifted keys were repointed.
 
 ## The intro wave
 
-**Status: shipped.**
+**Status: removed on 2026-10-01 (FZ-13a).** Andreas's decision: delete the
+animation, keep the loading field as the buffer screen while the first load
+runs. The wave cost more than it gave: `docs/performance-baseline.md` measured
+the first legible row at 923 to 1814 ms with it against 257 to 1148 ms without,
+and 6.3 to 9.0 MB of terminal output per launch against about 80 KB. The
+loading field (`ui::intro::Loading`) is unchanged and now gives way to the
+finished screen in one frame. `intro` in `config.toml` keeps its name and
+default and switches only the loading field; the `,` row is labelled `loading
+screen`. Everything below is kept for its reasoning; the parts about the wave
+describe code that no longer exists.
 
 Once per launch, the first painted screen arrives as a diagonal wave of
 scrambled characters that resolves into the content. The screen starts *full*

@@ -369,7 +369,7 @@ impl SettingField {
             Self::PersistPanes => "remember pane sizes",
             Self::Contributions => "contributions",
             Self::ContribCellSize => "contrib cell size",
-            Self::Intro => "intro animation",
+            Self::Intro => "loading screen",
         }
     }
 
@@ -399,9 +399,10 @@ impl SettingField {
             | Self::ContribCellSize => Applies::Live,
             // Only read when the app starts; `w` is how you change it now.
             Self::Watch => Applies::Restart,
-            // The wave plays once, on the first screen of a launch. By the
-            // time this row can be reached it has already been and gone, so
-            // there is nothing for a change to take effect on until next time.
+            // The loading screen only covers the first load of a launch. By
+            // the time this row can be reached it has already been and gone,
+            // so there is nothing for a change to take effect on until next
+            // time.
             Self::Intro => Applies::Restart,
             // Both only feed `time::` when the cutoff and header are computed,
             // which happens once per load against the `Config` the main loop
@@ -767,9 +768,9 @@ mod settings_intro_tests {
         );
     }
 
-    /// It is marked restart-only, and honestly so: the wave plays on the first
-    /// screen of a launch, so by the time this row can be reached it has
-    /// already been and gone.
+    /// It is marked restart-only, and honestly so: the loading screen only
+    /// covers the first load of a launch, so by the time this row can be
+    /// reached it has already been and gone.
     #[test]
     fn the_intro_row_says_it_needs_a_restart() {
         assert_eq!(SettingField::Intro.applies(), Applies::Restart);
@@ -1398,20 +1399,10 @@ pub struct App {
     pub spinner_frame: usize,
     /// Flips every 500ms; drives the pending-CI blink.
     pub blink_on: bool,
-    /// The intro wave, while one is running. See `ui::intro`.
-    pub intro: Option<crate::ui::intro::Intro>,
     /// The noise field shown while the first load is still running, so the
-    /// wait is spent on the surface the wave will later wash away rather than
-    /// on an empty frame.
+    /// wait is spent on a loading screen rather than on an empty frame. See
+    /// `ui::intro`.
     pub loading_field: Option<crate::ui::intro::Loading>,
-    /// Set when the first screenful of real content is ready, and cleared by
-    /// the paint that captures it. The wave resolves *into* a finished screen,
-    /// so it cannot start until there is one to resolve into.
-    pub intro_pending: bool,
-    /// Whether the wave has already been armed this launch. A sweep delivers
-    /// `Loaded` more than once; without this the dashboard would dissolve into
-    /// noise again every time one landed.
-    pub intro_armed: bool,
     /// True once the user pressed v; stops resize from auto-switching views.
     pub view_overridden: bool,
     /// Width of the repo list as a percentage of the main area, and the
@@ -1600,10 +1591,7 @@ impl App {
             needs_redraw: true,
             spinner_frame: 0,
             blink_on: true,
-            intro: None,
             loading_field: None,
-            intro_pending: false,
-            intro_armed: false,
             view_overridden: false,
             repo_list_pct: DEFAULT_REPO_LIST_PCT,
             inspector_pct: DEFAULT_INSPECTOR_PCT,
