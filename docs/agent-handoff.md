@@ -14,15 +14,13 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 19:56: two workers are running.** `fz-worker` on
-  FZ-05d's fix cycle 3 (#34, worktree `fz-05d`, base `d6604cb`), continued
-  19:56 after a second changes-requested verdict (one item, on #34).
-  `fz-worker` on FZ-13b (#51, worktree `fz-13b`, branch
-  `feat/fz-13b-plain-icons`, base `5b4d4c1`), dispatched 19:54. FZ-13c
-  (#52) is at Ready to integrate again and waits for Andreas. FZ-05b,
-  FZ-05c, FZ-13a and FZ-13t are merged and cleaned up. A lead that finds a
-  later state recorded on an issue and not here trusts the issue, and
-  checks #34 and #51 for a report before dispatching again.
+- **State at 2026-10-02 20:54: one reviewer is running.** `fz-reviewer`
+  on FZ-13b (#51, worktree `fz-13b`, uncommitted diff hash `9bb5d691`
+  against `5b4d4c1`). FZ-13c (#52) is at Ready to integrate again and
+  waits for Andreas. FZ-05b, FZ-05c, FZ-05d, FZ-13a and FZ-13t are merged
+  and cleaned up. FZ-05e (#35) is next and not dispatched yet. A lead that
+  finds a later state recorded on an issue and not here trusts the issue,
+  and checks #35 and #51 before dispatching again.
 
 > **No-install span, open since the merge of FZ-05b (`f37c6b9`, 2026-10-02
 > 19:00).** Until FZ-05e (#35) is merged, nothing is tagged and Andreas does
@@ -139,6 +137,17 @@ FZ-04 fix and merge, and the FZ-13 split are this session's.
 | FZ-05c | #33 | `24f2436` | `d6604cb` | `assemble_view_in` takes `home` and the scan roots; an S8a smoke test through the seam |
 | FZ-13a | #50 | `62598b8` | `ed225d5` | The intro wave is deleted; the loading field stays; `intro` switches the loading screen |
 | FZ-13t | #63 | `70e84c9` | `5b4d4c1` | The list row's worktree count is `WT` in `colors::WORKTREE_CLR` (lavender) |
+| FZ-05d | #34 | `4eafc18` | `3daea80` | One carrier row per remote identity; the poll, moved-remote check, fetch baseline and sort keyed by owner and name; the ambiguity status line |
+
+FZ-05d took three fix cycles and the reviewer's acceptance covers the whole
+diff (hash `453e8477` against `d6604cb`, on #34). Rulings by the coordinator,
+all recorded on #34: `src/discovery.rs` opened for `#[cfg(test)]` on two
+wrappers and for exposing `CheckoutRank` instead of a copied order; an owned
+row matches only its own owner (design 3.5, D1); the previous-entry lookup
+in `remotes_that_moved` keeps the legacy direction, after the reviewer
+showed the strict form missed a push following a launch from a pre-owner
+cache. `CLAUDE.md` carries invariant changes 3 and 4 and a paragraph on the
+carrier rule.
 
 FZ-13t: Andreas asked for it and accepted the branch build on 2026-10-02
 ("WT badge is good"). The detail pane's "N worktrees" line stays in
@@ -163,48 +172,31 @@ invariant change 1 of the identity design's section 3.10.
 
 Worktrees are under `.claude/worktrees/`.
 
-- **FZ-05d (#34), `fz-05d`, branch `fix/fz-05d-owner-aware-assembly-poll`,
-  base `d6604cb`.** Worker dispatched 2026-10-02 19:15. The largest ticket
-  of the series: carrier rows, the poll following the `owner` mark, the D4
-  status line. Its reviewer traces both the load and the poll. Nothing in
-  it rests on Andreas (he signed off the design); on the merge the
-  coordinator edits `CLAUDE.md` invariant changes 3 and 4. FZ-13a, merged
-  after this worker's base, changed the `Loaded` arm of `run_event_loop`
-  in the same file: the combined checks decide, and a textual conflict
-  goes back to a worker and a re-review.
-  **Worker report and rulings are on #34:** implemented (18 new tests, 843
-  passed), stopped on a clippy `dead_code` failure in `src/discovery.rs`.
-  The coordinator opened that file for two things only: `#[cfg(test)]` on
-  `find_in_primary` and `find_elsewhere`, and exposing the existing
-  primary-checkout rank so `src/main.rs` does not keep a copy of the order.
-  The worker did both (clippy clean, 843 passed, diff hash `082e09e6`).
-  **Review: changes requested** (on #34). The implementation was found
-  correct in every traced scenario; three mutants survived: no test for
-  the owner-aware compare in `remotes_that_moved`, none for the LocalOnly
-  carrier order, and `carries` writes an owned row from an owner-less
-  entry against design 3.5 and D1. Coordinator's ruling: the code follows
-  the design (an owned row matches only its own owner; an owner-less row
-  keeps matching by name). Fix cycle 2 did that (848 tests, diff hash
-  `5937f778`); the re-review accepted it except one case the strict rule
-  made worse than the base: the previous-entry lookup in
-  `remotes_that_moved` after a launch from a cache payload that predates
-  the `owner` field. Fix cycle 3 (19:56) keeps the legacy direction in
-  that one lookup and adds an order test that does not depend on the
-  filesystem; then the same reviewer re-reviews the delta. On
-  acceptance: commit, push, CI, combined checks with `main` (which has
-  gained FZ-13a in the same file), merge, `CLAUDE.md` invariant changes 3
-  and 4. **For Andreas once FZ-05e makes the ambiguity status line
-  reachable:** it is red, lasts 1.5 s like every status message, replaces
-  the "Reloaded from cache" failure message, and can be dropped by a narrow
-  footer. For FZ-05e: three "same remote" keys (`remote_key`,
-  `names_remote`, discovery's `repo_key`) should become one.
+- **FZ-05e (#35): next in the `src/main.rs` line, owns `merge_sources` in
+  `src/github.rs`.** It closes the no-install span. Carried into it from
+  FZ-05d's review: once two same-named owned entries reach a poll after a
+  legacy launch, `remotes_that_moved` can return one row index twice
+  (deduplicate it, a small addition in `src/main.rs`); it must not add a
+  fourth independent "same remote" key beside `remote_key`, `names_remote`
+  and discovery's `repo_key`. **For Andreas with FZ-05e,** because the
+  ambiguity status line becomes reachable then: it is red by the FZ-05d
+  worker's choice where other load messages are green, lasts 1.5 s like
+  every status message, replaces the "Reloaded from cache" failure
+  message, and can be dropped by a narrow footer. Ask him before lifting
+  the no-install warning.
 - **FZ-13b (#51), `fz-13b`, branch `feat/fz-13b-plain-icons`, base
-  `5b4d4c1`.** Worker dispatched 2026-10-02 19:54: the config key `icons`
-  (`nerd` default, `plain`), six plain one-column characters for the repo
-  kind, stash and watch glyphs. Then a reviewer, then Ready to integrate:
-  the six characters are Andreas's. If it adds a `SettingField` variant,
-  the help's `,` row on FZ-13c's branch (tied to the settings by an
-  exhaustive match in a test) needs a follow-up by whichever lands second.
+  `5b4d4c1`.** Implemented (7 files, +518 -6, diff hash `9bb5d691`, 820
+  tests by the worker's run, no existing test touched), in review (the
+  dispatch is on #51). Plain characters proposed: org `@`, private `-`, public `+`,
+  stash `$`, watch on `o`, watch off `-`. **Open design question, the
+  coordinator's to rule after the reviewer's read:** the active icon set
+  is kept on `App` and in a thread-local read by the row-level glyph
+  functions, because existing tests pin those functions' signatures. The
+  reviewer is asked whether rendering can read it on a thread where it was
+  never set, and what passing the set explicitly would cost in existing
+  test edits. No settings row and no `SettingField` variant, so FZ-13c's
+  help needs no follow-up. Then Ready to integrate: the six characters are
+  Andreas's.
 - **FZ-13c (#52), `fz-13c`, branch `feat/fz-13c-two-column-help`, base
   `ed225d5`, commits `b494248` and `b36d1f3`, pushed. Ready to integrate.**
   First round: one fix cycle after a changes-requested review, then
@@ -332,7 +324,7 @@ Keep to two workers with disjoint ownership, plus their reviewers.
 
 ## Tickets that exist and wait
 
-- **Identity:** FZ-05d #34 (in flight), FZ-05e #35, FZ-05f #36. Serial.
+- **Identity:** FZ-05e #35 (next), FZ-05f #36. Serial.
 - **API budget:** FZ-10a #47, FZ-10b #48, FZ-10c #49. Serial, after the
   identity series.
 - **Coverage and cache:** FZ-09a #57, FZ-09b #58, FZ-09c #59, FZ-09d #60,

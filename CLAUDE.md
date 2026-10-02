@@ -128,8 +128,22 @@ lists it (`sort_by_activity`), applied after the pass dedupe below.
 
 **Discovery pass order is load-bearing** (`main.rs::assemble_view`). Pass 1
 scans the configured roots, pass 2 sweeps `$HOME`, pass 3 picks up local-only
-repos, and only then is anything "not cloned". A local clone must win over that
-fallback, or a repo under a hidden path reports as absent.
+repos, and only then is anything "not cloned". A local clone wins over that
+fallback only through its exact origin, or through an unambiguous folder name
+in passes 1 and 2, or a repo under a hidden path reports as absent. A pass 3
+clone with no remote does not suppress the not-cloned row: it cannot say which
+repo it is.
+
+**GitHub-owned fields live on one carrier row per remote identity**, chosen at
+load and marked by the row's `owner` (`main.rs::build_repo_status`,
+`mark_local_carriers`). The poll, the moved-remote check, the startup fetch
+baseline and the activity sort follow that mark through one predicate
+(`carries`, `names_remote`), keyed by owner and name. A local-only row carries
+a repo only through its stored origin, never by name: matching by name put a
+stranger's CI badge on a same-named clone. Name-only matching survives in one
+place, a row or payload entry with no owner (a cache from before the field was
+asked for), and the first network poll upgrades it. Sweeps never touch the
+mark, so a poll and a sweep can land in either order.
 
 **A clone is matched by its `origin` remote first, and by its folder name only
 where the remote cannot decide** (`discovery::Wanted::match_clone`). The folder
@@ -144,14 +158,18 @@ someone else's same-named repo can't claim yours. A linked worktree has no
 config of its own and keeps the name match, or it would race its main clone for
 the row. When several clones match one repo, the primary is chosen by a fixed
 order (exact remote, github.com host, a `.git` directory, earlier root,
-shallower path, then path), never by filesystem order. Pass 3 dedupes by path as well as name (`main.rs::unclaimed_local`),
-because a remote-matched folder name is not the row's name. This diverges from
-repoz on purpose: repoz still matches on names only.
+shallower path, then path), never by filesystem order
+(`discovery::CheckoutRank`, which assembly reuses for local carriers). Pass 3
+dedupes by path as well as name (`main.rs::unclaimed_local`), because a
+remote-matched folder name is not the row's name. This diverges from repoz on
+purpose: repoz still matches on names only.
 
 **A local clone may be dot-prefixed when its GitHub repo is not** (`dotfiles`
 lives at `~/.dotfiles`). Discovery matches both spellings and reports the
-undotted name: match, glyph lookup and dedupe all key on the GitHub name
-(`discovery::matched_name`, `discovery::repo_name_for_path`).
+undotted name: match, glyph lookup and dedupe all key on the GitHub owner and
+name (`discovery::matched_name`, `discovery::repo_name_for_path`). A
+local-only row is matched only through its stored origin, so a remote-less
+`~/.dotfiles` outside the window shows no kind glyph.
 
 **Hidden directories are traversed inside a configured scan root, but not in
 the `$HOME` sweep.** A root you named (`repo_dir`, `extra_dirs`) yields its
