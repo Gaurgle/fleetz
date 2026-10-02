@@ -180,7 +180,7 @@ impl Wanted {
                 name: repo.name.clone(),
                 rank: MatchRank {
                     by_folder: false,
-                    off_github: origin.host != "github.com",
+                    off_github: off_github(Some(origin)),
                 },
             };
         }
@@ -228,7 +228,7 @@ impl Wanted {
                 name,
                 rank: MatchRank {
                     by_folder: true,
-                    off_github: origin.as_ref().is_none_or(|o| o.host != "github.com"),
+                    off_github: off_github(origin.as_ref()),
                 },
             },
             None => Match::Nothing,
@@ -259,18 +259,52 @@ struct MatchRank {
     off_github: bool,
 }
 
+/// Whether a clone's origin is somewhere other than `github.com`, or missing
+/// (o2). Compared on the lowercased key, since `RemoteRef::parse` keeps the
+/// host as the URL spelled it (`GitHub.com` stays `GitHub.com`).
+fn off_github(origin: Option<&RemoteRef>) -> bool {
+    origin.is_none_or(|o| o.key().host != "github.com")
+}
+
 /// Where a candidate stands in the primary-checkout order of section 3.3:
 /// exact remote, then an origin on `github.com`, then a `.git` directory over
 /// a `.git` file, then an earlier root, then fewer path components, then the
 /// path itself. Lower wins, so the result does not depend on the order the
 /// filesystem lists directories in.
+///
+/// Shared with assembly, which orders the LocalOnly rows naming one remote
+/// by it (`exact_origin`), so the order has one definition.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct CheckoutRank {
+pub(crate) struct CheckoutRank {
     matched: MatchRank,
     git_file: bool,
     root: usize,
     depth: usize,
     path: PathBuf,
+}
+
+impl CheckoutRank {
+    /// The rank of the clone at `path`, matched as `matched`, found under the
+    /// scan root at index `root`.
+    fn new(matched: MatchRank, path: &Path, root: usize) -> Self {
+        Self {
+            matched,
+            git_file: !path.join(".git").is_dir(),
+            root,
+            depth: path.components().count(),
+            path: path.to_path_buf(),
+        }
+    }
+
+    /// The rank of a clone at `path`, under the scan root at index `root`,
+    /// that stands for its repo through its exact `origin`.
+    pub(crate) fn exact_origin(origin: &RemoteRef, path: &Path, root: usize) -> Self {
+        let matched = MatchRank {
+            by_folder: false,
+            off_github: off_github(Some(origin)),
+        };
+        Self::new(matched, path, root)
+    }
 }
 
 /// The best clone per wanted repo, and the ambiguous clones, as a walk finds
@@ -294,13 +328,7 @@ impl Collector {
             }
             Match::Nothing => return,
         };
-        let rank = CheckoutRank {
-            matched,
-            git_file: !path.join(".git").is_dir(),
-            root,
-            depth: path.components().count(),
-            path: path.to_path_buf(),
-        };
+        let rank = CheckoutRank::new(matched, path, root);
         let found = FoundRepo {
             name,
             path: path.to_path_buf(),
@@ -341,6 +369,10 @@ impl Collector {
 ///
 /// One clone per wanted repo, chosen by the primary-checkout order
 /// (`CheckoutRank`), so overlapping roots can't produce two rows for one repo.
+///
+/// Production uses `find_in_primary_with_ambiguities`; this wrapper stays for
+/// the existing tests.
+#[cfg(test)]
 pub fn find_in_primary(roots: &[PathBuf], wanted: &Wanted) -> Vec<FoundRepo> {
     find_in_primary_with_ambiguities(roots, wanted).0
 }
@@ -368,6 +400,10 @@ pub fn find_in_primary_with_ambiguities(
 /// `already_found` holds the `FoundRepo::key` of every pass 1 match; those
 /// repos are not looked for again. One clone per remaining repo, by the same
 /// order as pass 1.
+///
+/// Production uses `find_elsewhere_with_ambiguities`; this wrapper stays for
+/// the existing tests.
+#[cfg(test)]
 pub fn find_elsewhere(
     home: &Path,
     roots: &[PathBuf],
