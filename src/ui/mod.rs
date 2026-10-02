@@ -216,6 +216,24 @@ pub fn sweep_overdue(
 const WATCH_ON_GLYPH: &str = "\u{f0208}";
 const WATCH_OFF_GLYPH: &str = "\u{f0209}";
 
+/// The plain-font watch marks: an open eye `o` and a shut one `-`. ASCII,
+/// so one column in every monospace font, and the word `watch` beside them
+/// says what they are, as it does for the Nerd Font eye.
+const PLAIN_WATCH_ON_GLYPH: &str = "o";
+const PLAIN_WATCH_OFF_GLYPH: &str = "-";
+
+/// The header's watch mark for `on` in the active set
+/// (`badges::active_icons`, the same one the rows draw from): the one place
+/// that decides between the Nerd Font eye and its plain stand-in.
+pub fn watch_icon(on: bool) -> &'static str {
+    match (badges::active_icons(), on) {
+        (crate::app::Icons::Nerd, true) => WATCH_ON_GLYPH,
+        (crate::app::Icons::Nerd, false) => WATCH_OFF_GLYPH,
+        (crate::app::Icons::Plain, true) => PLAIN_WATCH_ON_GLYPH,
+        (crate::app::Icons::Plain, false) => PLAIN_WATCH_OFF_GLYPH,
+    }
+}
+
 /// Columns between the edge of a pane and the first cell of its content: one
 /// for the border, one for the block's horizontal padding.
 ///
@@ -952,13 +970,13 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             colors::WATCH_OFF
         };
         vec![
-            Span::styled(format!(" {WATCH_ON_GLYPH}"), Style::default().fg(lamp)),
+            Span::styled(format!(" {}", watch_icon(true)), Style::default().fg(lamp)),
             Span::styled(" watch ".to_string(), Style::default().fg(colors::WATCH_ON)),
         ]
     } else {
         let off = Style::default().fg(colors::OVERLAY);
         vec![
-            Span::styled(format!(" {WATCH_OFF_GLYPH}"), off),
+            Span::styled(format!(" {}", watch_icon(false)), off),
             Span::styled(" watch ".to_string(), off),
         ]
     };
