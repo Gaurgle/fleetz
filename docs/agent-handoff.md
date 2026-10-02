@@ -14,10 +14,15 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 19:01: no worker or reviewer is running.** FZ-05b
-  is merged (`f37c6b9`). FZ-13a is reviewed, committed and pushed, and waits
-  at Ready to integrate for Andreas's look. A lead that finds a later
-  dispatch recorded on an issue and not here trusts the issue.
+- **State at 2026-10-02 19:05: two workers are running**, dispatched at
+  19:03 from base `c281a36`: `fz-worker` on FZ-05c (#33, worktree `fz-05c`,
+  branch `refactor/fz-05c-assemble-view-seam`, `src/main.rs`) and
+  `fz-worker` on FZ-13c (#52, worktree `fz-13c`, branch
+  `feat/fz-13c-two-column-help`, `src/ui/help.rs`). Neither is reviewed.
+  FZ-05b is merged (`f37c6b9`). FZ-13a is reviewed, committed and pushed,
+  and waits at Ready to integrate for Andreas's look. A lead that finds a
+  later state recorded on an issue and not here trusts the issue, and
+  checks #33 and #52 for a worker report before dispatching either again.
 
 > **No-install span, open since the merge of FZ-05b (`f37c6b9`, 2026-10-02
 > 19:00).** Until FZ-05e (#35) is merged, nothing is tagged and Andreas does
@@ -152,6 +157,16 @@ Worktrees are under `.claude/worktrees/`.
   other functions: rerun the combined checks on the new result before the
   merge. Build:
   `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-13a/Cargo.toml`.
+- **FZ-05c (#33), `fz-05c`, branch `refactor/fz-05c-assemble-view-seam`,
+  base `c281a36`.** Worker dispatched 2026-10-02 19:03: a pure refactor
+  that gives `assemble_view` a core taking `home` and the scan roots, plus
+  one S8a smoke test. Then a reviewer (pure refactor), then the safe-merge
+  rule; nothing in it rests on Andreas.
+- **FZ-13c (#52), `fz-13c`, branch `feat/fz-13c-two-column-help`, base
+  `c281a36`.** Worker dispatched 2026-10-02 19:03, `src/ui/help.rs` only.
+  Then a reviewer, then Ready to integrate: the grouping and look are
+  Andreas's. Its `,` row must be reconciled with FZ-13a's relabel of the
+  settings row ("loading screen") at integration.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked
   by Andreas until the repository goes public.
