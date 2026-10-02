@@ -2617,25 +2617,38 @@ fn sort_by_activity(
 }
 
 /// Pass 3's candidates: the local repos passes 1-2 have not already shown,
-/// each with the name it reports as.
+/// each with the name it reports as (undotted, `discovery::repo_name_for_path`).
 ///
-/// Skipped by path as well as by name. A clone matched through its remote can
-/// sit in a folder whose name is not the GitHub name (`DevOps_Portfolio` for
-/// `portfolio-site`), and the name check alone let it back in as a second,
-/// local-only row whenever it was dirty.
+/// Deduped by canonical path only, as repoz does (D5 in
+/// `docs/repository-identity-design.md`): a candidate is dropped when its
+/// canonical path is the canonical path of a claimed row, or of an earlier
+/// candidate, so one directory reached through two root spellings (a
+/// symlink, `R/sub/..`, `/var` against `/private/var`) is listed once. The
+/// raw path is the key when `canonicalize` fails. The key is for comparison
+/// only: each candidate keeps the path as discovered, which is what the row
+/// displays.
+///
+/// No name check: a dirty second checkout of a claimed repo, and two
+/// same-named local-only repos, each get a row. Matching by path also keeps
+/// out a clone passes 1-2 matched through its remote in a folder named
+/// otherwise (`DevOps_Portfolio` for `portfolio-site`).
+///
+/// `checked_names` is ignored. It is the name set pass 3 used to filter by,
+/// kept only so the signature existing callers use does not change.
 fn unclaimed_local(
     all_local: Vec<PathBuf>,
     claimed_paths: &HashSet<&Path>,
     checked_names: &HashSet<String>,
 ) -> Vec<(PathBuf, String)> {
+    let _ = checked_names;
+    let key = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut seen: HashSet<PathBuf> = claimed_paths.iter().map(|path| key(path)).collect();
     all_local
         .into_iter()
-        .filter(|path| !claimed_paths.contains(path.as_path()))
-        .filter_map(|path| {
-            // Undotted, so a hidden clone dedupes against the GitHub name passes
-            // 1-2 registered it under rather than showing a second `.foo` row.
+        .filter(|path| seen.insert(key(path)))
+        .map(|path| {
             let name = discovery::repo_name_for_path(&path);
-            (!checked_names.contains(&name.to_lowercase())).then_some((path, name))
+            (path, name)
         })
         .collect()
 }
@@ -2816,11 +2829,6 @@ async fn assemble_view_in(
         }
     }
     let mut repos: Vec<RepoStatus> = slots.into_iter().flatten().collect();
-    // Read only by pass 3's bare-name filter and its name claim below. The
-    // remotes the rows above carry are in `seen`, which the not-cloned loop
-    // reads instead.
-    let mut checked_names: HashSet<String> =
-        targets.iter().map(|(f, _)| f.name.to_lowercase()).collect();
 
     if let Some(tx) = progress {
         let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Finishing));
@@ -2834,7 +2842,7 @@ async fn assemble_view_in(
     // reach.
     let all_local = discovery::find_all_local(scan_roots);
     let claimed_paths: HashSet<&Path> = targets.iter().map(|(f, _)| f.path.as_path()).collect();
-    let candidates = unclaimed_local(all_local, &claimed_paths, &checked_names);
+    let candidates = unclaimed_local(all_local, &claimed_paths, &HashSet::new());
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
     let mut set = tokio::task::JoinSet::new();
     for (i, (path, name)) in candidates.iter().cloned().enumerate() {
@@ -2848,9 +2856,8 @@ async fn assemble_view_in(
         });
     }
 
-    // Back into discovery order, then claim names: a clean repo never claims
-    // one, so an active GitHub repo hidden from passes 1-2 still falls
-    // through to the not-cloned list below, exactly as it did serially.
+    // Back into discovery order. A clean repo gets no row, and every dirty
+    // one does: `unclaimed_local` already deduped the candidates by path.
     let mut local_results: Vec<(usize, Option<RepoStatus>)> = Vec::new();
     while let Some(joined) = set.join_next().await {
         if let Ok(pair) = joined {
@@ -2861,9 +2868,6 @@ async fn assemble_view_in(
     let mut local_rows: Vec<(&Path, RepoStatus)> = Vec::new();
     for (i, status) in local_results {
         let Some(repo) = status else { continue };
-        if !checked_names.insert(repo.name.to_lowercase()) {
-            continue;
-        }
         local_rows.push((candidates[i].0.as_path(), repo));
     }
     mark_local_carriers(&mut local_rows, dataset, scan_roots, &mut seen);
@@ -6023,6 +6027,248 @@ mod tests {
         let row = row_at(&repos, &clone);
         assert_eq!(row.location, RepoLocation::LocalOnly);
         assert_carries_nothing(row);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    // --- FZ-05f: pass 3 dedupes by canonical path only ---
+
+    /// A dirty remote-less repo at `dir`.
+    fn dirty_remoteless(dir: &Path) {
+        id_repo(dir, None, true);
+    }
+
+    /// S4, load and poll. Two clones of one remote with the same folder name:
+    /// the Primary at `R/fleetz` carries the repo, and the dirty `R/old/fleetz`
+    /// is a LocalOnly row with local fields only. A third checkout at
+    /// `R/older/fleetz` with nothing uncommitted or unpushed (cloned, so its
+    /// `origin/main` is its `main`) is not news and gets no row. Before, pass
+    /// 3 hid the dirty copy because its folder name was already claimed.
+    #[tokio::test]
+    async fn a_dirty_extra_checkout_named_like_its_remote_is_a_local_row() {
+        let home = wt_scratch("id_s4");
+        let root = home.join("R");
+        let url = "git@github.com:Gaurgle/fleetz.git";
+        id_repo(&root.join("fleetz"), Some(url), false);
+        id_repo(&root.join("old").join("fleetz"), Some(url), true);
+        let older = root.join("older");
+        std::fs::create_dir_all(&older).unwrap();
+        wt_sh(
+            &older,
+            &[
+                "git",
+                "clone",
+                "-q",
+                &path_arg(&root.join("fleetz")),
+                "fleetz",
+            ],
+        );
+        wt_sh(
+            &older.join("fleetz"),
+            &["git", "remote", "set-url", "origin", url],
+        );
+        let entry = id_entry(
+            Some("Gaurgle"),
+            "fleetz",
+            0,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Private,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            std::slice::from_ref(&root),
+            std::slice::from_ref(&entry),
+            None,
+        )
+        .await;
+
+        assert_eq!(repos.len(), 2, "{repos:#?}");
+        let primary = row_at(&repos, &root.join("fleetz"));
+        assert_eq!(primary.location, RepoLocation::Primary);
+        assert_eq!(primary.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(primary.ci_status, model::CiStatus::Passed);
+        assert_eq!(primary.pr_count, 1);
+        let copy = row_at(&repos, &root.join("old").join("fleetz"));
+        assert_eq!(copy.location, RepoLocation::LocalOnly);
+        assert_eq!(copy.name, "fleetz");
+        assert_eq!(copy.dirty, 1);
+        assert_carries_nothing(copy);
+
+        let mut app = App::new(repos, "h".to_string(), 120, 44);
+        let now = id_entry(
+            Some("Gaurgle"),
+            "fleetz",
+            0,
+            model::CiStatus::Failed,
+            2,
+            model::RepoKind::Private,
+        );
+        poll_entries(&mut app, vec![now]);
+        let primary = row_at(&app.repos, &root.join("fleetz"));
+        assert_eq!(primary.ci_status, model::CiStatus::Failed);
+        assert_eq!(primary.pr_count, 2);
+        assert_carries_nothing(row_at(&app.repos, &root.join("old").join("fleetz")));
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// S8b: two dirty remote-less repos both named `notes` are two LocalOnly
+    /// rows, one per path. Before, the second was hidden by name.
+    #[tokio::test]
+    async fn two_same_named_remoteless_repos_are_two_local_rows() {
+        let home = wt_scratch("id_s8b");
+        let root = home.join("R");
+        let a = root.join("a").join("notes");
+        let b = root.join("b").join("notes");
+        dirty_remoteless(&a);
+        dirty_remoteless(&b);
+
+        let (repos, _) = id_assemble(&home, std::slice::from_ref(&root), &[], None).await;
+
+        assert_eq!(repos.len(), 2, "{repos:#?}");
+        for path in [&a, &b] {
+            let row = row_at(&repos, path);
+            assert_eq!(row.location, RepoLocation::LocalOnly);
+            assert_eq!(row.name, "notes");
+            assert_carries_nothing(row);
+        }
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// Two owners of one name in the dataset, a Primary clone of one of them,
+    /// and a dirty remote-less `api` elsewhere under the root. The clone
+    /// carries `company/api`, `alice/api` stays not cloned, and the remote-less
+    /// folder, ambiguous by name (rule 2 of 3.3), claims neither and is a
+    /// LocalOnly row with no GitHub fields, named in the status line. Before,
+    /// the Primary's name hid it.
+    #[tokio::test]
+    async fn a_remoteless_checkout_named_like_a_claimed_repo_is_a_local_row() {
+        let home = wt_scratch("id_owners_p3");
+        let root = home.join("R");
+        let clone = root.join("api");
+        id_repo(&clone, Some("git@github.com:company/api.git"), false);
+        let scratch = root.join("x").join("api");
+        dirty_remoteless(&scratch);
+        let dataset = vec![
+            id_entry(
+                Some("alice"),
+                "api",
+                0,
+                model::CiStatus::Passed,
+                1,
+                model::RepoKind::Public,
+            ),
+            id_entry(
+                Some("company"),
+                "api",
+                0,
+                model::CiStatus::Failed,
+                0,
+                model::RepoKind::Org,
+            ),
+        ];
+
+        let (repos, notes) = id_assemble(&home, std::slice::from_ref(&root), &dataset, None).await;
+
+        assert_eq!(repos.len(), 3, "{repos:#?}");
+        let primary = row_at(&repos, &clone);
+        assert_eq!(primary.location, RepoLocation::Primary);
+        assert_eq!(primary.owner.as_deref(), Some("company"));
+        assert_eq!(primary.ci_status, model::CiStatus::Failed);
+        assert!(not_cloned(&repos, "alice", "api").is_some());
+        let local = row_at(&repos, &scratch);
+        assert_eq!(local.location, RepoLocation::LocalOnly);
+        assert_eq!(local.name, "api");
+        assert_carries_nothing(local);
+        assert_eq!(
+            notes.ambiguity.as_deref(),
+            Some(
+                format!(
+                    "api: {} matches 2 GitHub repos, add an origin remote",
+                    tilde_display(&scratch)
+                )
+                .as_str()
+            )
+        );
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// One directory reached through two spellings of one root is one row,
+    /// whether pass 1 claimed it (`fleetz`, dirty, with its remote) or only
+    /// pass 3 lists it (`scratch`). Spellings: a symlink to the root, the
+    /// root with `sub/..` appended, and the root canonicalized (`/private/var`
+    /// against `/var` for a macOS temp dir). Comparing raw paths would list
+    /// each repo once per spelling.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn one_directory_through_two_root_spellings_is_one_row() {
+        let home = wt_scratch("id_spellings");
+        let root = home.join("R");
+        id_repo(
+            &root.join("fleetz"),
+            Some("git@github.com:Gaurgle/fleetz.git"),
+            true,
+        );
+        dirty_remoteless(&root.join("scratch"));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let link = home.join("L");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        let entry = id_entry(
+            Some("Gaurgle"),
+            "fleetz",
+            0,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Public,
+        );
+
+        let spellings = [
+            link.clone(),
+            root.join("sub").join(".."),
+            root.canonicalize().unwrap(),
+        ];
+        for other in spellings {
+            let roots = [root.clone(), other.clone()];
+            let (repos, _) = id_assemble(&home, &roots, std::slice::from_ref(&entry), None).await;
+            assert_eq!(repos.len(), 2, "roots {roots:?}: {repos:#?}");
+            assert_eq!(
+                row_at(&repos, &root.join("fleetz")).location,
+                RepoLocation::Primary,
+                "roots {roots:?}"
+            );
+            assert_eq!(
+                row_at(&repos, &root.join("scratch")).location,
+                RepoLocation::LocalOnly,
+                "roots {roots:?}"
+            );
+        }
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// The dedupe key is canonical, the display path is not: a repo found
+    /// under a symlinked root shows the path as the root was spelled.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_row_under_a_symlinked_root_displays_the_root_as_spelled() {
+        let home = wt_scratch("id_symlink_display");
+        let real = home.join("real");
+        dirty_remoteless(&real.join("scratch"));
+        let link = home.join("R");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let (repos, _) = id_assemble(&home, std::slice::from_ref(&link), &[], None).await;
+
+        assert_eq!(repos.len(), 1, "{repos:#?}");
+        assert_eq!(
+            repos[0].path.as_deref(),
+            Some(tilde_display(&link.join("scratch")).as_str())
+        );
+        assert_eq!(repos[0].name, "scratch");
 
         std::fs::remove_dir_all(&home).ok();
     }
