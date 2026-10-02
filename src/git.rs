@@ -42,6 +42,12 @@ pub(crate) async fn run_git(repo_path: &Path, args: &[&str]) -> Option<std::proc
 /// work, and git de-duplicates a commit reachable from several refs. `%ad`
 /// with `--date=short` is the author date in local time, which is the day you
 /// would say you did the work on.
+///
+/// Minus `refs/stash` and `refs/notes/*`, whose commits are not work: a
+/// stash is a WIP and an index commit authored by you, and a note is
+/// metadata about a commit (#43). Excluded rather than narrowed to
+/// `--branches --remotes`, so everything else `--all` walks still counts:
+/// tags, HEAD when detached, and linked worktrees' HEADs.
 pub async fn daily_commits(
     repo_path: &Path,
     start: chrono::NaiveDate,
@@ -53,6 +59,10 @@ pub async fn daily_commits(
         repo_path,
         &[
             "log",
+            // Each `--exclude` applies to the `--all` after it, and matches
+            // full refnames by glob, where `*` also crosses `/`.
+            "--exclude=refs/stash",
+            "--exclude=refs/notes/*",
             "--all",
             "--date=short",
             "--pretty=%ad",
@@ -2743,6 +2753,227 @@ mod real_repo_tests {
         assert!(age < 60, "file written just now, got {at} ({age}s ago)");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- #43: the local histogram walks branches, not stash or notes ---
+
+    /// Grid start for the histogram tests: every fixed date below falls
+    /// inside the grid that starts here.
+    const DAILY_START: &str = "2023-10-01";
+
+    /// Total of `daily_commits` over the grid, counting the test identity.
+    async fn daily_total(dir: &Path) -> u32 {
+        let start = chrono::NaiveDate::parse_from_str(DAILY_START, "%Y-%m-%d").unwrap();
+        let counts = daily_commits(dir, start, "t@example.com")
+            .await
+            .expect("daily_commits answered");
+        counts.0.iter().map(|n| u32::from(*n)).sum()
+    }
+
+    /// One tracked file committed on `main` at a fixed date, so a stash has
+    /// something to save and every count is exact.
+    fn daily_repo(tag: &str) -> PathBuf {
+        let dir = empty_repo(tag);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh_at(
+            &dir,
+            "2024-01-10T12:00:00+00:00",
+            &["git", "commit", "-q", "-m", "init"],
+        );
+        dir
+    }
+
+    /// E5a: a stash is a WIP commit and an index commit authored by you.
+    /// Walking `--all` counted both, so stashing raised the strip by two.
+    #[tokio::test]
+    async fn a_stash_does_not_raise_the_local_count() {
+        let dir = daily_repo("daily_stash");
+        let before = daily_total(&dir).await;
+        std::fs::write(dir.join("a.txt"), "changed\n").unwrap();
+        sh_at(
+            &dir,
+            "2024-01-11T12:00:00+00:00",
+            &["git", "stash", "push", "-q"],
+        );
+        let after = daily_total(&dir).await;
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(before, 1);
+        assert_eq!(after, before, "the stash's commits were counted");
+    }
+
+    /// A note is metadata about a commit, stored as a commit on
+    /// `refs/notes/*`. Neither the default notes ref nor a nested one counts.
+    #[tokio::test]
+    async fn a_note_does_not_raise_the_local_count() {
+        let dir = daily_repo("daily_notes");
+        let before = daily_total(&dir).await;
+        sh_at(
+            &dir,
+            "2024-01-11T12:00:00+00:00",
+            &["git", "notes", "add", "-m", "a note", "HEAD"],
+        );
+        sh_at(
+            &dir,
+            "2024-01-11T12:00:00+00:00",
+            &[
+                "git",
+                "notes",
+                "--ref=team/review",
+                "add",
+                "-m",
+                "nested",
+                "HEAD",
+            ],
+        );
+        let after = daily_total(&dir).await;
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(before, 1);
+        assert_eq!(after, before, "the notes commits were counted");
+    }
+
+    /// The reason the walk is wider than HEAD: work on a branch that is not
+    /// checked out is still work.
+    #[tokio::test]
+    async fn a_commit_on_a_branch_not_checked_out_still_counts() {
+        let dir = daily_repo("daily_feature");
+        sh(&dir, &["git", "checkout", "-q", "-b", "feature"]);
+        sh_at(
+            &dir,
+            "2024-01-11T12:00:00+00:00",
+            &["git", "commit", "-q", "--allow-empty", "-m", "feature work"],
+        );
+        sh(&dir, &["git", "checkout", "-q", "main"]);
+        let total = daily_total(&dir).await;
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(total, 2, "the feature branch's commit was not counted");
+    }
+
+    /// One commit reachable from two branches, a remote-tracking ref and the
+    /// remote's `HEAD` symref is still one commit.
+    #[tokio::test]
+    async fn a_commit_reachable_from_several_refs_counts_once() {
+        let dir = daily_repo("daily_dedupe");
+        sh(&dir, &["git", "branch", "other"]);
+        sh(
+            &dir,
+            &["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+        sh(
+            &dir,
+            &[
+                "git",
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
+        let total = daily_total(&dir).await;
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(total, 1, "a commit was counted once per ref");
+    }
+
+    /// Kept from `--all`: a commit reachable only from a tag still counts.
+    #[tokio::test]
+    async fn a_commit_reachable_only_from_a_tag_still_counts() {
+        let dir = daily_repo("daily_tag");
+        sh(&dir, &["git", "checkout", "-q", "--detach"]);
+        sh_at(
+            &dir,
+            "2024-01-11T12:00:00+00:00",
+            &["git", "commit", "-q", "--allow-empty", "-m", "tagged"],
+        );
+        sh(&dir, &["git", "tag", "only-tag"]);
+        sh(&dir, &["git", "checkout", "-q", "main"]);
+        let total = daily_total(&dir).await;
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(total, 2, "the tag-only commit was not counted");
+    }
+
+    /// Kept from `--all`: work in progress on a detached HEAD, on no branch,
+    /// still counts.
+    #[tokio::test]
+    async fn a_commit_on_a_detached_head_still_counts() {
+        let dir = daily_repo("daily_detached");
+        sh(&dir, &["git", "checkout", "-q", "--detach"]);
+        sh_at(
+            &dir,
+            "2024-01-11T12:00:00+00:00",
+            &["git", "commit", "-q", "--allow-empty", "-m", "detached"],
+        );
+        let total = daily_total(&dir).await;
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(total, 2, "the detached HEAD's commit was not counted");
+    }
+
+    /// Kept from `--all`: a linked worktree's detached HEAD is walked from the
+    /// main checkout too, so its commits on no branch still count.
+    #[tokio::test]
+    async fn a_commit_on_a_linked_worktrees_detached_head_still_counts() {
+        let dir = daily_repo("daily_wt");
+        let linked = dir.with_file_name(format!(
+            "{}_linked",
+            dir.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&linked);
+        sh(
+            &dir,
+            &[
+                "git",
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                &linked.to_string_lossy(),
+                "main",
+            ],
+        );
+        sh_at(
+            &linked,
+            "2024-01-11T12:00:00+00:00",
+            &["git", "commit", "-q", "--allow-empty", "-m", "linked wip"],
+        );
+        let total = daily_total(&dir).await;
+        std::fs::remove_dir_all(&linked).ok();
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(total, 2, "the linked worktree's HEAD was not walked");
+    }
+
+    /// Kept from `--all`: only stash and notes are excluded, so a commit held
+    /// by any other namespace (here `refs/original`, as `filter-branch` leaves
+    /// behind) still counts.
+    #[tokio::test]
+    async fn a_commit_held_by_another_namespace_still_counts() {
+        let dir = daily_repo("daily_other_ns");
+        sh(&dir, &["git", "checkout", "-q", "--detach"]);
+        sh_at(
+            &dir,
+            "2024-01-11T12:00:00+00:00",
+            &[
+                "git",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "rewritten away",
+            ],
+        );
+        sh(
+            &dir,
+            &["git", "update-ref", "refs/original/refs/heads/main", "HEAD"],
+        );
+        sh(&dir, &["git", "checkout", "-q", "main"]);
+        let total = daily_total(&dir).await;
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(total, 2, "the refs/original commit was not counted");
     }
 
     #[tokio::test]
