@@ -1898,7 +1898,15 @@ fn remotes_that_moved(
                 .iter()
                 .position(|r| r.path.is_some() && carries(r, moved))
         })
-        .collect()
+        // Each row once, in the order its first moved entry came: two entries
+        // can resolve to one row (an owner-less legacy row carries every
+        // same-named entry), and a second index is a second single sweep.
+        .fold(Vec::new(), |mut rows, idx| {
+            if !rows.contains(&idx) {
+                rows.push(idx);
+            }
+            rows
+        })
 }
 
 /// Whether `entry` is the GitHub repo a row or clone known as `owner`/`name`
@@ -5817,6 +5825,23 @@ mod tests {
         current.owner = Some("company".to_string());
         let repos = vec![cloned("api")];
         assert_eq!(remotes_that_moved(&previous, &[current], &repos), vec![0]);
+    }
+
+    /// A launch from a payload without owners, then a poll holding both
+    /// `alice/api` and `company/api` (FZ-05e keeps both), each newer than the
+    /// legacy `api`. Both match that baseline and both resolve to the one
+    /// owner-less row, which came back twice and got two single sweeps.
+    #[test]
+    fn a_row_two_moved_entries_resolve_to_is_fetched_once() {
+        let previous = vec![gh("api", "2026-08-06T09:00:00Z")];
+        let owned = |owner: &str| {
+            let mut repo = gh("api", "2026-08-06T10:00:00Z");
+            repo.owner = Some(owner.to_string());
+            repo
+        };
+        let current = vec![owned("alice"), owned("company")];
+        let repos = vec![cloned("api")];
+        assert_eq!(remotes_that_moved(&previous, &current, &repos), vec![0]);
     }
 
     /// The carrier among LocalOnly rows equal on every earlier step is
