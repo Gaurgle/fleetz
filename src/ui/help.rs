@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -205,6 +205,15 @@ const COLUMN_GAP: u16 = 2;
 /// Blank cells between the border and the text, on each side.
 const SIDE_PAD: u16 = 1;
 
+/// Keys get a color of their own, so the eye finds the key column first and
+/// reads the gray description beside it second. The footer hints keep `TEXT`
+/// for their keys; the two differ on purpose until the owner says otherwise.
+const KEY_COLOR: Color = colors::SAPPHIRE;
+/// What a key does: subtle beside the key it explains.
+const DESC_COLOR: Color = colors::OVERLAY;
+/// Group titles, in the palette's section-label color.
+const TITLE_COLOR: Color = colors::MAUVE;
+
 /// Render the help overlay centered on screen.
 ///
 /// Two columns when the area is wide enough for both, one otherwise. The box
@@ -295,12 +304,10 @@ fn draw(frame: &mut Frame, area: Rect, groups: &[Group], left_groups: usize) {
 /// The lines of `groups`, in blocks that must be shown whole: a group's title
 /// travels with its first row, and a row with its continuation lines.
 fn blocks(groups: &[Group], key_width: usize) -> Vec<Vec<Line<'static>>> {
-    let key_style = Style::default()
-        .fg(colors::TEXT)
-        .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(colors::OVERLAY);
+    let key_style = Style::default().fg(KEY_COLOR).add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(DESC_COLOR);
     let title_style = Style::default()
-        .fg(colors::MAUVE)
+        .fg(TITLE_COLOR)
         .add_modifier(Modifier::BOLD);
 
     let mut out = Vec::new();
@@ -609,6 +616,36 @@ mod tests {
         assert_eq!(size(large), size(small), "the box grew with the screen");
         let ((x0, y0), (x1, y1)) = large;
         assert!(x0 > 0 && y0 > 0 && x1 < 119 && y1 < 39, "not centred");
+    }
+
+    /// Keys, descriptions and group titles are each drawn in their own color,
+    /// read from the cells, so a key stands out from the text explaining it.
+    #[test]
+    fn keys_descriptions_and_titles_have_distinct_colors() {
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| render(f, f.area())).unwrap();
+        let buf = term.backend().buffer().clone();
+        // The cell where `needle` starts, matched one cell per char.
+        let fg_at = |needle: &str| {
+            let chars: Vec<String> = needle.chars().map(String::from).collect();
+            (0..24u16)
+                .find_map(|y| {
+                    (0..80u16)
+                        .find(|&x| {
+                            chars.iter().enumerate().all(|(i, c)| {
+                                x + (i as u16) < 80 && buf[(x + i as u16, y)].symbol() == c
+                            })
+                        })
+                        .map(|x| buf[(x, y)].fg)
+                })
+                .unwrap_or_else(|| panic!("{needle} not on screen"))
+        };
+        assert_eq!(fg_at("PgUp/PgDn"), KEY_COLOR, "key");
+        assert_eq!(fg_at("page detail"), DESC_COLOR, "description");
+        assert_eq!(fg_at("Navigation"), TITLE_COLOR, "group title");
+        assert_ne!(KEY_COLOR, DESC_COLOR);
+        assert_ne!(KEY_COLOR, TITLE_COLOR);
+        assert_ne!(DESC_COLOR, TITLE_COLOR);
     }
 
     #[test]
