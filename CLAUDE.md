@@ -131,14 +131,20 @@ scans the configured roots, pass 2 sweeps `$HOME`, pass 3 picks up local-only
 repos, and only then is anything "not cloned". A local clone must win over that
 fallback, or a repo under a hidden path reports as absent.
 
-**A clone is matched by its `origin` remote first, its folder name second**
-(`discovery::Wanted::match_clone`). A folder name is only a convention: a clone
-of `portfolio-site` in `~/repos/DevOps_Portfolio` reported as not cloned. The
+**A clone is matched by its `origin` remote first, and by its folder name only
+where the remote cannot decide** (`discovery::Wanted::match_clone`). The folder
+name counts when there is no usable origin and the name is unambiguous across
+the full dataset, or when the origin names an unknown repo of the same owner
+(a rename). A folder name is only a convention: a clone of `portfolio-site` in
+`~/repos/DevOps_Portfolio` reported as not cloned, and an unconditional
+fallback let a checkout whose origin named another owner claim the row. The
 remote is read from `.git/config`, not `git remote get-url`, since it runs for
 every candidate in both sweeps. The owner is part of the key, so a clone of
 someone else's same-named repo can't claim yours. A linked worktree has no
 config of its own and keeps the name match, or it would race its main clone for
-the row. Pass 3 dedupes by path as well as name (`main.rs::unclaimed_local`),
+the row. When several clones match one repo, the primary is chosen by a fixed
+order (exact remote, github.com host, a `.git` directory, earlier root,
+shallower path, then path), never by filesystem order. Pass 3 dedupes by path as well as name (`main.rs::unclaimed_local`),
 because a remote-matched folder name is not the row's name. This diverges from
 repoz on purpose: repoz still matches on names only.
 

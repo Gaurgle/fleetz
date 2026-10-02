@@ -14,14 +14,20 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **Dispatched at takeover (2026-10-02 18:36), both running:** `fz-worker`
-  on FZ-05b's two test fixes (#32, worktree `fz-05b`) and `fz-reviewer` on
-  FZ-13a (#50, worktree `fz-13a`). A lead that finds this line with the baton
-  still held checks #32 and #50 for a later comment before dispatching
-  either again.
+- **State at 2026-10-02 19:01: no worker or reviewer is running.** FZ-05b
+  is merged (`f37c6b9`). FZ-13a is reviewed, committed and pushed, and waits
+  at Ready to integrate for Andreas's look. A lead that finds a later
+  dispatch recorded on an issue and not here trusts the issue.
 
-The rest of this file is the state as written at the end of 2026-10-01; the
-sections "In flight" and "Next steps" are updated as tickets move.
+> **No-install span, open since the merge of FZ-05b (`f37c6b9`, 2026-10-02
+> 19:00).** Until FZ-05e (#35) is merged, nothing is tagged and Andreas does
+> not install from `main` (`cargo install --path .`). On a fleet with two
+> same-named repos, a checkout whose repo `merge_sources` still drops has no
+> row. Repeat this in every owner-facing report until FZ-05e merges.
+
+The rest of this file is the state as written at the end of 2026-10-01,
+except "In flight", "What waits on Andreas", "Next steps" and the 2026-10-02
+rows under "Done", which are kept current as tickets move.
 
 Last full rewrite 2026-10-01 21:40 by `claude-fable-5-1`, when Andreas stopped
 that session for the day with usage at 85%. Nothing was running then: no
@@ -120,37 +126,44 @@ file's commit.
 The first eleven rows are from earlier sessions that day; the last six, the
 FZ-04 fix and merge, and the FZ-13 split are this session's.
 
-## In flight: two worktrees with uncommitted work
+## Done on 2026-10-02
 
-Both are under `.claude/worktrees/`. Neither is committed, pushed or merged.
+| Ticket | Issue | Ticket commit | Merge | What landed |
+|---|---|---|---|---|
+| FZ-05b | #32 | `47ce339` | `f37c6b9` | Discovery matches by owner and name; a stable six-step primary checkout; ambiguities as data |
 
-- **FZ-05b (#32), `fz-05b`, branch `fix/fz-05b-owner-aware-discovery`, base
-  `e4e3f42`.** `src/discovery.rs`, `src/main.rs`, `src/model.rs`, +912 -74.
-  Review verdict: **changes requested, test-only**; the reviewer accepts the
-  production code as written (822 passed, 0 failed, 1 ignored by its own
-  run). Two of the six primary-checkout steps have no test that fails when
-  the step is removed: depth (S4's own rule) and exact remote over folder
-  fallback. The two fixes are spelled out on #32. The no-install span has
-  **not** opened, because nothing is merged.
+FZ-05b took two test-only fix cycles after the first review. The second was
+the coordinator's ruling: the path tie-break had no test that failed without
+it, and the S5 primary choice is an acceptance criterion. A fresh reviewer
+killed all six step mutants and accepted the whole revision (diff hash
+`c91ed0bf` against `e4e3f42`, recorded on #32). `CLAUDE.md` carries
+invariant change 1 of the identity design's section 3.10.
+
+## In flight
+
+Worktrees are under `.claude/worktrees/`.
+
 - **FZ-13a (#50), `fz-13a`, branch `feat/fz-13a-remove-intro-wave`, base
-  `ed85856`.** `src/ui/intro.rs`, `src/main.rs`, `src/app.rs`,
-  `src/config.rs`, `README.md`, `docs/ideas.md`, +230 -984. **Implemented,
-  not reviewed.** The intro wave is deleted and the loading field kept, by
-  Andreas's decision; 21 wave-only tests deleted, 4 added, 775 passed by the
-  worker's run. Measured with the baseline's harness at 120x40 (medians):
-  first legible row 1811 ms before, 1218 ms after; bytes to a settled screen
-  2.28 MB before, 0.96 MB after. Report on #50. It changes what is on
-  screen, so it stops at Ready to integrate for him after review.
+  `ed85856`, commit `62598b8`, pushed. Ready to integrate.** Review
+  accepted (diff hash `269f88ae` against `ed85856`, on #50); CI green on
+  the branch; combined checks with `main` at `aef7ca3` passed (775 tests).
+  **It waits for Andreas to try the branch build; merge only after he
+  accepts.** `main` has since gained FZ-05b, which touches `src/main.rs` in
+  other functions: rerun the combined checks on the new result before the
+  merge. Build:
+  `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-13a/Cargo.toml`.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked
   by Andreas until the repository goes public.
 
-No other worktree or local ticket branch exists: the merged ones were removed
-at his request. Their branches remain on `origin`.
+No other worktree or local ticket branch exists. Merged branches remain on
+`origin`.
 
 ## What waits on Andreas
 
-1. **FZ-09 owner items**, not yet put to him (the session ended first). They
+1. **FZ-09 owner items**, put to him on 2026-10-02 at 18:40 with the
+   recommendations, together with the question whether issues FZ-09a to f
+   may be created; **not answered yet**. They
    are in plain language under "Owner items" in
    [coverage-cache-design.md](coverage-cache-design.md). The ones that
    matter: one saved GitHub copy per account, and what its file name is made
@@ -163,8 +176,11 @@ at his request. Their branches remain on `origin`.
    (O5); the signed-out launch (O7); saved files readable only by him (O14);
    and the `CLAUDE.md` and freshness contract changes in its section 6.
    Smaller: O8, O10, O11, O12. Later: O9, O13.
-2. **FZ-13a's branch build**, once it is reviewed:
+2. **FZ-13a's branch build**, reviewed and offered to him on 2026-10-02 at
+   18:50; no answer yet:
    `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-13a/Cargo.toml`.
+   Asked with it: may the `LoadingFrame` redraw bug (follow-ups below)
+   become an issue?
 3. **FZ-13 wave 4** (maximize and restore, hints that follow focus,
    economical folds): each needs a decision from him before it is a ticket.
    The questions are in the split on #26.
@@ -183,22 +199,13 @@ Font icons stay the default with an `icons` setting for plain characters (a
 setup wizard is an idea for FZ-17, not M3), a two-column help, a hyphen in
 the header.
 
-## Next steps for tomorrow, in order
+## Next steps, in order
 
-1. **FZ-05b:** dispatch a worker for the two test fixes on #32 (the original
-   worker's session may not be resumable; a fresh `fz-worker` gets #32's last
-   comment and the worktree). No production change. Then a narrow re-review
-   that reruns the two mutants. On acceptance: commit, push, CI on the
-   branch, combined checks, merge, close #32, remove the worktree. Then edit
-   invariant change 1 (section 3.10 of the identity design) into `CLAUDE.md`
-   and tell Andreas the no-install span is open: **from the merge of FZ-05b
-   until the merge of FZ-05e nothing is tagged and he does not install from
-   `main`**, repeated in every report.
-2. **FZ-13a:** dispatch `fz-reviewer` with the report on #50. It must check
-   the test classification, in particular the two judgment calls named
-   there. Then Ready to integrate and the build goes to Andreas. If FZ-05b
-   merged first, rerun the combined checks: both touch `src/main.rs`, in
-   different functions.
+1. **FZ-05b:** done on 2026-10-02 (see "Done on 2026-10-02"). The
+   no-install span is open; say so in every report until FZ-05e merges.
+2. **FZ-13a:** on Andreas's accept, rerun the combined checks against
+   current `main`, merge, close #50, remove the worktree. On a reject, his
+   words go on #50 and a worker gets them.
 3. **FZ-09:** put the owner items to him. On his answers: record them in the
    design and on the closed #22, amend `CLAUDE.md` and
    [freshness-contract.md](freshness-contract.md) as its section 6 says when
@@ -258,11 +265,11 @@ Keep to two workers with disjoint ownership, plus their reviewers.
 
 ## Tickets that exist and wait
 
-- **Identity:** FZ-05b #32 (in flight), FZ-05c #33, FZ-05d #34, FZ-05e #35,
-  FZ-05f #36. Serial.
+- **Identity:** FZ-05c #33 (next), FZ-05d #34, FZ-05e #35, FZ-05f #36.
+  Serial.
 - **API budget:** FZ-10a #47, FZ-10b #48, FZ-10c #49. Serial, after the
   identity series.
-- **M3:** FZ-13a #50 (in flight), FZ-13b #51, FZ-13c #52, FZ-13d #53,
+- **M3:** FZ-13a #50 (Ready to integrate), FZ-13b #51, FZ-13c #52, FZ-13d #53,
   FZ-13e #54, FZ-13f #55.
 - **Follow-ups (P2):** #43; #46 (needs Andreas's OK).
 - **#45** (M5), parked.
@@ -294,6 +301,17 @@ Keep to two workers with disjoint ownership, plus their reviewers.
 - **From the FZ-05b review:** a `file://` origin and a renamed GitHub
   account are now refused where the base claimed by folder; a clone with no
   origin ranks as off github.com.
+  `s5_of_two_equally_deep_clones_the_first_path_is_primary` passes only by
+  the filesystem's listing order and is redundant with
+  `s5_the_first_path_is_primary_whichever_clone_is_offered_first`.
+- **From the FZ-13a review (medium, older than the ticket):** in
+  `run_event_loop` the `AppEvent::LoadingFrame` arm assigns
+  `app.needs_redraw = app.loading_field.is_some()`. A frame queued while
+  the `Loaded` arm runs resets the flag after the dismiss, the held first
+  paint is lost and the loading field stays up until a spinner tick,
+  `RepoUpdated` or a key. Candidate: OR the value in, with an event-order
+  test (`Loaded` then `LoadingFrame`). Also a stale doc comment on
+  `an_animation_frame_is_never_held` ("made the intro stutter").
 - **`CLAUDE.md` text the code contradicts:** the tick is 100 ms, not 250 ms;
   `r` does not rebuild from cache; it names `last_github_poll` and
   `GithubFetch::from_cache`, which no longer exist; it lists only two of the
