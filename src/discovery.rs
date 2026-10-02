@@ -1,77 +1,331 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::model::RemoteRef;
+
 /// Result of discovering a local clone of a GitHub repo.
 #[derive(Debug, Clone)]
 pub struct FoundRepo {
     pub name: String,
     pub path: PathBuf,
+    /// The owner of the GitHub repo this clone was matched to, as the fetch
+    /// spells it. None when that repo came without an owner (a payload with
+    /// no `login`), the legacy case matched by name alone.
+    pub owner: Option<String>,
+}
+
+impl FoundRepo {
+    /// The key of the GitHub repo this clone claimed, as `find_elsewhere`'s
+    /// `already_found` expects it: lowercased `owner/name`, or the lowercased
+    /// name alone when the repo has no owner.
+    pub fn key(&self) -> String {
+        repo_key(self.owner.as_deref(), &self.name)
+    }
+}
+
+/// A clone that claimed no row because its folder name, the only evidence it
+/// has, names repos of two or more owners in the full dataset (D4 in
+/// `docs/repository-identity-design.md`). Ordered by path first, so a sorted
+/// list names the same checkout first on every launch.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Ambiguity {
+    pub path: PathBuf,
+    /// The folder's spelling, leading dot stripped, as a match would report.
+    pub name: String,
+}
+
+/// Lowercased `owner/name`, or the lowercased name for a repo with no owner.
+/// The two cannot collide, since a repo name holds no slash.
+fn repo_key(owner: Option<&str>, name: &str) -> String {
+    match owner {
+        Some(owner) => format!("{owner}/{name}").to_lowercase(),
+        None => name.to_lowercase(),
+    }
+}
+
+/// One GitHub repo discovery is looking for, spelled as the fetch reports it.
+#[derive(Debug, Clone)]
+struct WantedRepo {
+    owner: Option<String>,
+    name: String,
+}
+
+impl WantedRepo {
+    fn key(&self) -> String {
+        repo_key(self.owner.as_deref(), &self.name)
+    }
 }
 
 /// The GitHub repos discovery is looking for, indexed both ways a local clone
-/// can be recognized: by its `origin` remote, and by its folder name.
+/// can be recognized: by its `origin` remote, and by its folder name. It also
+/// holds what the full dataset knows, since whether a folder name is
+/// ambiguous, or an origin names a known repo, must not depend on the time
+/// window (M1).
 #[derive(Debug, Default)]
 pub struct Wanted {
-    /// Lowercased `owner/name` to the GitHub name. Only repos the fetch
+    /// Lowercased `owner/name` to the wanted repo. Only repos the fetch
     /// reported an owner for; the rest can still match by folder name.
-    by_remote: HashMap<String, String>,
-    /// Lowercased GitHub names.
-    names: HashSet<String>,
+    by_remote: HashMap<String, WantedRepo>,
+    /// Lowercased name to every wanted repo of that name, owned or not.
+    by_name: HashMap<String, Vec<WantedRepo>>,
+    /// Full dataset: lowercased name to the lowercased owners that have a
+    /// repo of that name. An owner-less entry adds no owner.
+    full_owners: HashMap<String, HashSet<String>>,
+    /// Full dataset: lowercased `owner/name` of every repo with an owner.
+    full_remotes: HashSet<String>,
 }
 
 impl Wanted {
-    /// Built from `(owner, name)` pairs as the GitHub fetch reports them.
+    /// Built from `(owner, name)` pairs as the GitHub fetch reports them,
+    /// standing for both the wanted repos and the full dataset. Production
+    /// passes the two separately through `with_full_dataset`, so this is
+    /// built for tests only.
+    #[cfg(test)]
     pub fn new<'a>(repos: impl IntoIterator<Item = (Option<&'a str>, &'a str)>) -> Self {
+        let repos: Vec<_> = repos.into_iter().collect();
+        Self::with_full_dataset(repos.iter().copied(), repos.iter().copied())
+    }
+
+    /// `active` is what discovery looks for (the window-filtered repos);
+    /// `full` is the whole dataset, which decides whether a folder name is
+    /// ambiguous and whether an origin names a repo fleetz knows. `active`
+    /// is expected to be a subset of `full`.
+    pub fn with_full_dataset<'a>(
+        active: impl IntoIterator<Item = (Option<&'a str>, &'a str)>,
+        full: impl IntoIterator<Item = (Option<&'a str>, &'a str)>,
+    ) -> Self {
         let mut wanted = Self::default();
-        for (owner, name) in repos {
-            if let Some(owner) = owner {
-                wanted
-                    .by_remote
-                    .insert(format!("{owner}/{name}").to_lowercase(), name.to_string());
+        for (owner, name) in active {
+            let repo = WantedRepo {
+                owner: owner.map(str::to_string),
+                name: name.to_string(),
+            };
+            if repo.owner.is_some() {
+                wanted.by_remote.insert(repo.key(), repo.clone());
             }
-            wanted.names.insert(name.to_lowercase());
+            wanted
+                .by_name
+                .entry(name.to_lowercase())
+                .or_default()
+                .push(repo);
+        }
+        for (owner, name) in full {
+            let owners = wanted.full_owners.entry(name.to_lowercase()).or_default();
+            if let Some(owner) = owner {
+                owners.insert(owner.to_lowercase());
+                wanted.full_remotes.insert(repo_key(Some(owner), name));
+            }
         }
         wanted
     }
 
-    /// The repos not in `found`, which holds lowercased GitHub names.
+    /// The repos not in `found`, which holds keys from `FoundRepo::key`. The
+    /// full dataset is kept whole.
     fn without(&self, found: &HashSet<String>) -> Self {
         Self {
             by_remote: self
                 .by_remote
                 .iter()
-                .filter(|(_, name)| !found.contains(&name.to_lowercase()))
-                .map(|(slug, name)| (slug.clone(), name.clone()))
+                .filter(|(key, _)| !found.contains(*key))
+                .map(|(key, repo)| (key.clone(), repo.clone()))
                 .collect(),
-            names: self.names.difference(found).cloned().collect(),
+            by_name: self
+                .by_name
+                .iter()
+                .filter_map(|(name, repos)| {
+                    let left: Vec<WantedRepo> = repos
+                        .iter()
+                        .filter(|repo| !found.contains(&repo.key()))
+                        .cloned()
+                        .collect();
+                    (!left.is_empty()).then(|| (name.clone(), left))
+                })
+                .collect(),
+            full_owners: self.full_owners.clone(),
+            full_remotes: self.full_remotes.clone(),
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.names.is_empty()
+        self.by_name.is_empty()
     }
 
-    /// The GitHub repo name the clone at `path` stands for, or None when it is
-    /// none of these.
+    /// What the clone at `path` stands for, by the rules of section 3.3 of
+    /// `docs/repository-identity-design.md`:
     ///
-    /// The remote is tried first because a folder name is only a convention: a
-    /// clone of `portfolio-site` can sit in `DevOps_Portfolio`. The folder name
-    /// stays as the fallback for a clone with no `origin`, a remote naming a
-    /// repo the fetch has no owner for, and a linked worktree (see
-    /// `origin_slug`).
+    /// 1. Its `origin` names a wanted repo: that repo.
+    /// 2. It has no usable `origin` (none, unparseable, or a linked worktree,
+    ///    see `origin_ref`): its folder name, when the full dataset has at
+    ///    most one owner for that name. Two or more owners make it ambiguous
+    ///    and it claims nothing.
+    /// 3. Its `origin` parses but names nothing wanted: its folder name, only
+    ///    when the origin's owner is the owner of the repo the folder names
+    ///    and the origin's repo is not in the full dataset. That keeps a repo
+    ///    renamed on GitHub matching from a renamed folder (the old URL keeps
+    ///    working through GitHub's redirect), and stops a fork, a transfer or
+    ///    a foreign host from claiming a row. A repo without an owner keeps
+    ///    the unconditional fallback.
     ///
-    /// A repo renamed on GitHub is not covered by the remote either: the old
-    /// URL keeps working through GitHub's redirect, so the clone's config still
-    /// names the old repo until `git remote set-url` updates it.
-    fn match_clone(&self, path: &Path) -> Option<String> {
-        if let Some(name) = origin_slug(path).and_then(|slug| self.by_remote.get(&slug)) {
-            return Some(name.clone());
+    /// The remote comes first because a folder name is only a convention: a
+    /// clone of `portfolio-site` can sit in `DevOps_Portfolio`.
+    fn match_clone(&self, path: &Path) -> Match {
+        let origin = origin_ref(path).map(|origin| origin.key());
+        if let Some(origin) = &origin
+            && let Some(repo) = self
+                .by_remote
+                .get(&repo_key(Some(&origin.owner), &origin.name))
+        {
+            return Match::Claimed {
+                repo: repo.clone(),
+                name: repo.name.clone(),
+                rank: MatchRank {
+                    by_folder: false,
+                    off_github: origin.host != "github.com",
+                },
+            };
         }
+
         let dir_name = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default();
-        matched_name(dir_name, &self.names)
+        let Some(name) = matched_name(dir_name, |lower| self.by_name.contains_key(lower)) else {
+            return Match::Nothing;
+        };
+        let lower = name.to_lowercase();
+        let candidates = &self.by_name[&lower];
+
+        let claimed = match &origin {
+            None => {
+                let owners = self.full_owners.get(&lower).map_or(0, HashSet::len);
+                if owners > 1 {
+                    return Match::Ambiguous(name);
+                }
+                candidates
+                    .iter()
+                    .find(|repo| repo.owner.is_some())
+                    .or_else(|| candidates.first())
+            }
+            Some(origin) => {
+                let known = self
+                    .full_remotes
+                    .contains(&repo_key(Some(&origin.owner), &origin.name));
+                candidates
+                    .iter()
+                    .find(|repo| {
+                        !known
+                            && repo
+                                .owner
+                                .as_deref()
+                                .is_some_and(|owner| owner.eq_ignore_ascii_case(&origin.owner))
+                    })
+                    .or_else(|| candidates.iter().find(|repo| repo.owner.is_none()))
+            }
+        };
+        match claimed {
+            Some(repo) => Match::Claimed {
+                repo: repo.clone(),
+                name,
+                rank: MatchRank {
+                    by_folder: true,
+                    off_github: origin.as_ref().is_none_or(|o| o.host != "github.com"),
+                },
+            },
+            None => Match::Nothing,
+        }
+    }
+}
+
+/// What `Wanted::match_clone` made of one clone.
+enum Match {
+    /// The clone stands for `repo` and reports as `name`: the GitHub name for
+    /// a remote match, the folder's spelling for a folder match.
+    Claimed {
+        repo: WantedRepo,
+        name: String,
+        rank: MatchRank,
+    },
+    /// The folder name, which names repos of several owners.
+    Ambiguous(String),
+    Nothing,
+}
+
+/// The first two steps of the primary-checkout order. `false` sorts first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct MatchRank {
+    /// Matched by its folder name rather than its exact remote.
+    by_folder: bool,
+    /// Its origin is on a host other than `github.com`, or it has none (o2).
+    off_github: bool,
+}
+
+/// Where a candidate stands in the primary-checkout order of section 3.3:
+/// exact remote, then an origin on `github.com`, then a `.git` directory over
+/// a `.git` file, then an earlier root, then fewer path components, then the
+/// path itself. Lower wins, so the result does not depend on the order the
+/// filesystem lists directories in.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct CheckoutRank {
+    matched: MatchRank,
+    git_file: bool,
+    root: usize,
+    depth: usize,
+    path: PathBuf,
+}
+
+/// The best clone per wanted repo, and the ambiguous clones, as a walk finds
+/// them.
+#[derive(Default)]
+struct Collector {
+    best: HashMap<String, (CheckoutRank, FoundRepo)>,
+    ambiguous: Vec<Ambiguity>,
+}
+
+impl Collector {
+    fn offer(&mut self, wanted: &Wanted, path: &Path, root: usize) {
+        let (repo, name, matched) = match wanted.match_clone(path) {
+            Match::Claimed { repo, name, rank } => (repo, name, rank),
+            Match::Ambiguous(name) => {
+                self.ambiguous.push(Ambiguity {
+                    path: path.to_path_buf(),
+                    name,
+                });
+                return;
+            }
+            Match::Nothing => return,
+        };
+        let rank = CheckoutRank {
+            matched,
+            git_file: !path.join(".git").is_dir(),
+            root,
+            depth: path.components().count(),
+            path: path.to_path_buf(),
+        };
+        let found = FoundRepo {
+            name,
+            path: path.to_path_buf(),
+            owner: repo.owner.clone(),
+        };
+        match self.best.get(&repo.key()) {
+            Some((best, _)) if *best <= rank => {}
+            _ => {
+                self.best.insert(repo.key(), (rank, found));
+            }
+        }
+    }
+
+    /// The winners in root order, then by path, and the ambiguities sorted by
+    /// path with the duplicates of overlapping roots removed.
+    fn finish(self) -> (Vec<FoundRepo>, Vec<Ambiguity>) {
+        let mut winners: Vec<(CheckoutRank, FoundRepo)> = self.best.into_values().collect();
+        winners.sort_by(|(a, _), (b, _)| (a.root, &a.path).cmp(&(b.root, &b.path)));
+        let mut ambiguous = self.ambiguous;
+        ambiguous.sort();
+        ambiguous.dedup();
+        (
+            winners.into_iter().map(|(_, found)| found).collect(),
+            ambiguous,
+        )
     }
 }
 
@@ -85,83 +339,86 @@ impl Wanted {
 /// subject to the hidden-dir skip. Mirrors repoz's pass 1, which falls back
 /// to `EXTRA_DIRS` when `REPO_DIR` has no match.
 ///
-/// De-duplicated by name, first root winning, so overlapping roots can't
-/// produce two rows for one repo.
+/// One clone per wanted repo, chosen by the primary-checkout order
+/// (`CheckoutRank`), so overlapping roots can't produce two rows for one repo.
 pub fn find_in_primary(roots: &[PathBuf], wanted: &Wanted) -> Vec<FoundRepo> {
-    let mut found = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    find_in_primary_with_ambiguities(roots, wanted).0
+}
 
-    for root in roots {
+/// `find_in_primary`, plus the clones that claimed nothing because their
+/// folder name is ambiguous, sorted by path.
+pub fn find_in_primary_with_ambiguities(
+    roots: &[PathBuf],
+    wanted: &Wanted,
+) -> (Vec<FoundRepo>, Vec<Ambiguity>) {
+    let mut collector = Collector::default();
+    for (index, root) in roots.iter().enumerate() {
         scan_for_git_repos(root, 3, false, &mut |path| {
-            let Some(name) = wanted.match_clone(path) else {
-                return;
-            };
-            if seen.insert(name.to_lowercase()) {
-                found.push(FoundRepo {
-                    name,
-                    path: path.to_path_buf(),
-                });
-            }
+            collector.offer(wanted, path, index);
         });
     }
-
-    found
+    collector.finish()
 }
 
 /// Pass 2: Find repos elsewhere under $HOME (maxdepth 4), excluding
 /// Library, .cache, node_modules, .Trash, and every pass 1 scan root (which
 /// has already been searched, and searched deeper than a `$HOME` sweep would
 /// reach it).
+///
+/// `already_found` holds the `FoundRepo::key` of every pass 1 match; those
+/// repos are not looked for again. One clone per remaining repo, by the same
+/// order as pass 1.
 pub fn find_elsewhere(
     home: &Path,
     roots: &[PathBuf],
     wanted: &Wanted,
     already_found: &HashSet<String>,
 ) -> Vec<FoundRepo> {
+    find_elsewhere_with_ambiguities(home, roots, wanted, already_found).0
+}
+
+/// `find_elsewhere`, plus the clones that claimed nothing because their
+/// folder name is ambiguous, sorted by path.
+pub fn find_elsewhere_with_ambiguities(
+    home: &Path,
+    roots: &[PathBuf],
+    wanted: &Wanted,
+    already_found: &HashSet<String>,
+) -> (Vec<FoundRepo>, Vec<Ambiguity>) {
     let remaining = wanted.without(already_found);
 
     if remaining.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
-    let mut found = Vec::new();
-
+    let mut collector = Collector::default();
     scan_for_git_repos(home, 4, true, &mut |path| {
         // Skip excluded directories
         if is_excluded(path, roots) {
             return;
         }
-
-        if let Some(name) = remaining.match_clone(path) {
-            found.push(FoundRepo {
-                name,
-                path: path.to_path_buf(),
-            });
-        }
+        collector.offer(&remaining, path, 0);
     });
-
-    found
+    collector.finish()
 }
 
-/// The GitHub repo name a local directory stands for, or None when it matches
-/// none of `names_lower` (which must already be lowercased).
+/// The GitHub repo name a local directory stands for, or None when
+/// `is_wanted` accepts neither spelling. `is_wanted` is asked lowercased names.
 ///
 /// A clone can carry a leading dot its GitHub repo doesn't -- the repo
 /// `dotfiles` conventionally lives at `~/.dotfiles` -- so the dotted spelling
 /// is tried too, mirroring repoz's `-iname "$name" -o -iname ".$name"`. The
 /// dot is stripped from the returned name because everything downstream (GitHub
 /// match, glyph lookup, dedupe) keys on the GitHub name, not the folder name.
-fn matched_name(dir_name: &str, names_lower: &HashSet<String>) -> Option<String> {
-    if names_lower.contains(&dir_name.to_lowercase()) {
+fn matched_name(dir_name: &str, is_wanted: impl Fn(&str) -> bool) -> Option<String> {
+    if is_wanted(&dir_name.to_lowercase()) {
         return Some(dir_name.to_string());
     }
     let undotted = dir_name.strip_prefix('.')?;
-    names_lower
-        .contains(&undotted.to_lowercase())
-        .then(|| undotted.to_string())
+    is_wanted(&undotted.to_lowercase()).then(|| undotted.to_string())
 }
 
-/// The lowercased `owner/name` the clone's `origin` remote points at.
+/// What the clone's `origin` remote points at.
 ///
 /// Read straight from `.git/config` rather than through `git remote get-url`:
 /// this runs for every candidate in both sweeps, and a process spawn each would
@@ -172,10 +429,9 @@ fn matched_name(dir_name: &str, names_lower: &HashSet<String>) -> Option<String>
 /// worktree or submodule; a worktree shares its main clone's remote, so
 /// matching it that way would let it race the real clone for the row. Those
 /// keep the folder-name match.
-fn origin_slug(repo: &Path) -> Option<String> {
+fn origin_ref(repo: &Path) -> Option<RemoteRef> {
     let config = std::fs::read_to_string(repo.join(".git").join("config")).ok()?;
-    let (owner, name) = crate::model::repo_from_remote_url(origin_url(&config)?)?;
-    Some(format!("{owner}/{name}").to_lowercase())
+    RemoteRef::parse(origin_url(&config)?)
 }
 
 /// The `url` of `[remote "origin"]` in the text of a git config file.
@@ -588,6 +844,595 @@ mod tests {
         assert!(found.is_empty());
 
         fs::remove_dir_all(dir).ok();
+    }
+
+    // Repository identity scenarios (docs/repository-identity-design.md,
+    // section 4). Each fixture lives in its own directory, unique per process.
+
+    fn scenario_dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("fleetz_test_fz05b_{tag}_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A linked worktree: a `.git` file pointing at a git dir elsewhere.
+    fn linked_worktree(path: &Path) {
+        fs::create_dir_all(path).unwrap();
+        fs::write(path.join(".git"), "gitdir: /elsewhere/.git/worktrees/wt\n").unwrap();
+    }
+
+    /// A clone with `origin` at `origin_url` and a second remote `other`.
+    fn clone_with_two_remotes(path: &Path, origin_url: &str, other: &str, other_url: &str) {
+        fs::create_dir_all(path.join(".git")).unwrap();
+        fs::write(
+            path.join(".git").join("config"),
+            format!(
+                "[remote \"{other}\"]\n\turl = {other_url}\n[remote \"origin\"]\n\turl = {origin_url}\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn paths(found: &[FoundRepo]) -> Vec<PathBuf> {
+        found.iter().map(|f| f.path.clone()).collect()
+    }
+
+    #[test]
+    fn s2_a_remote_of_another_owner_does_not_claim_a_row_through_its_folder() {
+        // S2 while the dataset still holds only `alice/api`: the clone of
+        // `company/api` used to claim alice's row by its folder name.
+        let dir = scenario_dir("s2_interim");
+        clone_with_origin(&dir.join("api"), "git@github.com:company/api.git");
+
+        let wanted = Wanted::new([(Some("alice"), "api")]);
+        assert!(find_in_primary(std::slice::from_ref(&dir), &wanted).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s2_the_remote_beats_the_folder() {
+        let dir = scenario_dir("s2");
+        let clone = dir.join("api");
+        clone_with_origin(&clone, "git@github.com:company/api.git");
+
+        let wanted = Wanted::new([(Some("alice"), "api"), (Some("company"), "api")]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &wanted);
+        assert_eq!(paths(&found), vec![clone]);
+        assert_eq!(found[0].name, "api");
+        assert_eq!(found[0].owner.as_deref(), Some("company"));
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s3_a_remote_less_clone_of_a_name_two_owners_share_claims_no_row() {
+        let dir = scenario_dir("s3");
+        fs::create_dir_all(dir.join("api").join(".git")).unwrap();
+
+        let wanted = Wanted::new([(Some("alice"), "api"), (Some("company"), "api")]);
+        assert!(find_in_primary(std::slice::from_ref(&dir), &wanted).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s7_a_linked_worktree_keeps_the_folder_fallback() {
+        // D10: a worktree has no config of its own, so its folder decides.
+        let dir = scenario_dir("s7");
+        let wt = dir.join("api");
+        linked_worktree(&wt);
+
+        let wanted = Wanted::new([(Some("company"), "api")]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &wanted);
+        assert_eq!(paths(&found), vec![wt]);
+        assert_eq!(found[0].name, "api");
+        assert_eq!(found[0].owner.as_deref(), Some("company"));
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s9a_a_clone_on_the_old_name_in_the_old_folder_matches_nothing() {
+        let dir = scenario_dir("s9a");
+        clone_with_origin(&dir.join("old-name"), "git@github.com:Gaurgle/old-name.git");
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "new-name")]);
+        assert!(find_in_primary(std::slice::from_ref(&dir), &wanted).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s9b_a_renamed_repo_in_a_renamed_folder_still_matches() {
+        // Same owner, and `old-name` is not a repo fleetz knows: rule 3.
+        let dir = scenario_dir("s9b");
+        let clone = dir.join("new-name");
+        clone_with_origin(&clone, "git@github.com:gaurgle/old-name.git");
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "new-name")]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &wanted);
+        assert_eq!(paths(&found), vec![clone]);
+        assert_eq!(found[0].name, "new-name");
+        assert_eq!(found[0].owner.as_deref(), Some("Gaurgle"));
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s9c_a_clone_of_a_transferred_repo_does_not_claim_the_new_owners_row() {
+        let dir = scenario_dir("s9c");
+        clone_with_origin(&dir.join("x"), "git@github.com:Gaurgle/x.git");
+
+        let wanted = Wanted::new([(Some("acme"), "x")]);
+        assert!(find_in_primary(std::slice::from_ref(&dir), &wanted).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s11a_a_foreign_host_project_does_not_claim_a_row_through_its_folder() {
+        let dir = scenario_dir("s11a");
+        clone_with_origin(&dir.join("api"), "git@gitlab.com:someone/api.git");
+
+        let wanted = Wanted::new([(Some("company"), "api")]);
+        assert!(find_in_primary(std::slice::from_ref(&dir), &wanted).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s12_a_fork_does_not_claim_its_parents_row() {
+        // Until the dataset keeps both, only the parent `acme/tool` is wanted.
+        let dir = scenario_dir("s12_interim");
+        clone_with_two_remotes(
+            &dir.join("tool"),
+            "git@github.com:Gaurgle/tool.git",
+            "upstream",
+            "git@github.com:acme/tool.git",
+        );
+
+        let wanted = Wanted::new([(Some("acme"), "tool")]);
+        assert!(find_in_primary(std::slice::from_ref(&dir), &wanted).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s12_a_fork_matches_its_own_row_when_both_are_wanted() {
+        let dir = scenario_dir("s12");
+        let clone = dir.join("tool");
+        clone_with_two_remotes(
+            &clone,
+            "git@github.com:Gaurgle/tool.git",
+            "upstream",
+            "git@github.com:acme/tool.git",
+        );
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "tool"), (Some("acme"), "tool")]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &wanted);
+        assert_eq!(paths(&found), vec![clone]);
+        assert_eq!(found[0].name, "tool");
+        assert_eq!(
+            found[0].owner.as_deref(),
+            Some("Gaurgle"),
+            "the fork, not acme"
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s12b_a_clone_whose_origin_is_the_upstream_does_not_claim_the_fork() {
+        // Accepted regression (m3): only `origin` is read, and its owner is
+        // not the fork's.
+        let dir = scenario_dir("s12b");
+        clone_with_two_remotes(
+            &dir.join("tool"),
+            "git@github.com:acme/tool.git",
+            "mine",
+            "git@github.com:Gaurgle/tool.git",
+        );
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "tool")]);
+        assert!(find_in_primary(std::slice::from_ref(&dir), &wanted).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s13_a_dot_prefixed_clone_matches_with_and_without_an_origin() {
+        let base = scenario_dir("s13");
+        let hidden = base.join(".dotfiles");
+        let wanted = Wanted::new([(Some("Gaurgle"), "dotfiles")]);
+
+        clone_with_origin(&hidden, "git@github.com:Gaurgle/dotfiles.git");
+        let found = find_in_primary(std::slice::from_ref(&hidden), &wanted);
+        assert_eq!(paths(&found), vec![hidden.clone()], "by its origin");
+        assert_eq!(found[0].name, "dotfiles");
+
+        fs::remove_file(hidden.join(".git").join("config")).unwrap();
+        let found = find_in_primary(std::slice::from_ref(&hidden), &wanted);
+        assert_eq!(paths(&found), vec![hidden.clone()], "by its folder");
+        assert_eq!(found[0].name, "dotfiles", "leading dot stripped");
+
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn a_legacy_repo_without_an_owner_keeps_the_folder_fallback() {
+        // A payload without `login` gives the wanted repo no owner, so rule 3's
+        // owner condition cannot be judged and today's fallback stays.
+        let dir = scenario_dir("legacy");
+        let clone = dir.join("tool");
+        clone_with_origin(&clone, "git@github.com:someone/tool.git");
+
+        let wanted = Wanted::new([(None, "tool")]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &wanted);
+        assert_eq!(paths(&found), vec![clone]);
+        assert_eq!(found[0].owner, None);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s4_the_clone_with_fewer_path_components_is_primary() {
+        // The deeper clone sorts first by path, so only depth picks `near`.
+        let dir = scenario_dir("s4");
+        let near = dir.join("fleetz");
+        clone_with_origin(&near, "git@github.com:Gaurgle/fleetz.git");
+        clone_with_origin(
+            &dir.join("a").join("fleetz"),
+            "git@github.com:Gaurgle/fleetz.git",
+        );
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "fleetz")]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &wanted);
+        assert_eq!(paths(&found), vec![near]);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s5_of_two_equally_deep_clones_the_first_path_is_primary() {
+        let dir = scenario_dir("s5");
+        let clone = dir.join("fleetz");
+        clone_with_origin(&clone, "git@github.com:Gaurgle/fleetz.git");
+        clone_with_origin(
+            &dir.join("fleetz-copy"),
+            "https://github.com/Gaurgle/fleetz",
+        );
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "fleetz")]);
+        let found = find_in_primary(std::slice::from_ref(&dir), &wanted);
+        assert_eq!(paths(&found), vec![clone]);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s5_the_first_path_is_primary_whichever_clone_is_offered_first() {
+        // Equal on every earlier step, so only the path decides. The walk's
+        // order is the filesystem's, so the offers are made directly.
+        let dir = scenario_dir("s5_offer");
+        let (first, later) = (dir.join("fleetz"), dir.join("fleetz-copy"));
+        clone_with_origin(&first, "git@github.com:Gaurgle/fleetz.git");
+        clone_with_origin(&later, "git@github.com:Gaurgle/fleetz.git");
+        let wanted = Wanted::new([(Some("Gaurgle"), "fleetz")]);
+
+        for order in [[&first, &later], [&later, &first]] {
+            let mut collector = Collector::default();
+            for path in order {
+                collector.offer(&wanted, path, 0);
+            }
+            let (found, _) = collector.finish();
+            assert_eq!(paths(&found), vec![first.clone()], "offered {order:?}");
+        }
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn an_exact_remote_beats_a_folder_match_in_an_earlier_root() {
+        let base = scenario_dir("order_exact");
+        let (first, second) = (base.join("one"), base.join("two"));
+        fs::create_dir_all(first.join("api").join(".git")).unwrap();
+        let exact = second.join("company-api");
+        clone_with_origin(&exact, "git@github.com:company/api.git");
+
+        let wanted = Wanted::new([(Some("company"), "api")]);
+        let found = find_in_primary(&[first, second], &wanted);
+        assert_eq!(paths(&found), vec![exact]);
+
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn an_exact_remote_on_another_host_beats_a_github_folder_match() {
+        // `api` claims by rule 3 (same owner, `api-old` unknown) with an origin
+        // on github.com; `x` matches exactly but on gitlab.com. Only the exact
+        // remote step, ahead of the host step, picks `x`.
+        let base = scenario_dir("order_exact_host");
+        let (first, second) = (base.join("one"), base.join("two"));
+        clone_with_origin(&first.join("api"), "git@github.com:company/api-old.git");
+        let exact = second.join("x");
+        clone_with_origin(&exact, "git@gitlab.com:company/api.git");
+
+        let wanted = Wanted::new([(Some("company"), "api")]);
+        let found = find_in_primary(&[first.clone(), second], &wanted);
+        assert_eq!(paths(&found), vec![exact]);
+
+        let alone = find_in_primary(std::slice::from_ref(&first), &wanted);
+        assert_eq!(
+            paths(&alone),
+            vec![first.join("api")],
+            "the folder clone claims by rule 3 on its own"
+        );
+
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn an_origin_on_github_com_beats_another_host_in_an_earlier_root() {
+        // o2. Matching is host-agnostic (D2), so both clones match exactly.
+        let base = scenario_dir("order_host");
+        let (first, second) = (base.join("one"), base.join("two"));
+        clone_with_origin(&first.join("mirror"), "git@gitlab.com:Gaurgle/fleetz.git");
+        let github = second.join("fleetz");
+        clone_with_origin(&github, "git@github.com:Gaurgle/fleetz.git");
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "fleetz")]);
+        let found = find_in_primary(&[first, second], &wanted);
+        assert_eq!(paths(&found), vec![github]);
+
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn a_git_directory_beats_a_linked_worktree_in_an_earlier_root() {
+        let base = scenario_dir("order_gitdir");
+        let (first, second) = (base.join("one"), base.join("two"));
+        linked_worktree(&first.join("api"));
+        let clone = second.join("api");
+        fs::create_dir_all(clone.join(".git")).unwrap();
+
+        let wanted = Wanted::new([(Some("company"), "api")]);
+        let found = find_in_primary(&[first, second], &wanted);
+        assert_eq!(paths(&found), vec![clone]);
+
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn an_earlier_root_beats_a_shallower_path_in_a_later_one() {
+        let base = scenario_dir("order_root");
+        let (first, second) = (base.join("one"), base.join("two"));
+        let deep = first.join("a").join("b").join("fleetz");
+        clone_with_origin(&deep, "git@github.com:Gaurgle/fleetz.git");
+        clone_with_origin(&second.join("fleetz"), "git@github.com:Gaurgle/fleetz.git");
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "fleetz")]);
+        let found = find_in_primary(&[first, second], &wanted);
+        assert_eq!(paths(&found), vec![deep]);
+
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn find_elsewhere_returns_one_clone_per_repo() {
+        // The deeper clone sorts first by path, so only depth picks `near`.
+        let home = scenario_dir("elsewhere_one");
+        let near = home.join("code").join("fleetz");
+        clone_with_origin(&near, "git@github.com:Gaurgle/fleetz.git");
+        clone_with_origin(
+            &home.join("code").join("a").join("fleetz"),
+            "git@github.com:Gaurgle/fleetz.git",
+        );
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "fleetz")]);
+        let found = find_elsewhere(&home, &[], &wanted, &HashSet::new());
+        assert_eq!(paths(&found), vec![near]);
+
+        fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn s3_the_ambiguous_clone_comes_back_as_data() {
+        // The ambiguous clone does not stop a clone with a remote from
+        // claiming its own row.
+        let dir = scenario_dir("s3_data");
+        let ambiguous = dir.join("api");
+        fs::create_dir_all(ambiguous.join(".git")).unwrap();
+        let alice = dir.join("alice-api");
+        clone_with_origin(&alice, "https://github.com/alice/api");
+
+        let wanted = Wanted::new([(Some("alice"), "api"), (Some("company"), "api")]);
+        let (found, ambiguities) =
+            find_in_primary_with_ambiguities(std::slice::from_ref(&dir), &wanted);
+        assert_eq!(paths(&found), vec![alice]);
+        assert_eq!(found[0].owner.as_deref(), Some("alice"));
+        assert_eq!(
+            ambiguities,
+            vec![Ambiguity {
+                path: ambiguous,
+                name: "api".to_string(),
+            }]
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s3b_ambiguity_is_judged_on_the_full_dataset_not_the_window() {
+        // A one-day window holds only `alice/api`; `company/api` was pushed
+        // 60 days ago and is in the full dataset only.
+        let dir = scenario_dir("s3b");
+        let clone = dir.join("api");
+        fs::create_dir_all(clone.join(".git")).unwrap();
+
+        let wanted = Wanted::with_full_dataset(
+            [(Some("alice"), "api")],
+            [(Some("alice"), "api"), (Some("company"), "api")],
+        );
+        let (found, ambiguities) =
+            find_in_primary_with_ambiguities(std::slice::from_ref(&dir), &wanted);
+        assert!(found.is_empty(), "claimed {found:?}");
+        assert_eq!(paths_of(&ambiguities), vec![clone]);
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_name_whose_owner_is_unique_in_the_full_dataset_is_not_ambiguous() {
+        let dir = scenario_dir("unique_owner");
+        let clone = dir.join("api");
+        fs::create_dir_all(clone.join(".git")).unwrap();
+
+        let wanted = Wanted::with_full_dataset(
+            [(Some("alice"), "api")],
+            [(Some("alice"), "api"), (Some("alice"), "other")],
+        );
+        let (found, ambiguities) =
+            find_in_primary_with_ambiguities(std::slice::from_ref(&dir), &wanted);
+        assert_eq!(paths(&found), vec![clone]);
+        assert_eq!(found[0].owner.as_deref(), Some("alice"));
+        assert!(ambiguities.is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s9d_an_origin_naming_a_known_repo_of_the_same_owner_does_not_claim_by_folder() {
+        // `Gaurgle/other` is outside the window but known to fleetz, so the
+        // clone is that repo's, not `Gaurgle/tool`'s.
+        let dir = scenario_dir("s9d");
+        clone_with_origin(&dir.join("tool"), "git@github.com:Gaurgle/other.git");
+
+        let wanted = Wanted::with_full_dataset(
+            [(Some("Gaurgle"), "tool")],
+            [(Some("Gaurgle"), "tool"), (Some("Gaurgle"), "other")],
+        );
+        assert!(find_in_primary(std::slice::from_ref(&dir), &wanted).is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn s9d_with_the_origins_repo_in_the_window_the_remote_matches() {
+        let dir = scenario_dir("s9d_window");
+        let clone = dir.join("tool");
+        clone_with_origin(&clone, "git@github.com:Gaurgle/other.git");
+
+        let both = [(Some("Gaurgle"), "tool"), (Some("Gaurgle"), "other")];
+        let wanted = Wanted::with_full_dataset(both, both);
+        let found = find_in_primary(std::slice::from_ref(&dir), &wanted);
+        assert_eq!(paths(&found), vec![clone]);
+        assert_eq!(found[0].name, "other");
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn ambiguities_are_sorted_by_path_across_roots() {
+        // o3: the first entry must not depend on root or walk order.
+        let base = scenario_dir("ambiguity_order");
+        let (first, second) = (base.join("z-root"), base.join("a-root"));
+        for clone in [
+            first.join("api"),
+            second.join("b").join("api"),
+            second.join("a").join(".api"),
+        ] {
+            fs::create_dir_all(clone.join(".git")).unwrap();
+        }
+
+        let wanted = Wanted::new([(Some("alice"), "api"), (Some("company"), "api")]);
+        let (found, ambiguities) = find_in_primary_with_ambiguities(
+            &[first.clone(), second.clone(), first.clone()],
+            &wanted,
+        );
+        assert!(found.is_empty());
+        assert_eq!(
+            paths_of(&ambiguities),
+            vec![
+                second.join("a").join(".api"),
+                second.join("b").join("api"),
+                first.join("api"),
+            ],
+            "sorted by path, a root listed twice reports once"
+        );
+        assert_eq!(ambiguities[0].name, "api", "leading dot stripped");
+
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn find_elsewhere_still_looks_for_another_owners_repo_of_a_found_name() {
+        // Pass 1 found `alice/api`; `company/api` is still wanted in pass 2.
+        let home = scenario_dir("elsewhere_keyed");
+        let root = home.join("repos");
+        let alice = root.join("api");
+        clone_with_origin(&alice, "git@github.com:alice/api.git");
+        let company = home.join("work").join("api");
+        clone_with_origin(&company, "git@github.com:company/api.git");
+
+        let wanted = Wanted::new([(Some("alice"), "api"), (Some("company"), "api")]);
+        let roots = vec![root];
+        let primary = find_in_primary(&roots, &wanted);
+        assert_eq!(paths(&primary), vec![alice]);
+        let found_set: HashSet<String> = primary.iter().map(FoundRepo::key).collect();
+
+        let elsewhere = find_elsewhere(&home, &roots, &wanted, &found_set);
+        assert_eq!(paths(&elsewhere), vec![company]);
+        assert_eq!(elsewhere[0].owner.as_deref(), Some("company"));
+
+        fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn find_elsewhere_skips_a_repo_pass_one_found() {
+        let home = scenario_dir("elsewhere_skip");
+        clone_with_origin(
+            &home.join("work").join("fleetz"),
+            "git@github.com:Gaurgle/fleetz.git",
+        );
+        fs::create_dir_all(home.join("work").join("legacy").join(".git")).unwrap();
+
+        let wanted = Wanted::new([(Some("Gaurgle"), "fleetz"), (None, "legacy")]);
+        let found_set: HashSet<String> = [
+            FoundRepo {
+                name: "Fleetz".to_string(),
+                path: PathBuf::from("/r/Fleetz"),
+                owner: Some("gaurgle".to_string()),
+            },
+            FoundRepo {
+                name: "Legacy".to_string(),
+                path: PathBuf::from("/r/Legacy"),
+                owner: None,
+            },
+        ]
+        .iter()
+        .map(FoundRepo::key)
+        .collect();
+        assert!(find_elsewhere(&home, &[], &wanted, &found_set).is_empty());
+
+        fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn found_repo_key_is_owner_and_name_lowercased_or_the_name_alone() {
+        let found = |owner: Option<&str>| FoundRepo {
+            name: "FleetZ".to_string(),
+            path: PathBuf::from("/r/FleetZ"),
+            owner: owner.map(str::to_string),
+        };
+        assert_eq!(found(Some("Gaurgle")).key(), "gaurgle/fleetz");
+        assert_eq!(found(None).key(), "fleetz");
+    }
+
+    fn paths_of(ambiguities: &[Ambiguity]) -> Vec<PathBuf> {
+        ambiguities.iter().map(|a| a.path.clone()).collect()
     }
 }
 
