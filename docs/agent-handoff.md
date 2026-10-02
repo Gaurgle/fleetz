@@ -14,22 +14,22 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 21:13: one worker is running.** `fz-worker` on
-  #43 (worktree `issue-43`, branch `fix/43-local-count-excludes-stash`,
-  base `3dfbd4a`, `src/git.rs` only), dispatched 21:12. FZ-05e (#35) and
-  FZ-13b (#51) are reviewed, committed, pushed and at Ready to integrate,
-  waiting for Andreas to try their branch builds. FZ-05b, FZ-05c, FZ-05d,
-  FZ-13a, FZ-13c and FZ-13t are merged and cleaned up. No further UI
-  ticket is dispatched while two builds wait for him, and the next
-  identity ticket depends on FZ-05e. A lead that finds a later state
-  recorded on an issue and not here trusts the issue, and checks #43 for a
-  report before dispatching it again.
+- **State at 2026-10-02 21:40: two workers are running**, both dispatched
+  21:38 from base `82c75c5`: `fz-worker` on FZ-05f (#36, worktree
+  `fz-05f`, branch `fix/fz-05f-pass3-canonical-path`, `src/main.rs`) and
+  `fz-worker` on FZ-13e (#54, worktree `fz-13e`, branch
+  `fix/fz-13e-measure-drawn-width`, `src/ui/mod.rs` and
+  `src/ui/footer.rs`). Neither is reviewed. Everything else dispatched
+  today is merged and cleaned up: FZ-05b, FZ-05c, FZ-05d, FZ-05e, FZ-13a,
+  FZ-13b, FZ-13c, FZ-13t and #43. Nothing waits at Ready to integrate. A
+  lead that finds a later state recorded on an issue and not here trusts
+  the issue, and checks #36 and #54 for a report before dispatching again.
 
-> **No-install span, open since the merge of FZ-05b (`f37c6b9`, 2026-10-02
-> 19:00).** Until FZ-05e (#35) is merged, nothing is tagged and Andreas does
-> not install from `main` (`cargo install --path .`). On a fleet with two
-> same-named repos, a checkout whose repo `merge_sources` still drops has no
-> row. Repeat this in every owner-facing report until FZ-05e merges.
+> **The no-install span is closed.** FZ-05b opened it (`f37c6b9`,
+> 2026-10-02 19:00) and FZ-05e closed it (`40a2c73`, 2026-10-02 21:31; CI
+> on `main` green there and at the merge after it, `82c75c5`). `main` again
+> shows every checkout. Andreas was told in the report after these
+> merges. Installing and tagging remain his.
 
 The rest of this file is the state as written at the end of 2026-10-01,
 except "In flight", "What waits on Andreas", "Next steps" and the 2026-10-02
@@ -89,6 +89,20 @@ Confirmed to the 2026-10-02 18:34 session ("Both hold").
   updates". So: no "try the build" for tickets with nothing to see; every
   ticket that changes the screen or a key goes to him with the branch build
   before it merges.
+- **Small look changes no longer wait for him** (said to the 2026-10-02
+  18:34 session at about 21:28, after he had tried five branch builds that
+  day). On FZ-13b: "this i trust. i dont care to change that setting".
+  Then: "i dont think i need to review these small things either, lets
+  keep going rather than stopping for minor things at this point". So
+  this narrows the item above: a minor on-screen change (a character, a
+  color, a label, a status line, a small row or badge) merges under the
+  safe-merge rule once reviewed, and the coordinator reports it at the
+  merge with the command to look at `main`. Still his before they are
+  built or merged: a new screen or a redesign (FZ-13s, the FZ-13 wave 4
+  questions), a new key or changed interaction, contract and owner items
+  (FZ-09), a new config key, and any test edit beyond the standing
+  exception. When in doubt whether something is minor, ask. A new lead
+  confirms this once before relying on it.
 - **Existing tests** (in [agent-workflow.md](agent-workflow.md), "Validation
   contract"): editing an existing test is his decision, except a
   compile-forced new field in existing test code with no assertion changed,
@@ -142,6 +156,33 @@ FZ-04 fix and merge, and the FZ-13 split are this session's.
 | FZ-13t | #63 | `70e84c9` | `5b4d4c1` | The list row's worktree count is `WT` in `colors::WORKTREE_CLR` (lavender) |
 | FZ-05d | #34 | `4eafc18` | `3daea80` | One carrier row per remote identity; the poll, moved-remote check, fetch baseline and sort keyed by owner and name; the ambiguity status line |
 | FZ-13c | #52 | `b494248`, `b36d1f3` | `117514c` | A two-column help sized from its content, complete against the event loop, keys in sapphire |
+| FZ-13b | #51 | `ffba73e` | `aec945c` | Config key `icons`: the Nerd Font set by default, six plain one-column characters with `plain` |
+| FZ-05e | #35 | `27a8c70` | `40a2c73` | The GitHub dataset keeps one entry per owner and name; the moved-remote check returns each row once |
+| Stash | #43 | `5604301` | `82c75c5` | The local contribution count excludes stash and notes commits |
+
+FZ-13b: Andreas accepted the six characters unseen in detail ("this i
+trust"). **Rule later tickets inherit, ruled by the coordinator on #51:**
+the active icon set is an ambient thread-local in `src/ui/badges.rs`, the
+single source read by the glyph choice functions, because existing tests
+pin the signatures of the functions that reach them and the palette
+tickets (FZ-13j, FZ-13k) will need an ambient render setting anyway. It is
+sound because `#[tokio::main]` polls the main future on the calling thread
+and every draw happens in the event loop inside it. **Rendering must stay
+on the thread that set it.** His idea from that build, not ticketed and to
+be asked: switching the icon set from inside the app (a settings row, which
+needs existing calls to `SettingsOverlay::new` in tests edited).
+
+FZ-05e: Andreas's own fleet has four repo names that exist under two
+owners (found in his saved GitHub copy; the names are deliberately not
+written into this repository, which is to become public). The coordinator
+first held the ticket at Ready to integrate for his look; he tried the
+build and saw nothing, because the coordinator had told him to choose
+"all" in the `t` overlay, which has no such choice. The `-a` flag shows
+those rows. He then gave the "small look changes" instruction and it
+merged under the safe-merge rule. **Still open with him, not blocking:**
+whether the ambiguity status line stays red (FZ-05d's worker's choice; it
+lasts 1.5 s, replaces the "Reloaded from cache" failure message, and a
+narrow footer can drop it).
 
 FZ-13c: Andreas asked for color after the first build and accepted the
 second on 2026-10-02 ("the colored help section looks good").
@@ -179,51 +220,21 @@ invariant change 1 of the identity design's section 3.10.
 
 Worktrees are under `.claude/worktrees/`.
 
-- **FZ-05e (#35), `fz-05e`, branch `fix/fz-05e-merge-sources-by-owner`,
-  base `95edd58`, commit `27a8c70`, pushed. Ready to integrate.** Review
-  accepted with no findings (diff hash `2711b9a6` against `95edd58`, seven
-  mutants killed, two end-to-end scratch tests from a payload through the
-  seam and a poll, on #35). CI green on the branch; combined checks with
-  `main` at `117514c` passed (853 tests). It closes the no-install span.
-  **Not merged, by the coordinator's ruling:** Andreas's own fleet has
-  four repo names that exist under two owners (found in his saved GitHub
-  copy; the names are deliberately not written into this repository), so
-  the ticket changes his screen: with a wide window, extra not-cloned rows
-  named like his clones, and the ambiguity status line for a remote-less
-  folder of such a name. His clones all point at the newer copy, so
-  nothing was wrong on his fleet during the span. He sees the branch build
-  first:
-  `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-05e/Cargo.toml`.
-  **Also open with him (asked 20:53, not answered):** the status line is
-  red by FZ-05d's worker's choice where other load messages are green; it
-  lasts 1.5 s like every status message, replaces the "Reloaded from
-  cache" failure message, and can be dropped by a narrow footer. On his
-  accept: rerun the combined checks if `main` moved in code, merge, close
-  #35, and lift the no-install warning once CI on `main` is green.
-- **FZ-13b (#51), `fz-13b`, branch `feat/fz-13b-plain-icons`, base
-  `5b4d4c1`, commit `ffba73e`, pushed. Ready to integrate.** One fix cycle
-  after a changes-requested review; the re-review accepted the whole diff
-  (hash `f8832f16` against `5b4d4c1`, thirteen mutants killed, on #51). CI
-  green on the branch; combined checks with `main` at `117514c` passed
-  (856 tests). Plain characters: org `@`, private `-`, public `+`, stash
-  `$`, watch on `o`, watch off `-`. No settings row and no `SettingField`
-  variant. **It waits for Andreas's look at the six characters; merge only
-  after he accepts.** To try it he adds `icons = "plain"` to his fleetz
-  `config.toml` (the installed binary ignores unknown keys) and runs
-  `cargo run --release --manifest-path ~/repos/fleetz/.claude/worktrees/fz-13b/Cargo.toml`.
-  **Design ruling by the coordinator, on #51, that later tickets inherit:**
-  the active icon set is an ambient thread-local in `src/ui/badges.rs`,
-  the single source read by the glyph choice functions, because existing
-  tests pin the signatures of the functions that reach them and the
-  palette tickets (FZ-13j, FZ-13k) will need an ambient render setting
-  anyway. It is sound because `#[tokio::main]` polls the main future on
-  the calling thread and every draw happens in the event loop inside it.
-  **Rendering must stay on the thread that set it.**
-- **#43, `issue-43`, branch `fix/43-local-count-excludes-stash`, base
-  `3dfbd4a`.** Worker dispatched 2026-10-02 21:12: `git::daily_commits`
-  stops counting stash commits. Coordinator's ruling on the body's open
-  point: notes commits do not count either. Then a reviewer, then the
-  safe-merge rule; nothing in it rests on Andreas.
+- **FZ-05f (#36), `fz-05f`, branch `fix/fz-05f-pass3-canonical-path`,
+  base `82c75c5`.** Worker dispatched 2026-10-02 21:38: pass 3 dedupes by
+  canonical path only, so dirty extra checkouts and same-named local-only
+  repos get rows. The veto in its body is settled (Andreas approved the
+  change with the design on 2026-10-01). It stops on its own if an
+  existing test encodes the name dedupe: that question is his. Then a
+  reviewer, then the safe-merge rule; on the merge the coordinator edits
+  `CLAUDE.md` invariant change 2 and tells him what rows are new.
+- **FZ-13e (#54), `fz-13e`, branch `fix/fz-13e-measure-drawn-width`, base
+  `82c75c5`.** Worker dispatched 2026-10-02 21:38: the header and footer
+  measure what is drawn, not bytes. It stops on its own if characters and
+  ratatui's width disagree for a glyph on those lines, or if an existing
+  test asserts today's early drop. Then a reviewer, then the safe-merge
+  rule under the "small look changes" instruction. FZ-13f (#55) waits for
+  it: both edit the header in `src/ui/mod.rs`.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked
   by Andreas until the repository goes public.
@@ -251,11 +262,11 @@ No other worktree or local ticket branch exists. Merged branches remain on
    (O5); the signed-out launch (O7); saved files readable only by him (O14);
    and the `CLAUDE.md` and freshness contract changes in its section 6.
    Smaller: O8, O10, O11, O12. Later: O9, O13.
-2. **Two branch builds to look at** (see "In flight"): FZ-05e (#35), which
-   on his accept closes the no-install span, with his answer on the color
-   of the ambiguity status line; and FZ-13b (#51), the six plain
-   characters. Asked on 2026-10-02 and not answered: may the
-   `LoadingFrame` redraw bug (follow-ups below) become an issue?
+2. **Small questions asked on 2026-10-02 and not answered**, none
+   blocking: whether the ambiguity status line stays red; whether the
+   `LoadingFrame` redraw bug (follow-ups below) may become an issue;
+   whether his idea of switching the icon set from inside the app should
+   become a ticket.
 3. **FZ-13 wave 4** (maximize and restore, hints that follow focus,
    economical folds): each needs a decision from him before it is a ticket.
    The questions are in the split on #26.
@@ -276,14 +287,12 @@ the header.
 
 ## Next steps, in order
 
-1. **The no-install span is open** until FZ-05e merges; say so in every
-   report. FZ-05e and FZ-13b wait for Andreas at Ready to integrate.
-2. **FZ-05f (#36)** is next in the identity series after FZ-05e merges
-   (it builds on the two-owner dataset; do not dispatch it before). It
-   dedupes pass 3 by canonical path; the coordinator edits `CLAUDE.md`
-   invariant change 2 with it. Carried into it: S4's load half; a fleet
-   where the dataset has two owners for the folder's name; the reviewer's
-   payload-to-seam-to-poll test pattern from #35.
+1. **FZ-05f (#36) and FZ-13e (#54) are in flight** (see "In flight"):
+   review each when its worker reports, then merge under the safe-merge
+   rule. With FZ-05f the coordinator edits `CLAUDE.md` invariant change 2,
+   and the identity series is complete.
+2. **After FZ-05f, FZ-10a (#47)** takes the `main.rs` line; **after
+   FZ-13e, FZ-13f (#55)** takes the header, then FZ-13d (#53).
 3. **FZ-09:** the owner items are with him, unanswered. On his answers:
    record them in the design and on the closed #22, amend `CLAUDE.md` and
    [freshness-contract.md](freshness-contract.md) as its section 6 says
