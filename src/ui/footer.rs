@@ -253,8 +253,11 @@ fn contrib_key_style(mode: ContributionsMode, folded: bool) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// Columns a span run draws, counted in characters as the rest of the UI
+/// counts them: every glyph the footer draws is one column wide, and a byte
+/// count charged the arrows and dots two or three columns each.
 fn line_width(spans: &[Span]) -> usize {
-    spans.iter().map(|s| s.content.len()).sum()
+    spans.iter().map(|s| s.content.chars().count()).sum()
 }
 
 /// Whether summary + hints fit side by side in `width` with at least one
@@ -407,6 +410,150 @@ mod tests {
         let mut app = app_in(View::Detail);
         app.watch_mode = true;
         assert_eq!(key_color(&app, "[w]"), Some(colors::TEXT));
+    }
+
+    /// A clean repo with the given counters, so the summary carries its
+    /// arrows and dots.
+    fn repo(name: &str, behind: u32, ahead: u32, dirty: u32) -> crate::model::RepoStatus {
+        crate::model::RepoStatus {
+            last_local: None,
+            daily: None,
+            daily_key: None,
+            name: name.to_string(),
+            path: Some(format!("~/repos/{name}")),
+            location: crate::model::RepoLocation::Primary,
+            branches: vec![],
+            commits: vec![],
+            behind,
+            ahead,
+            dirty,
+            pr_count: 0,
+            prs: vec![],
+            ci_status: crate::model::CiStatus::Unknown,
+            ci_workflow: None,
+            ci_duration: None,
+            groups: vec![],
+            stash_count: 0,
+            stash_entries: vec![],
+            worktrees: vec![],
+            reflog: vec![],
+            graph: vec![],
+            graph_expanded: Vec::new(),
+            repo_kind: crate::model::RepoKind::Unknown,
+            owner: None,
+            remote_url: None,
+            remote_only_branches: vec![],
+            remote_branches: vec![],
+            work_key: None,
+            fetch: crate::model::FetchFacts::default(),
+        }
+    }
+
+    /// An app whose summary reads `1↓ · 1↑ · 1! · 1 synced`: two arrows of
+    /// three bytes and three dots of two, so its byte length is seven more
+    /// than the columns it draws.
+    fn app_with_glyph_summary() -> App {
+        let repos = vec![
+            repo("a", 1, 0, 0),
+            repo("b", 0, 1, 0),
+            repo("c", 0, 0, 1),
+            repo("d", 0, 0, 0),
+        ];
+        let mut app = App::new(repos, String::new(), 120, 40);
+        app.view = View::Detail;
+        app
+    }
+
+    /// The footer's content row as drawn at `width` columns.
+    fn footer_row(app: &App, width: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut terminal = Terminal::new(TestBackend::new(width, 2)).unwrap();
+        terminal.draw(|f| render(f, f.area(), app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..width).map(|x| buffer[(x, 1)].symbol()).collect()
+    }
+
+    /// The narrowest footer that keeps `left` and `hints` side by side: the
+    /// inset on both sides, the columns they draw, and one column between.
+    fn snug_width(left: &str, hints: &str) -> u16 {
+        let inset = 2 * crate::ui::PANE_CONTENT_INSET as usize;
+        (inset + left.chars().count() + hints.chars().count() + 1) as u16
+    }
+
+    /// Regression: the fit was measured in bytes, so a summary's arrows and
+    /// dots cost two or three columns each and the key descriptions went
+    /// while there was room for them. At the snug width the summary and the
+    /// full hints are both drawn; one column less, the descriptions go.
+    #[test]
+    fn the_key_descriptions_stay_while_they_fit_beside_a_glyph_summary() {
+        let app = app_with_glyph_summary();
+        let summary = text(&summary_spans(&app.summary()));
+        assert_eq!(summary, "1↓ · 1↑ · 1! · 1 synced");
+        assert!(
+            summary.len() > summary.chars().count(),
+            "no multi-byte glyph"
+        );
+        let full = text(&keybind_hints(&app, true));
+        let width = snug_width(&summary, &full);
+
+        let row = footer_row(&app, width);
+        assert!(row.contains(&summary), "summary dropped: {row:?}");
+        assert!(row.contains(&full), "descriptions dropped: {row:?}");
+
+        let tighter = footer_row(&app, width - 1);
+        assert!(tighter.contains(&summary), "{tighter:?}");
+        assert!(!tighter.contains(" lazygit"), "{tighter:?}");
+    }
+
+    /// The same for the summary itself: at the width where it fits beside
+    /// the keys-only hints, it is drawn rather than dropped.
+    #[test]
+    fn a_glyph_summary_stays_while_it_fits_beside_the_keys() {
+        let app = app_with_glyph_summary();
+        let summary = text(&summary_spans(&app.summary()));
+        let keys = text(&keybind_hints(&app, false));
+        let width = snug_width(&summary, &keys);
+
+        let row = footer_row(&app, width);
+        assert!(row.contains(&summary), "summary dropped: {row:?}");
+        assert!(row.contains(&keys), "{row:?}");
+
+        let tighter = footer_row(&app, width - 1);
+        assert!(!tighter.contains("synced"), "{tighter:?}");
+        assert!(tighter.contains(&keys), "{tighter:?}");
+    }
+
+    /// The spacer is measured the same way, so the hints end flush with the
+    /// content's right edge: a byte count made the spacer short by one
+    /// column per extra byte, leaving a gap after `quit`.
+    #[test]
+    fn the_hints_end_at_the_right_edge_beside_a_glyph_summary() {
+        let app = app_with_glyph_summary();
+        let width = 160u16;
+        let row = footer_row(&app, width);
+        let right_edge = width as usize - crate::ui::PANE_CONTENT_INSET as usize;
+        let drawn = row.trim_end().chars().count();
+        assert_eq!(drawn, right_edge, "{row:?}");
+        assert!(row.trim_end().ends_with("[q] quit"), "{row:?}");
+    }
+
+    /// The drop order: the descriptions go first, then the left side. Read
+    /// from the drawn footer at every width from wide to narrow, so a
+    /// reordering, or a step that is skipped, fails.
+    #[test]
+    fn the_footer_drops_descriptions_before_the_summary() {
+        let app = app_with_glyph_summary();
+        let mut states: Vec<(bool, bool)> = Vec::new();
+        for width in (20u16..=160).rev() {
+            let row = footer_row(&app, width);
+            let state = (row.contains("synced"), row.contains(" lazygit"));
+            if states.last() != Some(&state) {
+                states.push(state);
+            }
+        }
+        assert_eq!(states, vec![(true, true), (true, false), (false, false)]);
     }
 
     #[test]
