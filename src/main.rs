@@ -170,6 +170,18 @@ pub struct LoadResult {
     /// old, so this decides whether the re-poll clock may start here or the
     /// first poll is due immediately, and what the header says about it.
     pub source: app::DatasetSource,
+    /// The status line for a clone that claimed no row because its folder
+    /// name names repos of several owners (D4 in
+    /// `docs/repository-identity-design.md`), naming the first such clone by
+    /// path. None when discovery found no ambiguity.
+    pub ambiguity: Option<String>,
+}
+
+/// What an assembly says besides its rows: the header, and the ambiguity
+/// status line that `LoadResult::ambiguity` carries to the app.
+struct ViewNotes {
+    header: String,
+    ambiguity: Option<String>,
 }
 
 /// Why a load produced nothing to show.
@@ -483,14 +495,15 @@ fn spawn_load(
         let mode = args.mode();
         let result = load_repos(&args, &config, &repo_dir, &mode, window, bypass_cache)
             .await
-            .map(|(repos, header, dataset, calendar, source)| {
+            .map(|(repos, notes, dataset, calendar, source)| {
                 Box::new(LoadResult {
                     kind,
                     repos,
-                    header,
+                    header: notes.header,
                     dataset: Some(dataset),
                     github_calendar: calendar,
                     source,
+                    ambiguity: notes.ambiguity,
                 })
             });
         let _ = tx.send(AppEvent::Loaded(result));
@@ -527,17 +540,20 @@ fn spawn_window_apply(
             Some(&tx),
         )
         .await
-        .map(|(repos, header)| {
+        .map(|(repos, notes)| {
             Box::new(LoadResult {
                 kind: LoadKind::WindowApply(w),
                 repos,
-                header,
+                header: notes.header,
                 dataset: None,
                 github_calendar: None,
                 // A window apply re-filters what is already in memory and
                 // fetches nothing, so it must not touch the poll clock either
                 // way. `dataset: None` already guards that.
                 source: app::DatasetSource::Local,
+                // Discovery runs again, so the ambiguity rides along like any
+                // load's.
+                ambiguity: notes.ambiguity,
             })
         })
         .map_err(LoadError::from);
@@ -551,6 +567,18 @@ fn apply_load_result(
     app: &mut App,
     config: &config::Config,
     result: Result<Box<LoadResult>, LoadError>,
+) {
+    apply_load_result_saving_to(app, config, result, &window_state::WindowState::new());
+}
+
+/// `apply_load_result` with the store a window apply persists its window to
+/// passed in, so a test can land a window apply without writing the user's
+/// saved window.
+fn apply_load_result_saving_to(
+    app: &mut App,
+    config: &config::Config,
+    result: Result<Box<LoadResult>, LoadError>,
+    window_store: &window_state::WindowState,
 ) {
     let now = chrono::Local::now();
     app.apply_progress = None;
@@ -597,10 +625,16 @@ fn apply_load_result(
                     _ => app.set_status("Reloaded".to_string(), false),
                 },
                 LoadKind::WindowApply(w) => {
-                    window_state::WindowState::new().save(&w);
+                    window_store.save(&w);
                     let label = app.header.clone();
                     app.set_status(format!("Window: {label}"), false);
                 }
+            }
+            // After the load's own message, so it wins (N2): the clone stays
+            // unclaimed on every load until it gets an origin remote, and a
+            // `Reloaded` that hid the reason would leave it unexplained.
+            if let Some(line) = lr.ambiguity {
+                app.set_status(line, true);
             }
         }
         Err(e) => {
@@ -1731,11 +1765,11 @@ fn apply_github_poll(
             }
             // Overwrite only the GitHub-owned fields: the local
             // git state is the sweep's business, not this poll's.
+            // Only on the row the load made the carrier
+            // (`carries`), so a same-named row of another owner, or
+            // a local-only checkout, never takes these.
             for repo in &mut app.repos {
-                if let Some(gh) = dataset
-                    .iter()
-                    .find(|g| g.name.eq_ignore_ascii_case(&repo.name))
-                {
+                if let Some(gh) = dataset.iter().find(|g| carries(repo, g)) {
                     repo.apply_github(gh);
                 }
             }
@@ -1837,6 +1871,15 @@ fn github_poll_due(
 /// of a session there is no baseline, and treating "unknown" as "moved" would
 /// fetch the entire fleet at once. Repos with no local clone are skipped too,
 /// since there is nothing to fetch.
+///
+/// Only the carrier of a moved remote is fetched (`carries`), the row the poll
+/// writes. An extra checkout of the same remote is not; `F` still reaches it.
+///
+/// The previous entry is the side `names_remote` matches from, so an owned
+/// one is only ever the same owner's push, and one without an owner (a
+/// launch from a payload without `login`) still matches by name. That keeps
+/// the legacy baseline: unmatched, a push since it would read as unknown and
+/// never be fetched, since the next poll compares against owned data.
 fn remotes_that_moved(
     previous: &[github::GithubRepo],
     current: &[github::GithubRepo],
@@ -1847,15 +1890,63 @@ fn remotes_that_moved(
         .filter(|now| {
             previous
                 .iter()
-                .find(|was| was.name.eq_ignore_ascii_case(&now.name))
+                .find(|was| names_remote(was.owner.as_deref(), &was.name, now))
                 .is_some_and(|was| now.pushed_at > was.pushed_at)
         })
         .filter_map(|moved| {
             repos
                 .iter()
-                .position(|r| r.path.is_some() && r.name.eq_ignore_ascii_case(&moved.name))
+                .position(|r| r.path.is_some() && carries(r, moved))
         })
         .collect()
+}
+
+/// Whether `entry` is the GitHub repo a row or clone known as `owner`/`name`
+/// stands for. Names compare case-insensitively, as GitHub does. With an
+/// owner, only an entry of that owner (case-insensitive) matches; an entry
+/// without one does not. With no owner, the name alone decides, whatever the
+/// entry's owner: that is the legacy path of a payload without `login` (m2
+/// and D1 in `docs/repository-identity-design.md`).
+fn names_remote(owner: Option<&str>, name: &str, entry: &github::GithubRepo) -> bool {
+    if !entry.name.eq_ignore_ascii_case(name) {
+        return false;
+    }
+    let Some(owner) = owner else {
+        return true;
+    };
+    entry
+        .owner
+        .as_deref()
+        .is_some_and(|theirs| theirs.eq_ignore_ascii_case(owner))
+}
+
+/// Whether `repo` is the row that carries `entry`'s GitHub fields, the mark
+/// the load left (D6, section 3.5 of `docs/repository-identity-design.md`).
+/// The poll and `remotes_that_moved` follow it; nothing is re-chosen here.
+///
+/// A Primary, Elsewhere or NotCloned row with an owner matches only an entry
+/// of that owner and name, so an entry without an owner never writes it. One
+/// with no owner matches any entry of its name (legacy, `names_remote`). A
+/// LocalOnly row matches only when the load made it a carrier by giving it
+/// an owner, and then only an entry of that owner named like the repo its
+/// stored `origin` names, since its `name` is its folder's. A LocalOnly row
+/// is never matched by name: that is how a remote-less checkout picked up a
+/// stranger's CI on the first poll.
+fn carries(repo: &RepoStatus, entry: &github::GithubRepo) -> bool {
+    if repo.location != RepoLocation::LocalOnly {
+        return names_remote(repo.owner.as_deref(), &repo.name, entry);
+    }
+    let (Some(owner), Some(url)) = (repo.owner.as_deref(), repo.remote_url.as_deref()) else {
+        return false;
+    };
+    let Some(origin) = model::RemoteRef::parse(url) else {
+        return false;
+    };
+    entry
+        .owner
+        .as_deref()
+        .is_some_and(|theirs| theirs.eq_ignore_ascii_case(owner))
+        && entry.name.eq_ignore_ascii_case(&origin.name)
 }
 
 /// Resolve watch mode at startup: an explicit flag wins, otherwise the config
@@ -2223,7 +2314,7 @@ async fn load_repos(
 ) -> Result<
     (
         Vec<RepoStatus>,
-        String,
+        ViewNotes,
         Vec<github::GithubRepo>,
         Option<Box<contributions::Calendar>>,
         app::DatasetSource,
@@ -2261,7 +2352,11 @@ async fn load_repos(
         }
         results.sort_by_key(|(i, _)| *i);
         let repos: Vec<RepoStatus> = results.into_iter().filter_map(|(_, r)| r).collect();
-        return Ok((repos, header, Vec::new(), None, app::DatasetSource::Local));
+        let notes = ViewNotes {
+            header,
+            ambiguity: None,
+        };
+        return Ok((repos, notes, Vec::new(), None, app::DatasetSource::Local));
     }
 
     // Fetch from GitHub (with caching)
@@ -2300,10 +2395,10 @@ async fn load_repos(
     let (dataset, calendar) = (fetch.repos, fetch.calendar);
 
     let (cutoff, header) = resolve_cutoff(window, mode, config)?;
-    let (repos, full_header) =
+    let (repos, notes) =
         assemble_view(&dataset, cutoff, header, args, config, repo_dir, true, None).await?;
 
-    Ok((repos, full_header, dataset, calendar, source))
+    Ok((repos, notes, dataset, calendar, source))
 }
 
 /// One repo's full local status for `-d` mode. Returns None for a repo with
@@ -2419,19 +2514,20 @@ fn stale_remotes(
     targets: &[(discovery::FoundRepo, RepoLocation)],
     active: &[github::GithubRepo],
 ) -> Vec<std::path::PathBuf> {
-    let pushed: HashMap<String, chrono::DateTime<chrono::Utc>> = active
-        .iter()
-        .map(|r| (r.name.to_lowercase(), r.pushed_at))
-        .collect();
-
     targets
         .iter()
         .filter(|(found, _)| {
-            let Some(pushed_at) = pushed.get(&found.name.to_lowercase()) else {
+            // The repo this clone claimed, by owner and name: a same-named
+            // repo of another owner pushed at another time.
+            let Some(pushed_at) = active
+                .iter()
+                .find(|r| names_remote(found.owner.as_deref(), &found.name, r))
+                .map(|r| r.pushed_at)
+            else {
                 return true;
             };
             match git::last_successful_fetch_at(&found.path) {
-                Some(fetched) => *pushed_at > chrono::DateTime::<chrono::Utc>::from(fetched),
+                Some(fetched) => pushed_at > chrono::DateTime::<chrono::Utc>::from(fetched),
                 None => true,
             }
         })
@@ -2496,14 +2592,11 @@ fn sort_by_activity(
     targets: &mut [(discovery::FoundRepo, RepoLocation)],
     active: &[github::GithubRepo],
 ) {
-    let rank: HashMap<String, usize> = active
-        .iter()
-        .enumerate()
-        .map(|(i, r)| (r.name.to_lowercase(), i))
-        .collect();
-    targets.sort_by_key(|(f, _)| {
-        rank.get(&f.name.to_lowercase())
-            .copied()
+    // By owner and name, so two same-named repos each sort by their own push.
+    targets.sort_by_cached_key(|(f, _)| {
+        active
+            .iter()
+            .position(|r| names_remote(f.owner.as_deref(), &f.name, r))
             .unwrap_or(usize::MAX)
     });
 }
@@ -2542,7 +2635,7 @@ async fn assemble_view(
     repo_dir: &Path,
     git_fetch: bool,
     progress: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
-) -> Result<(Vec<RepoStatus>, String), String> {
+) -> Result<(Vec<RepoStatus>, ViewNotes), String> {
     // Local scan roots: the primary repo_dir plus any configured extra dirs
     // (e.g. ~/.dotfiles) -- the fleetz equivalent of repoz's EXTRA_DIRS. Used
     // by all three passes, so a repo outside the main tree gets a full
@@ -2582,16 +2675,7 @@ async fn assemble_view_in(
     scan_roots: &[PathBuf],
     git_fetch: bool,
     progress: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
-) -> Result<(Vec<RepoStatus>, String), String> {
-    // name -> org/private/public, from the *full* fetch (before the activity
-    // cutoff filters it down), so a local-only repo can still show its glyph
-    // even though it wasn't pushed recently enough to be "active". Mirrors
-    // repoz's `meta_lookup`.
-    let kind_by_name: HashMap<String, model::RepoKind> = dataset
-        .iter()
-        .map(|r| (r.name.to_lowercase(), r.repo_kind))
-        .collect();
-
+) -> Result<(Vec<RepoStatus>, ViewNotes), String> {
     // Apply --before filter
     let before_cutoff = match &args.before {
         Some(b) => {
@@ -2620,27 +2704,32 @@ async fn assemble_view_in(
     );
 
     // Pass 1: find under every scan root (repo_dir + extra_dirs)
-    let primary_found = discovery::find_in_primary(scan_roots, &wanted);
+    let (primary_found, mut ambiguities) =
+        discovery::find_in_primary_with_ambiguities(scan_roots, &wanted);
     let found_set: HashSet<String> = primary_found
         .iter()
         .map(discovery::FoundRepo::key)
         .collect();
 
     // Pass 2: find elsewhere
-    let elsewhere_found = discovery::find_elsewhere(home, scan_roots, &wanted, &found_set);
+    let (elsewhere_found, elsewhere_ambiguities) =
+        discovery::find_elsewhere_with_ambiguities(home, scan_roots, &wanted, &found_set);
+    ambiguities.extend(elsewhere_ambiguities);
+    let ambiguity = ambiguity_line(&ambiguities, dataset);
 
     // Dedupe up front: a repo found in both passes is one stat target, so the
     // gauge total is the real amount of work rather than a count that has to
-    // be padded as duplicates are skipped. Primary wins the location.
+    // be padded as duplicates are skipped. Primary wins the location. Keyed
+    // by owner and name, so `alice/api` and `company/api` are two targets.
     let mut targets: Vec<(discovery::FoundRepo, RepoLocation)> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<RemoteKey> = HashSet::new();
     for f in &primary_found {
-        if seen.insert(f.name.to_lowercase()) {
+        if seen.insert(remote_key(f.owner.as_deref(), &f.name)) {
             targets.push((f.clone(), RepoLocation::Primary));
         }
     }
     for f in &elsewhere_found {
-        if seen.insert(f.name.to_lowercase()) {
+        if seen.insert(remote_key(f.owner.as_deref(), &f.name)) {
             targets.push((f.clone(), RepoLocation::Elsewhere));
         }
     }
@@ -2712,7 +2801,11 @@ async fn assemble_view_in(
         }
     }
     let mut repos: Vec<RepoStatus> = slots.into_iter().flatten().collect();
-    let mut checked_names: HashSet<String> = seen;
+    // Read only by pass 3's bare-name filter and its name claim below. The
+    // remotes the rows above carry are in `seen`, which the not-cloned loop
+    // reads instead.
+    let mut checked_names: HashSet<String> =
+        targets.iter().map(|(f, _)| f.name.to_lowercase()).collect();
 
     if let Some(tx) = progress {
         let _ = tx.send(AppEvent::Progress(app::ApplyProgress::Finishing));
@@ -2720,27 +2813,23 @@ async fn assemble_view_in(
 
     // Pass 3: local repos (under repo_dir or any configured extra_dir, e.g.
     // ~/.dotfiles) with uncommitted or unpushed changes, not already shown
-    // above. Runs *before* the not-cloned loop so a dirty local clone claims
-    // the repo as LocalOnly rather than being mislabeled "not cloned" when
-    // it lives at a hidden path passes 1/2 don't reach.
+    // above. Runs *before* the not-cloned loop so a dirty local clone whose
+    // origin names an active repo carries it as LocalOnly rather than leaving
+    // it mislabeled "not cloned" when it lives at a path passes 1/2 don't
+    // reach.
     let all_local = discovery::find_all_local(scan_roots);
     let claimed_paths: HashSet<&Path> = targets.iter().map(|(f, _)| f.path.as_path()).collect();
+    let candidates = unclaimed_local(all_local, &claimed_paths, &checked_names);
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
     let mut set = tokio::task::JoinSet::new();
-    for (i, (path, name)) in unclaimed_local(all_local, &claimed_paths, &checked_names)
-        .into_iter()
-        .enumerate()
-    {
-        // Glyph metadata by name from the full GitHub fetch, so a local-only
-        // repo (e.g. dotfiles) still shows its org/private/public glyph.
-        let repo_kind = kind_by_name
-            .get(&name.to_lowercase())
-            .copied()
-            .unwrap_or(model::RepoKind::Unknown);
+    for (i, (path, name)) in candidates.iter().cloned().enumerate() {
         let sem = sem.clone();
         set.spawn(async move {
             let _permit = sem.acquire().await;
-            (i, local_only_status(&path, name, repo_kind, cutoff).await)
+            // No glyph by name: a LocalOnly row gets one only as a carrier,
+            // from the repo its origin names, below.
+            let status = local_only_status(&path, name, model::RepoKind::Unknown, cutoff).await;
+            (i, status)
         });
     }
 
@@ -2754,18 +2843,22 @@ async fn assemble_view_in(
         }
     }
     local_results.sort_by_key(|(i, _)| *i);
-    for (_, status) in local_results {
+    let mut local_rows: Vec<(&Path, RepoStatus)> = Vec::new();
+    for (i, status) in local_results {
         let Some(repo) = status else { continue };
         if !checked_names.insert(repo.name.to_lowercase()) {
             continue;
         }
-        repos.push(repo);
+        local_rows.push((candidates[i].0.as_path(), repo));
     }
+    mark_local_carriers(&mut local_rows, dataset, scan_roots, &mut seen);
+    repos.extend(local_rows.into_iter().map(|(_, repo)| repo));
 
-    // Not-cloned repos: active on GitHub but found nowhere locally (passes
-    // 1-3 all missed them). Last, so a local clone always wins over this.
+    // Not-cloned repos: active on GitHub but carried by no row above. Last,
+    // so a local clone always wins over this, but only through the remote it
+    // carries: a pass 3 clone without an origin no longer hides the repo.
     for gh_repo in &active {
-        if checked_names.contains(&gh_repo.name.to_lowercase()) {
+        if seen.contains(&remote_key(gh_repo.owner.as_deref(), &gh_repo.name)) {
             continue;
         }
         repos.push(RepoStatus {
@@ -2823,7 +2916,93 @@ async fn assemble_view_in(
         );
     }
 
-    Ok((repos, full_header))
+    let notes = ViewNotes {
+        header: full_header,
+        ambiguity,
+    };
+    Ok((repos, notes))
+}
+
+/// A remote identity as assembly compares it: lowercased owner and name. No
+/// owner is the legacy key of a payload without `login`, matched by name.
+/// The host is left out: every dataset entry is on `github.com`, and matching
+/// is host-agnostic (D2).
+type RemoteKey = (Option<String>, String);
+
+fn remote_key(owner: Option<&str>, name: &str) -> RemoteKey {
+    (owner.map(str::to_lowercase), name.to_lowercase())
+}
+
+/// The D4 status line for the first ambiguous clone by path, or None. The
+/// count is the owners the full dataset has for the name, since that is what
+/// made the folder name ambiguous.
+fn ambiguity_line(
+    ambiguities: &[discovery::Ambiguity],
+    dataset: &[github::GithubRepo],
+) -> Option<String> {
+    let first = ambiguities.iter().min()?;
+    let owners: HashSet<String> = dataset
+        .iter()
+        .filter(|r| r.name.eq_ignore_ascii_case(&first.name))
+        .filter_map(|r| r.owner.as_deref().map(str::to_lowercase))
+        .collect();
+    Some(format!(
+        "{}: {} matches {} GitHub repos, add an origin remote",
+        first.name,
+        tilde_display(&first.path),
+        owners.len()
+    ))
+}
+
+/// Make each LocalOnly row the carrier of the repo its stored `origin` names,
+/// when that repo is in the full dataset and no row carries it yet (`carried`
+/// holds the keys already carried, and gains each one claimed here). The
+/// carrier is marked by its `owner` and takes the repo's GitHub fields now,
+/// so they show from the first frame (D6, rule 2 of section 3.5 of
+/// `docs/repository-identity-design.md`). Every other LocalOnly row keeps no
+/// owner and no GitHub fields.
+///
+/// The URL is the one `git remote get-url` returned, which applies
+/// `insteadOf` and, in a linked worktree, names the main clone's origin, so
+/// a checkout passes 1 and 2 could not match can still carry here. Several
+/// rows naming one repo are tried in discovery's primary-checkout order
+/// (`discovery::CheckoutRank`), each as a match through its exact origin.
+///
+/// The root index is that of the first scan root holding the path, the same
+/// index pass 1 gives a clone two overlapping roots both reach, since the
+/// lower-ranked offer wins there. Pass 3 walks only the scan roots, so a row
+/// always lies under one; `usize::MAX` is a fallback that cannot occur.
+fn mark_local_carriers(
+    rows: &mut [(&Path, RepoStatus)],
+    dataset: &[github::GithubRepo],
+    scan_roots: &[PathBuf],
+    carried: &mut HashSet<RemoteKey>,
+) {
+    let mut order: Vec<(discovery::CheckoutRank, usize, &github::GithubRepo)> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (path, repo))| {
+            let origin = model::RemoteRef::parse(repo.remote_url.as_deref()?)?;
+            let entry = dataset.iter().find(|r| {
+                r.owner.is_some() && names_remote(Some(&origin.owner), &origin.name, r)
+            })?;
+            let root = scan_roots
+                .iter()
+                .position(|root| path.starts_with(root))
+                .unwrap_or(usize::MAX);
+            let rank = discovery::CheckoutRank::exact_origin(&origin, path, root);
+            Some((rank, i, entry))
+        })
+        .collect();
+    order.sort_by(|a, b| a.0.cmp(&b.0));
+    for (_, i, entry) in order {
+        if !carried.insert(remote_key(entry.owner.as_deref(), &entry.name)) {
+            continue;
+        }
+        let repo = &mut rows[i].1;
+        repo.owner = entry.owner.clone();
+        repo.apply_github(entry);
+    }
 }
 
 /// Probe a local repo that no GitHub match claimed. Returns None when it has
@@ -2965,9 +3144,11 @@ async fn build_repo_status(
     let graph = git::graph(path, &branch_names, HISTORY_COUNT).await;
     let graph_expanded = git::graph_expanded(path, &branch_names, HISTORY_COUNT).await;
 
+    // The repo discovery matched this clone to, by owner and name: the first
+    // same-named entry could be another owner's.
     let gh_match = gh_repos
         .iter()
-        .find(|r| r.name.eq_ignore_ascii_case(&found.name));
+        .find(|r| names_remote(found.owner.as_deref(), &found.name, r));
 
     let pr_count = gh_match.map_or(0, |r| r.pr_count);
     let prs = gh_match.map_or_else(Vec::new, |r| r.prs.clone());
@@ -3599,6 +3780,7 @@ mod tests {
                 dataset: Some(Vec::new()),
                 github_calendar: None,
                 source,
+                ambiguity: None,
             })),
         );
     }
@@ -3718,6 +3900,7 @@ mod tests {
                 dataset: Some(Vec::new()),
                 github_calendar: None,
                 source,
+                ambiguity: None,
             })),
         );
     }
@@ -3930,6 +4113,44 @@ mod tests {
         assert_eq!(repo.name, "other");
         assert_eq!(repo.dirty, 0);
         assert!(repo.commits.is_empty());
+    }
+
+    /// S15 of the repository identity design (section 3.6): a sweep result
+    /// lands by path, on whatever row a reload has put there since, even when
+    /// that row stands for another remote. Every field a sweep writes is a
+    /// probe of the directory, so it is right for the row at that path; the
+    /// row's identity, GitHub fields and groups stay the reload's.
+    #[test]
+    fn a_late_result_lands_by_path_on_the_row_a_reload_put_there() {
+        let mut app = app_with_pending_repo();
+        let snapshot = sweep_targets(&app, None).remove(0).old;
+        let mut now_there = test_repo();
+        now_there.name = "y".to_string();
+        now_there.path = Some(SWEPT_PATH.to_string());
+        now_there.owner = Some("Gaurgle".to_string());
+        now_there.remote_url = Some("git@github.com:Gaurgle/y.git".to_string());
+        now_there.ci_status = model::CiStatus::Passed;
+        now_there.groups = vec!["side".to_string()];
+        app.repos = vec![now_there];
+
+        apply_repo_updated(
+            &mut app,
+            SWEPT_PATH,
+            rebuilt_from(&snapshot),
+            git::FetchOutcome::NotAttempted,
+        );
+
+        assert_eq!(app.repos.len(), 1);
+        let repo = &app.repos[0];
+        assert_eq!(repo.name, "y");
+        assert_eq!(repo.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(
+            repo.remote_url.as_deref(),
+            Some("git@github.com:Gaurgle/y.git")
+        );
+        assert_eq!(repo.ci_status, model::CiStatus::Passed);
+        assert_eq!(repo.groups, vec!["side".to_string()]);
+        assert_sweep_fields(repo);
     }
 
     // --- FZ-04: fetch outcomes land as outcomes, not as "requested" ---
@@ -4616,6 +4837,1164 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
     }
 
+    // --- FZ-05d: GitHub fields live on one carrier row per remote ---
+    //
+    // Scenarios of section 4 of `docs/repository-identity-design.md`. The
+    // load half runs through `assemble_view_in` with a temp home and root, so
+    // the real `$HOME` is never walked; `git_fetch: false` and a dataset
+    // handed in directly keep the network, the cache and `gh` out of it.
+
+    /// A repo at `dir` with one commit, `origin` set to `url` when given, and
+    /// a modified tracked file when `dirty`.
+    fn id_repo(dir: &Path, url: Option<&str>, dirty: bool) {
+        std::fs::create_dir_all(dir).unwrap();
+        wt_sh(dir, &["git", "init", "-q", "-b", "main"]);
+        wt_sh(dir, &["git", "config", "user.email", "t@example.com"]);
+        wt_sh(dir, &["git", "config", "user.name", "t"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        wt_sh(dir, &["git", "add", "."]);
+        wt_sh(dir, &["git", "commit", "-q", "-m", "init"]);
+        if let Some(url) = url {
+            wt_sh(dir, &["git", "remote", "add", "origin", url]);
+        }
+        if dirty {
+            std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+        }
+    }
+
+    /// A dataset entry pushed `days_ago`, with `prs` open pull requests.
+    fn id_entry(
+        owner: Option<&str>,
+        name: &str,
+        days_ago: i64,
+        ci: model::CiStatus,
+        prs: u32,
+        kind: model::RepoKind,
+    ) -> github::GithubRepo {
+        let pr = |number: u32| model::PullRequest {
+            number,
+            title: "Change".to_string(),
+            author: "someone".to_string(),
+            created_at: chrono::Utc::now(),
+            review_status: model::ReviewStatus::Approved,
+            url: format!("https://github.com/x/{name}/pull/{number}"),
+        };
+        github::GithubRepo {
+            name: name.to_string(),
+            pushed_at: chrono::Utc::now() - chrono::Duration::days(days_ago),
+            pr_count: prs,
+            prs: (1..=prs).map(pr).collect(),
+            ci_status: ci,
+            ci_workflow: None,
+            ci_duration: None,
+            repo_kind: kind,
+            owner: owner.map(str::to_string),
+        }
+    }
+
+    /// The 1-day window the scenarios name, as a cutoff.
+    fn one_day() -> Option<chrono::DateTime<chrono::Utc>> {
+        Some(chrono::Utc::now() - chrono::Duration::days(1))
+    }
+
+    async fn id_assemble(
+        home: &Path,
+        roots: &[PathBuf],
+        dataset: &[github::GithubRepo],
+        cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> (Vec<RepoStatus>, ViewNotes) {
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        assemble_view_in(
+            dataset,
+            cutoff,
+            String::new(),
+            &args,
+            &config,
+            home,
+            roots,
+            false,
+            None,
+        )
+        .await
+        .expect("assembly")
+    }
+
+    fn row_at<'a>(repos: &'a [RepoStatus], path: &Path) -> &'a RepoStatus {
+        let want = tilde_display(path);
+        repos
+            .iter()
+            .find(|r| r.path.as_deref() == Some(want.as_str()))
+            .unwrap_or_else(|| panic!("no row at {want}: {repos:#?}"))
+    }
+
+    fn not_cloned<'a>(repos: &'a [RepoStatus], owner: &str, name: &str) -> Option<&'a RepoStatus> {
+        repos.iter().find(|r| {
+            r.location == RepoLocation::NotCloned
+                && r.name == name
+                && r.owner.as_deref() == Some(owner)
+        })
+    }
+
+    /// A row with no GitHub fields: what every non-carrier LocalOnly row is.
+    fn assert_carries_nothing(repo: &RepoStatus) {
+        assert_eq!(repo.owner, None, "{} was given an owner", repo.name);
+        assert_eq!(repo.ci_status, model::CiStatus::Unknown, "{}", repo.name);
+        assert_eq!(repo.pr_count, 0, "{}", repo.name);
+        assert!(repo.prs.is_empty(), "{}", repo.name);
+        assert_eq!(repo.repo_kind, model::RepoKind::Unknown, "{}", repo.name);
+    }
+
+    /// Land a successful poll carrying `repos` on `app`.
+    fn poll_entries(app: &mut App, repos: Vec<github::GithubRepo>) {
+        poll_with(
+            app,
+            Ok(Box::new(github::GithubFetch {
+                repos,
+                calendar: None,
+                has_pr_counts: true,
+                origin: github::Origin::Network,
+            })),
+        );
+    }
+
+    /// S1, load and poll. Two clones of two same-named repos of different
+    /// owners are two Primary rows, each with its own owner and CI, and a
+    /// poll keeps each on its own repo. The name dedupe kept one row, and
+    /// both rows would have taken the first `api` in the dataset. A push to
+    /// one of them fetches that clone only.
+    #[tokio::test]
+    async fn two_same_named_repos_of_two_owners_each_keep_their_own_ci() {
+        let home = wt_scratch("id_s1");
+        let root = home.join("R");
+        id_repo(
+            &root.join("api"),
+            Some("git@github.com:company/api.git"),
+            false,
+        );
+        id_repo(
+            &root.join("alice-api"),
+            Some("https://github.com/alice/api"),
+            false,
+        );
+        let alice = id_entry(
+            Some("alice"),
+            "api",
+            0,
+            model::CiStatus::Passed,
+            0,
+            model::RepoKind::Public,
+        );
+        let company = id_entry(
+            Some("company"),
+            "api",
+            0,
+            model::CiStatus::Failed,
+            0,
+            model::RepoKind::Org,
+        );
+        let dataset = vec![alice.clone(), company.clone()];
+
+        let (repos, _) = id_assemble(&home, std::slice::from_ref(&root), &dataset, None).await;
+
+        assert_eq!(repos.len(), 2, "{repos:#?}");
+        let alices = row_at(&repos, &root.join("alice-api"));
+        assert_eq!(alices.location, RepoLocation::Primary);
+        assert_eq!(alices.owner.as_deref(), Some("alice"));
+        assert_eq!(alices.ci_status, model::CiStatus::Passed);
+        let companys = row_at(&repos, &root.join("api"));
+        assert_eq!(companys.location, RepoLocation::Primary);
+        assert_eq!(companys.owner.as_deref(), Some("company"));
+        assert_eq!(companys.ci_status, model::CiStatus::Failed);
+
+        let mut app = App::new(repos, "h".to_string(), 120, 44);
+        let mut alice_now = alice.clone();
+        alice_now.ci_status = model::CiStatus::Failed;
+        let mut company_now = company.clone();
+        company_now.ci_status = model::CiStatus::Passed;
+        company_now.pushed_at = company.pushed_at + chrono::Duration::hours(1);
+        poll_entries(&mut app, vec![alice_now.clone(), company_now.clone()]);
+
+        let alices = row_at(&app.repos, &root.join("alice-api"));
+        assert_eq!(alices.ci_status, model::CiStatus::Failed);
+        let companys = row_at(&app.repos, &root.join("api"));
+        assert_eq!(companys.ci_status, model::CiStatus::Passed);
+
+        let company_index = app
+            .repos
+            .iter()
+            .position(|r| r.owner.as_deref() == Some("company"))
+            .unwrap();
+        assert_eq!(
+            remotes_that_moved(&dataset, &[alice_now, company_now], &app.repos),
+            vec![company_index],
+            "the push to company/api fetched another clone"
+        );
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// S16, load and poll. Two same-named repos of different owners, neither
+    /// cloned, are two NotCloned rows, and a poll gives each its own CI. By
+    /// name, both took the first entry's.
+    #[tokio::test]
+    async fn two_not_cloned_repos_of_one_name_each_get_their_own_ci() {
+        let home = wt_scratch("id_s16");
+        let root = home.join("R");
+        std::fs::create_dir_all(&root).unwrap();
+        let alice = id_entry(
+            Some("alice"),
+            "api",
+            0,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Public,
+        );
+        let company = id_entry(
+            Some("company"),
+            "api",
+            0,
+            model::CiStatus::Failed,
+            0,
+            model::RepoKind::Org,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            std::slice::from_ref(&root),
+            &[alice.clone(), company.clone()],
+            None,
+        )
+        .await;
+
+        assert_eq!(repos.len(), 2, "{repos:#?}");
+        let row = not_cloned(&repos, "alice", "api").expect("alice/api not cloned");
+        assert_eq!(row.ci_status, model::CiStatus::Passed);
+        assert_eq!(row.pr_count, 1);
+        let row = not_cloned(&repos, "company", "api").expect("company/api not cloned");
+        assert_eq!(row.ci_status, model::CiStatus::Failed);
+        assert_eq!(row.pr_count, 0);
+
+        let mut app = App::new(repos, "h".to_string(), 120, 44);
+        let mut alice_now = alice;
+        alice_now.ci_status = model::CiStatus::Failed;
+        alice_now.pr_count = 0;
+        alice_now.prs.clear();
+        let mut company_now = company;
+        company_now.ci_status = model::CiStatus::Passed;
+        poll_entries(&mut app, vec![alice_now, company_now]);
+
+        let row = not_cloned(&app.repos, "alice", "api").unwrap();
+        assert_eq!(row.ci_status, model::CiStatus::Failed);
+        assert_eq!(row.pr_count, 0);
+        let row = not_cloned(&app.repos, "company", "api").unwrap();
+        assert_eq!(row.ci_status, model::CiStatus::Passed);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// The FZ-05c seam carried forward: pass 2 sweeps the `home` it is given.
+    /// A clone outside the scan roots but under that home is an Elsewhere
+    /// row, the carrier of its repo at load and in the poll.
+    #[tokio::test]
+    async fn pass_two_finds_a_carrier_under_the_given_home() {
+        let home = wt_scratch("id_elsewhere");
+        let root = home.join("R");
+        std::fs::create_dir_all(&root).unwrap();
+        let clone = home.join("src").join("tool");
+        id_repo(&clone, Some("git@github.com:Gaurgle/tool.git"), false);
+        let entry = id_entry(
+            Some("Gaurgle"),
+            "tool",
+            0,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Private,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            std::slice::from_ref(&root),
+            std::slice::from_ref(&entry),
+            None,
+        )
+        .await;
+
+        assert_eq!(repos.len(), 1, "{repos:#?}");
+        let row = row_at(&repos, &clone);
+        assert_eq!(row.location, RepoLocation::Elsewhere);
+        assert_eq!(row.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(row.ci_status, model::CiStatus::Passed);
+        assert_eq!(row.pr_count, 1);
+
+        let mut app = App::new(repos, "h".to_string(), 120, 44);
+        let mut now = entry;
+        now.ci_status = model::CiStatus::Failed;
+        poll_entries(&mut app, vec![now]);
+        assert_eq!(app.repos[0].ci_status, model::CiStatus::Failed);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// S3: a remote-less clone whose folder name names two owners' repos
+    /// claims neither. Both stay not cloned, the clone is a LocalOnly row
+    /// with no GitHub fields and no glyph, and the load says why. Before,
+    /// its pass 3 row took a glyph by name and hid both NotCloned rows.
+    #[tokio::test]
+    async fn an_ambiguous_remoteless_clone_carries_nothing_and_says_why() {
+        let home = wt_scratch("id_s3");
+        let root = home.join("R");
+        let clone = root.join("api");
+        id_repo(&clone, None, true);
+        let dataset = vec![
+            id_entry(
+                Some("alice"),
+                "api",
+                0,
+                model::CiStatus::Passed,
+                1,
+                model::RepoKind::Public,
+            ),
+            id_entry(
+                Some("company"),
+                "api",
+                0,
+                model::CiStatus::Failed,
+                0,
+                model::RepoKind::Org,
+            ),
+        ];
+
+        let (repos, notes) = id_assemble(&home, std::slice::from_ref(&root), &dataset, None).await;
+
+        assert_eq!(repos.len(), 3, "{repos:#?}");
+        assert!(not_cloned(&repos, "alice", "api").is_some());
+        assert!(not_cloned(&repos, "company", "api").is_some());
+        let local = row_at(&repos, &clone);
+        assert_eq!(local.location, RepoLocation::LocalOnly);
+        assert_carries_nothing(local);
+        assert_eq!(
+            notes.ambiguity.as_deref(),
+            Some(
+                format!(
+                    "api: {} matches 2 GitHub repos, add an origin remote",
+                    tilde_display(&clone)
+                )
+                .as_str()
+            )
+        );
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// A load landing with `ambiguity` as its kind's result would.
+    fn land_load(
+        app: &mut App,
+        kind: LoadKind,
+        ambiguity: Option<&str>,
+        store: &window_state::WindowState,
+    ) {
+        apply_load_result_saving_to(
+            app,
+            &config::Config::default(),
+            Ok(Box::new(LoadResult {
+                kind,
+                repos: Vec::new(),
+                header: "last 2 days".to_string(),
+                dataset: Some(Vec::new()),
+                github_calendar: None,
+                source: app::DatasetSource::Network,
+                ambiguity: ambiguity.map(str::to_string),
+            })),
+            store,
+        );
+    }
+
+    /// S3's status line (N2). Set after the `Reloaded` and `Window: ...`
+    /// messages, so every kind of load leaves it on screen; with no
+    /// ambiguity each kind says what it said before.
+    #[test]
+    fn the_ambiguity_line_wins_over_every_loads_own_message() {
+        let scratch = wt_scratch("id_status");
+        let store = window_state::WindowState::at(scratch.join("window.toml"));
+        let line = "api: ~/repos/api matches 2 GitHub repos, add an origin remote";
+        let window = || time::TimeWindow::clamped(2, time::WindowUnit::Days);
+        let status = |app: &App| app.status_message.as_ref().map(|m| m.text.clone());
+
+        let kinds = [
+            (LoadKind::Initial, None),
+            (LoadKind::Reload, Some("Reloaded".to_string())),
+            (
+                LoadKind::WindowApply(window()),
+                Some("Window: last 2 days".to_string()),
+            ),
+        ];
+        for (kind, today) in kinds {
+            let label = format!("{today:?}");
+            let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+            let again = match &kind {
+                LoadKind::Initial => LoadKind::Initial,
+                LoadKind::Reload => LoadKind::Reload,
+                LoadKind::WindowApply(_) => LoadKind::WindowApply(window()),
+            };
+            land_load(&mut app, kind, Some(line), &store);
+            assert_eq!(status(&app).as_deref(), Some(line), "after {label}");
+
+            let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+            land_load(&mut app, again, None, &store);
+            assert_eq!(status(&app), today, "{label} without an ambiguity");
+        }
+
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// S5 load and poll twin (section 5, FZ-05d). Two clones of one remote:
+    /// the Primary is the carrier, and the dirty copy is a LocalOnly row
+    /// with local fields only, at load and after a poll. A push to the remote
+    /// fetches the carrier only.
+    #[tokio::test]
+    async fn an_extra_checkout_carries_nothing_at_load_or_in_the_poll() {
+        let home = wt_scratch("id_s5");
+        let root = home.join("R");
+        let url = "git@github.com:Gaurgle/fleetz.git";
+        id_repo(&root.join("fleetz"), Some(url), false);
+        id_repo(&root.join("fleetz-copy"), Some(url), true);
+        let entry = id_entry(
+            Some("Gaurgle"),
+            "fleetz",
+            0,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Private,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            std::slice::from_ref(&root),
+            std::slice::from_ref(&entry),
+            None,
+        )
+        .await;
+
+        assert_eq!(repos.len(), 2, "{repos:#?}");
+        let primary = row_at(&repos, &root.join("fleetz"));
+        assert_eq!(primary.location, RepoLocation::Primary);
+        assert_eq!(primary.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(primary.ci_status, model::CiStatus::Passed);
+        assert_eq!(primary.pr_count, 1);
+        let copy = row_at(&repos, &root.join("fleetz-copy"));
+        assert_eq!(copy.location, RepoLocation::LocalOnly);
+        assert_carries_nothing(copy);
+
+        let mut app = App::new(repos, "h".to_string(), 120, 44);
+        let mut now = id_entry(
+            Some("Gaurgle"),
+            "fleetz",
+            0,
+            model::CiStatus::Failed,
+            2,
+            model::RepoKind::Private,
+        );
+        poll_entries(&mut app, vec![now.clone()]);
+        let primary = row_at(&app.repos, &root.join("fleetz"));
+        assert_eq!(primary.ci_status, model::CiStatus::Failed);
+        assert_eq!(primary.pr_count, 2);
+        assert_carries_nothing(row_at(&app.repos, &root.join("fleetz-copy")));
+
+        let primary_index = app
+            .repos
+            .iter()
+            .position(|r| r.location == RepoLocation::Primary)
+            .unwrap();
+        let before = app.dataset.clone();
+        now.pushed_at += chrono::Duration::hours(1);
+        assert_eq!(
+            remotes_that_moved(&before, &[now], &app.repos),
+            vec![primary_index]
+        );
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// S4's poll twin. The dirty copy at `old/fleetz` has the remote's own
+    /// name, so the name match wrote the poll onto it as well. Its load half
+    /// waits for FZ-05f: pass 3 hides it by name until then.
+    #[test]
+    fn an_extra_checkout_named_like_its_remote_takes_nothing_from_the_poll() {
+        let mut primary = cloned("fleetz");
+        primary.owner = Some("Gaurgle".to_string());
+        primary.remote_url = Some("git@github.com:Gaurgle/fleetz.git".to_string());
+        let mut copy = cloned("fleetz");
+        copy.path = Some("~/repos/old/fleetz".to_string());
+        copy.location = RepoLocation::LocalOnly;
+        copy.remote_url = primary.remote_url.clone();
+        let mut app = App::new(vec![primary, copy], "h".to_string(), 120, 44);
+
+        let mut now = id_entry(
+            Some("Gaurgle"),
+            "fleetz",
+            0,
+            model::CiStatus::Failed,
+            2,
+            model::RepoKind::Private,
+        );
+        poll_entries(&mut app, vec![now.clone()]);
+
+        assert_eq!(app.repos[0].ci_status, model::CiStatus::Failed);
+        assert_eq!(app.repos[0].pr_count, 2);
+        assert_carries_nothing(&app.repos[1]);
+        let before = app.dataset.clone();
+        now.pushed_at += chrono::Duration::hours(1);
+        assert_eq!(remotes_that_moved(&before, &[now], &app.repos), vec![0]);
+    }
+
+    /// S14, load: a remote-less clone named like a repo outside the window
+    /// takes nothing from it, not even its glyph.
+    #[tokio::test]
+    async fn a_remoteless_clone_takes_no_glyph_from_a_same_named_repo() {
+        let home = wt_scratch("id_s14");
+        let root = home.join("R");
+        let clone = root.join("api");
+        id_repo(&clone, None, true);
+        let entry = id_entry(
+            Some("company"),
+            "api",
+            60,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Org,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            std::slice::from_ref(&root),
+            std::slice::from_ref(&entry),
+            one_day(),
+        )
+        .await;
+
+        assert_eq!(repos.len(), 1, "{repos:#?}");
+        let local = row_at(&repos, &clone);
+        assert_eq!(local.location, RepoLocation::LocalOnly);
+        assert_carries_nothing(local);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// S14, poll (section 5, FZ-05d): a LocalOnly row with no owner and no
+    /// origin is never written by name, whether the entry has an owner or
+    /// is a legacy one without. This is F4: a stranger's CI badge on a local
+    /// repo on the first tick.
+    #[test]
+    fn a_remoteless_local_row_takes_nothing_from_the_poll() {
+        for owner in [Some("company"), None] {
+            let mut local = cloned("api");
+            local.location = RepoLocation::LocalOnly;
+            let mut app = App::new(vec![local], "h".to_string(), 120, 44);
+            let entry = id_entry(
+                owner,
+                "api",
+                0,
+                model::CiStatus::Passed,
+                1,
+                model::RepoKind::Org,
+            );
+            poll_entries(&mut app, vec![entry]);
+            let row = &app.repos[0];
+            assert_eq!(row.ci_status, model::CiStatus::Unknown, "owner {owner:?}");
+            assert_eq!(row.pr_count, 0, "owner {owner:?}");
+            assert_eq!(row.repo_kind, model::RepoKind::Unknown, "owner {owner:?}");
+        }
+    }
+
+    /// S6: a dirty linked worktree beside its main clone. The main clone is
+    /// the Primary carrier; the worktree's stored origin names the same
+    /// remote, so it is a LocalOnly row with local fields only.
+    #[tokio::test]
+    async fn a_worktree_beside_its_main_clone_carries_nothing() {
+        let home = wt_scratch("id_s6");
+        let root = home.join("R");
+        let main = root.join("site");
+        id_repo(
+            &main,
+            Some("git@github.com:Gaurgle/portfolio-site.git"),
+            false,
+        );
+        let worktree = root.join("site-feature");
+        wt_sh(
+            &main,
+            &[
+                "git",
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feature",
+                &path_arg(&worktree),
+            ],
+        );
+        std::fs::write(worktree.join("a.txt"), "two\n").unwrap();
+        let entry = id_entry(
+            Some("Gaurgle"),
+            "portfolio-site",
+            0,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Public,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            std::slice::from_ref(&root),
+            std::slice::from_ref(&entry),
+            None,
+        )
+        .await;
+
+        assert_eq!(repos.len(), 2, "{repos:#?}");
+        let primary = row_at(&repos, &main);
+        assert_eq!(primary.location, RepoLocation::Primary);
+        assert_eq!(primary.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(primary.ci_status, model::CiStatus::Passed);
+        let local = row_at(&repos, &worktree);
+        assert_eq!(local.location, RepoLocation::LocalOnly);
+        assert!(
+            local.remote_url.is_some(),
+            "the worktree's origin was not read"
+        );
+        assert_carries_nothing(local);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// S6b: only the worktree is under a scan root, and its main clone is
+    /// outside every root and outside the home. It carries the remote
+    /// through its stored origin, with GitHub fields from the first frame,
+    /// and the repo is not also listed as not cloned.
+    #[tokio::test]
+    async fn a_lone_worktree_carries_its_remote_through_its_stored_origin() {
+        let scratch = wt_scratch("id_s6b");
+        let home = scratch.join("home");
+        let root = home.join("R");
+        std::fs::create_dir_all(&root).unwrap();
+        let main = scratch.join("outside").join("site");
+        id_repo(
+            &main,
+            Some("git@github.com:Gaurgle/portfolio-site.git"),
+            false,
+        );
+        let worktree = root.join("site-feature");
+        wt_sh(
+            &main,
+            &[
+                "git",
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feature",
+                &path_arg(&worktree),
+            ],
+        );
+        std::fs::write(worktree.join("a.txt"), "two\n").unwrap();
+        let entry = id_entry(
+            Some("Gaurgle"),
+            "portfolio-site",
+            0,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Public,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            std::slice::from_ref(&root),
+            std::slice::from_ref(&entry),
+            None,
+        )
+        .await;
+
+        assert_eq!(repos.len(), 1, "one row, no NotCloned: {repos:#?}");
+        let row = row_at(&repos, &worktree);
+        assert_eq!(row.location, RepoLocation::LocalOnly);
+        assert_eq!(row.name, "site-feature");
+        assert_eq!(row.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(row.ci_status, model::CiStatus::Passed);
+        assert_eq!(row.pr_count, 1);
+        assert_eq!(row.repo_kind, model::RepoKind::Public);
+
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// S9d: a clone whose origin names a known repo outside the window, in a
+    /// folder named like another repo in it. The folder claims nothing; the
+    /// clone carries the repo its origin names, at load and in the poll, and
+    /// the repo its folder names stays not cloned. Before, the LocalOnly row
+    /// took the folder repo's glyph and hid its NotCloned row.
+    #[tokio::test]
+    async fn a_clone_carries_the_known_repo_its_origin_names() {
+        let home = wt_scratch("id_s9d");
+        let root = home.join("R");
+        let clone = root.join("tool");
+        id_repo(&clone, Some("git@github.com:Gaurgle/other.git"), true);
+        let tool = id_entry(
+            Some("Gaurgle"),
+            "tool",
+            0,
+            model::CiStatus::Failed,
+            0,
+            model::RepoKind::Public,
+        );
+        let other = id_entry(
+            Some("Gaurgle"),
+            "other",
+            60,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Private,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            std::slice::from_ref(&root),
+            &[tool.clone(), other.clone()],
+            one_day(),
+        )
+        .await;
+
+        assert_eq!(repos.len(), 2, "{repos:#?}");
+        let folder_repo = not_cloned(&repos, "Gaurgle", "tool").expect("Gaurgle/tool");
+        assert_eq!(folder_repo.ci_status, model::CiStatus::Failed);
+        let local = row_at(&repos, &clone);
+        assert_eq!(local.location, RepoLocation::LocalOnly);
+        assert_eq!(local.name, "tool");
+        assert_eq!(local.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(local.ci_status, model::CiStatus::Passed);
+        assert_eq!(local.pr_count, 1);
+        assert_eq!(local.repo_kind, model::RepoKind::Private);
+
+        // The poll keys the carrier by the repo its origin names, not by its
+        // folder's name, which is the other repo's.
+        let mut app = App::new(repos, "h".to_string(), 120, 44);
+        let mut tool_now = tool;
+        tool_now.ci_status = model::CiStatus::Pending;
+        let mut other_now = other;
+        other_now.ci_status = model::CiStatus::Failed;
+        poll_entries(&mut app, vec![tool_now, other_now]);
+        let local = row_at(&app.repos, &clone);
+        assert_eq!(local.ci_status, model::CiStatus::Failed);
+        let folder_repo = not_cloned(&app.repos, "Gaurgle", "tool").unwrap();
+        assert_eq!(folder_repo.ci_status, model::CiStatus::Pending);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// S11a: a clone of a project on another host, in a folder named like a
+    /// GitHub repo. The GitHub repo is not cloned and carries its CI; the
+    /// clone is a LocalOnly row with no GitHub fields and no glyph. Before,
+    /// its pass 3 row took the glyph by name and hid the NotCloned row.
+    #[tokio::test]
+    async fn a_foreign_host_clone_leaves_the_github_repo_not_cloned() {
+        let home = wt_scratch("id_s11a");
+        let root = home.join("R");
+        let clone = root.join("api");
+        id_repo(&clone, Some("git@gitlab.com:someone/api.git"), true);
+        let entry = id_entry(
+            Some("company"),
+            "api",
+            0,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Org,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            std::slice::from_ref(&root),
+            std::slice::from_ref(&entry),
+            None,
+        )
+        .await;
+
+        assert_eq!(repos.len(), 2, "{repos:#?}");
+        let carrier = not_cloned(&repos, "company", "api").expect("company/api");
+        assert_eq!(carrier.ci_status, model::CiStatus::Passed);
+        assert_eq!(carrier.pr_count, 1);
+        let local = row_at(&repos, &clone);
+        assert_eq!(local.location, RepoLocation::LocalOnly);
+        assert_carries_nothing(local);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// S13b: `~/.dotfiles` as a scan root, with an origin, dirty, its repo
+    /// pushed outside the window. No other row has the repo, so the clone
+    /// carries it: glyph, CI and PRs at load, not first after a poll, and
+    /// the poll keeps writing them.
+    #[tokio::test]
+    async fn an_out_of_window_dotfiles_clone_carries_its_repo_from_the_first_frame() {
+        let home = wt_scratch("id_s13b");
+        let root = home.join("R");
+        std::fs::create_dir_all(&root).unwrap();
+        let dotfiles = home.join(".dotfiles");
+        id_repo(&dotfiles, Some("git@github.com:Gaurgle/dotfiles.git"), true);
+        let entry = id_entry(
+            Some("Gaurgle"),
+            "dotfiles",
+            60,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Public,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            &[root.clone(), dotfiles.clone()],
+            std::slice::from_ref(&entry),
+            one_day(),
+        )
+        .await;
+
+        assert_eq!(repos.len(), 1, "{repos:#?}");
+        let row = row_at(&repos, &dotfiles);
+        assert_eq!(row.location, RepoLocation::LocalOnly);
+        assert_eq!(row.name, "dotfiles");
+        assert_eq!(row.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(row.ci_status, model::CiStatus::Passed);
+        assert_eq!(row.pr_count, 1);
+        assert_eq!(row.repo_kind, model::RepoKind::Public);
+
+        let mut app = App::new(repos, "h".to_string(), 120, 44);
+        let mut now = entry;
+        now.ci_status = model::CiStatus::Failed;
+        poll_entries(&mut app, vec![now]);
+        assert_eq!(app.repos[0].ci_status, model::CiStatus::Failed);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// S17: a dirty clone with an origin at depth 4 under the root, which
+    /// pass 1 (depth 3) misses and pass 3 (depth 4) reaches. It is the one
+    /// row for its repo and carries it from the first frame; no NotCloned
+    /// row beside it.
+    #[tokio::test]
+    async fn a_depth_four_clone_carries_its_repo_at_load() {
+        let home = wt_scratch("id_s17");
+        let root = home.join("R");
+        let deep = root.join("a").join("b").join("c").join("fleetz");
+        id_repo(&deep, Some("git@github.com:Gaurgle/fleetz.git"), true);
+        let entry = id_entry(
+            Some("Gaurgle"),
+            "fleetz",
+            0,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Public,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            std::slice::from_ref(&root),
+            std::slice::from_ref(&entry),
+            None,
+        )
+        .await;
+
+        assert_eq!(repos.len(), 1, "one row, no NotCloned: {repos:#?}");
+        let row = row_at(&repos, &deep);
+        assert_eq!(row.location, RepoLocation::LocalOnly);
+        assert_eq!(row.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(row.ci_status, model::CiStatus::Passed);
+        assert_eq!(row.pr_count, 1);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// The first-poll baseline reads each clone's own repo: two same-named
+    /// repos of two owners are pushed at different times. By name, both
+    /// clones were judged by one of the two.
+    #[test]
+    fn the_startup_fetch_judges_each_clone_by_its_own_repo() {
+        let dir = fetch_fixture("owners", &["alice-api", "company-api"], true);
+        let target = |folder: &str, owner: &str| {
+            (
+                discovery::FoundRepo {
+                    name: "api".to_string(),
+                    path: dir.join(folder),
+                    owner: Some(owner.to_string()),
+                },
+                RepoLocation::Primary,
+            )
+        };
+        let targets = vec![
+            target("alice-api", "alice"),
+            target("company-api", "company"),
+        ];
+        let mut alice = gh("api", "2099-01-01T00:00:00Z");
+        alice.owner = Some("alice".to_string());
+        let mut company = gh("api", "2001-01-01T00:00:00Z");
+        company.owner = Some("company".to_string());
+
+        assert_eq!(
+            stale_remotes(&targets, &[alice.clone(), company.clone()]),
+            vec![dir.join("alice-api")]
+        );
+        assert_eq!(
+            stale_remotes(&targets, &[company, alice]),
+            vec![dir.join("alice-api")]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Push order is per repo: two same-named repos of two owners each sort
+    /// by their own push. By name, both took one rank.
+    #[test]
+    fn same_named_repos_of_two_owners_sort_by_their_own_push() {
+        let dir = Path::new("/tmp/x");
+        let found = |name: &str, owner: Option<&str>| {
+            (
+                discovery::FoundRepo {
+                    name: name.to_string(),
+                    path: dir.join(format!("{}-{name}", owner.unwrap_or("none"))),
+                    owner: owner.map(str::to_string),
+                },
+                RepoLocation::Primary,
+            )
+        };
+        let mut targets = vec![
+            found("api", Some("company")),
+            found("mid", None),
+            found("api", Some("alice")),
+        ];
+        let mut alice = gh("api", "2026-08-24T10:00:00Z");
+        alice.owner = Some("alice".to_string());
+        let mid = gh("mid", "2026-08-20T10:00:00Z");
+        let mut company = gh("api", "2026-08-01T10:00:00Z");
+        company.owner = Some("company".to_string());
+
+        sort_by_activity(&mut targets, &[alice, mid, company]);
+        let order: Vec<Option<&str>> = targets.iter().map(|(f, _)| f.owner.as_deref()).collect();
+        assert_eq!(order, [Some("alice"), None, Some("company")]);
+    }
+
+    /// A push is judged against the same repo's previous push, not a
+    /// same-named repo's. `company/api` moves from 09:00 to 10:00 while
+    /// `alice/api` sits at 12:00: by name, 10:00 was checked against 12:00
+    /// and company's clone was never fetched.
+    #[test]
+    fn a_push_is_judged_against_the_same_owners_previous_push() {
+        let entry = |owner: &str, pushed: &str| {
+            let mut repo = gh("api", pushed);
+            repo.owner = Some(owner.to_string());
+            repo
+        };
+        let mut alices = cloned("api");
+        alices.owner = Some("alice".to_string());
+        alices.path = Some("~/repos/alice-api".to_string());
+        let mut companys = cloned("api");
+        companys.owner = Some("company".to_string());
+        let repos = vec![alices, companys];
+
+        let previous = vec![
+            entry("alice", "2026-08-06T12:00:00Z"),
+            entry("company", "2026-08-06T09:00:00Z"),
+        ];
+        let current = vec![
+            entry("alice", "2026-08-06T12:00:00Z"),
+            entry("company", "2026-08-06T10:00:00Z"),
+        ];
+        assert_eq!(remotes_that_moved(&previous, &current, &repos), vec![1]);
+    }
+
+    /// A launch served from a payload without owners, then a first network
+    /// poll that has them. The legacy previous entry is still the baseline:
+    /// unmatched, the push would read as unknown, never be fetched, and the
+    /// next poll would compare against the owned dataset and miss it too.
+    #[test]
+    fn a_push_since_a_legacy_payload_is_still_fetched() {
+        let previous = vec![gh("api", "2026-08-06T09:00:00Z")];
+        let mut current = gh("api", "2026-08-06T10:00:00Z");
+        current.owner = Some("company".to_string());
+        let repos = vec![cloned("api")];
+        assert_eq!(remotes_that_moved(&previous, &[current], &repos), vec![0]);
+    }
+
+    /// The carrier among LocalOnly rows equal on every earlier step is
+    /// decided by the path, whichever order the walk listed them in.
+    #[test]
+    fn the_local_carrier_does_not_depend_on_listing_order() {
+        let root = PathBuf::from("/tmp/fleetz_no_such_root/R");
+        let a = root.join("fleetz-a");
+        let b = root.join("fleetz-b");
+        let row = |name: &str| {
+            let mut repo = cloned(name);
+            repo.location = RepoLocation::LocalOnly;
+            repo.remote_url = Some("git@github.com:Gaurgle/fleetz.git".to_string());
+            repo
+        };
+        let entry = id_entry(
+            Some("Gaurgle"),
+            "fleetz",
+            0,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Public,
+        );
+        let listings = [
+            [(a.as_path(), "fleetz-a"), (b.as_path(), "fleetz-b")],
+            [(b.as_path(), "fleetz-b"), (a.as_path(), "fleetz-a")],
+        ];
+        for listing in listings {
+            let mut rows: Vec<(&Path, RepoStatus)> = listing
+                .iter()
+                .map(|(path, name)| (*path, row(name)))
+                .collect();
+            let mut carried = HashSet::new();
+            mark_local_carriers(
+                &mut rows,
+                std::slice::from_ref(&entry),
+                std::slice::from_ref(&root),
+                &mut carried,
+            );
+            let carriers: Vec<&str> = rows
+                .iter()
+                .filter(|(_, r)| r.owner.is_some())
+                .map(|(_, r)| r.name.as_str())
+                .collect();
+            assert_eq!(carriers, ["fleetz-a"], "listed as {listing:?}");
+        }
+    }
+
+    /// Several LocalOnly clones naming one repo: the carrier is the first in
+    /// discovery's primary-checkout order, not the first the filesystem
+    /// lists. Pair one ties on every step but the path, so the path decides
+    /// (`fleetz-a`). Pair two is decided by depth against the path order:
+    /// `a/notes-deep` sorts first by path, but `z-notes` has fewer
+    /// components and wins. The repos are pushed outside the window, so
+    /// passes 1 and 2 never look for them and only pass 3 sees the clones.
+    #[tokio::test]
+    async fn the_carrier_among_local_clones_follows_the_primary_checkout_order() {
+        let home = wt_scratch("id_order");
+        let root = home.join("R");
+        let fleetz = "git@github.com:Gaurgle/fleetz.git";
+        let notes = "git@github.com:Gaurgle/notes.git";
+        id_repo(&root.join("fleetz-b"), Some(fleetz), true);
+        id_repo(&root.join("fleetz-a"), Some(fleetz), true);
+        id_repo(&root.join("z-notes"), Some(notes), true);
+        id_repo(&root.join("a").join("notes-deep"), Some(notes), true);
+        let dataset = vec![
+            id_entry(
+                Some("Gaurgle"),
+                "fleetz",
+                60,
+                model::CiStatus::Passed,
+                1,
+                model::RepoKind::Public,
+            ),
+            id_entry(
+                Some("Gaurgle"),
+                "notes",
+                60,
+                model::CiStatus::Failed,
+                2,
+                model::RepoKind::Private,
+            ),
+        ];
+
+        let (repos, _) = id_assemble(&home, std::slice::from_ref(&root), &dataset, one_day()).await;
+
+        assert_eq!(repos.len(), 4, "{repos:#?}");
+        let carrier = row_at(&repos, &root.join("fleetz-a"));
+        assert_eq!(carrier.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(carrier.ci_status, model::CiStatus::Passed);
+        assert_eq!(carrier.pr_count, 1);
+        assert_carries_nothing(row_at(&repos, &root.join("fleetz-b")));
+
+        let carrier = row_at(&repos, &root.join("z-notes"));
+        assert_eq!(carrier.owner.as_deref(), Some("Gaurgle"));
+        assert_eq!(carrier.ci_status, model::CiStatus::Failed);
+        assert_eq!(carrier.pr_count, 2);
+        assert_eq!(carrier.repo_kind, model::RepoKind::Private);
+        assert_carries_nothing(row_at(&repos, &root.join("a").join("notes-deep")));
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// A row with an owner is written only by an entry of that owner: a
+    /// same-named entry without one is not its repo (3.5, D1).
+    #[test]
+    fn an_owned_row_takes_nothing_from_an_ownerless_entry() {
+        let mut row = cloned("api");
+        row.owner = Some("company".to_string());
+        let mut app = App::new(vec![row], "h".to_string(), 120, 44);
+        let entry = id_entry(
+            None,
+            "api",
+            0,
+            model::CiStatus::Failed,
+            1,
+            model::RepoKind::Org,
+        );
+        poll_entries(&mut app, vec![entry]);
+        let row = &app.repos[0];
+        assert_eq!(row.ci_status, model::CiStatus::Unknown);
+        assert_eq!(row.pr_count, 0);
+        assert_eq!(row.repo_kind, model::RepoKind::Unknown);
+    }
+
+    /// The mirror, which must keep working: a row without an owner, the
+    /// legacy case (m2), is written by a same-named entry, owned or not.
+    #[test]
+    fn an_ownerless_row_is_still_written_by_name() {
+        let mut app = App::new(vec![cloned("api")], "h".to_string(), 120, 44);
+        let entry = id_entry(
+            Some("company"),
+            "api",
+            0,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Org,
+        );
+        poll_entries(&mut app, vec![entry]);
+        let row = &app.repos[0];
+        assert_eq!(row.ci_status, model::CiStatus::Passed);
+        assert_eq!(row.pr_count, 1);
+        assert_eq!(row.repo_kind, model::RepoKind::Org);
+    }
+
+    /// A legacy payload has no owners, so no repo in it has a remote identity
+    /// for a LocalOnly row's origin to name: the row carries nothing.
+    #[tokio::test]
+    async fn a_local_clone_carries_nothing_from_a_legacy_payload() {
+        let home = wt_scratch("id_legacy");
+        let root = home.join("R");
+        let clone = root.join("fleetz-copy");
+        id_repo(&clone, Some("git@github.com:Gaurgle/fleetz.git"), true);
+        let entry = id_entry(
+            None,
+            "fleetz",
+            60,
+            model::CiStatus::Passed,
+            1,
+            model::RepoKind::Public,
+        );
+
+        let (repos, _) = id_assemble(
+            &home,
+            std::slice::from_ref(&root),
+            std::slice::from_ref(&entry),
+            one_day(),
+        )
+        .await;
+
+        assert_eq!(repos.len(), 1, "{repos:#?}");
+        let row = row_at(&repos, &clone);
+        assert_eq!(row.location, RepoLocation::LocalOnly);
+        assert_carries_nothing(row);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
     /// `c` switches the strip's source and ctrl-c quits. Match arms are
     /// ordered, so an unguarded `c` arm placed above the modifier check
     /// silently turns the quit key into a pane key. That regression happened
@@ -4683,6 +6062,7 @@ mod tests {
                 dataset: Some(Vec::new()),
                 github_calendar: Some(Box::new(cal)),
                 source: app::DatasetSource::Network,
+                ambiguity: None,
             })),
         );
         assert_eq!(
@@ -4715,6 +6095,7 @@ mod tests {
                 dataset: Some(Vec::new()),
                 github_calendar: None,
                 source: app::DatasetSource::Cache { written: None },
+                ambiguity: None,
             })),
         );
         assert!(
@@ -4739,6 +6120,7 @@ mod tests {
                 dataset: Some(Vec::new()),
                 github_calendar: None,
                 source: app::DatasetSource::Network,
+                ambiguity: None,
             })),
         );
         assert!(
@@ -4766,6 +6148,7 @@ mod tests {
                 dataset: None,
                 github_calendar: None,
                 source: app::DatasetSource::Network,
+                ambiguity: None,
             })),
         );
         assert_eq!(app.github_calendar.as_ref().map(|c| c.total()), Some(9));

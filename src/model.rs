@@ -272,9 +272,10 @@ pub struct RepoStatus {
     /// `git::graph_expanded`.
     pub graph_expanded: Vec<String>,
     pub repo_kind: RepoKind,
-    /// Owner login as reported by the GitHub API, when a fetch matched this
-    /// repo. Local-only clones leave it None and fall back to the remote URL
-    /// via `owner_display`.
+    /// Owner login as reported by the GitHub API, set at load on the one row
+    /// carrying this remote's GitHub fields. It is the carrier mark the poll
+    /// follows. Every other row leaves it None and falls back to the remote
+    /// URL via `owner_display`.
     pub owner: Option<String>,
     /// URL of the `origin` remote, if configured.
     pub remote_url: Option<String>,
