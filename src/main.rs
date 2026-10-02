@@ -106,9 +106,10 @@ const MAX_COALESCED_FRAMES: u32 = 64;
 /// of wheel events all describe the same final state and only the last one
 /// matters. An animation frame is the opposite: it is a deadline, and the frame
 /// held is a frame not shown. Holding them behind queued background work is
-/// what made the intro stutter on a release build and not on a debug one --
-/// release finishes the repo probes fast enough to flood the channel during the
-/// wave, where debug spreads the same work out past the end of it.
+/// what made the intro wave (since removed) stutter on a release build and not
+/// on a debug one -- release finishes the repo probes fast enough to flood the
+/// channel during an animation, where debug spreads the same work out past the
+/// end of it. The loading field is the animation this protects now.
 fn should_paint(queue_empty: bool, held: u32, animating: bool) -> bool {
     animating || queue_empty || held >= MAX_COALESCED_FRAMES
 }
@@ -135,10 +136,9 @@ pub enum AppEvent {
         result: Result<Box<github::GithubFetch>, github::FetchError>,
     },
     Progress(ApplyProgress),
-    /// One frame of the intro wave. On its own timer: the loop's 100ms tick is
-    /// the spinner rate and far too coarse for an animation. See `ui::intro`.
-    IntroFrame,
-    /// One frame of the noise field shown while the first load runs.
+    /// One frame of the noise field shown while the first load runs. On its
+    /// own timer: the loop's 100ms tick is the spinner rate and far too coarse
+    /// for an animation. See `ui::intro`.
     LoadingFrame,
     SweepDone {
         at: chrono::DateTime<chrono::Local>,
@@ -243,7 +243,7 @@ fn spawn_input_thread(tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
 }
 
 /// Shimmer the loading field until `running` is cleared, which happens when the
-/// first load lands and the wave takes over.
+/// first load lands or a key is pressed (`dismiss_loading_field`).
 fn spawn_loading_task(
     tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
     running: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -264,22 +264,28 @@ fn spawn_loading_task(
     });
 }
 
-/// Drive the intro wave at its own frame rate for as long as it lasts, then
-/// stop. A one-shot task rather than a faster global tick, because the global
-/// tick *is* the spinner rate and everything else is expressed in it.
-fn spawn_intro_task(tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(ui::intro::FRAME_INTERVAL);
-        // See `spawn_loading_task`: catch-up ticks paint the same frame twice.
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let deadline = std::time::Instant::now() + ui::intro::DURATION;
-        loop {
-            interval.tick().await;
-            if tx.send(AppEvent::IntroFrame).is_err() || std::time::Instant::now() >= deadline {
-                break;
-            }
-        }
-    });
+/// Whether a launch puts the loading field up: `intro` in `config.toml`
+/// switches it, and it only ever covers a load that is still running.
+fn shows_loading_field(intro_enabled: bool, loading: bool) -> bool {
+    intro_enabled && loading
+}
+
+/// Take the loading field down and stop its frame timer. Called when the first
+/// load lands and on any keypress, so the next paint is the finished screen,
+/// with nothing in between.
+fn dismiss_loading_field(app: &mut App, running: &std::sync::atomic::AtomicBool) {
+    app.loading_field = None;
+    running.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Paint one frame: the loading field while it is up, otherwise the dashboard.
+/// The field composes the whole buffer from its current area on every frame,
+/// so a resize while it is up never paints a stale layout.
+fn draw_screen(frame: &mut ratatui::Frame, app: &App) {
+    match app.loading_field.as_ref() {
+        Some(field) => field.paint(frame.buffer_mut()),
+        None => ui::render(frame, app),
+    }
 }
 
 /// Drive the clock, the spinner, the status-message TTL, and (later) the
@@ -645,20 +651,16 @@ async fn run_event_loop(
     {
         app.view = config.startup_view(size.width, size.height);
     }
-    // The wait is spent on the noise the wave will later wash away, rather
-    // than on an empty frame. Started before the first paint so there is never
-    // a blank one.
+    // The wait is spent on the loading field rather than on an empty frame.
+    // Started before the first paint so there is never a blank one.
     let loading_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    if config.intro && app.loading {
+    if shows_loading_field(config.intro, app.loading) {
         app.loading_field = Some(ui::intro::Loading::new());
         loading_running.store(true, std::sync::atomic::Ordering::Relaxed);
         spawn_loading_task(tx.clone(), loading_running.clone());
     }
     terminal
-        .draw(|frame| match app.loading_field.as_ref() {
-            Some(field) => field.paint(frame.buffer_mut()),
-            None => ui::render(frame, app),
-        })
+        .draw(|frame| draw_screen(frame, app))
         .map_err(|e| e.to_string())?;
 
     // How many held paints have accumulated, so a stream that never drains
@@ -716,17 +718,10 @@ async fn run_event_loop(
                 }
             }
             AppEvent::Input(Event::Key(key)) => {
-                // Any keypress ends the wave on the spot. Seven tenths of a
-                // second is short, but it is still time someone did not ask
-                // for, and a dashboard that ignores the first keystroke of
-                // every launch would be worse than one that never animated.
-                app.intro = None;
-                // ...and the field with it. Skip means skip: an empty frame is
-                // what there was before any of this, and is at least honest
-                // about how far along the load is.
-                app.loading_field = None;
-                app.intro_pending = false;
-                loading_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                // Any keypress takes the loading field down. Skip means skip:
+                // an empty frame is what there was before any of this, and is
+                // at least honest about how far along the load is.
+                dismiss_loading_field(app, &loading_running);
                 // Any keypress clears a transient status message before it's
                 // handled, so the message shows until the next interaction and
                 // then yields the footer back to the summary. The handler for
@@ -753,23 +748,9 @@ async fn run_event_loop(
             AppEvent::Input(_) => {}
             AppEvent::Loaded(result) => {
                 apply_load_result(app, config, result);
-                // Arm the wave for the paint that follows: that paint is the
-                // first screenful of real content, which is what it resolves
-                // into. Only ever armed here, so it runs once a launch.
-                if config.intro && !app.intro_armed {
-                    app.intro_armed = true;
-                    app.intro_pending = true;
-                }
-                // The field hands over to the wave. Cleared here rather than
-                // when the wave starts, so the two never both want the screen.
-                app.loading_field = None;
-                loading_running.store(false, std::sync::atomic::Ordering::Relaxed);
-                app.needs_redraw = true;
-            }
-            AppEvent::IntroFrame => {
-                if app.intro.as_ref().is_some_and(|i| i.finished()) {
-                    app.intro = None;
-                }
+                // The field gives way to the finished screen: the paint that
+                // follows is the first screenful of real content.
+                dismiss_loading_field(app, &loading_running);
                 app.needs_redraw = true;
             }
             AppEvent::LoadingFrame => {
@@ -811,57 +792,13 @@ async fn run_event_loop(
         // next pass through the loop inherits it, so nothing is lost, only
         // deferred.
         if app.needs_redraw {
-            let animating = app.intro.is_some() || app.loading_field.is_some();
+            let animating = app.loading_field.is_some();
             if should_paint(rx.is_empty(), coalesced, animating) {
                 coalesced = 0;
                 app.needs_redraw = false;
-                // While the wave is running it composes every frame from the
-                // screen it captured, so the real UI is not re-rendered forty
-                // times in seven tenths of a second. A resize invalidates that
-                // capture, and `paint` says so rather than drawing a stale
-                // layout.
-                let mut wave_ended = false;
-                // The screen the wave will resolve into, captured *inside* the
-                // closure. It has to be: `draw` swaps buffers on the way out,
-                // so by the time it returns the screen just painted is the
-                // previous buffer and `current_buffer_mut` is a freshly reset
-                // blank. Capturing after the call captured that blank, and the
-                // wave dutifully resolved into nothing -- noise, an empty pane,
-                // then the content snapping in when the wave ended, which is
-                // not a reveal at all.
-                let mut captured = None;
                 terminal
-                    .draw(
-                        |frame| match (app.loading_field.as_ref(), app.intro.as_ref()) {
-                            (Some(field), _) => field.paint(frame.buffer_mut()),
-                            (None, Some(intro)) => wave_ended = !intro.paint(frame.buffer_mut()),
-                            (None, None) => {
-                                ui::render(frame, app);
-                                if app.intro_pending {
-                                    let intro = ui::intro::Intro::new(frame.buffer_mut().clone());
-                                    // Painted over immediately, in this same frame.
-                                    // Presenting the dashboard and only then
-                                    // starting the wave would show a single frame
-                                    // of finished content before it dissolved --
-                                    // a flash on the way in to a reveal.
-                                    intro.paint(frame.buffer_mut());
-                                    captured = Some(intro);
-                                }
-                            }
-                        },
-                    )
+                    .draw(|frame| draw_screen(frame, app))
                     .map_err(|e| e.to_string())?;
-                if wave_ended {
-                    app.intro = None;
-                    app.needs_redraw = true;
-                }
-                // Started from the first painted screenful of real content, so
-                // a slow load never animates an empty dashboard.
-                if let Some(intro) = captured {
-                    app.intro_pending = false;
-                    app.intro = Some(intro);
-                    spawn_intro_task(tx.clone());
-                }
             } else {
                 coalesced += 1;
             }
@@ -3085,6 +3022,105 @@ mod tests {
     fn a_queue_that_never_drains_still_paints_eventually() {
         assert!(should_paint(false, MAX_COALESCED_FRAMES, false));
         assert!(should_paint(false, MAX_COALESCED_FRAMES + 1, false));
+    }
+
+    /// `intro = false` puts no loading field up, and neither does a launch
+    /// with no load running. `intro = true` with a load running does.
+    #[test]
+    fn intro_off_shows_no_loading_field() {
+        assert!(!shows_loading_field(false, true));
+        assert!(!shows_loading_field(false, false));
+        assert!(!shows_loading_field(true, false));
+        assert!(shows_loading_field(true, true));
+    }
+
+    /// An empty app at launch, with the loading field up as `run_event_loop`
+    /// puts it.
+    fn app_under_loading_field() -> App {
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.loading = true;
+        app.loading_field = Some(ui::intro::Loading::new());
+        app
+    }
+
+    /// Whether any row of `buf` holds the top row of the `LOADING` banner.
+    fn shows_loading_banner(buf: &ratatui::buffer::Buffer) -> bool {
+        (0..buf.area.height).any(|y| {
+            let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+            row.contains("█    ████ ████ ███  ███ █  █ ████")
+        })
+    }
+
+    /// The loading field is up until the load lands, and the very next frame
+    /// is the finished screen exactly: nothing is drawn in between, so there is
+    /// no wave frame and no noise left over. The removed intro wave painted
+    /// 1.5 s of frames here.
+    #[test]
+    fn the_frame_after_the_load_lands_is_the_finished_screen() {
+        use ratatui::backend::TestBackend;
+        let mut app = app_under_loading_field();
+        let running = std::sync::atomic::AtomicBool::new(true);
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|frame| draw_screen(frame, &app)).unwrap();
+        assert!(
+            shows_loading_banner(term.backend().buffer()),
+            "the loading field was not painted while the load ran"
+        );
+
+        // What the `Loaded` arm does: the load is applied, then the field goes.
+        app.loading = false;
+        dismiss_loading_field(&mut app, &running);
+        assert!(app.loading_field.is_none(), "the field is still up");
+        assert!(
+            !running.load(std::sync::atomic::Ordering::Relaxed),
+            "the field's frame timer is still running"
+        );
+        term.draw(|frame| draw_screen(frame, &app)).unwrap();
+
+        let mut finished = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        finished.draw(|frame| ui::render(frame, &app)).unwrap();
+        assert_eq!(
+            term.backend().buffer(),
+            finished.backend().buffer(),
+            "the frame after the load is not the finished screen"
+        );
+    }
+
+    /// A resize while the field is up paints the field at the new size, banner
+    /// re-centred and no cell left over from the old layout.
+    #[test]
+    fn a_resize_while_loading_paints_the_field_at_the_new_size() {
+        use ratatui::backend::TestBackend;
+        let app = app_under_loading_field();
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|frame| draw_screen(frame, &app)).unwrap();
+
+        term.backend_mut().resize(80, 24);
+        term.draw(|frame| draw_screen(frame, &app)).unwrap();
+        let buf = term.backend().buffer();
+        assert_eq!(buf.area, ratatui::layout::Rect::new(0, 0, 80, 24));
+        assert!(
+            shows_loading_banner(buf),
+            "the banner is gone after a resize"
+        );
+
+        let mut fresh = ratatui::buffer::Buffer::empty(buf.area);
+        app.loading_field
+            .as_ref()
+            .expect("the field")
+            .paint(&mut fresh);
+        let differing_symbols = (0..24u16)
+            .flat_map(|y| (0..80u16).map(move |x| (x, y)))
+            .filter(|(x, y)| {
+                // The noise churns with the clock, so compare where the banner
+                // sits, which is still and derived from the area alone.
+                buf[(*x, *y)].symbol().starts_with('█') != fresh[(*x, *y)].symbol().starts_with('█')
+            })
+            .count();
+        assert_eq!(
+            differing_symbols, 0,
+            "the banner is not where a fresh field at the new size puts it"
+        );
     }
 
     fn test_repo() -> RepoStatus {

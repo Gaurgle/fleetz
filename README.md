@@ -181,7 +181,7 @@ in the header instead.
 | `G` | Show all (clear group) |
 | `/` | Fuzzy-search repos by name (best match first, `flz` finds `fleetz`), or type `#dirty` `#behind` `#ahead` `#ci` `#prs` `#stash` to filter |
 | `0` | Clear `#tag` filters (keeps free-text search) |
-| `,` | Settings overlay: refresh interval, startup view, work hours, pane persistence, contributions strip and its cell size, intro animation. `Enter` saves to `config.toml` |
+| `,` | Settings overlay: refresh interval, startup view, work hours, pane persistence, contributions strip and its cell size, loading screen. `Enter` saves to `config.toml` |
 | `<` / `>` | Narrow / widen the repo list |
 | `+` / `-` | Shrink / grow the inspector pane |
 | `=` | Reset both panes to their default sizes |
@@ -279,11 +279,10 @@ cache_ttl = 120
 # for one repo doesn't silently become permanent. Toggle it in the `,` menu.
 persist_pane_sizes = false
 
-# Play the intro wave on the first painted screen of a launch. The load is
-# spent on a field of scrambled characters with LOADING held still in block
-# capitals in the middle; when the repos land, a diagonal wave washes the
-# scramble away character by character and leaves the dashboard behind, over
-# about a second and a half. Any keypress skips it. Set false to never see it again.
+# Show the loading screen while the first load of a launch runs: a field of
+# scrambled characters with LOADING held still in block capitals in the
+# middle. When the repos land the dashboard replaces it in one frame. Any
+# keypress dismisses it. Set false to start on the empty dashboard instead.
 intro = true
 repo_list_pct = 35
 inspector_pct = 40

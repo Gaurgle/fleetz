@@ -66,9 +66,11 @@ pub struct Config {
     pub repo_list_pct: u16,
     #[serde(default = "default_inspector_pct")]
     pub inspector_pct: u16,
-    /// Whether the first painted screen of a launch arrives as the intro wave.
-    /// On by default, and one key to retire: an animation you meet several
-    /// times a day should be trivial to turn off.
+    /// Whether the first load of a launch is spent on the loading screen (a
+    /// field of scrambled characters with `LOADING` in the middle) rather than
+    /// on the empty dashboard. On by default, and one key to retire: an
+    /// animation you meet several times a day should be trivial to turn off.
+    /// The key keeps its name from the intro wave it used to also switch.
     #[serde(default = "default_intro")]
     pub intro: bool,
 }
