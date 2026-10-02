@@ -6,10 +6,11 @@ first review (findings 1 to 12 and its optional items). **Architectural
 decisions C1 to C9 taken by the coordinator (`claude-fable-5-1`) on
 2026-10-01**, as recommended in revision 1, with the review's conditions
 ([Decisions](#9-decisions)). Anything that changes a file on disk or what the
-user sees or waits for is an **owner item**, open, presented to Andreas
-together ([Owner items](#owner-items)). This ticket does not authorize a cache
-schema change: the keyed, versioned cache file below is designed, and its
-adoption is the owner's (O1, O2).
+user sees or waits for is an **owner item**, presented to Andreas together
+([Owner items](#owner-items)). **He accepted them all as recommended on
+2026-10-02**, which includes adopting the keyed, versioned cache file below
+(O1, O2) and the contract and invariant changes of section 6. The words and
+look named in O3 and O4 are still judged on the builds that draw them.
 
 Written against `main` at `769c1fd` and revised at `aa66577`; production code
 was read, not changed, and nothing was built. `src/github.rs`, `src/cache.rs`
@@ -389,7 +390,7 @@ Pagination by page is not the per-repo split the "batch on GraphQL" invariant
 forbids: each page still batches every repo on it. It does add requests, so
 any pagination ticket must price itself with FZ-10's procedure.
 
-### 4.3 Cache key: account, host and format version (C1, C9, decided; O1 open)
+### 4.3 Cache key: account, host and format version (C1, C9, decided; O1 accepted)
 
 The file name gains three parts. Example:
 `github-v2-github.com-2a8d4ab865f3ca20-50.json`.
@@ -986,6 +987,15 @@ conditions stated.
   confirmed by the reviewer on `gh` 2.98.0.
 
 ### Owner items
+
+**Accepted by Andreas on 2026-10-02, all as recommended.** The items were
+put to him that day with their recommendations and with "all as recommended"
+offered as a complete answer; his reply was "yes to all". That settles: O1
+as the fingerprint of the `gh` token (K1); O2; O3 and O4, whose words and
+look he still sees on the builds that draw them; O5; O7 as the most recently
+saved copy; O8; O10; O11; O12; O14; and the contract and invariant changes of
+section 6. O9 and O13 stay "later", as recommended: neither is built until it
+is taken up.
 
 For Andreas, in plain language: everything you would find on disk, see on
 screen or wait for. Each has a recommendation. O6 was withdrawn (a test-edit
