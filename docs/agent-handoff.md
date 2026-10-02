@@ -14,11 +14,11 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 20:56: one worker and one reviewer are running.**
-  `fz-worker` on FZ-05e (#35, worktree `fz-05e`, branch
+- **State at 2026-10-02 20:58: two workers are running.** `fz-worker` on
+  FZ-05e (#35, worktree `fz-05e`, branch
   `fix/fz-05e-merge-sources-by-owner`, base `95edd58`), dispatched 20:55.
-  `fz-reviewer` on FZ-13b (#51, worktree `fz-13b`, uncommitted diff hash
-  `9bb5d691` against `5b4d4c1`). FZ-13c (#52) is at Ready to integrate
+  `fz-worker` on FZ-13b's fix cycle 1 (#51, worktree `fz-13b`, base
+  `5b4d4c1`), continued 20:58. FZ-13c (#52) is at Ready to integrate
   again and waits for Andreas. FZ-05b, FZ-05c, FZ-05d, FZ-13a and FZ-13t
   are merged and cleaned up. A lead that finds a later state recorded on
   an issue and not here trusts the issue, and checks #35 and #51 for a
@@ -191,15 +191,20 @@ Worktrees are under `.claude/worktrees/`.
   `5b4d4c1`.** Implemented (7 files, +518 -6, diff hash `9bb5d691`, 820
   tests by the worker's run, no existing test touched), in review (the
   dispatch is on #51). Plain characters proposed: org `@`, private `-`, public `+`,
-  stash `$`, watch on `o`, watch off `-`. **Open design question, the
-  coordinator's to rule after the reviewer's read:** the active icon set
-  is kept on `App` and in a thread-local read by the row-level glyph
-  functions, because existing tests pin those functions' signatures. The
-  reviewer is asked whether rendering can read it on a thread where it was
-  never set, and what passing the set explicitly would cost in existing
-  test edits. No settings row and no `SettingField` variant, so FZ-13c's
-  help needs no follow-up. Then Ready to integrate: the six characters are
-  Andreas's.
+  stash `$`, watch on `o`, watch off `-`. No settings row and no
+  `SettingField` variant, so FZ-13c's help needs no follow-up.
+  **Review: changes requested** (on #51): production is correct and eleven
+  mutants were killed; one new test compared plain with plain.
+  **Coordinator's design ruling (on #51):** the active icon set stays an
+  ambient thread-local read by the glyph functions, because existing tests
+  pin those functions' signatures and the palette tickets (FZ-13j, FZ-13k)
+  will need an ambient render setting anyway; but it is stored once (the
+  `App.icons` field goes, the header reads the same accessor), and its doc
+  comment states why it is sound: `#[tokio::main]` polls the main future
+  on the calling thread, and every draw happens in the event loop inside
+  it. **Rendering must stay on the thread that set it.** Fix cycle 1 runs
+  since 20:58 with the same worker; then the same reviewer, then Ready to
+  integrate: the six characters are Andreas's.
 - **FZ-13c (#52), `fz-13c`, branch `feat/fz-13c-two-column-help`, base
   `ed225d5`, commits `b494248` and `b36d1f3`, pushed. Ready to integrate.**
   First round: one fix cycle after a changes-requested review, then
