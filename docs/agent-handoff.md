@@ -14,18 +14,15 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 21:50: two reviewers and two workers are
-  running** (the second worker is `fz-small` on FZ-09f, #62, worktree
-  `fz-09f`, dispatched 21:50; see "In flight"). `fz-reviewer` on FZ-05f (#36, worktree `fz-05f`, uncommitted
-  diff hash `95715991` against `82c75c5`); `fz-reviewer` on FZ-13e (#54,
-  worktree `fz-13e`, uncommitted diff hash `622307cf` against `82c75c5`);
-  `fz-worker` on FZ-09a (#57, worktree `fz-09a`, branch
-  `fix/fz-09a-atomic-cache-writes`, base `841a2e2`, `src/cache.rs`),
-  dispatched 21:47. Everything else dispatched today is merged and cleaned
-  up: FZ-05b, FZ-05c, FZ-05d, FZ-05e, FZ-13a, FZ-13b, FZ-13c, FZ-13t and
-  #43. Nothing waits at Ready to integrate. A lead that finds a later
-  state recorded on an issue and not here trusts the issue, and checks
-  #36, #54 and #57 before dispatching again.
+- **State at 2026-10-02 21:58: one reviewer is running, no worker.**
+  `fz-reviewer` on FZ-13e (#54, worktree `fz-13e`, uncommitted diff hash
+  `622307cf` against `82c75c5`). FZ-09a (#57, worktree `fz-09a`) and
+  FZ-09f (#62, worktree `fz-09f`) are both accepted by their reviewers and
+  wait for the coordinator's commit and merge, one after the other.
+  Everything else dispatched today is merged and cleaned up: FZ-05b to
+  FZ-05f, FZ-13a, FZ-13b, FZ-13c, FZ-13t and #43. A lead that finds a
+  later state recorded on an issue and not here trusts the issue, and
+  checks #54, #57 and #62 before dispatching again.
 
 > **The no-install span is closed.** FZ-05b opened it (`f37c6b9`,
 > 2026-10-02 19:00) and FZ-05e closed it (`40a2c73`, 2026-10-02 21:31; CI
@@ -161,6 +158,16 @@ FZ-04 fix and merge, and the FZ-13 split are this session's.
 | FZ-13b | #51 | `ffba73e` | `aec945c` | Config key `icons`: the Nerd Font set by default, six plain one-column characters with `plain` |
 | FZ-05e | #35 | `27a8c70` | `40a2c73` | The GitHub dataset keeps one entry per owner and name; the moved-remote check returns each row once |
 | Stash | #43 | `5604301` | `82c75c5` | The local contribution count excludes stash and notes commits |
+| FZ-05f | #36 | `af414ec` | `52a31c2` | Pass 3 dedupes by canonical path only: dirty extra checkouts and same-named local-only repos get rows |
+
+**The identity series FZ-05a to FZ-05f is complete**, and all four invariant
+changes of the identity design's section 3.10 are in `CLAUDE.md`. Left from
+FZ-05f's review, not ticketed: `unclaimed_local` keeps an unused
+`checked_names` parameter for its signature (rename it `_checked_names`, or
+drop it when the existing test's call may be edited); the doc comment on the
+existing test `an_extra_checkout_named_like_its_remote_takes_nothing_from_the_poll`
+still says its load half waits for FZ-05f; rows of one repo look identical in
+the list until the optional FZ-05g.
 
 FZ-13b: Andreas accepted the six characters unseen in detail ("this i
 trust"). **Rule later tickets inherit, ruled by the coordinator on #51:**
@@ -222,17 +229,6 @@ invariant change 1 of the identity design's section 3.10.
 
 Worktrees are under `.claude/worktrees/`.
 
-- **FZ-05f (#36), `fz-05f`, branch `fix/fz-05f-pass3-canonical-path`,
-  base `82c75c5`.** Implemented (`src/main.rs` only, +268 -22, diff hash
-  `95715991`, 877 tests by the worker's run, no existing test edited; the
-  report is on #36), in review. Pass 3 dedupes by canonical
-  path only; the `checked_names` parameter of `unclaimed_local` is kept
-  for the signature and ignored. The veto in its body is settled (Andreas
-  approved the change with the design on 2026-10-01). On acceptance:
-  commit, push, CI, combined checks, merge under the safe-merge rule, edit
-  `CLAUDE.md` invariant change 2, and tell him what rows are new (dirty
-  extra checkouts, same-named local-only repos). The identity series is
-  then complete.
 - **FZ-13e (#54), `fz-13e`, branch `fix/fz-13e-measure-drawn-width`, base
   `82c75c5`.** Implemented (`src/ui/mod.rs` and `src/ui/footer.rs`, +238
   -3, diff hash `622307cf`, 878 tests by the worker's run; the report is
@@ -242,15 +238,21 @@ Worktrees are under `.claude/worktrees/`.
   changes" instruction. FZ-13f (#55) waits for it: both edit the header in
   `src/ui/mod.rs`.
 - **FZ-09a (#57), `fz-09a`, branch `fix/fz-09a-atomic-cache-writes`, base
-  `841a2e2`.** Worker dispatched 2026-10-02 21:47: `ApiCache::write`
-  through a temporary file and a rename, new files mode 0600; `src/cache.rs`
-  only, standard library only. Then a reviewer, then the safe-merge rule
-  (no format or key change).
+  `841a2e2`.** Implemented and **accepted by its reviewer** (`src/cache.rs`
+  only, +340 -4, diff hash `c22e4d59` against `841a2e2`, 881 tests, nine
+  of ten mutants killed; reports on #57). Not committed yet at 21:56: next
+  is commit, push, CI, combined checks and the merge under the safe-merge
+  rule (no format or key change). To record with it: with this ticket
+  alone the existing cache file becomes mode 0600 on its next write,
+  stricter than O14's text; no test notices the rename being replaced by a
+  copy (an optional hard-link test would).
 - **FZ-09f (#62), `fz-09f`, branch `feat/fz-09f-pr-section-count`, base
-  `b2b583e`.** `fz-small` dispatched 2026-10-02 21:50: the `-p` PR
-  section says "5 of 8 open PRs" when fewer are listed than are open;
-  `src/ui/detail.rs` only. Then a reviewer, then the safe-merge rule under
-  the "small look changes" instruction.
+  `b2b583e`.** Implemented by `fz-small` (`src/ui/detail.rs` only, diff
+  hash `f7305b5d` against `b2b583e`, 877 tests) and **accepted by its
+  reviewer** (base run and four mutants; verdict on #62): the `-p` PR
+  section says "5 of 8 open PRs" when fewer are listed than are open. Not
+  committed yet at 21:58: next is commit, push, CI, combined checks and
+  the merge under the "small look changes" instruction.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked
   by Andreas until the repository goes public.

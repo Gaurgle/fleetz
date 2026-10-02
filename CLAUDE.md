@@ -159,10 +159,16 @@ config of its own and keeps the name match, or it would race its main clone for
 the row. When several clones match one repo, the primary is chosen by a fixed
 order (exact remote, github.com host, a `.git` directory, earlier root,
 shallower path, then path), never by filesystem order
-(`discovery::CheckoutRank`, which assembly reuses for local carriers). Pass 3
-dedupes by path as well as name (`main.rs::unclaimed_local`), because a
-remote-matched folder name is not the row's name. This diverges from repoz on
-purpose: repoz still matches on names only.
+(`discovery::CheckoutRank`, which assembly reuses for local carriers). Matching
+diverges from repoz on purpose: repoz still matches clones on names only.
+
+**Pass 3 dedupes by canonical path only** (`main.rs::unclaimed_local`, the raw
+path when `canonicalize` fails), as repoz does, so one directory reached
+through two root spellings is one row. A dirty extra checkout, or a same-named
+local-only repo, gets its own row, which carries GitHub fields only if it is
+its remote's carrier. Deduping by folder name hid a dirty second checkout and
+drew two same-named local repos as one. The canonical path is a comparison key
+only: a row displays the path as its root was spelled.
 
 **A local clone may be dot-prefixed when its GitHub repo is not** (`dotfiles`
 lives at `~/.dotfiles`). Discovery matches both spellings and reports the
