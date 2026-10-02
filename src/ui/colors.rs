@@ -59,6 +59,13 @@ pub const SELECTED_BG: Color = Color::Rgb(69, 71, 90);
 /// state. Clear of `RED`, which is CI failing.
 pub const STASH_CLR: Color = Color::Rgb(242, 205, 205);
 
+/// The linked-worktree count in the repo list's badge.
+///
+/// An alias of `LAVENDER`, no new color. Neither an alarm color nor gray: the
+/// count is information, not a state that needs action, so it avoids
+/// `PEACH`, `RED` and `YELLOW`, and `OVERLAY` made it read as a footnote.
+pub const WORKTREE_CLR: Color = LAVENDER;
+
 /// Contribution intensity for the GitHub source, empty through busiest.
 ///
 /// Grown out of github.com's dark-dimmed graph rather than sampled from it.
