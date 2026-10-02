@@ -14,13 +14,13 @@
 - **Standing scope confirmed.** Andreas answered "Both hold" in this session
   on 2026-10-02 18:34 to the pace-and-dispatch and where-his-testing-matters
   instructions below. Their limits are unchanged.
-- **State at 2026-10-02 19:45: one reviewer is running.** `fz-reviewer`
-  on FZ-05d (#34, worktree `fz-05d`, uncommitted diff hash `082e09e6`
-  against `d6604cb`), dispatched 19:35. FZ-13c (#52) and FZ-13t (#63) are
-  at Ready to integrate and wait for Andreas. FZ-05b, FZ-05c and FZ-13a
-  are merged and cleaned up. A lead that finds a later state recorded on
-  an issue and not here trusts the issue, and checks #34 for a verdict
-  before dispatching again.
+- **State at 2026-10-02 19:47: one worker is running.** `fz-worker` on
+  FZ-05d's fix cycle 2 (#34, worktree `fz-05d`, base `d6604cb`), continued
+  19:46 after a changes-requested review (verdict and rulings on #34).
+  FZ-13c (#52) and FZ-13t (#63) are at Ready to integrate and wait for
+  Andreas. FZ-05b, FZ-05c and FZ-13a are merged and cleaned up. A lead
+  that finds a later state recorded on an issue and not here trusts the
+  issue, and checks #34 for a report before dispatching again.
 
 > **No-install span, open since the merge of FZ-05b (`f37c6b9`, 2026-10-02
 > 19:00).** Until FZ-05e (#35) is merged, nothing is tagged and Andreas does
@@ -170,11 +170,22 @@ Worktrees are under `.claude/worktrees/`.
   The coordinator opened that file for two things only: `#[cfg(test)]` on
   `find_in_primary` and `find_elsewhere`, and exposing the existing
   primary-checkout rank so `src/main.rs` does not keep a copy of the order.
-  The worker did both (clippy clean, 843 passed, diff hash `082e09e6`) and
-  the review is running since 19:35. On acceptance: commit, push, CI,
-  combined checks with `main` (which has gained FZ-13a in the same file),
-  merge, `CLAUDE.md` invariant changes 3 and 4. For Andreas afterwards:
-  the ambiguity status line is shown as an error by the worker's choice.
+  The worker did both (clippy clean, 843 passed, diff hash `082e09e6`).
+  **Review: changes requested** (on #34). The implementation was found
+  correct in every traced scenario; three mutants survived: no test for
+  the owner-aware compare in `remotes_that_moved`, none for the LocalOnly
+  carrier order, and `carries` writes an owned row from an owner-less
+  entry against design 3.5 and D1. Coordinator's ruling: the code follows
+  the design (an owned row matches only its own owner; an owner-less row
+  keeps matching by name). Fix cycle 2 runs since 19:46 with the same
+  worker; then the same reviewer re-reviews the changed portion. On
+  acceptance: commit, push, CI, combined checks with `main` (which has
+  gained FZ-13a in the same file), merge, `CLAUDE.md` invariant changes 3
+  and 4. **For Andreas once FZ-05e makes the ambiguity status line
+  reachable:** it is red, lasts 1.5 s like every status message, replaces
+  the "Reloaded from cache" failure message, and can be dropped by a narrow
+  footer. For FZ-05e: three "same remote" keys (`remote_key`,
+  `names_remote`, discovery's `repo_key`) should become one.
 - **FZ-13t (#63), `fz-13t`, branch `feat/fz-13t-worktree-badge`, base
   `dd90291`.** Andreas asked for it on 2026-10-02: the list row's worktree
   count as `WT` in a color that is information, not an alarm and not gray.
