@@ -1190,35 +1190,60 @@ fn handle_settings_input(app: &mut App, key: KeyEvent) {
             let path = config::settings_path();
             match config::save_settings(&path, &updates) {
                 Ok(()) => {
-                    let (interval, view, persist, contributions, contrib_cell) = (
-                        so.refresh_interval,
-                        so.view,
-                        so.persist_panes,
-                        so.contributions,
-                        so.contrib_cell,
-                    );
                     so.status = Some(format!("saved to {}", tilde_display(&path)));
                     // Live fields take effect immediately; the overlay stays
                     // open so the confirmation is actually readable.
-                    app.refresh_interval = interval;
-                    app.persist_pane_sizes = persist;
-                    app.apply_contributions_setting(contributions);
-                    app.contrib_cell = contrib_cell;
-                    if let Some(v) = view {
-                        app.view = v;
-                        // Same flag `v` sets, so a later resize can't undo an
-                        // explicit choice.
-                        app.view_overridden = true;
-                    } else {
-                        app.view_overridden = false;
-                    }
-                    app.needs_redraw = true;
+                    let saved = so.clone();
+                    apply_live_settings(app, &saved);
                 }
                 Err(e) => so.status = Some(e),
             }
         }
         _ => {}
     }
+}
+
+/// The settings overlay `,` opens. Seeded from live app state where one
+/// exists (interval, view, pane persistence, the icon set) and from the
+/// loaded config where it does not, so the values shown are the ones
+/// actually in force.
+fn settings_overlay(app: &App, config: &config::Config) -> app::SettingsOverlay {
+    app::SettingsOverlay::new(
+        app.refresh_interval,
+        config.github_poll_interval,
+        app.watch_mode,
+        app.view_overridden.then_some(app.view),
+        config.work_start,
+        config.work_end,
+        app.persist_pane_sizes,
+        app.contributions,
+        app.contrib_cell,
+        config.intro,
+        ui::badges::active_icons(),
+    )
+}
+
+/// Apply the live fields of a saved settings overlay to the running app, so
+/// they show on the next frame. Restart-only fields are left to the next
+/// launch.
+///
+/// Runs in the event loop, on the thread that draws, which is what makes
+/// `set_active_icons` (thread-local) reach the next frame.
+fn apply_live_settings(app: &mut App, so: &app::SettingsOverlay) {
+    app.refresh_interval = so.refresh_interval;
+    app.persist_pane_sizes = so.persist_panes;
+    app.apply_contributions_setting(so.contributions);
+    app.contrib_cell = so.contrib_cell;
+    ui::badges::set_active_icons(so.icons);
+    if let Some(v) = so.view {
+        app.view = v;
+        // Same flag `v` sets, so a later resize can't undo an explicit
+        // choice.
+        app.view_overridden = true;
+    } else {
+        app.view_overridden = false;
+    }
+    app.needs_redraw = true;
 }
 
 /// Build and show the branches overlay for the selected repo: every local
@@ -1500,22 +1525,8 @@ async fn handle_normal_input(
         KeyCode::Char('+') => app.resize_inspector(1),
         KeyCode::Char('-') => app.resize_inspector(-1),
         KeyCode::Char('=') => app.reset_pane_sizes(),
-        // Settings overlay. Seeded from live app state where one exists
-        // (interval, view, pane persistence) and from the loaded config where
-        // it does not, so the values shown are the ones actually in force.
         KeyCode::Char(',') => {
-            app.overlay = Overlay::Settings(app::SettingsOverlay::new(
-                app.refresh_interval,
-                config.github_poll_interval,
-                app.watch_mode,
-                app.view_overridden.then_some(app.view),
-                config.work_start,
-                config.work_end,
-                app.persist_pane_sizes,
-                app.contributions,
-                app.contrib_cell,
-                config.intro,
-            ));
+            app.overlay = Overlay::Settings(settings_overlay(app, config));
         }
         KeyCode::Char('O') => {
             // Open first PR in browser (Shift+O)
@@ -7082,5 +7093,175 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
 
         assert_eq!(total, 2, "the fetched commit was not counted");
+    }
+
+    // FZ-13u: the icons row of the settings overlay. The set is a
+    // thread-local, and libtest gives each test its own thread; the guard
+    // puts back whatever the thread held anyway, panics included.
+
+    struct RestoreIcons(app::Icons);
+
+    impl RestoreIcons {
+        fn capture() -> Self {
+            Self(ui::badges::active_icons())
+        }
+    }
+
+    impl Drop for RestoreIcons {
+        fn drop(&mut self) {
+            ui::badges::set_active_icons(self.0);
+        }
+    }
+
+    const ICONS_PROBE: &str = "glyph-probe";
+
+    /// One public repo in the detail view with watch on, so a list row and
+    /// the header both draw a mark from the icon set.
+    fn app_for_icons() -> App {
+        let mut repo = test_repo();
+        repo.name = ICONS_PROBE.to_string();
+        repo.repo_kind = model::RepoKind::Public;
+        repo.owner = Some("Gaurgle".to_string());
+        let mut app = App::new(vec![repo], "h".to_string(), 120, 40);
+        app.view = app::View::Detail;
+        app.watch_mode = true;
+        app
+    }
+
+    /// The kind glyph left of the repo's name in the list, and the header's
+    /// watch mark, as the next frame draws them.
+    fn drawn_icon_marks(app: &App) -> (String, String) {
+        use ratatui::backend::TestBackend;
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| ui::render(f, app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let list = ui::panel_rects(buf.area, app).repo_list;
+        let name: Vec<String> = ICONS_PROBE.chars().map(String::from).collect();
+        let (x, y) = (list.top()..list.bottom())
+            .find_map(|y| {
+                (list.left()..list.right())
+                    .find(|&x| {
+                        name.iter().enumerate().all(|(i, c)| {
+                            let cx = x + i as u16;
+                            cx < list.right() && buf[(cx, y)].symbol() == c
+                        })
+                    })
+                    .map(|x| (x, y))
+            })
+            .expect("the repo row is drawn");
+        let header: String = (0..buf.area.width).map(|x| buf[(x, 0)].symbol()).collect();
+        let watch = header
+            .split_whitespace()
+            .take_while(|word| *word != "watch")
+            .last()
+            .unwrap_or_default()
+            .to_string();
+        (buf[(x - 2, y)].symbol().to_string(), watch)
+    }
+
+    fn press(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    /// Open the overlay as `,` does and walk to the icons row with `j`.
+    fn open_settings_on_the_icons_row(app: &mut App) {
+        app.overlay = Overlay::Settings(settings_overlay(app, &config::Config::default()));
+        for _ in 0..app::SETTING_FIELDS.len() {
+            if let Overlay::Settings(ref so) = app.overlay
+                && so.field() == app::SettingField::Icons
+            {
+                return;
+            }
+            handle_settings_input(app, press('j'));
+        }
+        panic!("no icons row in the settings overlay");
+    }
+
+    /// What Enter applies once the file is written.
+    fn apply_open_settings(app: &mut App) {
+        let Overlay::Settings(ref so) = app.overlay else {
+            panic!("the settings overlay is not open");
+        };
+        let saved = so.clone();
+        apply_live_settings(app, &saved);
+    }
+
+    /// Toggling the row and applying it changes the list row's kind glyph
+    /// and the header's watch mark on the next frame, and toggling again
+    /// brings the Nerd set back, with no restart. Fails if applying the
+    /// overlay leaves the active set alone.
+    #[test]
+    fn toggling_the_icons_row_redraws_the_rows_and_the_header() {
+        let _restore = RestoreIcons::capture();
+        ui::badges::set_active_icons(app::Icons::Nerd);
+        let mut app = app_for_icons();
+        let nerd = drawn_icon_marks(&app);
+        assert_eq!(
+            nerd.0,
+            ui::badges::kind_glyph(model::RepoKind::Public).unwrap(),
+            "the control did not draw the Nerd set"
+        );
+
+        open_settings_on_the_icons_row(&mut app);
+        handle_settings_input(&mut app, press('l'));
+        app.needs_redraw = false;
+        apply_open_settings(&mut app);
+        assert!(app.needs_redraw, "applying did not ask for a frame");
+        assert_eq!(ui::badges::active_icons(), app::Icons::Plain);
+        assert_eq!(
+            drawn_icon_marks(&app),
+            ("+".to_string(), "o".to_string()),
+            "the next frame still draws the old set"
+        );
+
+        handle_settings_input(&mut app, press('l'));
+        apply_open_settings(&mut app);
+        assert_eq!(ui::badges::active_icons(), app::Icons::Nerd);
+        assert_eq!(drawn_icon_marks(&app), nerd);
+    }
+
+    /// Esc after toggling the row discards it, as it discards every row:
+    /// the overlay does not preview, so the set in force is untouched.
+    #[test]
+    fn cancelling_the_overlay_leaves_the_icon_set_as_it_was() {
+        let _restore = RestoreIcons::capture();
+        for before in [app::Icons::Nerd, app::Icons::Plain] {
+            ui::badges::set_active_icons(before);
+            let mut app = app_for_icons();
+            let drawn = drawn_icon_marks(&app);
+
+            open_settings_on_the_icons_row(&mut app);
+            handle_settings_input(&mut app, press('l'));
+            handle_settings_input(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+            assert!(matches!(app.overlay, Overlay::None), "Esc did not close");
+            assert_eq!(ui::badges::active_icons(), before);
+            assert_eq!(drawn_icon_marks(&app), drawn);
+        }
+    }
+
+    /// The overlay opens on the set the app is drawing with, not on a
+    /// default, so saving another row writes back the set in force. Fails
+    /// if a session switched to `plain` would save `nerd` the next time any
+    /// setting is saved.
+    #[test]
+    fn the_overlay_opens_on_the_icon_set_in_force() {
+        let _restore = RestoreIcons::capture();
+        let app = app_for_icons();
+        for in_force in [app::Icons::Plain, app::Icons::Nerd] {
+            ui::badges::set_active_icons(in_force);
+            let so = settings_overlay(&app, &config::Config::default());
+            assert_eq!(so.icons, in_force);
+            let written = so
+                .config_updates()
+                .into_iter()
+                .find(|(key, _)| *key == "icons")
+                .map(|(_, value)| value);
+            let expected = match in_force {
+                app::Icons::Nerd => "nerd",
+                app::Icons::Plain => "plain",
+            };
+            assert_eq!(written, Some(config::SettingValue::Str(expected)));
+        }
     }
 }

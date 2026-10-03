@@ -195,6 +195,15 @@ impl Icons {
             _ => Self::Nerd,
         }
     }
+
+    /// The string `from_config` reads back as this set: what the settings
+    /// overlay writes and shows.
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Nerd => "nerd",
+            Self::Plain => "plain",
+        }
+    }
 }
 
 /// One quick-filter a repo can be toggled against.
@@ -363,11 +372,12 @@ pub enum SettingField {
     PersistPanes,
     Contributions,
     ContribCellSize,
+    Icons,
     Intro,
 }
 
 /// The settings rows in display order.
-pub const SETTING_FIELDS: [SettingField; 10] = [
+pub const SETTING_FIELDS: [SettingField; 11] = [
     SettingField::RefreshInterval,
     SettingField::GithubPollInterval,
     SettingField::Watch,
@@ -377,6 +387,7 @@ pub const SETTING_FIELDS: [SettingField; 10] = [
     SettingField::PersistPanes,
     SettingField::Contributions,
     SettingField::ContribCellSize,
+    SettingField::Icons,
     SettingField::Intro,
 ];
 
@@ -392,6 +403,7 @@ impl SettingField {
             Self::PersistPanes => "remember pane sizes",
             Self::Contributions => "contributions",
             Self::ContribCellSize => "contrib cell size",
+            Self::Icons => "icons",
             Self::Intro => "loading screen",
         }
     }
@@ -408,6 +420,7 @@ impl SettingField {
             Self::PersistPanes => "persist_pane_sizes",
             Self::Contributions => "contributions",
             Self::ContribCellSize => "contributions_cell_size",
+            Self::Icons => "icons",
             Self::Intro => "intro",
         }
     }
@@ -419,7 +432,8 @@ impl SettingField {
             | Self::View
             | Self::PersistPanes
             | Self::Contributions
-            | Self::ContribCellSize => Applies::Live,
+            | Self::ContribCellSize
+            | Self::Icons => Applies::Live,
             // Only read when the app starts; `w` is how you change it now.
             Self::Watch => Applies::Restart,
             // The loading screen only covers the first load of a launch. By
@@ -509,6 +523,9 @@ pub struct SettingsOverlay {
     pub persist_panes: bool,
     pub contributions: ContributionsMode,
     pub contrib_cell: CellSize,
+    /// Seeded from the set the app is drawing with, so a save that only
+    /// meant to change another row writes back the set already in force.
+    pub icons: Icons,
     pub intro: bool,
     /// Result of the last save attempt, shown as a footer line.
     pub status: Option<String>,
@@ -529,6 +546,7 @@ impl SettingsOverlay {
         contributions: ContributionsMode,
         contrib_cell: CellSize,
         intro: bool,
+        icons: Icons,
     ) -> Self {
         Self {
             cursor: 0,
@@ -541,6 +559,7 @@ impl SettingsOverlay {
             persist_panes,
             contributions,
             contrib_cell,
+            icons,
             intro,
             status: None,
             digits: String::new(),
@@ -597,6 +616,12 @@ impl SettingsOverlay {
             SettingField::PersistPanes => self.persist_panes = !self.persist_panes,
             SettingField::Intro => self.intro = !self.intro,
             SettingField::ContribCellSize => self.contrib_cell = self.contrib_cell.step(delta),
+            SettingField::Icons => {
+                self.icons = match self.icons {
+                    Icons::Nerd => Icons::Plain,
+                    Icons::Plain => Icons::Nerd,
+                }
+            }
             // off -> github -> local -> off
             SettingField::Contributions => {
                 self.contributions = match (self.contributions, delta > 0) {
@@ -704,6 +729,10 @@ impl SettingsOverlay {
                 SettingValue::Str(self.contrib_cell.config_value()),
             ),
             (
+                SettingField::Icons.config_key(),
+                SettingValue::Str(self.icons.config_value()),
+            ),
+            (
                 SettingField::Intro.config_key(),
                 SettingValue::Bool(self.intro),
             ),
@@ -738,6 +767,7 @@ impl SettingsOverlay {
             SettingField::PersistPanes => bool_label(self.persist_panes),
             SettingField::Contributions => self.contributions.label().to_string(),
             SettingField::ContribCellSize => self.contrib_cell.label().to_string(),
+            SettingField::Icons => self.icons.config_value().to_string(),
             SettingField::Intro => bool_label(self.intro),
         }
     }
@@ -759,6 +789,7 @@ mod settings_intro_tests {
             ContributionsMode::Off,
             CellSize::Medium,
             intro,
+            Icons::Nerd,
         )
     }
 
@@ -812,6 +843,93 @@ mod settings_intro_tests {
         crate::config::save_settings(&path, &so.config_updates()).expect("save");
         let loaded = crate::config::Config::load_from(&path).expect("load");
         assert!(!loaded.intro, "the toggle did not survive the round trip");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod settings_icons_tests {
+    use super::*;
+
+    fn overlay(icons: Icons) -> SettingsOverlay {
+        let mut so = SettingsOverlay::new(
+            60,
+            30,
+            true,
+            None,
+            9,
+            18,
+            false,
+            ContributionsMode::Off,
+            CellSize::Medium,
+            true,
+            icons,
+        );
+        so.cursor = SETTING_FIELDS
+            .iter()
+            .position(|f| *f == SettingField::Icons)
+            .expect("the icons row");
+        so
+    }
+
+    fn saved_icons(so: &SettingsOverlay) -> crate::config::SettingValue {
+        so.config_updates()
+            .into_iter()
+            .find(|(key, _)| *key == "icons")
+            .map(|(_, value)| value)
+            .expect("icons is not written to the file")
+    }
+
+    /// The row switches between the two sets both ways, says which is
+    /// selected, applies without a restart and writes the key the loader
+    /// reads. Fails if the row is inert, mislabelled or not saved.
+    #[test]
+    fn the_icons_row_toggles_and_saves_under_the_key_config_reads() {
+        assert_eq!(SettingField::Icons.config_key(), "icons");
+        assert_eq!(SettingField::Icons.applies(), Applies::Live);
+
+        let mut so = overlay(Icons::Nerd);
+        assert_eq!(so.value_label(SettingField::Icons), "nerd");
+        assert_eq!(saved_icons(&so), crate::config::SettingValue::Str("nerd"));
+
+        so.step(1);
+        assert_eq!(so.icons, Icons::Plain, "the row did not toggle");
+        assert_eq!(so.value_label(SettingField::Icons), "plain");
+        assert_eq!(saved_icons(&so), crate::config::SettingValue::Str("plain"));
+
+        so.step(-1);
+        assert_eq!(so.icons, Icons::Nerd, "the row did not toggle back");
+    }
+
+    /// Typing a digit on the row changes nothing: it is not numeric.
+    #[test]
+    fn digits_leave_the_icons_row_alone() {
+        let mut so = overlay(Icons::Plain);
+        so.push_digit(1);
+        assert_eq!(so.icons, Icons::Plain);
+    }
+
+    /// Both values survive a real save and load, read back the way launch
+    /// reads them (`Icons::from_config`). Fails if the written string is one
+    /// the loader does not recognise, which would fall back to Nerd.
+    #[test]
+    fn each_icon_set_survives_a_save_and_load() {
+        let dir = std::env::temp_dir().join(format!("fleetz-icons-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("config.toml");
+
+        for icons in [Icons::Plain, Icons::Nerd] {
+            let so = overlay(icons);
+            crate::config::save_settings(&path, &so.config_updates()).expect("save");
+            let loaded = crate::config::Config::load_from(&path).expect("load");
+            let read_back = loaded
+                .icons
+                .as_deref()
+                .map(Icons::from_config)
+                .unwrap_or_default();
+            assert_eq!(read_back, icons, "the set did not survive the round trip");
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3449,6 +3567,7 @@ mod tests {
             ContributionsMode::Off,
             CellSize::Medium,
             true,
+            Icons::Nerd,
         )
     }
 
@@ -4267,6 +4386,7 @@ mod tests {
             ContributionsMode::Off,
             CellSize::Medium,
             true,
+            Icons::Nerd,
         );
         overlay.cursor = SETTING_FIELDS
             .iter()
@@ -4308,6 +4428,7 @@ mod tests {
             ContributionsMode::Off,
             CellSize::Medium,
             true,
+            Icons::Nerd,
         );
         overlay.cursor = SETTING_FIELDS
             .iter()
@@ -4347,6 +4468,7 @@ mod tests {
             ContributionsMode::Local,
             CellSize::Medium,
             true,
+            Icons::Nerd,
         );
         let updates = overlay.config_updates();
         assert!(updates.iter().any(|(k, v)| *k == "contributions"
