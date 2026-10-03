@@ -78,13 +78,17 @@ pub fn github_failure_label(failure: &crate::github::Failure) -> &'static str {
     use crate::github::FailureKind;
     match failure.kind {
         FailureKind::Offline => "offline",
+        // Decided by the fetch layer: GitHub's error `type` for a body, the
+        // status and rate headers for a 403 or 429.
+        FailureKind::Api | FailureKind::Http if failure.rate_limited => "rate limited",
         FailureKind::Http => "http error",
-        // Decided by the fetch layer from GitHub's error `type`.
-        FailureKind::Api if failure.rate_limited => "rate limited",
         FailureKind::Api => "api error",
         FailureKind::Auth => "not signed in",
         FailureKind::Malformed => "bad response",
         FailureKind::TimedOut => "timed out",
+        // Provisional words: FZ-10c settles them with the owner (O1).
+        FailureKind::Server => "server error",
+        FailureKind::Refused => "refused",
     }
 }
 

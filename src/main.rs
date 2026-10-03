@@ -1760,6 +1760,7 @@ fn apply_github_poll(
                 // The poll always bypasses the cache, so this is
                 // network data by construction.
                 origin: _,
+                meta: _,
             } = *fetch;
             // The calendar rides the same payload as the repos, so
             // a poll that updated CI also refreshed the year at no
@@ -2390,6 +2391,7 @@ async fn load_repos(
         Err(github::FetchError {
             failure,
             fallback: Some(fallback),
+            meta: _,
         }) => {
             let written = match fallback.origin {
                 github::Origin::Cache { written } => written,
@@ -2400,6 +2402,7 @@ async fn load_repos(
         Err(github::FetchError {
             failure,
             fallback: None,
+            meta: _,
         }) => {
             return Err(LoadError {
                 message: failure.message.clone(),
@@ -3507,6 +3510,7 @@ mod tests {
             calendar: None,
             has_pr_counts: true,
             origin: github::Origin::Network,
+            meta: Default::default(),
         }))
     }
 
@@ -3514,6 +3518,7 @@ mod tests {
         let result = result.map_err(|message| github::FetchError {
             failure: github::Failure::new(github::FailureKind::Http, message),
             fallback: None,
+            meta: Default::default(),
         });
         poll_with(app, result);
     }
@@ -3637,6 +3642,7 @@ mod tests {
         github::FetchError {
             failure: github::Failure::new(github::FailureKind::Offline, "no route"),
             fallback: Some(cached),
+            meta: Default::default(),
         }
     }
 
@@ -3834,6 +3840,7 @@ mod tests {
             let result = result.map_err(|m| github::FetchError {
                 failure: github::Failure::new(github::FailureKind::Http, m),
                 fallback: None,
+                meta: Default::default(),
             });
             answer(&mut app, attempt, result);
 
@@ -4973,6 +4980,7 @@ mod tests {
                 calendar: None,
                 has_pr_counts: true,
                 origin: github::Origin::Network,
+                meta: Default::default(),
             })),
         );
     }
