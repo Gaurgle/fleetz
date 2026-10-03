@@ -187,7 +187,7 @@ pub fn render(frame: &mut Frame, area: Rect, overlay: &BranchOverlay) {
         }
     }
 
-    let title = format!(" Branches — {} ", overlay.repo_name);
+    let title = format!(" Branches - {} ", overlay.repo_name);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(colors::LAVENDER))
@@ -209,4 +209,33 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     Layout::horizontal([Constraint::Percentage(percent_x)])
         .flex(Flex::Center)
         .split(vertical[0])[0]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    /// The title carried an em dash, against the house rule.
+    #[test]
+    fn overlay_title_draws_no_em_or_en_dash() {
+        let overlay = BranchOverlay {
+            repo_name: "fleetz".to_string(),
+            repo_path: "/tmp/fleetz".to_string(),
+            branches: Vec::new(),
+            selected: 0,
+            confirm_delete: false,
+            previews: std::collections::HashMap::new(),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| render(f, f.area(), &overlay)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text: String = buffer.content().iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("Branches"), "the title is drawn");
+        assert!(
+            !text.contains(['\u{2013}', '\u{2014}']),
+            "overlay has a dash character"
+        );
+    }
 }

@@ -884,7 +884,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let version_span = Span::styled(format!(" {VERSION}"), Style::default().fg(colors::SUBTEXT));
     let header_span = (!app.header.is_empty()).then(|| {
         Span::styled(
-            format!(" — {}", app.header),
+            format!(" - {}", app.header),
             Style::default().fg(colors::OVERLAY),
         )
     });
@@ -1152,6 +1152,18 @@ mod tests {
             .style()
             .fg
             .expect("watch label has no colour")
+    }
+
+    /// The house rule bans em and en dashes, and the header drew an em dash
+    /// between the version and the window label.
+    #[test]
+    fn header_draws_no_em_or_en_dash() {
+        let row = header_row("last 7 days", 120);
+        assert!(row.contains("last 7 days"), "the window label is drawn");
+        assert!(
+            !row.contains(['\u{2013}', '\u{2014}']),
+            "header has a dash character: {row:?}"
+        );
     }
 
     /// Only the lamp moves. Same rule as `spinner_group`: a word that pulses

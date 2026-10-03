@@ -1534,9 +1534,11 @@ pub struct App {
     pub detail_view_height: std::cell::Cell<u16>,
     pub inspector_max_scroll: std::cell::Cell<u16>,
     /// Repaint on the next loop pass. Set by every state change; ticks also
-    /// force a paint every 4th frame so the clock and spinner stay live.
+    /// force a paint while a spinner is visible, and every
+    /// `SLOW_REPAINT_TICKS` ticks in watch mode or while applying, so the
+    /// clock and blink stay live.
     pub needs_redraw: bool,
-    /// Advances every 250ms tick; drives the loading/sweep spinner.
+    /// Advances every 100ms tick; drives the loading/sweep spinner.
     pub spinner_frame: usize,
     /// Flips every 500ms; drives the pending-CI blink.
     pub blink_on: bool,
