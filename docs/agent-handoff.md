@@ -3,11 +3,11 @@
 Last rewritten 2026-10-02 22:09 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `60a43b88-e448-4466-be9c-e93c226b8f44`), when Andreas
 stopped the session for the night with usage at 82%. Updated 2026-10-03
-17:29 CEST by the session that holds the baton now (the Baton, State of
-`main`, Done on 2026-10-03, Worktrees and Next step sections); the rest
-stands as written on 2026-10-02. **In flight at 17:40: two `fz-worker`s,
-FZ-09c (#59), dispatched 17:27, and FZ-13d (#53), dispatched 17:39; no
-reviewer, no build.** Read this file,
+17:55 CEST by the session that holds the baton now (the Baton, State of
+`main`, Done on 2026-10-03, Worktrees, Next step and What waits on Andreas
+sections); the rest stands as written on 2026-10-02. **In flight at 17:55:
+two `fz-reviewer`s, on FZ-09c (#59) and FZ-13u (#65); no worker, no build.
+FZ-13d (#53) is at Ready to integrate, waiting for Andreas.** Read this file,
 the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
@@ -110,8 +110,8 @@ written into the repository.
 
 ## State of `main`
 
-`main` is at the merge of FZ-10a, `645ef75`, plus coordination doc commits,
-equal to `origin/main`, CI green, 923 tests passing and 1 ignored. **The no-install
+`main` is at the merge of #64, `0b9930d`, plus coordination doc commits,
+equal to `origin/main`, CI green, 926 tests passing and 1 ignored. **The no-install
 span of the identity series is closed** (FZ-05b opened it at `f37c6b9`,
 FZ-05e closed it at `40a2c73`): `main` shows every checkout again. Andreas was
 told; installing and tagging are his. To look at `main` without installing:
@@ -125,6 +125,8 @@ evidence, worktree and local branch removed.
 | Ticket | Issue | Ticket commit | Merge | What landed |
 |---|---|---|---|---|
 | FZ-10a | #47 | `97e694d` | `645ef75` | A budget reading from the rate-limit headers on every answer, carried in `FetchMeta`; refusals classified by the design's 4.3 table (`Server`, `Refused`, primary and secondary limits); one reused client with a 10 s connect and a 30 s total timeout; `token_fingerprint` and `poll_cost` |
+
+| Late frame | #64 | `4fd53e0` | `0b9930d` | A `LoadingFrame` queued behind `Loaded` no longer cancels the held first paint: the arm's body is `on_loading_frame`, which adds to `needs_redraw` |
 
 What FZ-10a leaves for later tickets is in the closing comment on #47:
 `poll_cost` carries an `expect(dead_code)` outside tests that FZ-10b removes
@@ -169,34 +171,53 @@ Each issue holds its evidence.
 
 ## Worktrees
 
-Three exist besides the main checkout, under `.claude/worktrees/`. `fz-09c`
-and `fz-13d` each hold a worker's uncommitted change while that worker runs.
+Four exist besides the main checkout, under `.claude/worktrees/`. Each
+issue's comments hold the diff hash of the revision under review or accepted.
 
-- **`fz-09c`, branch `feat/fz-09c-keyed-cache`, base `645ef75`.** FZ-09c
-  (#59) was dispatched to an `fz-worker` on 2026-10-03 at 17:27; the
-  assignment is the last comment on #59 and the board shows it In progress.
-  If this session is gone, the worker is gone with it: look at the
-  worktree's `git status`, and dispatch a fresh worker with the issue's last
-  comment rather than trusting a half-made change. Nothing in it is reviewed
-  until #59 says so.
-- **`fz-13d`, branch `fix/fz-13d-focus-reads-true`, base `5821ae8`.** FZ-13d
-  (#53) was dispatched to an `fz-worker` on 2026-10-03 at 17:39, after
-  Andreas asked whether more could run in parallel. It shares `src/main.rs`
-  with FZ-09c by symbol (the `BackTab` arm only), as its body allows; the
-  assignment is the last comment on #53. **It stops at Ready to integrate:**
-  `Shift-Tab` changes direction, a changed interaction, so Andreas tries the
-  branch build before the merge.
-- `fz-10a` is removed: FZ-10a is merged.
+- **`fz-09c`, branch `feat/fz-09c-keyed-cache`, base `645ef75`, uncommitted
+  change, in Review.** FZ-09c (#59): the worker reported at 17:43 (diff hash
+  `f134df9f...`, on #59) and an `fz-reviewer` was dispatched at about 17:44.
+  Nothing in it is accepted until #59 says so. Two coordinator rulings wait
+  for the review to finish (both on #59): the host part of the file name is
+  to come from one function shared with the identity key, which needs a
+  small extraction in `src/model.rs` by a worker and a re-review; and the
+  worker's reading that a signed-out `R` or poll has no fallback goes to
+  Andreas if the reviewer finds the screen gets worse than today beyond
+  owner items O7 and O12. If this session is gone, the reviewer is gone with
+  it: dispatch a fresh one with the worker-report comment on #59.
+- **`fz-13d`, branch `fix/fz-13d-focus-reads-true`, at `12b0b1b`, pushed,
+  clean: Ready to integrate.** FZ-13d (#53) was accepted in review and
+  re-review (one help line was added after the first acceptance), CI is
+  green on the branch, and the combined checks passed against `main` at
+  `933b452`. **`main` has moved in code since (#64), so rerun the combined
+  check before merging.** It waits for Andreas to try the branch build:
+  `Shift-Tab` changes direction, a changed interaction. The steps to try it
+  are in the last comment on #53.
+- **`fz-13u`, branch `feat/fz-13u-icons-setting`, base `933b452`,
+  uncommitted change, in Review.** FZ-13u (#65): the worker reported at
+  17:54 (diff hash `8ab7c693...`, on #65) and an `fz-reviewer` was
+  dispatched at 17:55. One existing-test edit goes beyond what Andreas
+  released for the ticket and waits for his answer before the merge: a
+  compile-forced arm `SettingField::Icons => "icons",` in the exhaustive
+  match of `ui/help.rs::the_settings_row_names_every_setting`.
+- `fz-10a` and `issue-64` are removed: both tickets are merged.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked by
   Andreas until the repository goes public.
 
 ## Next step, and the order after it
 
-**Next step:** FZ-09c (#59), in flight: when its worker reports, dispatch
-`fz-reviewer` as a separate invocation, then commit, push, run the combined
+**Next step:** three tickets are between review and merge; take each to
+Done before dispatching more. FZ-13d (#53): merge when Andreas has tried it,
+after rerunning the combined check. FZ-13u (#65): when the review accepts
+and Andreas has answered on the match arm, commit, push, check and merge (a
+small look change, reported at the merge). FZ-09c (#59): when the review
+returns, have a worker make the `src/model.rs` extraction and any requested
+fixes, re-review, then commit, push, run the combined
 checks and merge under the safe-merge rule (the owner approved its cache
-format change on 2026-10-02). When it lands, the coordinator makes the
+format change on 2026-10-02). The three share `src/main.rs`, `src/app.rs`,
+`src/ui/help.rs` and `README.md` by region, so merge one at a time and rerun
+the combined check for the next against the new `main`. When FZ-09c lands, the coordinator makes the
 contract and invariant edits the ticket's body lists under "Contract and
 invariant edits": the `CLAUDE.md` launch invariant, freshness contract rules
 2 and 5 and three transitions, `api-budget-design.md` 4.1 on `token_id`, and
@@ -209,13 +230,15 @@ Then:
    each FZ-09 ticket lands, amend `CLAUDE.md` and
    [freshness-contract.md](freshness-contract.md) as the coverage design's
    section 6 says.
-2. **M3 in the second slot:** FZ-13f #55 (the hyphen in the header, README
-   and comment corrections; it edits the header in `ui/mod.rs`, so not beside
-   FZ-10c or FZ-09b, and `README.md`, which FZ-09c also edits: run it while
-   FZ-09c is in review or between two tickets of line 1), FZ-13d #53 (one
-   key arm in `main.rs`), FZ-13u #65, #64. Every one of these touches a file
-   a ticket of line 1 owns, so the second slot was left empty on 2026-10-03
-   while FZ-10a and FZ-09c ran. Wave 3
+2. **M3 in the second slot:** FZ-13f #55 is the only M3 ticket left with an
+   issue that does not wait on Andreas (the hyphen in the header, README
+   and comment corrections). It edits the header in `ui/mod.rs`, so not
+   beside FZ-10c or FZ-09b; comments in `ui/compact.rs`, `ui/detail.rs` and
+   `src/app.rs`, right beside lines FZ-13d changed; and `README.md`. Run it
+   after FZ-13d, FZ-13u and FZ-09c are merged. On 2026-10-03 Andreas asked
+   for more in parallel, and the coordinator ran FZ-13d, #64 and FZ-13u
+   beside FZ-09c with ownership by symbol or region rather than by whole
+   file, never more than two workers at once. Wave 3
    and the rendering tickets in the split on #26 have no issues yet; write
    their bodies before asking. FZ-13s #56 waits for Andreas.
 3. **M1's exit evidence:** when line 1 is done, check the milestone's exit
@@ -229,7 +252,18 @@ Keep to two workers with disjoint ownership, plus their reviewers.
 
 ## What waits on Andreas
 
-Nothing blocks the next step.
+Asked on 2026-10-03, not yet answered:
+
+- **FZ-13d (#53):** try the branch build and say whether it may merge
+  (`cargo run --release --manifest-path
+  ~/repos/fleetz/.claude/worktrees/fz-13d/Cargo.toml`; steps on #53).
+- **FZ-13u (#65):** may the compile-forced match arm in the existing test
+  `the_settings_row_names_every_setting` stand? His release for the ticket
+  names only the positional `SettingsOverlay::new` calls.
+- **Whether "continue the work from handoff" confirmed the three standing
+  instructions** as the coordinator read it (see Baton). He has not objected.
+
+Older, still open:
 
 1. **FZ-13 wave 4** (maximize and restore, hints that follow focus,
    economical folds): each needs a decision from him before it is a ticket.
@@ -329,10 +363,10 @@ O1 to O5 accepted (O1's words and look are his on the FZ-10c build); FZ-08
 ## Tickets that exist and wait
 
 - **API budget:** FZ-10b #48, FZ-10c #49. Serial. FZ-10a #47 is done.
-- **Coverage and cache:** FZ-09c #59 (in flight), FZ-09b #58, FZ-09d #60, in
+- **Coverage and cache:** FZ-09c #59 (in Review), FZ-09b #58, FZ-09d #60, in
   the order of C8 between the FZ-10 tickets; FZ-09e #61 stays not promoted.
-- **M3:** FZ-13d #53, FZ-13f #55, FZ-13u #65, #64, and FZ-13s #56, which
-  waits for Andreas.
+- **M3:** FZ-13d #53 (Ready to integrate), FZ-13u #65 (in Review), FZ-13f
+  #55, and FZ-13s #56, which waits for Andreas. #64 is done.
 - **Follow-ups (P2):** #46 (needs Andreas's OK).
 - **#45** (M5), parked.
 - **FZ-08 #21** (M4): a read-only GitHub Project board view. He said not to
