@@ -2228,6 +2228,23 @@ impl App {
         };
     }
 
+    /// `toggle_panel_focus` in reverse (Shift-Tab): repo list -> strip ->
+    /// inspector -> detail -> repo list, skipping a hidden inspector the same
+    /// way.
+    pub fn toggle_panel_focus_back(&mut self) {
+        if self.view != View::Detail {
+            // Two targets, so the reverse is the same toggle.
+            self.toggle_panel_focus();
+            return;
+        }
+        self.focused_panel = match self.focused_panel {
+            FocusedPanel::RepoList => FocusedPanel::Contributions,
+            FocusedPanel::Contributions if self.shows_inspector() => FocusedPanel::Inspector,
+            FocusedPanel::Contributions | FocusedPanel::Inspector => FocusedPanel::Detail,
+            FocusedPanel::Detail => FocusedPanel::RepoList,
+        };
+    }
+
     /// Jump keyboard focus directly to `panel` (the `1`/`2` bindings).
     /// Only meaningful in `Detail` view.
     pub fn focus_panel(&mut self, panel: FocusedPanel) {
@@ -4011,6 +4028,44 @@ mod tests {
         assert_eq!(app.focused_panel, FocusedPanel::RepoList);
     }
 
+    /// Shift-Tab used to call the forward cycle, so it walked the same way
+    /// as Tab and "back one pane" took three presses.
+    #[test]
+    fn shift_tab_walks_all_four_panes_in_reverse() {
+        let mut app = make_app(1);
+        app.view = View::Detail;
+        for next in [
+            FocusedPanel::Contributions,
+            FocusedPanel::Inspector,
+            FocusedPanel::Detail,
+            FocusedPanel::RepoList,
+        ] {
+            app.toggle_panel_focus_back();
+            assert_eq!(app.focused_panel, next);
+        }
+        for start in [
+            FocusedPanel::RepoList,
+            FocusedPanel::Detail,
+            FocusedPanel::Inspector,
+            FocusedPanel::Contributions,
+        ] {
+            app.focused_panel = start;
+            app.toggle_panel_focus();
+            app.toggle_panel_focus_back();
+            assert_eq!(app.focused_panel, start, "Shift-Tab did not undo Tab");
+        }
+    }
+
+    #[test]
+    fn shift_tab_in_compact_toggles_between_the_list_and_the_pane() {
+        let mut app = make_app(1);
+        app.view = View::Compact;
+        app.toggle_panel_focus_back();
+        assert_eq!(app.focused_panel, FocusedPanel::Contributions);
+        app.toggle_panel_focus_back();
+        assert_eq!(app.focused_panel, FocusedPanel::RepoList);
+    }
+
     /// The grid reads as columns of weeks and rows of weekdays, so the keys
     /// must move that way: left/right change the week, up/down change the
     /// weekday. They were wired the other way round at first, which moved the
@@ -4820,6 +4875,22 @@ mod tests {
         assert_ne!(
             app.focused_panel,
             FocusedPanel::Inspector,
+            "focus landed on a pane the graph view does not draw"
+        );
+    }
+
+    /// The reverse walk has the same trap from the other side: back from the
+    /// strip is the inspector, unless the graph view hides it.
+    #[test]
+    fn reverse_focus_cycling_skips_a_hidden_inspector() {
+        let mut app = make_app(1);
+        app.history_view = HistoryView::Graph;
+        app.view = View::Detail;
+        app.focused_panel = FocusedPanel::Contributions;
+        app.toggle_panel_focus_back();
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::Detail,
             "focus landed on a pane the graph view does not draw"
         );
     }

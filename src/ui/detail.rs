@@ -530,11 +530,6 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         colors::SURFACE
     };
-    let num_color = if focused {
-        colors::LAVENDER
-    } else {
-        colors::SURFACE
-    };
     let panel = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -557,8 +552,11 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // knows live -- and the frame was repeating those exact words a row
     // above them. The right title carries the view switcher instead.
     let status = repo.short_status();
+    // The number span comes from `panel_title` so its colors have one source;
+    // a copy here once drew the unfocused number darker than every other pane.
+    let number = crate::ui::panel_title(2, "", focused).spans.swap_remove(0);
     let left_title = Line::from(vec![
-        Span::styled(" [2] ", Style::default().fg(num_color)),
+        number,
         Span::styled(
             repo.name.clone(),
             Style::default()
@@ -2502,6 +2500,41 @@ mod tests {
             .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The color the `2` of the detail pane's ` [2] ` title is drawn in.
+    fn detail_number_color(focused_panel: FocusedPanel) -> Option<ratatui::style::Color> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let width = 92;
+        let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), width, 44);
+        app.focused_panel = focused_panel;
+        let mut term = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let row: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+        let x = row.find("[2]").expect("pane number not drawn") as u16 + 1;
+        buf[(x, 0)].style().fg
+    }
+
+    /// The detail pane builds its own title and drew its unfocused number in
+    /// SURFACE, a shade darker than every other pane's, which is exactly
+    /// when the number is the key you need to read.
+    #[test]
+    fn the_unfocused_detail_number_matches_the_other_panes() {
+        let number_fg = |focused| {
+            crate::ui::panel_title(2, "detail", focused).spans[0]
+                .style
+                .fg
+        };
+        assert_eq!(
+            detail_number_color(FocusedPanel::RepoList),
+            number_fg(false),
+            "unfocused number differs from panel_title's"
+        );
+        assert_eq!(detail_number_color(FocusedPanel::Detail), number_fg(true));
     }
 
     /// The failure this closes: a remote-only branch's tip is not in the union
