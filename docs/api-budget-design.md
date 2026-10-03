@@ -492,6 +492,7 @@ pace (4.2), and the not-before.
 | Body cut off for another reason | `Offline` (as today) | |
 | 2xx, unparseable or no `data` | `Malformed` | |
 | 2xx, `errors` with `type == RATE_LIMITED` | `Api` | primary |
+| 2xx, `errors` with no `type` whose message says "rate limit" | `Api` | primary (the fallback that predates this table; the test `an_untyped_rate_limit_body_falls_back_to_the_message` pins it, and FZ-10a kept it, row added 2026-10-03) |
 | 2xx, other `errors` | `Api` | |
 | 403 or 429 with `retry-after` | `Http` | secondary, with its delay |
 | 403 or 429 with `x-ratelimit-remaining: 0` | `Http` | primary |
