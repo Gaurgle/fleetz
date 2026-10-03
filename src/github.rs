@@ -57,6 +57,47 @@ pub struct GithubFetch {
     /// cached payload leaves the first real poll a whole interval away, and
     /// the dashboard spends it showing whatever the last session left behind.
     pub origin: Origin,
+    /// What the attempt learned besides the payload. Default for a
+    /// cache-served load, which asked GitHub nothing.
+    pub meta: FetchMeta,
+}
+
+/// What one attempt learned about the account and the answer, beside the
+/// payload or the failure. One struct with a `Default`, so a later field
+/// (coverage, the account key: FZ-09) lands inside it and no test that builds
+/// a `GithubFetch` or `FetchError` has to change again.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FetchMeta {
+    /// The API budget the response's headers reported, if they did.
+    pub budget: Option<BudgetReading>,
+}
+
+/// GitHub's API budget as one response's `x-ratelimit-*` headers stated it.
+/// See `docs/api-budget-design.md` 4.1.
+///
+/// Read from every response that carries the headers, success or failure,
+/// since a refused answer states the budget as truly as an accepted one. A
+/// response without them (a gateway 502) carries no reading, and the last
+/// known one stands. Nothing here is anchored to the local clock: `reset` and
+/// `date` are the server's, raw, so the caller can turn the reset into a delay
+/// in the server's own time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BudgetReading {
+    /// `x-ratelimit-limit`: points per window.
+    pub limit: u32,
+    /// `x-ratelimit-remaining`.
+    pub remaining: u32,
+    /// `x-ratelimit-used`.
+    pub used: u32,
+    /// `x-ratelimit-reset`: when the window ends, in epoch seconds on the
+    /// server's clock.
+    pub reset: i64,
+    /// The response's `Date`, the server's clock at the same moment. `None`
+    /// when absent or unparseable.
+    pub date: Option<DateTime<Utc>>,
+    /// `token_fingerprint` of the token the request carried. Readings from two
+    /// tokens are two accounts, possibly, and never compared. Memory only.
+    pub token_id: String,
 }
 
 /// Where a payload came from.
@@ -75,18 +116,41 @@ pub enum Origin {
 /// How a request to GitHub failed. See `docs/freshness-contract.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureKind {
-    /// Transport: DNS, TLS, no route, a body cut off.
+    /// Transport: DNS, TLS, no route, a connection that could not be opened
+    /// (a connect timeout among them), a body cut off.
     Offline,
-    /// A non-2xx status.
+    /// A non-2xx status no other kind covers, a 403 or 429 rate limit among
+    /// them.
     Http,
-    /// A GraphQL `errors` body; the rate limit is one of these.
+    /// A GraphQL `errors` body; the primary rate limit is one of these.
     Api,
     /// No token from `gh`.
     Auth,
     /// A body that does not parse, or parses without `data`.
     Malformed,
-    /// Given up on after `GITHUB_POLL_STUCK_AFTER` with no answer.
+    /// No answer in time after the connection was made: the client's total
+    /// deadline (`TOTAL_TIMEOUT`), or the give-up after
+    /// `GITHUB_POLL_STUCK_AFTER`.
     TimedOut,
+    /// A 5xx answer. Not "query too slow": a 502 or 504 can be GitHub's
+    /// deadline, a deploy or an outage, and one answer does not say which.
+    Server,
+    /// Credentials or permissions refused: a 401, or a 403 that is not a
+    /// rate limit (scopes, SSO).
+    Refused,
+}
+
+/// Which of GitHub's rate limits refused an attempt.
+/// See `docs/api-budget-design.md` 4.3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateLimit {
+    /// The hourly points budget is spent; it lifts at `x-ratelimit-reset`.
+    Primary,
+    /// A secondary limit (concurrency, points a minute, server time). It lifts
+    /// after `retry_after` when GitHub said, otherwise after an unstated wait.
+    Secondary {
+        retry_after: Option<std::time::Duration>,
+    },
 }
 
 /// One failed attempt: its kind, and the message the status line shows.
@@ -94,9 +158,12 @@ pub enum FailureKind {
 pub struct Failure {
     pub kind: FailureKind,
     pub message: String,
-    /// An `Api` failure that is GitHub's rate limit: the common way the API
-    /// refuses, and one that clears on its own, so the header names it.
+    /// Any failure that is one of GitHub's rate limits, an `Api` body or a
+    /// 403 or 429: the common way the API refuses, and one that clears on its
+    /// own, so the header names it. True exactly when `limit` is set.
     pub rate_limited: bool,
+    /// Which limit, with its `retry-after` when it is a secondary one.
+    pub limit: Option<RateLimit>,
 }
 
 impl Failure {
@@ -105,14 +172,21 @@ impl Failure {
             kind,
             message: message.into(),
             rate_limited: false,
+            limit: None,
         }
     }
 
     /// An `Api` failure that is a rate limit.
     pub fn rate_limit(message: impl Into<String>) -> Self {
+        Self::limited(FailureKind::Api, RateLimit::Primary, message)
+    }
+
+    /// A failure that is a rate limit of the given kind.
+    fn limited(kind: FailureKind, limit: RateLimit, message: impl Into<String>) -> Self {
         Self {
             rate_limited: true,
-            ..Self::new(FailureKind::Api, message)
+            limit: Some(limit),
+            ..Self::new(kind, message)
         }
     }
 }
@@ -129,6 +203,8 @@ pub struct FetchError {
     pub failure: Failure,
     /// Always `Origin::Cache` when present.
     pub fallback: Option<Box<GithubFetch>>,
+    /// What the failed attempt learned, a refused answer's budget among it.
+    pub meta: FetchMeta,
 }
 
 impl std::fmt::Debug for FetchError {
@@ -443,6 +519,24 @@ const ORG_REPO_LIMIT: u32 = 12;
 /// Raising either back past what it replaced puts the 26-point query back.
 const _: () = assert!(MAX_ORGS < 25 && ORG_REPO_LIMIT < 50);
 
+/// What one fleet poll costs in GraphQL points at `repo_limit`, as measured
+/// (`docs/api-budget-design.md` section 2): 2 at 20 (M2), 3 at 50 (M1), 4 at
+/// 100 (M6, a dry run). A limit between two measured points takes the higher
+/// price, so pacing on it errs slow. The headers carry no per-query cost, so
+/// this is the only source: a change to `build_query` re-measures and updates
+/// it under "Pricing a query change".
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "FZ-10b's pacing is the first caller")
+)]
+pub fn poll_cost(repo_limit: u32) -> u32 {
+    match repo_limit {
+        0..=20 => 2,
+        21..=50 => 3,
+        _ => 4,
+    }
+}
+
 fn build_query(repo_limit: u32, today: chrono::NaiveDate, rotation: i64) -> String {
     // PR numbers cannot be had cheaply, and half-measures buy nothing.
     // Measured against the live API on the same fleet:
@@ -637,6 +731,7 @@ fn split_viewer(viewer: Viewer, today: chrono::NaiveDate, origin: Origin) -> Git
         calendar: parse_calendar(contribution_years, recent, today).map(Box::new),
         has_pr_counts,
         origin,
+        meta: FetchMeta::default(),
     }
 }
 
@@ -679,8 +774,20 @@ pub async fn fetch_repos(
         return Ok(fetch);
     }
 
-    let attempt = request(repo_limit, cache, today).await;
-    settle_attempt(attempt, cache, today)
+    let (attempt, budget) = request(repo_limit, cache, today).await;
+    with_budget(settle_attempt(attempt, cache, today), budget)
+}
+
+/// Attach the attempt's budget reading to its result, whichever way it went.
+fn with_budget(
+    result: Result<GithubFetch, FetchError>,
+    budget: Option<BudgetReading>,
+) -> Result<GithubFetch, FetchError> {
+    let meta = FetchMeta { budget };
+    match result {
+        Ok(fetch) => Ok(GithubFetch { meta, ..fetch }),
+        Err(error) => Err(FetchError { meta, ..error }),
+    }
 }
 
 /// Turn a finished attempt into the fetch result: a success as it is, a
@@ -698,27 +805,71 @@ fn settle_attempt(
     attempt.map_err(|failure| FetchError {
         failure,
         fallback: read_cached(cache, today).map(Box::new),
+        meta: FetchMeta::default(),
     })
 }
 
-/// One network attempt: token, request, status, body.
+const GRAPHQL_URL: &str = "https://api.github.com/graphql";
+
+/// How long opening the connection may take. A connect that runs out is
+/// `Offline`: the path to GitHub is not up (A5).
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How long the whole request may take, the body read included. Clears the
+/// measured 6 to 7.5 s answer and the 11 s gateway 502 with margin, and fires
+/// well before the 60 s give-up, which stays the backstop for a hung token
+/// subprocess.
+const TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The one client every request goes through. It used to be built per
+/// request with no timeout at all, so a request that never answered was
+/// only ever ended by the give-up, and every poll paid a fresh TLS handshake.
+fn client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| build_client(CONNECT_TIMEOUT, TOTAL_TIMEOUT))
+}
+
+/// A client with the two deadlines. `reqwest::Client::new()` panics on the
+/// same TLS backend failure `build` reports, so the `expect` loses nothing.
+fn build_client(connect: std::time::Duration, total: std::time::Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(connect)
+        .timeout(total)
+        .build()
+        .expect("the HTTP client could not be built")
+}
+
+/// One network attempt: token, request, status, body. The budget reading
+/// travels beside the result, since a refused answer carries one too.
 async fn request(
     repo_limit: u32,
     cache: &crate::cache::ApiCache,
     today: chrono::NaiveDate,
-) -> Result<GithubFetch, Failure> {
-    let token = get_gh_token()
-        .await
-        .map_err(|e| Failure::new(FailureKind::Auth, e))?;
+) -> (Result<GithubFetch, Failure>, Option<BudgetReading>) {
+    let token = match get_gh_token().await {
+        Ok(token) => token,
+        Err(e) => return (Err(Failure::new(FailureKind::Auth, e)), None),
+    };
     let query = build_query(
         repo_limit,
         today,
         crate::contributions::rotation_tick(chrono::Utc::now()),
     );
+    exchange(client(), GRAPHQL_URL, &token, &query, cache, today).await
+}
 
-    let client = reqwest::Client::new();
+/// Send the query and turn whatever comes back into a result. Split from
+/// `request` so a test can point it at a local listener with short deadlines.
+async fn exchange(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+    query: &str,
+    cache: &crate::cache::ApiCache,
+    today: chrono::NaiveDate,
+) -> (Result<GithubFetch, Failure>, Option<BudgetReading>) {
     let resp = match client
-        .post("https://api.github.com/graphql")
+        .post(url)
         .header("Authorization", format!("bearer {token}"))
         .header("User-Agent", "fleetz")
         .json(&serde_json::json!({ "query": query }))
@@ -726,31 +877,177 @@ async fn request(
         .await
     {
         Ok(r) => r,
-        // Transport failure (offline, DNS, TLS). `settle_attempt` attaches
-        // the cache, so launch and `R` still work offline.
+        // No answer. `settle_attempt` attaches the cache, so launch and `R`
+        // still work offline.
         Err(e) => {
-            return Err(Failure::new(
-                FailureKind::Offline,
-                format!("GitHub API request failed: {e}"),
-            ));
+            return (
+                Err(transport_failure(&e, "GitHub API request failed")),
+                None,
+            );
         }
     };
 
-    if !resp.status().is_success() {
-        return Err(Failure::new(
-            FailureKind::Http,
-            format!("GitHub API returned {}", resp.status()),
-        ));
+    let status = resp.status();
+    let headers = resp.headers().clone();
+    let budget = read_budget(&headers, &token_fingerprint(token));
+    let body = match resp.text().await {
+        Ok(body) => body,
+        Err(e) if status.is_success() => {
+            return (
+                Err(transport_failure(&e, "failed to read response")),
+                budget,
+            );
+        }
+        // A refusal is decided by its status and headers; the body only adds
+        // the secondary-limit wording and the message, so a lost one is no
+        // reason to call GitHub's answer something else.
+        Err(_) => String::new(),
+    };
+    if !status.is_success() {
+        return (Err(classify_refusal(status, &headers, &body)), budget);
     }
+    (accept_response(&body, cache, today), budget)
+}
 
-    let body_text = resp.text().await.map_err(|e| {
-        Failure::new(
-            FailureKind::Offline,
-            format!("failed to read response: {e}"),
-        )
-    })?;
+/// A request that got no complete answer. A connect failure, a connect
+/// timeout included, is `Offline`; a deadline reached after connecting,
+/// during the body read included, is `TimedOut` (A5).
+fn transport_failure(error: &reqwest::Error, context: &str) -> Failure {
+    Failure::new(
+        transport_kind(error.is_connect(), error.is_timeout()),
+        format!("{context}: {error}"),
+    )
+}
 
-    accept_response(&body_text, cache, today)
+/// reqwest marks a connect timeout as both a connect and a timeout error, so
+/// the connect test goes first: a dropped Wi-Fi is not a slow server, and as
+/// `TimedOut` it would be put on the server's backoff ladder.
+fn transport_kind(is_connect: bool, is_timeout: bool) -> FailureKind {
+    if is_connect {
+        FailureKind::Offline
+    } else if is_timeout {
+        FailureKind::TimedOut
+    } else {
+        FailureKind::Offline
+    }
+}
+
+/// Classify a non-2xx answer by the table in `docs/api-budget-design.md` 4.3.
+/// The rows are checked in order: a `retry-after` names a secondary limit
+/// even beside `x-ratelimit-remaining: 0`.
+fn classify_refusal(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+) -> Failure {
+    let message = refusal_message(status, body);
+    let code = status.as_u16();
+    if code == 403 || code == 429 {
+        if let Some(value) = headers.get(reqwest::header::RETRY_AFTER) {
+            let retry_after = value
+                .to_str()
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(std::time::Duration::from_secs);
+            return Failure::limited(
+                FailureKind::Http,
+                RateLimit::Secondary { retry_after },
+                message,
+            );
+        }
+        if header_number::<u32>(headers, "x-ratelimit-remaining") == Some(0) {
+            return Failure::limited(FailureKind::Http, RateLimit::Primary, message);
+        }
+        if code == 429 || body.to_lowercase().contains("secondary rate limit") {
+            let limit = RateLimit::Secondary { retry_after: None };
+            return Failure::limited(FailureKind::Http, limit, message);
+        }
+    }
+    let kind = match code {
+        401 | 403 => FailureKind::Refused,
+        500..=599 => FailureKind::Server,
+        _ => FailureKind::Http,
+    };
+    Failure::new(kind, message)
+}
+
+/// The longest stretch of a refusal's body the message keeps.
+const REFUSAL_DETAIL_CHARS: usize = 200;
+
+/// The status, and what the body says about it when it says something
+/// readable: GitHub's JSON `message`, or plain text, on one line and
+/// trimmed. An HTML page (a gateway's) is left out.
+fn refusal_message(status: reqwest::StatusCode, body: &str) -> String {
+    let head = format!("GitHub API returned {status}");
+    let text = body.trim();
+    if text.starts_with('<') {
+        return head;
+    }
+    let said = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|json| json.get("message")?.as_str().map(str::to_string))
+        .unwrap_or_else(|| text.to_string());
+    let line: String = said
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(REFUSAL_DETAIL_CHARS)
+        .collect();
+    match line.is_empty() {
+        true => head,
+        false => format!("{head}: {line}"),
+    }
+}
+
+/// The budget the response's headers state, or `None` unless all four of
+/// limit, remaining, used and reset are there and numeric: half a window is
+/// nothing to pace on. `Date` is optional; without it the caller falls back
+/// to the local clock.
+fn read_budget(headers: &reqwest::header::HeaderMap, token_id: &str) -> Option<BudgetReading> {
+    Some(BudgetReading {
+        limit: header_number(headers, "x-ratelimit-limit")?,
+        remaining: header_number(headers, "x-ratelimit-remaining")?,
+        used: header_number(headers, "x-ratelimit-used")?,
+        reset: header_number(headers, "x-ratelimit-reset")?,
+        date: headers
+            .get(reqwest::header::DATE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|text| DateTime::parse_from_rfc2822(text).ok())
+            .map(|date| date.with_timezone(&Utc)),
+        token_id: token_id.to_string(),
+    })
+}
+
+fn header_number<T: std::str::FromStr>(
+    headers: &reqwest::header::HeaderMap,
+    name: &str,
+) -> Option<T> {
+    headers.get(name)?.to_str().ok()?.parse().ok()
+}
+
+/// A stable fingerprint of a token: which credential a budget reading (and,
+/// from FZ-09c, a cache file) belongs to, without keeping the token. Specified
+/// byte for byte in `docs/coverage-cache-design.md` 4.3 (K1): FNV-1a 64 over
+/// `fleetz-account-v1:` and the trimmed token, as 16 lowercase hex digits.
+///
+/// Not `std`'s `DefaultHasher`, whose algorithm may change between Rust
+/// releases, and not through `Hash`, whose `str` impl appends a terminator
+/// byte: the value is pinned by test vectors and may end up in a file name.
+/// Not cryptographic, and not meant to be: it identifies, it does not
+/// protect. Never log the token, only this.
+pub fn token_fingerprint(token: &str) -> String {
+    const DOMAIN: &str = "fleetz-account-v1:";
+    let bytes = DOMAIN.bytes().chain(token.trim().bytes());
+    format!("{:016x}", fnv1a_64(bytes))
+}
+
+/// FNV-1a, 64 bits: offset basis `0xcbf29ce484222325`, prime
+/// `0x100000001b3`, wrapping multiplication.
+fn fnv1a_64(bytes: impl IntoIterator<Item = u8>) -> u64 {
+    bytes.into_iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
 }
 
 /// Parse a fresh response body, and cache it only if it carried data.
@@ -2125,5 +2422,544 @@ mod tests {
             dataset_of(&payload),
             vec![entry(Some("alice"), "api", 1), entry(None, "api", 2)]
         );
+    }
+
+    // --- FZ-10a: the API budget and failure classification. Scenario numbers
+    // are `docs/api-budget-design.md` section 5's.
+
+    /// A header map from name and value pairs, as a response would carry.
+    fn headers(pairs: &[(&str, &str)]) -> reqwest::header::HeaderMap {
+        let mut map = reqwest::header::HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                reqwest::header::HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        map
+    }
+
+    fn status(code: u16) -> reqwest::StatusCode {
+        reqwest::StatusCode::from_u16(code).unwrap()
+    }
+
+    /// 2026-10-01 17:23:06Z, M1's reset, in the header's epoch seconds.
+    const M1_RESET: &str = "1790875386";
+
+    /// M1's headers: the four numbers and the server's `Date`.
+    fn m1_headers() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("x-ratelimit-limit", "5000"),
+            ("x-ratelimit-remaining", "3564"),
+            ("x-ratelimit-used", "1436"),
+            ("x-ratelimit-reset", M1_RESET),
+            ("date", "Thu, 01 Oct 2026 17:00:43 GMT"),
+        ]
+    }
+
+    fn utc(text: &str) -> DateTime<Utc> {
+        text.parse().unwrap()
+    }
+
+    /// S1. A 200's headers are a reading: the numbers as stated, the reset raw
+    /// on the server's clock, its `Date`, and whose token it was.
+    #[test]
+    fn s1_a_success_carries_the_budget_its_headers_state() {
+        assert_eq!(
+            M1_RESET.parse::<i64>().unwrap(),
+            utc("2026-10-01T17:23:06Z").timestamp(),
+            "fixture"
+        );
+        let reading = read_budget(&headers(&m1_headers()), "abc").expect("a reading");
+        assert_eq!(
+            reading,
+            BudgetReading {
+                limit: 5000,
+                remaining: 3564,
+                used: 1436,
+                reset: utc("2026-10-01T17:23:06Z").timestamp(),
+                date: Some(utc("2026-10-01T17:00:43Z")),
+                token_id: "abc".to_string(),
+            }
+        );
+    }
+
+    /// Half a window is nothing to pace on: any of the four numbers missing or
+    /// unreadable is no reading. A missing or unreadable `Date` is only a
+    /// reading without one.
+    #[test]
+    fn a_reading_needs_all_four_numbers_but_not_the_date() {
+        let without = |name: &str| {
+            let pairs: Vec<_> = m1_headers()
+                .into_iter()
+                .filter(|(n, _)| *n != name)
+                .collect();
+            read_budget(&headers(&pairs), "t")
+        };
+        for name in [
+            "x-ratelimit-limit",
+            "x-ratelimit-remaining",
+            "x-ratelimit-used",
+            "x-ratelimit-reset",
+        ] {
+            assert_eq!(without(name), None, "a reading without {name}");
+        }
+        let garbled: Vec<_> = m1_headers()
+            .into_iter()
+            .map(|(n, v)| match n {
+                "x-ratelimit-remaining" => (n, "lots"),
+                _ => (n, v),
+            })
+            .collect();
+        assert_eq!(read_budget(&headers(&garbled), "t"), None);
+
+        let undated = without("date").expect("the date is optional");
+        assert_eq!(undated.date, None);
+        assert_eq!(undated.remaining, 3564);
+        let mut bad_date = m1_headers();
+        bad_date.retain(|(n, _)| *n != "date");
+        bad_date.push(("date", "yesterday"));
+        assert_eq!(read_budget(&headers(&bad_date), "t").unwrap().date, None);
+    }
+
+    /// S2. A gateway's 502: an nginx page and no rate headers. No reading, a
+    /// `Server` failure whose message keeps the status and leaves the HTML out.
+    #[test]
+    fn s2_a_gateway_502_is_a_server_failure_with_no_reading() {
+        let page = "<html><head><title>502 Bad Gateway</title></head><body>nginx</body></html>";
+        let failure = classify_refusal(status(502), &headers(&[]), page);
+        assert_eq!(failure.kind, FailureKind::Server);
+        assert!(failure.message.contains("502"), "{}", failure.message);
+        assert!(!failure.message.contains('<'), "{}", failure.message);
+        assert!(!failure.rate_limited);
+        assert_eq!(failure.limit, None);
+        assert_eq!(read_budget(&headers(&[]), "t"), None);
+    }
+
+    /// S2a. Every 5xx is `Server`, not `Http`; the 4xx below the range is not.
+    #[test]
+    fn s2a_a_504_and_the_rest_of_5xx_are_server_failures() {
+        for code in [500, 502, 504, 599] {
+            let failure = classify_refusal(status(code), &headers(&[]), "");
+            assert_eq!(failure.kind, FailureKind::Server, "{code}");
+            assert!(!failure.rate_limited, "{code}");
+        }
+        assert_eq!(
+            classify_refusal(status(499), &headers(&[]), "").kind,
+            FailureKind::Http
+        );
+    }
+
+    /// S4a. The measured step function (M2, M1, M6), and a limit between two
+    /// measured points takes the higher price, so pacing errs slow.
+    #[test]
+    fn s4a_poll_cost_steps_at_the_measured_limits() {
+        assert_eq!(poll_cost(20), 2, "M2");
+        assert_eq!(poll_cost(50), 3, "M1");
+        assert_eq!(poll_cost(100), 4, "M6");
+        assert_eq!(poll_cost(30), 3);
+        assert_eq!(poll_cost(1), 2);
+        assert_eq!(poll_cost(21), 3);
+        assert_eq!(poll_cost(51), 4);
+    }
+
+    /// S6, classification. A `RATE_LIMITED` body is an `Api` failure and the
+    /// primary limit: the hourly budget, lifting at the reset.
+    #[test]
+    fn s6_a_rate_limited_body_is_the_primary_limit() {
+        let dir = std::env::temp_dir().join(format!("fleetz_s6_{}", std::process::id()));
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let body = r#"{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}"#;
+        let failure = accept_response(body, &cache, day("2026-08-18"))
+            .err()
+            .unwrap();
+        assert_eq!(failure.kind, FailureKind::Api);
+        assert!(failure.rate_limited);
+        assert_eq!(failure.limit, Some(RateLimit::Primary));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S6b. A primary limit with no reset header is still the primary limit;
+    /// it just carries no reading, so nothing claims to know when it lifts.
+    #[test]
+    fn s6b_a_primary_limit_without_a_reset_is_primary_with_no_reading() {
+        let stated = headers(&[
+            ("x-ratelimit-limit", "5000"),
+            ("x-ratelimit-remaining", "0"),
+            ("x-ratelimit-used", "5000"),
+        ]);
+        let failure = classify_refusal(status(403), &stated, "");
+        assert_eq!(failure.kind, FailureKind::Http);
+        assert_eq!(failure.limit, Some(RateLimit::Primary));
+        assert!(failure.rate_limited);
+        assert_eq!(read_budget(&stated, "t"), None);
+    }
+
+    /// S7. A 403 with nothing remaining is the primary limit, read as rate
+    /// limited. It used to be `http error`.
+    #[test]
+    fn s7_a_403_with_nothing_remaining_is_the_primary_limit() {
+        let body = r#"{"message":"API rate limit exceeded for user ID 1."}"#;
+        let failure = classify_refusal(
+            status(403),
+            &headers(&[("x-ratelimit-remaining", "0")]),
+            body,
+        );
+        assert_eq!(failure.kind, FailureKind::Http);
+        assert!(failure.rate_limited);
+        assert_eq!(failure.limit, Some(RateLimit::Primary));
+        assert_eq!(crate::ui::github_failure_label(&failure), "rate limited");
+
+        // A 429 says the same with the same header.
+        let failure =
+            classify_refusal(status(429), &headers(&[("x-ratelimit-remaining", "0")]), "");
+        assert_eq!(failure.limit, Some(RateLimit::Primary));
+    }
+
+    /// S8. A `retry-after` names a secondary limit and its delay, and wins over
+    /// `x-ratelimit-remaining: 0` beside it: the table's first matching row.
+    #[test]
+    fn s8_a_retry_after_is_a_secondary_limit_with_its_delay() {
+        let delay = Some(std::time::Duration::from_secs(120));
+        for code in [403, 429] {
+            let failure = classify_refusal(status(code), &headers(&[("retry-after", "120")]), "");
+            assert_eq!(failure.kind, FailureKind::Http, "{code}");
+            assert!(failure.rate_limited, "{code}");
+            assert_eq!(
+                failure.limit,
+                Some(RateLimit::Secondary { retry_after: delay }),
+                "{code}"
+            );
+        }
+        let both = headers(&[("retry-after", "120"), ("x-ratelimit-remaining", "0")]);
+        assert_eq!(
+            classify_refusal(status(403), &both, "").limit,
+            Some(RateLimit::Secondary { retry_after: delay })
+        );
+        // A `retry-after` that is not a number of seconds still names the
+        // limit, without a delay to trust.
+        let odd = headers(&[("retry-after", "Wed, 21 Oct 2026 07:28:00 GMT")]);
+        assert_eq!(
+            classify_refusal(status(403), &odd, "").limit,
+            Some(RateLimit::Secondary { retry_after: None })
+        );
+    }
+
+    /// S9. A 429 with no `retry-after` is still a secondary limit, with no
+    /// delay; so is a 403 whose body says so.
+    #[test]
+    fn s9_a_429_or_a_403_saying_so_is_a_secondary_limit_without_a_delay() {
+        let secondary = Some(RateLimit::Secondary { retry_after: None });
+        let failure = classify_refusal(status(429), &headers(&[]), "");
+        assert_eq!(failure.kind, FailureKind::Http);
+        assert!(failure.rate_limited);
+        assert_eq!(failure.limit, secondary);
+
+        let body = r#"{"message":"You have exceeded a Secondary Rate Limit. Please wait."}"#;
+        let failure = classify_refusal(status(403), &headers(&[]), body);
+        assert_eq!(failure.kind, FailureKind::Http);
+        assert_eq!(failure.limit, secondary);
+        assert!(failure.rate_limited);
+    }
+
+    /// S9a. A 403 with no limit header and no secondary wording is a refusal
+    /// of the credentials or their scope, not a rate limit; so is one that
+    /// still has budget left.
+    #[test]
+    fn s9a_a_plain_403_is_refused_not_rate_limited() {
+        let body = r#"{"message":"Resource protected by organization SAML enforcement."}"#;
+        for stated in [headers(&[]), headers(&[("x-ratelimit-remaining", "4000")])] {
+            let failure = classify_refusal(status(403), &stated, body);
+            assert_eq!(failure.kind, FailureKind::Refused);
+            assert!(!failure.rate_limited);
+            assert_eq!(failure.limit, None);
+        }
+    }
+
+    /// S14, classification. A 401 is refused, never a rate limit, whatever its
+    /// headers say: only a 403 or 429 can be one.
+    #[test]
+    fn s14_a_401_is_refused() {
+        for stated in [
+            headers(&[]),
+            headers(&[("x-ratelimit-remaining", "0"), ("retry-after", "60")]),
+        ] {
+            let failure =
+                classify_refusal(status(401), &stated, r#"{"message":"Bad credentials"}"#);
+            assert_eq!(failure.kind, FailureKind::Refused);
+            assert!(!failure.rate_limited);
+            assert_eq!(failure.limit, None);
+        }
+    }
+
+    /// Any other 4xx stays `Http`, even with limit-looking headers.
+    #[test]
+    fn other_4xx_answers_stay_http() {
+        for code in [400, 404, 422] {
+            let failure = classify_refusal(
+                status(code),
+                &headers(&[("x-ratelimit-remaining", "0"), ("retry-after", "5")]),
+                "secondary rate limit",
+            );
+            assert_eq!(failure.kind, FailureKind::Http, "{code}");
+            assert!(!failure.rate_limited, "{code}");
+        }
+    }
+
+    /// The message keeps the status and what GitHub said, on one line and
+    /// trimmed: the JSON `message` rather than the whole body, plain text as
+    /// it is, an HTML page not at all.
+    #[test]
+    fn a_refusal_message_keeps_the_status_and_a_trimmed_reason() {
+        let json = r#"{"message":"Bad credentials","documentation_url":"https://docs"}"#;
+        assert_eq!(
+            refusal_message(status(401), json),
+            "GitHub API returned 401 Unauthorized: Bad credentials"
+        );
+        assert_eq!(
+            refusal_message(status(404), "  not\n  here  "),
+            "GitHub API returned 404 Not Found: not here"
+        );
+        assert_eq!(
+            refusal_message(status(502), "  <html>gateway</html>"),
+            "GitHub API returned 502 Bad Gateway"
+        );
+        assert_eq!(
+            refusal_message(status(500), "   "),
+            "GitHub API returned 500 Internal Server Error"
+        );
+        let long = "x".repeat(REFUSAL_DETAIL_CHARS + 50);
+        let message = refusal_message(status(500), &long);
+        assert!(message.ends_with(&"x".repeat(REFUSAL_DETAIL_CHARS)));
+        assert!(!message.contains(&"x".repeat(REFUSAL_DETAIL_CHARS + 1)));
+    }
+
+    /// The header's words: any rate limit reads `rate limited`, an `Http` one
+    /// included; the two new kinds are not `http error`.
+    #[test]
+    fn every_rate_limit_is_labelled_rate_limited() {
+        use crate::ui::github_failure_label as label;
+        let limited = |kind| Failure::limited(kind, RateLimit::Primary, "m");
+        assert_eq!(label(&limited(FailureKind::Http)), "rate limited");
+        assert_eq!(label(&limited(FailureKind::Api)), "rate limited");
+        assert_eq!(label(&Failure::new(FailureKind::Http, "m")), "http error");
+        assert_eq!(label(&Failure::new(FailureKind::Api, "m")), "api error");
+        for kind in [FailureKind::Server, FailureKind::Refused] {
+            let words = label(&Failure::new(kind, "m"));
+            assert!(
+                !matches!(words, "http error" | "rate limited"),
+                "{kind:?}: {words}"
+            );
+        }
+    }
+
+    /// S19a and A5. reqwest marks a connect timeout as both a connect and a
+    /// timeout error; the connect test goes first, so it is `Offline`. Only a
+    /// timeout after connecting is `TimedOut`.
+    #[test]
+    fn s19a_a_connect_timeout_is_offline_and_a_later_timeout_is_timed_out() {
+        assert_eq!(transport_kind(true, true), FailureKind::Offline);
+        assert_eq!(transport_kind(true, false), FailureKind::Offline);
+        assert_eq!(transport_kind(false, true), FailureKind::TimedOut);
+        assert_eq!(transport_kind(false, false), FailureKind::Offline);
+    }
+
+    /// S19 and amendment 4. The client gives up after 30 s in total and 10 s
+    /// to connect, well before the 60 s give-up, which stays the backstop.
+    #[test]
+    fn s19_the_client_deadline_comes_before_the_give_up() {
+        assert_eq!(CONNECT_TIMEOUT, std::time::Duration::from_secs(10));
+        assert_eq!(TOTAL_TIMEOUT, std::time::Duration::from_secs(30));
+        assert!(TOTAL_TIMEOUT < crate::GITHUB_POLL_STUCK_AFTER);
+        assert!(std::ptr::eq(client(), client()), "one client, reused");
+    }
+
+    /// A local listener that accepts one connection, reads the request, writes
+    /// `response` and then holds the socket open without a word more. No
+    /// network: everything stays on the loopback.
+    async fn serve_once(response: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0u8; 64 * 1024];
+            let _ = socket.read(&mut request).await;
+            let _ = socket.write_all(response.as_bytes()).await;
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            drop(socket);
+        });
+        format!("http://{addr}/graphql")
+    }
+
+    /// `exchange` against `url` with short deadlines and a cache in a scratch
+    /// directory.
+    async fn exchange_with(
+        url: &str,
+        tag: &str,
+    ) -> (Result<GithubFetch, Failure>, Option<BudgetReading>) {
+        let dir = std::env::temp_dir().join(format!("fleetz_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let client = build_client(
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_millis(300),
+        );
+        let result = exchange(&client, url, "tok", "{}", &cache, day("2026-08-18")).await;
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    /// S19. Connected, then silence: the total deadline ends it as `TimedOut`.
+    #[tokio::test]
+    async fn s19_silence_after_connecting_is_timed_out() {
+        let url = serve_once("").await;
+        let (result, budget) = exchange_with(&url, "s19_silent").await;
+        let failure = result.err().expect("no answer, yet Ok");
+        assert_eq!(failure.kind, FailureKind::TimedOut, "{}", failure.message);
+        assert_eq!(budget, None);
+    }
+
+    /// S19, the body read. The status and headers arrive, the body stalls: the
+    /// same deadline, the same `TimedOut`, and the headers' reading is kept.
+    #[tokio::test]
+    async fn s19_a_body_that_stalls_is_timed_out_and_keeps_the_reading() {
+        let url = serve_once(concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "content-length: 4096\r\n",
+            "x-ratelimit-limit: 5000\r\n",
+            "x-ratelimit-remaining: 3564\r\n",
+            "x-ratelimit-used: 1436\r\n",
+            "x-ratelimit-reset: 1790875386\r\n",
+            "\r\n",
+            "{\"data\":",
+        ))
+        .await;
+        let (result, budget) = exchange_with(&url, "s19_body").await;
+        let failure = result.err().expect("a cut-off body, yet Ok");
+        assert_eq!(failure.kind, FailureKind::TimedOut, "{}", failure.message);
+        assert_eq!(budget.expect("the headers arrived").remaining, 3564);
+    }
+
+    /// A5. Nothing listening: the connection cannot be opened, so `Offline`.
+    #[tokio::test]
+    async fn a_refused_connection_is_offline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let (result, budget) = exchange_with(&format!("http://{addr}/graphql"), "refused").await;
+        let failure = result.err().expect("nothing listening, yet Ok");
+        assert_eq!(failure.kind, FailureKind::Offline, "{}", failure.message);
+        assert_eq!(budget, None);
+    }
+
+    /// A refused answer states the budget as truly as an accepted one, so the
+    /// reading travels with the failure: a 403 limit and a 200 `RATE_LIMITED`
+    /// body both carry it, keyed by the token's fingerprint.
+    #[tokio::test]
+    async fn a_refused_answer_still_carries_its_reading() {
+        let url = serve_once(concat!(
+            "HTTP/1.1 403 Forbidden\r\n",
+            "content-length: 2\r\n",
+            "x-ratelimit-limit: 5000\r\n",
+            "x-ratelimit-remaining: 0\r\n",
+            "x-ratelimit-used: 5000\r\n",
+            "x-ratelimit-reset: 1790875386\r\n",
+            "\r\n",
+            "{}",
+        ))
+        .await;
+        let (result, budget) = exchange_with(&url, "refused_403").await;
+        let failure = result.err().unwrap();
+        assert_eq!(failure.limit, Some(RateLimit::Primary));
+        let budget = budget.expect("a reading");
+        assert_eq!((budget.remaining, budget.used), (0, 5000));
+        assert_eq!(budget.token_id, token_fingerprint("tok"));
+
+        let url = serve_once(concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "content-length: 72\r\n",
+            "x-ratelimit-limit: 5000\r\n",
+            "x-ratelimit-remaining: 0\r\n",
+            "x-ratelimit-used: 5000\r\n",
+            "x-ratelimit-reset: 1790875386\r\n",
+            "\r\n",
+            r#"{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}"#,
+        ))
+        .await;
+        let (result, budget) = exchange_with(&url, "refused_body").await;
+        let failure = result.err().unwrap();
+        assert_eq!(failure.kind, FailureKind::Api);
+        assert_eq!(failure.limit, Some(RateLimit::Primary));
+        assert_eq!(budget.expect("a reading").remaining, 0);
+    }
+
+    /// The reading leaves `fetch_repos` on whichever side the attempt landed.
+    #[test]
+    fn the_reading_travels_with_a_success_and_with_a_failure() {
+        let budget = read_budget(&headers(&m1_headers()), "t");
+        assert!(budget.is_some(), "fixture");
+        let dir = std::env::temp_dir().join(format!("fleetz_meta_{}", std::process::id()));
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let ok = accept_response(SERVABLE, &cache, day("2026-08-18"))
+            .ok()
+            .unwrap();
+        let fetch = with_budget(Ok(ok), budget.clone()).ok().unwrap();
+        assert_eq!(fetch.meta.budget, budget);
+
+        let failure = Failure::new(FailureKind::Server, "502");
+        let settled = settle_attempt(Err(failure), &cache, day("2026-08-18"));
+        let error = with_budget(settled, budget.clone()).err().unwrap();
+        assert_eq!(error.meta.budget, budget);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A refusal is decided by its status and headers. A body that stalls
+    /// after them does not turn GitHub's 403 limit into a timeout.
+    #[tokio::test]
+    async fn a_refusal_whose_body_stalls_is_still_classified_by_its_status() {
+        let url = serve_once(concat!(
+            "HTTP/1.1 403 Forbidden\r\n",
+            "content-length: 4096\r\n",
+            "x-ratelimit-remaining: 0\r\n",
+            "\r\n",
+            "{\"mess",
+        ))
+        .await;
+        let (result, _) = exchange_with(&url, "refusal_stall").await;
+        let failure = result.err().unwrap();
+        assert_eq!(failure.kind, FailureKind::Http, "{}", failure.message);
+        assert_eq!(failure.limit, Some(RateLimit::Primary));
+    }
+
+    /// A cache-served load asked GitHub nothing, so it carries no reading.
+    #[tokio::test]
+    async fn a_cache_served_load_carries_no_reading() {
+        let (path, _) = planted_cache("meta_cached", std::time::Duration::from_secs(60));
+        let cache = crate::cache::ApiCache::at(path.clone(), 86_400);
+        let fetch = fetch_repos(50, &cache, CacheMode::AnyCached).await.unwrap();
+        assert_eq!(fetch.meta, FetchMeta::default());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// K1, the vectors of `docs/coverage-cache-design.md` (CK6), pinned so the
+    /// fingerprint cannot drift between releases. Surrounding whitespace is
+    /// not part of the token.
+    #[test]
+    fn the_token_fingerprint_is_pinned() {
+        let token = "gho_EXAMPLEexampleEXAMPLEexample0000";
+        assert_eq!(token_fingerprint(token), "2a8d4ab865f3ca20");
+        assert_eq!(
+            token_fingerprint(&format!("  {token}\n")),
+            "2a8d4ab865f3ca20"
+        );
+        assert_eq!(token_fingerprint(""), "5fccb9a3d0a45785");
+    }
+
+    /// The published FNV-1a 64 values, for the hash under the fingerprint.
+    #[test]
+    fn fnv1a_64_matches_the_published_vectors() {
+        assert_eq!(fnv1a_64(*b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a_64(*b"a"), 0xaf63_dc4c_8601_ec8c);
     }
 }
