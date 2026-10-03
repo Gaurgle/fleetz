@@ -1,4 +1,4 @@
-//! The contribution strip: a year of activity docked under the main panes.
+//! The contribution strip: three years of activity docked under the main panes.
 //!
 //! A day is a Nerd Font square icon in one character cell, with a blank column
 //! between weeks. The icon is the point: it is drawn by the font to sit on the

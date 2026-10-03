@@ -202,7 +202,7 @@ in the header instead.
 | `0` | Clear `#tag` filters (keeps free-text search) |
 | `,` | Settings overlay: refresh interval, startup view, work hours, pane persistence, contributions strip and its cell size, icon set (`nerd` or `plain`), loading screen. `Enter` saves to `config.toml` |
 | `<` / `>` | Narrow / widen the repo list |
-| `+` / `-` | Shrink / grow the inspector pane |
+| `+` / `-` | Grow / shrink the inspector pane |
 | `=` | Reset both panes to their default sizes |
 | `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates, and fetch the repos whose remote moved. No rediscovery. A failed poll keeps the rows as they are and marks the header; failed fetches are marked on their repos and counted in the status line |
 | `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear. If GitHub cannot be reached it rebuilds from the signed-in account's saved copy and says `Reloaded from cache: GitHub offline` (or why) instead of `Reloaded`; with no saved copy for that account the reload fails and says so, rather than showing another account's data |

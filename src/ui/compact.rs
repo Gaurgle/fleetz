@@ -9,7 +9,9 @@ use crate::model::RepoStatus;
 use crate::ui::badges;
 use crate::ui::colors;
 
-/// Render the compact view: two-column dense grid of all repos.
+/// Render the compact view: a dense grid of all repos. The column count
+/// follows the width and the widest name and badges (`column_count`), up to
+/// `MAX_COLUMNS`.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let visible = app.visible_repos();
 

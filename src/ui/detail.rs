@@ -113,8 +113,10 @@ const INSPECTOR_FILE_CAP: usize = 30;
 /// about fifty columns, enough for a subject line or a stat plus a path.
 const INSPECTOR_TWO_LANE_WIDTH: u16 = 100;
 
-/// Render the detail view: repo list (left 35%) + a right column (65%) that
-/// stacks the detail pane over the inspector pane.
+/// Render the detail view: the repo list on the left (35% of the width by
+/// default, capped at `REPO_LIST_MAX_COLS`; see `split_main`) and the detail
+/// pane on the right, with the inspector docked across the full width below
+/// them.
 /// Draw the three Detail panes into rectangles `ui::panel_rects` already
 /// computed.
 ///

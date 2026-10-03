@@ -1371,7 +1371,7 @@ async fn handle_normal_input(
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.should_quit = true;
         }
-        // `[` and `]` step the repo pane's body between its four views --
+        // `[` and `]` step the repo pane's body between its five views --
         // lazygit's own binding for the same gesture, and unlike a shifted
         // letter it gives backwards for free.
         KeyCode::Char(']') => app.cycle_history_view(false),
