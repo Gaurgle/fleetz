@@ -5,8 +5,9 @@ fz-coordinator`, session `60a43b88-e448-4466-be9c-e93c226b8f44`), when Andreas
 stopped the session for the night with usage at 82%. Updated 2026-10-03
 17:29 CEST by the session that holds the baton now (the Baton, State of
 `main`, Done on 2026-10-03, Worktrees and Next step sections); the rest
-stands as written on 2026-10-02. **In flight at 17:29: one `fz-worker` on
-FZ-09c (#59), dispatched 17:27; no reviewer, no build.** Read this file,
+stands as written on 2026-10-02. **In flight at 17:40: two `fz-worker`s,
+FZ-09c (#59), dispatched 17:27, and FZ-13d (#53), dispatched 17:39; no
+reviewer, no build.** Read this file,
 the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
@@ -168,8 +169,8 @@ Each issue holds its evidence.
 
 ## Worktrees
 
-Two exist besides the main checkout, under `.claude/worktrees/`. `fz-09c`
-holds a worker's uncommitted change while that worker runs.
+Three exist besides the main checkout, under `.claude/worktrees/`. `fz-09c`
+and `fz-13d` each hold a worker's uncommitted change while that worker runs.
 
 - **`fz-09c`, branch `feat/fz-09c-keyed-cache`, base `645ef75`.** FZ-09c
   (#59) was dispatched to an `fz-worker` on 2026-10-03 at 17:27; the
@@ -178,6 +179,13 @@ holds a worker's uncommitted change while that worker runs.
   worktree's `git status`, and dispatch a fresh worker with the issue's last
   comment rather than trusting a half-made change. Nothing in it is reviewed
   until #59 says so.
+- **`fz-13d`, branch `fix/fz-13d-focus-reads-true`, base `5821ae8`.** FZ-13d
+  (#53) was dispatched to an `fz-worker` on 2026-10-03 at 17:39, after
+  Andreas asked whether more could run in parallel. It shares `src/main.rs`
+  with FZ-09c by symbol (the `BackTab` arm only), as its body allows; the
+  assignment is the last comment on #53. **It stops at Ready to integrate:**
+  `Shift-Tab` changes direction, a changed interaction, so Andreas tries the
+  branch build before the merge.
 - `fz-10a` is removed: FZ-10a is merged.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked by
