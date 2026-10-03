@@ -565,11 +565,17 @@ impl RemoteRef {
     /// parsed spelling, which is kept for display.
     pub fn key(&self) -> Self {
         Self {
-            host: self.host.to_lowercase(),
+            host: host_key(&self.host),
             owner: self.owner.to_lowercase(),
             name: self.name.to_lowercase(),
         }
     }
+}
+
+/// The comparison key of a host: lowercased. The one rule `RemoteRef::key`
+/// and the cache file name (`cache::host_part`) both spell a host by.
+pub fn host_key(host: &str) -> String {
+    host.to_lowercase()
 }
 
 /// `host` from `user@host`, or the input when there is no user.

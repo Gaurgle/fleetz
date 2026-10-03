@@ -70,6 +70,11 @@ pub struct GithubFetch {
 pub struct FetchMeta {
     /// The API budget the response's headers reported, if they did.
     pub budget: Option<BudgetReading>,
+    /// The account key: `token_fingerprint` of the token the attempt carried,
+    /// or whose keyed cache file the load was served from. `None` when
+    /// unknown: a launch served from the legacy file or under the signed-out
+    /// rule, or a lookup that failed. Never the token itself.
+    pub account: Option<String>,
 }
 
 /// GitHub's API budget as one response's `x-ratelimit-*` headers stated it.
@@ -204,7 +209,9 @@ pub struct FetchError {
     /// Always `Origin::Cache` when present.
     pub fallback: Option<Box<GithubFetch>>,
     /// What the failed attempt learned, a refused answer's budget among it.
-    pub meta: FetchMeta,
+    /// Boxed so the error stays small enough to return by value as it grows
+    /// (clippy's `result_large_err`).
+    pub meta: Box<FetchMeta>,
 }
 
 impl std::fmt::Debug for FetchError {
@@ -752,6 +759,9 @@ pub enum CacheMode {
     Bypass,
 }
 
+/// The single-file fetch from before FZ-09c, kept for the tests that pin a
+/// payload with `ApiCache::at`. Production goes through `fetch_github`.
+#[cfg(test)]
 pub async fn fetch_repos(
     repo_limit: u32,
     cache: &crate::cache::ApiCache,
@@ -760,16 +770,8 @@ pub async fn fetch_repos(
     // One "today" for the whole fetch, so every path builds the same grid.
     let today = chrono::Local::now().date_naive();
 
-    // A payload written before the calendar field existed parses fine but
-    // carries no calendar, and serving it would show an empty year. Same for
-    // one written before PR counts rode along. Treat either as a miss: the
-    // whole point of the poll is that both come for free.
-    let usable =
-        |fetch: Option<GithubFetch>| fetch.filter(|f| f.calendar.is_some() && f.has_pr_counts);
     if mode == CacheMode::AnyCached
-        && let Some(fetch) =
-            usable(parse_cached(cache.read(), today).map(|f| stamp_written(f, cache.written())))
-                .or_else(|| usable(read_cached(cache, today)))
+        && let Some(fetch) = serve_cached(cache, today)
     {
         return Ok(fetch);
     }
@@ -778,15 +780,166 @@ pub async fn fetch_repos(
     with_budget(settle_attempt(attempt, cache, today), budget)
 }
 
+/// The cache file's payload if it is good enough to paint, stamped with the
+/// file's write time.
+///
+/// A payload written before the calendar field existed parses fine but
+/// carries no calendar, and serving it would show an empty year. Same for one
+/// written before PR counts rode along. Treat either as a miss: the whole
+/// point of the poll is that both come for free.
+fn serve_cached(cache: &crate::cache::ApiCache, today: chrono::NaiveDate) -> Option<GithubFetch> {
+    let usable =
+        |fetch: Option<GithubFetch>| fetch.filter(|f| f.calendar.is_some() && f.has_pr_counts);
+    usable(parse_cached(cache.read(), today).map(|f| stamp_written(f, cache.written())))
+        .or_else(|| usable(read_cached(cache, today)))
+}
+
+/// The host every request goes to, as the cache file name and a `RemoteRef`
+/// key spell it. The endpoint is `api.github.com`; Enterprise is not
+/// supported.
+pub const HOST: &str = "github.com";
+
+/// How long launch waits on the token lookup before it treats the user as
+/// signed out (O11). `gh` answers in about 0.05 s; this is a margin for a
+/// keychain that stalls, not a measured worst case. Only the launch lookup is
+/// bounded: a poll's is covered by the client deadline and the give-up.
+pub const LAUNCH_LOOKUP_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Fetch the dataset through the keyed cache, looking the token up with `gh`.
+///
+/// `CacheMode::AnyCached` is launch: one token lookup bounded at
+/// `LAUNCH_LOOKUP_BOUND` picks the file to paint from (`KeyedCache::launch_reads`),
+/// and superseded files are cleaned up once the launch has data.
+/// `CacheMode::Bypass` is a poll or `R`: the request, with only this
+/// credential's own keyed file to fall back on.
+pub async fn fetch_github(
+    repo_limit: u32,
+    cache: &crate::cache::KeyedCache,
+    mode: CacheMode,
+) -> Result<GithubFetch, FetchError> {
+    fetch_keyed(
+        repo_limit,
+        cache,
+        mode,
+        get_gh_token,
+        client(),
+        GRAPHQL_URL,
+        LAUNCH_LOOKUP_BOUND,
+    )
+    .await
+}
+
+/// `fetch_github` with the token source, the endpoint and the launch bound
+/// passed in, so a test drives every path without `gh` or the network.
+///
+/// The token is looked up **once** per attempt (`token_source` is `FnOnce`):
+/// the lookup that picks the file is the lookup whose token goes into the
+/// request's `Authorization` header, and that request's answer is written to
+/// that token's file. Two lookups could straddle an account switch and write
+/// one account's answer into the other's file.
+async fn fetch_keyed<S, F>(
+    repo_limit: u32,
+    cache: &crate::cache::KeyedCache,
+    mode: CacheMode,
+    token_source: S,
+    client: &reqwest::Client,
+    url: &str,
+    launch_bound: std::time::Duration,
+) -> Result<GithubFetch, FetchError>
+where
+    S: FnOnce() -> F,
+    F: std::future::Future<Output = Result<String, String>>,
+{
+    // One "today" for the whole fetch, so every path builds the same grid.
+    let today = chrono::Local::now().date_naive();
+    let lookup = match mode {
+        CacheMode::AnyCached => tokio::time::timeout(launch_bound, token_source())
+            .await
+            .unwrap_or_else(|_| {
+                Err(format!(
+                    "`gh auth token` did not answer within {} s",
+                    launch_bound.as_secs_f32()
+                ))
+            }),
+        CacheMode::Bypass => token_source().await,
+    };
+    let account = lookup.as_deref().ok().map(token_fingerprint);
+
+    if mode == CacheMode::AnyCached
+        && let Some((fetch, served)) = read_at_launch(cache, account.as_deref(), today)
+    {
+        cache.remove_superseded(account.as_deref(), Some(&served));
+        return Ok(fetch);
+    }
+
+    // Signed out, or a launch lookup that timed out with nothing to paint:
+    // no token, no request, and no account whose file could be a fallback.
+    let token = lookup.map_err(|message| FetchError {
+        failure: Failure::new(FailureKind::Auth, message),
+        fallback: None,
+        meta: Default::default(),
+    })?;
+    let account = token_fingerprint(&token);
+    let own = cache.for_account(&account);
+    let query = build_query(
+        repo_limit,
+        today,
+        crate::contributions::rotation_tick(chrono::Utc::now()),
+    );
+    let (attempt, budget) = exchange(client, url, &token, &query, &own, today).await;
+    let meta = FetchMeta {
+        budget,
+        account: Some(account.clone()),
+    };
+    let result = with_meta(settle_attempt(attempt, &own, today), meta);
+    if mode == CacheMode::AnyCached && result.is_ok() {
+        cache.remove_superseded(Some(&account), None);
+    }
+    result
+}
+
+/// The first file `launch_reads` offers that is good enough to paint, with
+/// its path. Only the credential's own file makes the load's account known.
+fn read_at_launch(
+    cache: &crate::cache::KeyedCache,
+    account: Option<&str>,
+    today: chrono::NaiveDate,
+) -> Option<(GithubFetch, std::path::PathBuf)> {
+    cache.launch_reads(account).into_iter().find_map(|read| {
+        let mut fetch = serve_cached(&read.cache, today)?;
+        if read.own {
+            fetch.meta.account = account.map(str::to_string);
+        }
+        Some((fetch, read.cache.path().to_path_buf()))
+    })
+}
+
 /// Attach the attempt's budget reading to its result, whichever way it went.
+#[cfg(test)]
 fn with_budget(
     result: Result<GithubFetch, FetchError>,
     budget: Option<BudgetReading>,
 ) -> Result<GithubFetch, FetchError> {
-    let meta = FetchMeta { budget };
+    with_meta(
+        result,
+        FetchMeta {
+            budget,
+            ..FetchMeta::default()
+        },
+    )
+}
+
+/// Attach what the attempt learned to its result, whichever way it went.
+fn with_meta(
+    result: Result<GithubFetch, FetchError>,
+    meta: FetchMeta,
+) -> Result<GithubFetch, FetchError> {
     match result {
         Ok(fetch) => Ok(GithubFetch { meta, ..fetch }),
-        Err(error) => Err(FetchError { meta, ..error }),
+        Err(error) => Err(FetchError {
+            meta: Box::new(meta),
+            ..error
+        }),
     }
 }
 
@@ -805,7 +958,7 @@ fn settle_attempt(
     attempt.map_err(|failure| FetchError {
         failure,
         fallback: read_cached(cache, today).map(Box::new),
-        meta: FetchMeta::default(),
+        meta: Default::default(),
     })
 }
 
@@ -841,6 +994,7 @@ fn build_client(connect: std::time::Duration, total: std::time::Duration) -> req
 
 /// One network attempt: token, request, status, body. The budget reading
 /// travels beside the result, since a refused answer carries one too.
+#[cfg(test)]
 async fn request(
     repo_limit: u32,
     cache: &crate::cache::ApiCache,
@@ -1044,7 +1198,7 @@ pub fn token_fingerprint(token: &str) -> String {
 
 /// FNV-1a, 64 bits: offset basis `0xcbf29ce484222325`, prime
 /// `0x100000001b3`, wrapping multiplication.
-fn fnv1a_64(bytes: impl IntoIterator<Item = u8>) -> u64 {
+pub(crate) fn fnv1a_64(bytes: impl IntoIterator<Item = u8>) -> u64 {
     bytes.into_iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
     })
@@ -1241,10 +1395,18 @@ pub fn window_exceeds_dataset(
         .is_some_and(|oldest| cutoff < oldest)
 }
 
-/// Get the GitHub auth token from the `gh` CLI.
+/// What `get_gh_token` asks `gh` (C9). `--hostname` names the host the
+/// request goes to, so with `GH_HOST` set to another server fleetz still gets
+/// its github.com token instead of failing as `Auth`; `GH_TOKEN` is still
+/// honoured.
+const GH_TOKEN_ARGS: [&str; 4] = ["auth", "token", "--hostname", HOST];
+
+/// Get the GitHub auth token from the `gh` CLI. The child is killed if the
+/// lookup is dropped, so one cut off by the launch bound leaves no process.
 async fn get_gh_token() -> Result<String, String> {
     let output = tokio::process::Command::new("gh")
-        .args(["auth", "token"])
+        .args(GH_TOKEN_ARGS)
+        .kill_on_drop(true)
         .output()
         .await
         .map_err(|e| format!("failed to run `gh auth token`: {e}"))?;
@@ -2961,5 +3123,723 @@ mod tests {
     fn fnv1a_64_matches_the_published_vectors() {
         assert_eq!(fnv1a_64(*b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(fnv1a_64(*b"a"), 0xaf63_dc4c_8601_ec8c);
+    }
+
+    // --- FZ-09c: one lookup per attempt, the keyed file, migration ---
+    //
+    // Every test injects its token source and points the request at the
+    // loopback: no `gh`, no network, no real cache directory.
+
+    /// Dummy tokens. A is the design's example token, B the same shape.
+    const TOKEN_A: &str = "gho_EXAMPLEexampleEXAMPLEexample0000";
+    const TOKEN_B: &str = "gho_EXAMPLEexampleEXAMPLEexample1111";
+    const HOUR: std::time::Duration = std::time::Duration::from_secs(3600);
+    const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+    /// Valid `data` with no calendar: it parses, so a fallback read returns
+    /// it, but launch's `usable` refuses to paint it.
+    const NO_CALENDAR: &str = r#"{"data":{"viewer":{"repositories":{"nodes":[]}}}}"#;
+
+    /// A fresh scratch directory, removed when dropped.
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("fleetz_09c_{tag}_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn cache(&self) -> crate::cache::KeyedCache {
+            crate::cache::KeyedCache::at(self.0.clone(), 86_400, 50, HOST)
+        }
+
+        fn names(&self) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(&self.0)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+
+        fn own_path(&self, token: &str) -> std::path::PathBuf {
+            self.cache()
+                .for_account(&token_fingerprint(token))
+                .path()
+                .to_path_buf()
+        }
+
+        fn legacy_path(&self) -> std::path::PathBuf {
+            self.0.join("github-50.json")
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Writes `body` at `path`, dated `age` ago, and returns that time.
+    fn plant(
+        path: &std::path::Path,
+        body: &str,
+        age: std::time::Duration,
+    ) -> std::time::SystemTime {
+        std::fs::write(path, body).unwrap();
+        let written = std::time::SystemTime::now() - age;
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(written)
+            .unwrap();
+        written
+    }
+
+    /// A servable payload holding one repo, so a test can tell which file
+    /// was painted.
+    fn servable_named(name: &str) -> String {
+        let node = node_json(Some("alice"), name, "2026-08-01T00:00:00Z", 1);
+        SERVABLE.replace(r#""nodes":[]"#, &format!(r#""nodes":[{node}]"#))
+    }
+
+    fn repo_names(fetch: &GithubFetch) -> Vec<String> {
+        fetch.repos.iter().map(|repo| repo.name.clone()).collect()
+    }
+
+    fn signed_in(
+        token: &'static str,
+    ) -> impl FnOnce() -> std::future::Ready<Result<String, String>> {
+        move || std::future::ready(Ok(token.to_string()))
+    }
+
+    fn signed_out() -> impl FnOnce() -> std::future::Ready<Result<String, String>> {
+        || {
+            std::future::ready(Err(
+                "not authenticated with GitHub. Run: gh auth login".into()
+            ))
+        }
+    }
+
+    /// A loopback URL nothing listens on: the request fails as `Offline`.
+    fn nowhere() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{addr}/graphql")
+    }
+
+    /// A loopback listener that answers one request with `body` as a 200 and
+    /// hands back the request it read, headers and body.
+    async fn serve_capturing(body: String) -> (String, tokio::sync::oneshot::Receiver<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (sent, received) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut seen = Vec::new();
+            let mut chunk = [0u8; 16 * 1024];
+            // Read the headers, then as much body as they announce, so the
+            // answer never races the client's write.
+            loop {
+                let text = String::from_utf8_lossy(&seen).to_lowercase();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if seen.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+                match socket.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => seen.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
+            let _ = sent.send(String::from_utf8_lossy(&seen).into_owned());
+        });
+        (format!("http://{addr}/graphql"), received)
+    }
+
+    fn test_client() -> reqwest::Client {
+        build_client(
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(5),
+        )
+    }
+
+    /// `fetch_keyed` with the test client and a 2 s launch bound.
+    async fn fetch_with<S, F>(
+        cache: &crate::cache::KeyedCache,
+        mode: CacheMode,
+        source: S,
+        url: &str,
+    ) -> Result<GithubFetch, FetchError>
+    where
+        S: FnOnce() -> F,
+        F: std::future::Future<Output = Result<String, String>>,
+    {
+        let client = test_client();
+        fetch_keyed(50, cache, mode, source, &client, url, LAUNCH_LOOKUP_BOUND).await
+    }
+
+    /// C9: the token asked of `gh` is github.com's, whatever `GH_HOST` says.
+    #[test]
+    fn c9_the_token_is_asked_for_github_com() {
+        assert_eq!(GH_TOKEN_ARGS, ["auth", "token", "--hostname", "github.com"]);
+        assert_eq!(HOST, "github.com");
+    }
+
+    /// O11: the launch lookup is bounded at 2 s.
+    #[test]
+    fn the_launch_lookup_is_bounded_at_two_seconds() {
+        assert_eq!(LAUNCH_LOOKUP_BOUND, std::time::Duration::from_secs(2));
+    }
+
+    /// CK2: another account's saved copy is never painted; the launch goes
+    /// to the network as if there were no cache, and with the request failing
+    /// there is nothing to fall back on.
+    #[tokio::test]
+    async fn ck2_another_accounts_file_is_not_painted() {
+        let scratch = Scratch::new("ck2");
+        let file_a = scratch.own_path(TOKEN_A);
+        plant(&file_a, &servable_named("a-repo"), HOUR);
+
+        let error = fetch_with(
+            &scratch.cache(),
+            CacheMode::AnyCached,
+            signed_in(TOKEN_B),
+            &nowhere(),
+        )
+        .await
+        .err()
+        .expect("A's file was painted for B");
+
+        assert_eq!(error.failure.kind, FailureKind::Offline);
+        assert!(error.fallback.is_none(), "fell back on A's file");
+        assert_eq!(error.meta.account, Some(token_fingerprint(TOKEN_B)));
+        assert_eq!(
+            std::fs::read_to_string(&file_a).unwrap(),
+            servable_named("a-repo")
+        );
+    }
+
+    /// CK4: signed out, the newest current keyed file is painted as a cache
+    /// load with no account and no reading; nothing is cleaned up; the poll
+    /// that follows fails as `Auth` with no fallback.
+    #[tokio::test]
+    async fn ck4_signed_out_serves_the_newest_keyed_file_and_the_poll_is_auth() {
+        let scratch = Scratch::new("ck4");
+        plant(
+            &scratch.own_path(TOKEN_A),
+            &servable_named("a-repo"),
+            2 * HOUR,
+        );
+        let written_b = plant(&scratch.own_path(TOKEN_B), &servable_named("b-repo"), HOUR);
+        plant(
+            &scratch.legacy_path(),
+            &servable_named("legacy-repo"),
+            40 * DAY,
+        );
+        let before = scratch.names();
+
+        let fetch = fetch_with(
+            &scratch.cache(),
+            CacheMode::AnyCached,
+            signed_out(),
+            &nowhere(),
+        )
+        .await
+        .expect("the newest keyed file is served");
+
+        assert_eq!(repo_names(&fetch), ["b-repo"]);
+        assert_written_near(fetch.origin, written_b);
+        assert_eq!(fetch.meta, FetchMeta::default(), "account must be unknown");
+        assert_eq!(scratch.names(), before, "cleanup ran without an account");
+
+        let poll = fetch_with(
+            &scratch.cache(),
+            CacheMode::Bypass,
+            signed_out(),
+            &nowhere(),
+        )
+        .await
+        .err()
+        .expect("a signed-out poll succeeded");
+        assert_eq!(poll.failure.kind, FailureKind::Auth);
+        assert!(poll.fallback.is_none());
+        assert_eq!(poll.meta.account, None);
+    }
+
+    /// CK11: a lookup that does not answer within the bound is treated as
+    /// signed out (as CK4). The bound is a parameter, so this waits 200 ms;
+    /// production passes `LAUNCH_LOOKUP_BOUND`, pinned above at 2 s.
+    #[tokio::test]
+    async fn ck11_a_stalled_lookup_is_treated_as_signed_out_after_the_bound() {
+        let scratch = Scratch::new("ck11");
+        plant(&scratch.own_path(TOKEN_B), &servable_named("b-repo"), HOUR);
+        let bound = std::time::Duration::from_millis(200);
+        let client = test_client();
+        let started = std::time::Instant::now();
+
+        let fetch = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            fetch_keyed(
+                50,
+                &scratch.cache(),
+                CacheMode::AnyCached,
+                std::future::pending::<Result<String, String>>,
+                &client,
+                &nowhere(),
+                bound,
+            ),
+        )
+        .await
+        .expect("the launch lookup was not bounded")
+        .expect("B's file is served under the signed-out rule");
+
+        assert!(started.elapsed() >= bound);
+        assert_eq!(repo_names(&fetch), ["b-repo"]);
+        assert!(matches!(fetch.origin, Origin::Cache { .. }));
+        assert_eq!(fetch.meta.account, None);
+    }
+
+    /// A stalled lookup with nothing to paint fails as `Auth` and says why,
+    /// without a request.
+    #[tokio::test]
+    async fn a_stalled_lookup_with_no_cache_fails_as_auth() {
+        let scratch = Scratch::new("stalled_empty");
+        let client = test_client();
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            fetch_keyed(
+                50,
+                &scratch.cache(),
+                CacheMode::AnyCached,
+                std::future::pending::<Result<String, String>>,
+                &client,
+                &nowhere(),
+                std::time::Duration::from_millis(50),
+            ),
+        )
+        .await
+        .expect("the launch lookup was not bounded")
+        .err()
+        .expect("nothing to serve, yet Ok");
+        assert_eq!(error.failure.kind, FailureKind::Auth);
+        assert!(error.failure.message.contains("did not answer"));
+        assert!(error.fallback.is_none());
+    }
+
+    /// CK10: one lookup per attempt. The source would say B on a second call;
+    /// it is called once, the request carries A, and the answer lands in A's
+    /// file only.
+    #[tokio::test]
+    async fn ck10_one_lookup_picks_the_file_and_authorizes_the_request() {
+        let scratch = Scratch::new("ck10");
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        let source = move || {
+            let call = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let token = if call == 0 { TOKEN_A } else { TOKEN_B };
+            std::future::ready(Ok::<_, String>(token.to_string()))
+        };
+        let (url, request) = serve_capturing(SERVABLE.to_string()).await;
+
+        let fetch = fetch_with(&scratch.cache(), CacheMode::AnyCached, source, &url)
+            .await
+            .expect("the loopback answered");
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let request = request.await.unwrap().to_lowercase();
+        assert!(
+            request.contains(&format!("authorization: bearer {}", TOKEN_A.to_lowercase())),
+            "the request did not carry token A"
+        );
+        assert_eq!(fetch.origin, Origin::Network);
+        assert_eq!(fetch.meta.account, Some(token_fingerprint(TOKEN_A)));
+        assert_eq!(
+            std::fs::read_to_string(scratch.own_path(TOKEN_A)).unwrap(),
+            SERVABLE
+        );
+        assert!(!scratch.own_path(TOKEN_B).exists());
+        assert_eq!(
+            scratch.names(),
+            [scratch
+                .own_path(TOKEN_A)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()]
+        );
+    }
+
+    /// CK7: the token reaches no file name, no file body, no status line and
+    /// no debug output, on a success, a failure or a signed-out launch; the
+    /// fingerprint stands in for it.
+    #[tokio::test]
+    async fn ck7_the_token_appears_nowhere_but_the_request() {
+        let scratch = Scratch::new("ck7");
+        let (url, _request) = serve_capturing(SERVABLE.to_string()).await;
+        let ok = fetch_with(
+            &scratch.cache(),
+            CacheMode::Bypass,
+            signed_in(TOKEN_A),
+            &url,
+        )
+        .await
+        .unwrap();
+        let failed = fetch_with(
+            &scratch.cache(),
+            CacheMode::Bypass,
+            signed_in(TOKEN_A),
+            &nowhere(),
+        )
+        .await
+        .err()
+        .unwrap();
+        let auth = fetch_with(
+            &scratch.cache(),
+            CacheMode::AnyCached,
+            signed_out(),
+            &nowhere(),
+        )
+        .await;
+
+        let mut seen = vec![
+            format!("{:?}", ok.meta),
+            failed.failure.message.clone(),
+            format!("{failed:?} {:?}", failed.meta),
+        ];
+        match auth {
+            Ok(fetch) => seen.push(format!("{:?}", fetch.meta)),
+            Err(error) => seen.push(format!("{} {error:?}", error.failure.message)),
+        }
+        for entry in std::fs::read_dir(&scratch.0).unwrap() {
+            let entry = entry.unwrap();
+            seen.push(entry.file_name().to_string_lossy().into_owned());
+            seen.push(std::fs::read_to_string(entry.path()).unwrap());
+        }
+        for text in &seen {
+            assert!(!text.contains(TOKEN_A), "the token leaked: {text}");
+        }
+        assert!(scratch.names()[0].contains(&token_fingerprint(TOKEN_A)));
+    }
+
+    /// CK8: a pinned `ApiCache` served through `fetch_repos` returns from the
+    /// cache branch, before `request`, the only place it asks `gh`: a cache
+    /// origin and no account say no attempt was made.
+    #[tokio::test]
+    async fn ck8_a_pinned_cache_is_served_without_an_attempt() {
+        let (path, _) = planted_cache("ck8", std::time::Duration::from_secs(60));
+        let cache = crate::cache::ApiCache::at(path.clone(), 0);
+        let fetch = fetch_repos(50, &cache, CacheMode::AnyCached).await.unwrap();
+        assert!(matches!(fetch.origin, Origin::Cache { .. }));
+        assert_eq!(fetch.meta, FetchMeta::default());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// CM1: only the legacy file: painted as a cache load dated by its mtime,
+    /// account unknown. The first successful poll writes the keyed file and
+    /// leaves the legacy one alone.
+    #[tokio::test]
+    async fn cm1_only_the_legacy_file_is_painted_until_a_poll_writes_the_keyed_one() {
+        let scratch = Scratch::new("cm1");
+        let written = plant(
+            &scratch.legacy_path(),
+            &servable_named("legacy-repo"),
+            3 * HOUR,
+        );
+
+        let fetch = fetch_with(
+            &scratch.cache(),
+            CacheMode::AnyCached,
+            signed_in(TOKEN_A),
+            &nowhere(),
+        )
+        .await
+        .expect("the legacy file is painted");
+        assert_eq!(repo_names(&fetch), ["legacy-repo"]);
+        assert_written_near(fetch.origin, written);
+        assert_eq!(fetch.meta.account, None, "the legacy file has no account");
+
+        let (url, _request) = serve_capturing(servable_named("fresh-repo")).await;
+        let poll = fetch_with(
+            &scratch.cache(),
+            CacheMode::Bypass,
+            signed_in(TOKEN_A),
+            &url,
+        )
+        .await
+        .expect("the poll succeeded");
+        assert_eq!(repo_names(&poll), ["fresh-repo"]);
+        assert_eq!(
+            std::fs::read_to_string(scratch.own_path(TOKEN_A)).unwrap(),
+            servable_named("fresh-repo")
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.legacy_path()).unwrap(),
+            servable_named("legacy-repo")
+        );
+    }
+
+    /// CM2: legacy and this credential's keyed file: the keyed one, with its
+    /// account.
+    #[tokio::test]
+    async fn cm2_the_own_keyed_file_wins_over_the_legacy_one() {
+        let scratch = Scratch::new("cm2");
+        plant(&scratch.legacy_path(), &servable_named("legacy-repo"), HOUR);
+        plant(
+            &scratch.own_path(TOKEN_A),
+            &servable_named("own-repo"),
+            2 * HOUR,
+        );
+
+        let fetch = fetch_with(
+            &scratch.cache(),
+            CacheMode::AnyCached,
+            signed_in(TOKEN_A),
+            &nowhere(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(repo_names(&fetch), ["own-repo"]);
+        assert!(matches!(fetch.origin, Origin::Cache { .. }));
+        assert_eq!(fetch.meta.account, Some(token_fingerprint(TOKEN_A)));
+    }
+
+    /// CM3 (a): `R` fails with only a legacy file on disk: no fallback, the
+    /// legacy file untouched.
+    #[tokio::test]
+    async fn cm3a_a_failed_reload_never_falls_back_on_the_legacy_file() {
+        let scratch = Scratch::new("cm3a");
+        plant(&scratch.legacy_path(), &servable_named("legacy-repo"), HOUR);
+
+        let error = fetch_with(
+            &scratch.cache(),
+            CacheMode::Bypass,
+            signed_in(TOKEN_A),
+            &nowhere(),
+        )
+        .await
+        .err()
+        .expect("offline, yet Ok");
+
+        assert_eq!(error.failure.kind, FailureKind::Offline);
+        assert!(error.fallback.is_none(), "fell back on the legacy file");
+        assert_eq!(
+            std::fs::read_to_string(scratch.legacy_path()).unwrap(),
+            servable_named("legacy-repo")
+        );
+    }
+
+    /// CM3 (b): a launch whose legacy file is unusable and whose request
+    /// fails: no fallback, the load fails. The legacy body parses, so a
+    /// fallback read of it would succeed; only launch's `usable` refuses it.
+    #[tokio::test]
+    async fn cm3b_an_unusable_legacy_file_and_a_failed_launch_have_no_fallback() {
+        let scratch = Scratch::new("cm3b");
+        plant(&scratch.legacy_path(), NO_CALENDAR, HOUR);
+        assert!(
+            read_cached(
+                &scratch.cache().launch_reads(None)[0].cache,
+                day("2026-08-18")
+            )
+            .is_some(),
+            "fixture: the legacy body must parse"
+        );
+
+        let error = fetch_with(
+            &scratch.cache(),
+            CacheMode::AnyCached,
+            signed_in(TOKEN_A),
+            &nowhere(),
+        )
+        .await
+        .err()
+        .expect("nothing usable, yet Ok");
+
+        assert_eq!(error.failure.kind, FailureKind::Offline);
+        assert!(error.fallback.is_none());
+        assert_eq!(
+            std::fs::read_to_string(scratch.legacy_path()).unwrap(),
+            NO_CALENDAR
+        );
+    }
+
+    /// The other side of CM3: a failed `R` falls back on this credential's
+    /// own keyed file, as a failure carrying it (rule 2).
+    #[tokio::test]
+    async fn a_failed_reload_falls_back_on_the_own_keyed_file() {
+        let scratch = Scratch::new("own_fallback");
+        let written = plant(
+            &scratch.own_path(TOKEN_A),
+            &servable_named("own-repo"),
+            HOUR,
+        );
+
+        let error = fetch_with(
+            &scratch.cache(),
+            CacheMode::Bypass,
+            signed_in(TOKEN_A),
+            &nowhere(),
+        )
+        .await
+        .err()
+        .expect("offline, yet Ok");
+
+        let fallback = error.fallback.expect("the own file is the fallback");
+        assert_eq!(repo_names(&fallback), ["own-repo"]);
+        assert_written_near(fallback.origin, written);
+    }
+
+    /// CM4: with this credential's keyed file, launch deletes a legacy file
+    /// 31 days unwritten and keeps one 2 days unwritten.
+    #[tokio::test]
+    async fn cm4_launch_deletes_a_legacy_file_unwritten_for_31_days_only() {
+        for (age, kept) in [(31 * DAY, false), (2 * DAY, true)] {
+            let scratch = Scratch::new(&format!("cm4_{}", age.as_secs()));
+            plant(
+                &scratch.own_path(TOKEN_A),
+                &servable_named("own-repo"),
+                HOUR,
+            );
+            plant(&scratch.legacy_path(), &servable_named("legacy-repo"), age);
+
+            fetch_with(
+                &scratch.cache(),
+                CacheMode::AnyCached,
+                signed_in(TOKEN_A),
+                &nowhere(),
+            )
+            .await
+            .expect("the own file is served");
+
+            assert_eq!(scratch.legacy_path().exists(), kept, "age {age:?}");
+        }
+    }
+
+    /// A launch whose request succeeds cleans up too; one whose request
+    /// fails, and a poll, never do.
+    #[tokio::test]
+    async fn cleanup_runs_after_a_successful_launch_only() {
+        let scratch = Scratch::new("cleanup_paths");
+        plant(&scratch.legacy_path(), "not json", 40 * DAY);
+        plant(
+            &scratch.own_path(TOKEN_B),
+            &servable_named("b-repo"),
+            40 * DAY,
+        );
+        // A's current file exists, so every deletion rule but "not on a
+        // failure path" holds for the two 40 day old files. It is unusable,
+        // so A's launch goes to the network; failing, it must delete nothing.
+        plant(
+            &scratch.own_path(TOKEN_A),
+            NO_CALENDAR,
+            std::time::Duration::ZERO,
+        );
+        let before = scratch.names();
+        let failed = fetch_with(
+            &scratch.cache(),
+            CacheMode::AnyCached,
+            signed_in(TOKEN_A),
+            &nowhere(),
+        )
+        .await;
+        assert!(failed.is_err());
+        assert_eq!(scratch.names(), before, "a failed launch cleaned up");
+
+        // A poll rewrites A's file but is not launch.
+        let (url, _request) = serve_capturing(SERVABLE.to_string()).await;
+        fetch_with(
+            &scratch.cache(),
+            CacheMode::Bypass,
+            signed_in(TOKEN_A),
+            &url,
+        )
+        .await
+        .unwrap();
+        assert_eq!(scratch.names(), before, "a poll cleaned up");
+
+        // A launch that reaches the network and succeeds cleans up.
+        std::fs::remove_file(scratch.own_path(TOKEN_A)).unwrap();
+        let (url, _request) = serve_capturing(SERVABLE.to_string()).await;
+        fetch_with(
+            &scratch.cache(),
+            CacheMode::AnyCached,
+            signed_in(TOKEN_A),
+            &url,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            scratch.names(),
+            [scratch
+                .own_path(TOKEN_A)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()]
+        );
+    }
+
+    /// CM5: only an older version's keyed file for this credential: not
+    /// served, a cold launch.
+    #[tokio::test]
+    async fn cm5_an_older_versions_keyed_file_is_not_served() {
+        let scratch = Scratch::new("cm5");
+        let account = token_fingerprint(TOKEN_A);
+        plant(
+            &scratch
+                .0
+                .join(format!("github-v1-github.com-{account}-50.json")),
+            &servable_named("v1-repo"),
+            HOUR,
+        );
+
+        let error = fetch_with(
+            &scratch.cache(),
+            CacheMode::AnyCached,
+            signed_in(TOKEN_A),
+            &nowhere(),
+        )
+        .await
+        .err()
+        .expect("an older version was served");
+
+        assert_eq!(error.failure.kind, FailureKind::Offline);
+        assert!(error.fallback.is_none());
+    }
+
+    /// CM6: legacy and account A's keyed file, launch on B: neither is
+    /// painted, B behaves as no cache.
+    #[tokio::test]
+    async fn cm6_another_accounts_keyed_file_retires_the_legacy_one() {
+        let scratch = Scratch::new("cm6");
+        plant(&scratch.legacy_path(), &servable_named("legacy-repo"), HOUR);
+        plant(&scratch.own_path(TOKEN_A), &servable_named("a-repo"), HOUR);
+
+        let error = fetch_with(
+            &scratch.cache(),
+            CacheMode::AnyCached,
+            signed_in(TOKEN_B),
+            &nowhere(),
+        )
+        .await
+        .err()
+        .expect("the legacy or A's file was painted for B");
+
+        assert!(error.fallback.is_none());
+        assert_eq!(error.meta.account, Some(token_fingerprint(TOKEN_B)));
     }
 }

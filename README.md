@@ -53,6 +53,21 @@ later; with watch off, none follows on its own, and `r` retries at once. The
 segment clears on the first success. A narrow header shortens it to
 `⚠ github` or `github cached` rather than dropping it.
 
+The saved copy of GitHub's answer lives in the `fleetz` folder of your
+platform cache directory (`~/Library/Caches/fleetz` on macOS,
+`$XDG_CACHE_HOME/fleetz` or `~/.cache/fleetz` on Linux), one file per `gh`
+account, for example `github-v2-github.com-2a8d4ab865f3ca20-50.json`: format
+version, host, a 16 character fingerprint computed from your `gh` token (never
+the token itself) and `repo_limit`. Files are readable only by you. Launch asks
+`gh auth token --hostname github.com` which account is signed in, waiting at
+most 2 seconds, and paints only that account's copy; an account with no saved
+copy yet paints nothing until GitHub answers. Signed out, or when `gh` does
+not answer in time, launch paints the most recently saved copy on the machine.
+The single `github-{repo_limit}.json` that earlier versions wrote is read only
+until any account has saved its own copy. A copy superseded by another account,
+token or format version is deleted at launch once it has gone 30 days without
+being written; nothing else in the folder is touched.
+
 A `git fetch` that fails (from `f`, `F`, `r`, `R`, launch or a watch sweep) is
 marked on the repo rather than passed off as a fetch:
 
@@ -190,7 +205,7 @@ in the header instead.
 | `+` / `-` | Shrink / grow the inspector pane |
 | `=` | Reset both panes to their default sizes |
 | `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates, and fetch the repos whose remote moved. No rediscovery. A failed poll keeps the rows as they are and marks the header; failed fetches are marked on their repos and counted in the status line |
-| `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear. If GitHub cannot be reached it rebuilds from the cache and says `Reloaded from cache: GitHub offline` (or why) instead of `Reloaded` |
+| `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear. If GitHub cannot be reached it rebuilds from the signed-in account's saved copy and says `Reloaded from cache: GitHub offline` (or why) instead of `Reloaded`; with no saved copy for that account the reload fails and says so, rather than showing another account's data |
 | `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub. A fetch that fails is marked on its repo, not in the status line. While it is on, a red eye (`󰈈 watch`) in the header pulses between two shades so the dashboard says it is live without anything moving; off, it is a grey crossed-out eye (`󰈉 watch`). With `icons = "plain"` the eye is `o watch` on and `- watch` off |
 | `?` | Toggle help overlay |
 | `Esc` | Close search or help |
