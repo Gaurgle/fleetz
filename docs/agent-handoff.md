@@ -1,10 +1,11 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-02 22:09 CEST by `claude-fable-5-1` (`claude --agent
+Last rewritten 2026-10-02 22:09 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `60a43b88-e448-4466-be9c-e93c226b8f44`), when Andreas
-stopped the session for the night with usage at 82%. **Nothing is running: no
-worker, no reviewer, no build, no background job.** Read this file, the
-repository instructions, [agent-workflow.md](agent-workflow.md) and
+stopped the session for the night with usage at 82%. The Baton section was
+updated 2026-10-03 17:02 CEST by the session that holds it now; the rest
+describes the state at 22:09 until that session rewrites it. Read this file,
+the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
 authoritative for status; this file says why things are where they are and
@@ -12,11 +13,24 @@ what to do next.
 
 ## Baton
 
-**Released** 2026-10-02 22:09 CEST by the session above, which held it from 2026-10-02
-18:34. No lead is active. The next lead records its own session and takeover
-time here, after confirming with Andreas that this session has ended.
+**Held** since 2026-10-03 17:02 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `9f425986-e283-4dc5-8dcd-6ffc91edf1e3`). If this
+section still says Held and that session is gone, ask Andreas before taking
+over, and look at #47 and the `fz-10a` worktree for work in flight.
 
-- **How it was taken.** Andreas answered "Retired, take over" about two older
+- **How it was taken (2026-10-03).** Andreas opened the session at 16:58 and
+  wrote: "continue the work from handoff". The session read that as his
+  instruction to take over and to resume the next step and the order recorded
+  below, under the standing instructions as they are written here, and told
+  him so in its first report so he can correct it. Evidence that the previous
+  lead stopped: no `claude --agent fz-coordinator` process from 2026-10-02 is
+  running, `main` equalled `origin/main` at `f8d3680` with CI green, the
+  `fz-10a` worktree was clean with no commit of its own, and the board showed
+  no item In progress or in Review. The `claude` started 2026-10-01 13:54 is
+  still open in this repository; Andreas retired it on 2026-10-02.
+- **Released before that** 2026-10-02 22:09 CEST by session `60a43b88`, which
+  held it from 2026-10-02 18:34.
+- **How that session took it.** Andreas answered "Retired, take over" about two older
   sessions still open in this repository (a `claude` started 2026-10-01 13:54
   and a `codex` started 2026-09-30 23:25), and "Both hold" to the standing
   instructions below.
@@ -140,8 +154,10 @@ Each issue holds its evidence.
 Two exist besides the main checkout, under `.claude/worktrees/`. No ticket
 worktree holds uncommitted work.
 
-- **`fz-10a`, branch `feat/fz-10a-api-budget-reading`, at `8cc1c52`, clean,
-  no commit of its own.** FZ-10a (#47) was dispatched 2026-10-02 22:01 and
+- **`fz-10a`, branch `feat/fz-10a-api-budget-reading`.** Fast-forwarded to
+  `f8d3680` on 2026-10-03 17:02 and dispatched again to a fresh `fz-worker`
+  (see #47 for the assignment and the live state). Before that it was at
+  `8cc1c52`, clean, with no commit of its own: FZ-10a (#47) was dispatched 2026-10-02 22:01 and
   stopped at about 22:03; the worker had read the code and changed nothing.
   Its last finding: more existing test sites build `GithubFetch`,
   `FetchError` or `Failure` than the four the ticket names, because later
