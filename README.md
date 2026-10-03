@@ -93,9 +93,9 @@ You also need:
 - `gh` (GitHub CLI, authenticated via `gh auth login`)
 - `lazygit` (optional, for the `Enter` keybind)
 - a [Nerd Font](https://www.nerdfonts.com/) in your terminal, unless you set
-  `icons = "plain"` in the config, which draws the repo kind, stash and watch
-  marks as plain ASCII instead (the contribution strip's day squares still
-  need one)
+  `icons = "plain"` in the config or the `,` settings, which draws the repo
+  kind, stash and watch marks as plain ASCII instead (the contribution strip's
+  day squares still need one)
 
 ## Usage
 
@@ -185,7 +185,7 @@ in the header instead.
 | `G` | Show all (clear group) |
 | `/` | Fuzzy-search repos by name (best match first, `flz` finds `fleetz`), or type `#dirty` `#behind` `#ahead` `#ci` `#prs` `#stash` to filter |
 | `0` | Clear `#tag` filters (keeps free-text search) |
-| `,` | Settings overlay: refresh interval, startup view, work hours, pane persistence, contributions strip and its cell size, loading screen. `Enter` saves to `config.toml` |
+| `,` | Settings overlay: refresh interval, startup view, work hours, pane persistence, contributions strip and its cell size, icon set (`nerd` or `plain`), loading screen. `Enter` saves to `config.toml` |
 | `<` / `>` | Narrow / widen the repo list |
 | `+` / `-` | Shrink / grow the inspector pane |
 | `=` | Reset both panes to their default sizes |
@@ -255,7 +255,8 @@ contributions_cell_size = "medium"
 # Glyph set for the repo kind, stash and watch marks: "nerd" (default) draws
 # Nerd Font icons, "plain" draws ASCII any monospace font has: `@` org, `-`
 # private, `+` public, `$` stash (as git's own prompt marks one), and `o` / `-`
-# for watch on / off. An unknown value keeps "nerd". Read at launch.
+# for watch on / off. An unknown value keeps "nerd". Also in the `,` menu,
+# where it applies live.
 icons = "nerd"
 
 # Start in watch mode. On by default: a dashboard you leave open should keep

@@ -170,7 +170,7 @@ const GROUPS: [Group; 6] = [
                     "settings: sweep and poll",
                     "intervals, watch, view,",
                     "work hours, pane sizes,",
-                    "contrib, loading screen",
+                    "contrib, loading, icons",
                 ],
             },
             Row {
@@ -518,6 +518,7 @@ mod tests {
                 SettingField::PersistPanes => "pane",
                 SettingField::Contributions | SettingField::ContribCellSize => "contrib",
                 SettingField::Intro => "loading",
+                SettingField::Icons => "icons",
             };
             assert!(
                 field.label().contains(word),
