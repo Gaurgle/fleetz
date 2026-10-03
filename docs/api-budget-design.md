@@ -359,8 +359,11 @@ owner's, it is marked open.
 
 **The reading.** FZ-10a parses, from any response that carries them, success
 or failure: `limit`, `remaining`, `used`, the raw `reset` epoch, the
-response's `Date`, and a `token_id` (a hash of the token the request used,
-computed in memory and never stored or logged). It travels out of
+response's `Date`, and a `token_id` (the pinned fingerprint of the token the
+request used, specified in
+[coverage-cache-design.md](coverage-cache-design.md) 4.3; never stored
+except as the account part of the cache file's name, never logged; amended
+2026-10-03 when FZ-09c landed). It travels out of
 `fetch_repos` with the result. A response without the headers carries no
 reading. A cache-served load carries none.
 

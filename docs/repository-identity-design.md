@@ -526,7 +526,7 @@ spellings.
 
 | Store | Change | Approval |
 |---|---|---|
-| API cache file | **None.** `owner.login` is already in the payload, so `RemoteId` is derived after parse. A payload without `login` takes the legacy name path (m2) | None for FZ-05. Per-account and per-host file keys are FZ-09 |
+| API cache file | **None.** `owner.login` is already in the payload, so `RemoteId` is derived after parse. A payload without `login` takes the legacy name path (m2) | None for FZ-05. Per-account and per-host file keys are FZ-09: done in FZ-09c (2026-10-03), where the file name carries a format version, the host (`model::host_key`, the function `RemoteRef::key` uses) and the account fingerprint ([coverage-cache-design.md](coverage-cache-design.md) 4.3) |
 | `config.groups` | **None now (D7 deferred).** A possible additive `owner/name` member syntax is parked as FZ-05h | Andreas's explicit approval of the config contract change, if ever wanted |
 | Window state | None | n/a |
 | GraphQL query | None. `nameWithOwner`, `url` and `id` are free fields but not needed | Widening the fetch would need the cache check required by `CLAUDE.md` |

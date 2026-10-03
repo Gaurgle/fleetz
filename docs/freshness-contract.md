@@ -246,6 +246,41 @@ the code.
    slowed, paused or rate limited poll (O1), are settled on the FZ-10c branch
    build.
 
+Accepted by Andreas on 2026-10-02 with the owner items of
+[coverage-cache-design.md](coverage-cache-design.md), whose section 6 goes
+through every rule, changed or not. Amendments 7 to 9 took effect with FZ-09c
+on 2026-10-03. The changes for coverage marks and for an account change
+follow with FZ-09b and FZ-09d and are added here when those land.
+
+7. **Rule 2: the fallback is this credential's file.** A fallback after a
+   failed attempt reads only the cache file keyed to the credential that made
+   the attempt. A credential with no saved copy has no fallback, and neither
+   has an attempt made with no credential (signed out of `gh`): the failure
+   then carries no data. Rule 1 is unchanged and covers a launch that is
+   signed out, or whose `gh` lookup did not answer within 2 s: it is served
+   from the newest saved copy as a cache read, and no attempt is recorded.
+8. **Rule 5: cleanup is not a failure path.** A failure still never touches
+   the cache file. Superseded files (the legacy unkeyed file, a file of an
+   older format version, another account's file) are deleted only when they
+   have gone 30 days unwritten, only at a launch that has data and a known
+   account with its own current file, and never the file that launch just
+   served.
+9. **Transitions: what "cache" means.** "Launch, cache served" reads this
+   credential's keyed file; or the legacy unkeyed file while no account has a
+   keyed file; or, signed out or after a timed-out lookup, the newest keyed
+   file. "Launch, no usable cache" includes a credential with no saved copy
+   while other accounts' copies exist: nothing is painted from them. "`R`
+   fails, cache exists" becomes two rows:
+
+   | Event | Rows | `data_time` | `last_attempt` | `outcome` | Cache file |
+   |---|---|---|---|---|---|
+   | `R` fails, this credential's keyed file exists | Rebuilt from that file | File write time, or unknown | Now | `Failed(kind)` | Untouched |
+   | `R` fails, no keyed file for this credential, or signed out | Unchanged; the status line says the load failed and why | Unchanged | Now | `Failed(kind)` | Untouched |
+
+   The second row is owner item O12, and Andreas accepted it for the
+   signed-out case too on 2026-10-03 ("Merge as it is"): before FZ-09c a
+   signed-out `R` rebuilt from the shared file.
+
 ## Not in this contract
 
 Budget and backoff beyond the amendments above

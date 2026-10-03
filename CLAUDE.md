@@ -273,10 +273,17 @@ is.
 **Launch paints from the cache, however stale.** Blocking on the GraphQL
 dataset cost 6-9s before the first frame, so startup passes
 `CacheMode::AnyCached` and the first tick's poll replaces it. That only works
-if the poll is due: a cache-served load must leave `last_github_poll` unset
-(`GithubFetch::from_cache`), or launch shows the last session's numbers for a
-whole interval. Keyed by `repo_limit` alone: never re-add `-p` (`cache.rs`),
-which decides whether PR data is *drawn*, not whether it is fetched.
+if the poll is due: a cache-served load is not an attempt and must leave
+`GithubFreshness::last_attempt` unset (`DatasetSource::Cache`), or launch
+shows the last session's numbers for a whole interval. The file is keyed by
+format version, host, account and `repo_limit` (`cache::KeyedCache`): launch
+reads this credential's saved copy after one `gh` lookup bounded at 2 s
+(`github::LAUNCH_LOOKUP_BOUND`), and a credential with no saved copy paints
+nothing and waits for GitHub, never another account's data. The unkeyed
+legacy file is read only while no account has a keyed file. Signed out, or
+after a lookup that timed out, launch shows the newest saved copy. Never
+re-add `-p` to the key (`cache.rs`), which decides whether PR data is
+*drawn*, not whether it is fetched.
 
 **Never widen the GitHub fetch without checking the cache.** Results are cached
 on disk with a TTL (`cache.rs`, `cache_ttl`); `r` rebuilds from cache, `R`
