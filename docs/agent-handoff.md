@@ -1,13 +1,11 @@
 # Fleetz coordinator handoff
 
-Last rewritten 2026-10-02 22:09 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `60a43b88-e448-4466-be9c-e93c226b8f44`), when Andreas
-stopped the session for the night with usage at 82%. Updated 2026-10-03
-18:10 CEST by the session that holds the baton now (the Baton, State of
-`main`, Done on 2026-10-03, Worktrees, Next step and What waits on Andreas
-sections); the rest stands as written on 2026-10-02. **In flight at 18:13:
-one `fz-reviewer` on FZ-13f (#55); no worker, no build. FZ-09c (#59) is at
-Ready to integrate, waiting for Andreas's answer on a signed-out `R`.** Read this file,
+Last written 2026-10-03 18:27 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `9f425986-e283-4dc5-8dcd-6ffc91edf1e3`), when Andreas
+asked for a good place to stop for the day. **Nothing is running: no worker,
+no reviewer, no build, no background job. No ticket of the release line is
+between dispatch and merge, and no ticket worktree exists** (the board's one
+Ready to integrate item is #45, parked). Read this file,
 the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
@@ -16,16 +14,24 @@ what to do next.
 
 ## Baton
 
-**Held** since 2026-10-03 17:02 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `9f425986-e283-4dc5-8dcd-6ffc91edf1e3`). If this
-section still says Held and that session is gone, ask Andreas before taking
-over, and look at the Worktrees section and the board for work in flight.
+**Released** 2026-10-03 18:27 CEST by the session above, which held it from
+2026-10-03 17:02. No lead is active. The next lead records its own session
+and takeover time here, after confirming with Andreas that this session has
+ended.
 
+- **How it ended (2026-10-03).** At about 18:22 Andreas wrote: "we can look
+  for a good place to stop for the day now. let all processes and workers
+  finish what they are doing, then commit and push. update handover as
+  needed and let me now". No worker or reviewer was running. One ticket was
+  open: FZ-13f (#55), accepted in review, committed, pushed, CI green on its
+  branch and checked against `main`. The coordinator finished its merge
+  under the safe-merge rule, cleaned up and dispatched nothing more.
+- **Taking over does not resume work.** The standing scope below is recorded
+  evidence. A new lead confirms it with Andreas once before dispatching.
 - **Confirmed (2026-10-03, about 18:00).** The session had told Andreas how
   it read his opening message and listed three open questions (try FZ-13d,
   one test arm in FZ-13u, the standing instructions). He answered: "good!
   all ok from me."
-
 - **How it was taken (2026-10-03).** Andreas opened the session at 16:58 and
   wrote: "continue the work from handoff". The session read that as his
   instruction to take over and to resume the next step and the order recorded
@@ -42,16 +48,14 @@ over, and look at the Worktrees section and the board for work in flight.
   sessions still open in this repository (a `claude` started 2026-10-01 13:54
   and a `codex` started 2026-09-30 23:25), and "Both hold" to the standing
   instructions below.
-- **How it ended.** At about 22:03 he wrote: "we are at 82% usage now., find a
+- **How that session ended.** At about 22:03 he wrote: "we are at 82% usage now., find a
   safe spot to stop for tonight. commit and merge and stop". The coordinator
   stopped the one worker in flight (FZ-10a, #47, dispatched 22:01), which had
   changed no file, merged the one accepted ticket still open (FZ-13e) and
   cleaned up. A few minutes later he added that a running worker or reviewer
   should be let finish and its report recorded; by then the FZ-10a worker was
   already stopped, and no reviewer was running. Nothing was left at Ready to
-  integrate and nothing is uncommitted in a ticket worktree.
-- **Taking over does not resume work.** The standing scope below is recorded
-  evidence. A new lead confirms it with Andreas once before dispatching.
+  integrate and nothing was uncommitted in a ticket worktree.
 
 ## Authority and routing
 
@@ -77,12 +81,21 @@ A new lead confirms the first three once before relying on them; the rest are
 written into the repository.
 
 - **Pace and dispatch** (2026-10-01; confirmed "Both hold" on 2026-10-02
-  18:34; "keep going" at about 21:49). "keep me updated. backend is still
+  18:34; "keep going" at about 21:49; "continue the work from handoff" and
+  "good! all ok from me." on 2026-10-03). "keep me updated. backend is still
   vital, but its more important that we move forward in a good pace. But keep
   me updated, and ask me about decisions that are bigger". Under it the
   coordinator dispatched in plan order without waiting, ruled on small
   questions, reported at each merge, and went to him for design decisions,
   contract changes and test edits beyond the exception below.
+- **More in parallel** (2026-10-03, about 17:35). "we are only running one
+  agent right now, i think? Are'nt there any more tickets we can get working
+  on in parallell?" Under it the coordinator filled the second worker slot
+  with tickets that share a file with the first by symbol or region rather
+  than waiting for whole-file disjointness, recorded each overlap in the
+  assignment comment, merged one ticket at a time and reran the combined
+  check against the new `main` for the next. Never more than two workers at
+  once; he was offered a third and did not ask for it.
 - **Where his testing matters** (2026-10-01; confirmed with the above). No
   "try the build" for tickets with nothing to see; a ticket that changes the
   screen or a key goes to him with the branch build before it merges, except
@@ -100,8 +113,11 @@ written into the repository.
   contract"): editing an existing test is his decision, except a
   compile-forced new field in existing test code with no assertion changed.
   Two releases he gave for single tickets: the assertion on `1wt` (FZ-13t,
-  done) and the positional calls to `SettingsOverlay::new` (FZ-13u, #65: one
-  argument added with a neutral value, no assertion changed).
+  done) and the positional calls to `SettingsOverlay::new` (FZ-13u, done: one
+  argument added with a neutral value, no assertion changed), with one
+  compile-forced arm in an exhaustive match of an existing test, which he
+  allowed when asked ("all ok from me", 2026-10-03). An exhaustive match
+  that needs an arm for a new variant is not a struct field: ask each time.
 - **Writing files** (in `agent-workflow.md` and
   `.claude/agents/fz-coordinator.md`): Write or Edit, never heredocs or
   redirection; command text goes through a scratchpad file and `--body-file`.
@@ -115,8 +131,13 @@ written into the repository.
 
 ## State of `main`
 
-`main` is at the merge of FZ-13u, `d1d1019`, plus coordination doc commits,
-equal to `origin/main`, CI green, 937 tests passing and 1 ignored. **The no-install
+`main` is at the merge of FZ-13f, `45b8d6a`, plus this file's commit, equal
+to `origin/main`, CI green, 976 tests passing and 1 ignored. **The first
+launch of a build from this `main` changes the cache on disk** (FZ-09c): it
+paints from the old `github-50.json`, and the first successful poll writes
+`github-v2-github.com-<fingerprint>-50.json` beside it. The installed binary
+keeps using the old file, which the new build deletes once it has gone 30
+days unwritten. **The no-install
 span of the identity series is closed** (FZ-05b opened it at `f37c6b9`,
 FZ-05e closed it at `40a2c73`): `main` shows every checkout again. Andreas was
 told; installing and tagging are his. To look at `main` without installing:
@@ -130,16 +151,25 @@ evidence, worktree and local branch removed.
 | Ticket | Issue | Ticket commit | Merge | What landed |
 |---|---|---|---|---|
 | FZ-10a | #47 | `97e694d` | `645ef75` | A budget reading from the rate-limit headers on every answer, carried in `FetchMeta`; refusals classified by the design's 4.3 table (`Server`, `Refused`, primary and secondary limits); one reused client with a 10 s connect and a 30 s total timeout; `token_fingerprint` and `poll_cost` |
-
 | Late frame | #64 | `4fd53e0` | `0b9930d` | A `LoadingFrame` queued behind `Loaded` no longer cancels the held first paint: the arm's body is `on_loading_frame`, which adds to `needs_redraw` |
 | FZ-13d | #53 | `12b0b1b` | `e58274e` | `Shift-Tab` walks the panes in reverse; the compact list title follows focus; the detail pane's unfocused number takes `panel_title`'s color; the help's `Tab` row says "focus next / previous pane" |
 | FZ-13u | #65 | `7f1c9ea` | `d1d1019` | An "icons" row in the `,` settings: saves under `icons`, applies on Enter through `set_active_icons`; the overlay opens on the set in force |
+| FZ-09c | #59 | `1b14a26` | `76d0170` | The GitHub cache file is keyed by format version, host and account fingerprint; one token lookup per attempt, bounded at 2 s before the launch read; the legacy file is read only while no account has a keyed file; superseded files go after 30 days; `gh auth token --hostname github.com` |
+| FZ-13f | #55 | `632ac05` | `45b8d6a` | A hyphen where the header and the branches title drew an em dash; the README's inspector keys the right way round; six stale comments corrected |
 
 What FZ-10a leaves for later tickets is in the closing comment on #47:
 `poll_cost` carries an `expect(dead_code)` outside tests that FZ-10b removes
 with its first caller; `apply_github_poll` discards the reading (`meta: _`)
 until FZ-10b; the 4.3 table has a new row for the untyped "rate limit"
-message, which is a primary limit.
+message, which is a primary limit. What FZ-09c leaves for FZ-09b and FZ-09d
+is in the closing comment on #59.
+
+**The contract edits FZ-09c required are made** (commit `3736966`): the
+launch invariant in `CLAUDE.md` (which also lost the stale names
+`last_github_poll` and `GithubFetch::from_cache`), amendments 7 to 9 in
+[freshness-contract.md](freshness-contract.md), the `token_id` sentence in
+`api-budget-design.md` 4.1 and the answer in
+`repository-identity-design.md` 3.8.
 
 ## Done on 2026-10-02
 
@@ -178,89 +208,75 @@ Each issue holds its evidence.
 
 ## Worktrees
 
-Three exist besides the main checkout, under `.claude/worktrees/`. Each
-issue's comments hold the diff hash of the revision under review or accepted.
+One exists besides the main checkout, under `.claude/worktrees/`. Every
+ticket worktree of 2026-10-03 (`fz-10a`, `issue-64`, `fz-13d`, `fz-13u`,
+`fz-09c`, `fz-13f`) is removed with its local branch: all six tickets are
+merged. Their remote branches stay on GitHub.
 
-- **`fz-09c`, branch `feat/fz-09c-keyed-cache`, at `1b14a26`, pushed, clean:
-  Ready to integrate.** FZ-09c (#59): the first review asked for changes in
-  two new tests; the worker fixed them, extracted `model::host_key` as the
-  coordinator ruled, and made two small accepted edits; the re-review
-  accepted the revision (diff hash `dc022853...`). CI is green on the
-  branch and the combined checks passed against `main` at `d1d1019` (974
-  tests, no conflict). **It waits for Andreas's answer on a signed-out `R`**
-  (see What waits on Andreas). If `main` moves in code first (FZ-13f),
-  rerun the combined check before merging. After the merge, make the
-  contract and invariant edits listed under Next step.
-- **`fz-13f`, branch `fix/fz-13f-header-hyphen`, base `d1d1019`,
-  uncommitted change, in Review.** FZ-13f (#55): an `fz-small`
-  (`claude-sonnet-5-5`) reported at 18:12 (diff hash `2d9f43c1...`, on #55)
-  and an `fz-reviewer` was dispatched at 18:13. It merges under the
-  safe-merge rule once accepted (a dash becoming a hyphen is a small look
-  change). The worker wrote its two tests with an inline script instead of
-  Write or Edit and said so; the reviewer was told.
-- `fz-10a`, `issue-64`, `fz-13d` and `fz-13u` are removed: all four tickets
-  are merged.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked by
   Andreas until the repository goes public.
 
 ## Next step, and the order after it
 
-**Next step:** FZ-09c (#59): when Andreas has answered the signed-out `R`
-question, merge under the safe-merge rule (the owner approved its cache
-format change on 2026-10-02), rerunning the combined check if `main` moved
-in code. FZ-13f (#55): when the review accepts, commit, push, check and merge.
-Both touch `README.md` and `src/main.rs` by region, so merge one at a time
-and rerun the combined check for the second against the new `main`. When FZ-09c lands, the coordinator makes the
-contract and invariant edits the ticket's body lists under "Contract and
-invariant edits": the `CLAUDE.md` launch invariant, freshness contract rules
-2 and 5 and three transitions, `api-budget-design.md` 4.1 on `token_id`, and
-the answer to `repository-identity-design.md` 3.8.
+**Next step:** FZ-09b (#58), coverage facts and a correct header note. It is
+next on the `src/main.rs` line by C8 and its dependency FZ-09c is merged.
+Read the issue and the coverage design's sections 4.1 and 8 (FZ-09b); move
+it to Ready, record base, branch and worktree in an assignment comment and
+dispatch an `fz-worker`. As the handoff of 2026-10-02 and the design record
+it: it adds coverage facts inside `FetchMeta` (the account key is there
+since FZ-09c), replaces `window_exceeds_dataset`, and draws a note in the
+header, whose words and look (owner items O3 and O4) Andreas judges on the
+branch build before it merges. Check the body before relying on this
+summary.
 
 Then:
 
 1. **The `src/main.rs` line**, one worker at a time, in the order ruled for
-   FZ-09 (C8): FZ-09b #58, FZ-10b #48, FZ-10c #49, FZ-09d #60. As
+   FZ-09 (C8): FZ-10b #48, FZ-10c #49, FZ-09d #60. As
    each FZ-09 ticket lands, amend `CLAUDE.md` and
    [freshness-contract.md](freshness-contract.md) as the coverage design's
-   section 6 says.
-2. **M3 in the second slot:** after FZ-13f #55 (in flight) no M3 ticket
-   with an issue is left that does not wait on Andreas. On 2026-10-03
-   Andreas asked for more in parallel, and the coordinator ran FZ-13d, #64,
-   FZ-13u and FZ-13f beside FZ-09c with ownership by symbol or region rather
-   than by whole file, never more than two workers at once. Wave 3
+   section 6 says (its rows for coverage marks, the `Pending` floor and the
+   account rebuild are still to come; amendments 7 to 9 cover FZ-09c).
+2. **M3 in the second slot:** no M3 ticket with an issue is left that does
+   not wait on Andreas. Wave 3
    and the rendering tickets in the split on #26 have no issues yet; write
-   their bodies before asking. FZ-13s #56 waits for Andreas.
+   their bodies before asking. FZ-13s #56 waits for Andreas. Until then the
+   second slot has nothing to run, unless he allows issues for the
+   follow-ups below.
 3. **M1's exit evidence:** when line 1 is done, check the milestone's exit
    evidence in [release-plan.md](release-plan.md) with him.
 4. **The M0 retrospective** the Relay method asks for is not written. The
    issues hold the data: on 2026-10-02 thirteen tickets merged, and five of
    them (FZ-05b, FZ-05d, FZ-13b, FZ-13c, FZ-13t) needed at least one fix
-   cycle after their first review.
+   cycle after their first review. On 2026-10-03 six merged in about an hour
+   and a half; three needed a fix cycle (FZ-13d one help line, FZ-09c two
+   tests that could not fail, FZ-13f two comment wordings twice), and one
+   worker stopped to ask before adding a seam (#64).
 
-Keep to two workers with disjoint ownership, plus their reviewers.
+Keep to two workers, plus their reviewers. Ownership may be by symbol or
+region when the assignment comment says so and the merges go one at a time.
 
 ## What waits on Andreas
 
-Asked on 2026-10-03 at about 18:15, not yet answered. **It blocks the merge
-of FZ-09c (#59)**, which is otherwise at Ready to integrate:
+Nothing blocks the next step.
 
-- **`R` while signed out of `gh`.** Today it rebuilds from the shared cache
-  file, rediscovers local repos and says "Reloaded from cache". With FZ-09c
-  the rows stay on screen, the status line says "Load failed: not
-  authenticated with GitHub. Run: gh auth login", and local repos are not
-  rediscovered. It follows design 4.5 (a fallback reads only this
-  credential's file), but O12 as he accepted it speaks of "an account with
-  no saved copy", and signed out there is no account. The coordinator
-  recommended merging as it is, with a follow-up ticket if he wants a
-  signed-out `R` to behave like a signed-out launch (O7: show the newest
-  saved copy).
+Answered on 2026-10-03:
 
-Answered on 2026-10-03 ("good! all ok from me.", about 18:00): FZ-13d may
-merge; the compile-forced match arm in FZ-13u's existing test may stand; the
-three standing instructions hold as the coordinator read them.
+- "good! all ok from me." (about 18:00): FZ-13d may merge; the
+  compile-forced match arm in FZ-13u's existing test may stand; the three
+  standing instructions hold as the coordinator read them.
+- "Merge as it is" (about 18:15), on **`R` while signed out of `gh`**.
+  Before FZ-09c it rebuilt from the shared cache file, rediscovered local
+  repos and said "Reloaded from cache". Now the rows stay on screen, the
+  status line says "Load failed: not authenticated with GitHub. Run: gh auth
+  login", and local repos are not rediscovered. It follows design 4.5 (a
+  fallback reads only this credential's file); O12 as he accepted it speaks
+  of "an account with no saved copy", and signed out there is no account,
+  so he was asked. A signed-out `R` that behaves like a signed-out launch
+  (O7: the newest saved copy) is a follow-up he did not ask for.
 
-Older, still open:
+Still open:
 
 1. **FZ-13 wave 4** (maximize and restore, hints that follow focus,
    economical folds): each needs a decision from him before it is a ticket.
@@ -278,6 +294,24 @@ Older, still open:
 Decided, nothing needed: #45 waits for the repository to go public; FZ-10's
 O1 to O5 accepted (O1's words and look are his on the FZ-10c build); FZ-08
 #21 is not to be started.
+
+## Decisions of 2026-10-03 that later tickets inherit
+
+- **A signed-out `R` fails and says so** (Andreas, "Merge as it is"): see
+  What waits on Andreas, and amendment 9 of the freshness contract.
+- **One function spells a host** (coordinator's ruling on #59):
+  `model::host_key`, lowercasing only, used by `RemoteRef::key` and the cache
+  file name. The hashing of an unusual host stays in `cache::host_part` and
+  must not move into the identity key.
+- **`FetchError.meta` is boxed** (coordinator's ruling on #59), because
+  clippy's `result_large_err` fired once the account key was added. New
+  fields for FZ-09b go inside `FetchMeta`.
+- **The untyped "rate limit" message is a primary limit** (coordinator, with
+  the FZ-10a review): the row is in `api-budget-design.md` 4.3, so FZ-10b's
+  not-before is written against what the code does.
+- **A test seam is the smallest that reaches the production line**
+  (coordinator's ruling on #64): one private function for the
+  `LoadingFrame` arm, not an extraction of the event dispatch.
 
 ## Decisions of 2026-10-02 that later tickets inherit
 
@@ -323,7 +357,11 @@ O1 to O5 accepted (O1's words and look are his on the FZ-10c build); FZ-08
 - **Freshness (FZ-03, amended).** `App::github_freshness` holds data time,
   last attempt and outcome. A cached fallback is an `Err` that carries data.
   [freshness-contract.md](freshness-contract.md) has six amendments from
-  FZ-10, each in force when its ticket lands.
+  FZ-10, each in force when its ticket lands (3 and 4 are, with FZ-10a), and
+  three from FZ-09c (7 to 9, in force): a fallback reads only this
+  credential's file, cleanup is not a failure path, and an `R` that fails
+  with no keyed file for the credential, or signed out, leaves the rows and
+  says the load failed.
 - **Fetch outcomes (FZ-04).** `f` fetches the selected repo only; `F` and the
   watch sweep fetch every clone. A failed fetch stays marked until that repo
   is fetched again. Commit `3469f67` has no recorded author session: it
@@ -343,27 +381,50 @@ O1 to O5 accepted (O1's words and look are his on the FZ-10c build); FZ-08
 - **API budget (FZ-10).** Decisions A1 to A7 and the rulings on them are in
   the design. Backoff step 1 is exactly the interval; jitter from step 2 and
   on the cap (longest wait about twelve minutes); `Offline` and `Auth` are
-  transparent to the ladder.
+  transparent to the ladder. FZ-10a is in: every answer with the rate-limit
+  headers yields a `BudgetReading` in `FetchMeta.budget`, on `Ok` and `Err`
+  alike; `Failure` carries `limit: Option<RateLimit>` (primary, or secondary
+  with its `retry-after`) and `rate_limited` is true exactly when it is set;
+  `FailureKind` has `Server` and `Refused`; `client()` is the one reused
+  client (10 s connect, 30 s total); a connect failure is `Offline`, a later
+  timeout `TimedOut`. Nothing consumes the reading yet: `apply_github_poll`
+  binds `meta: _`, and `poll_cost` waits for FZ-10b with an
+  `expect(dead_code)` that FZ-10b must remove.
 - **Coverage and cache (FZ-09).** The account has 95 repos and 50 are
   fetched; `totalCount` and `hasNextPage` are free. Decisions C1 to C9 are in
   the design. `repo_limit` 100 fails with a 502 near 11 s. The cache is now
   written atomically (FZ-09a): temporary files are named `.` + target file
-  name + `.tmp-<pid>-<counter>`, and FZ-09c's startup cleanup matches only
-  that, older than one hour, never from `ApiCache::new`. With FZ-09a alone
-  the existing cache file becomes mode 0600 on its next write.
+  name + `.tmp-<pid>-<counter>`, and startup removes only those, older than
+  one hour, never from `ApiCache::new`. FZ-09c is in: `cache::KeyedCache`
+  names the file `github-v2-{host}-{fingerprint}-{repo_limit}.json`
+  (`FORMAT_VERSION` 2; the host from `model::host_key`, hashed to `h_` plus
+  16 hex digits when it is not plain); production enters through
+  `github::fetch_github` with an injectable token source, and `fetch_repos`,
+  `request` and `with_budget` are test-only wrappers over the same code;
+  `FetchMeta.account` holds the fingerprint, unknown for a load served from
+  the legacy file or signed out; `FetchError.meta` is a `Box<FetchMeta>`.
+  Launch waits on one `gh` lookup, at most `LAUNCH_LOOKUP_BOUND` (2 s).
+  Superseded-file cleanup runs only inside a launch that has data and a
+  known account.
 - **UI (FZ-13).** The inventory behind the split is in the first comment on
-  #26. Done from it: the wave removed, plain icons, the help, the header and
-  footer widths. Both columns of the help are exactly full at 80x24: a new
+  #26. Done from it: the wave removed, plain icons (also switchable in the
+  `,` settings), the help, the header and footer widths, the focus fixes
+  (`Shift-Tab` reverses `Tab` through `App::toggle_panel_focus_back`), the
+  hyphen in the header. Both columns of the help are exactly full at 80x24: a new
   key row needs one merged or removed, and its `,` row is tied by test to the
-  labels in `SETTING_FIELDS`. Letters FZ-13a to FZ-13u are taken.
+  labels in `SETTING_FIELDS` (eleven rows now; the settings popup is 18 rows
+  tall). A help description may be at most 26 columns wide without widening
+  its column. Letters FZ-13a to FZ-13u are taken.
 
 ## Tickets that exist and wait
 
-- **API budget:** FZ-10b #48, FZ-10c #49. Serial. FZ-10a #47 is done.
-- **Coverage and cache:** FZ-09c #59 (in Review), FZ-09b #58, FZ-09d #60, in
-  the order of C8 between the FZ-10 tickets; FZ-09e #61 stays not promoted.
-- **M3:** FZ-13d #53 (Ready to integrate), FZ-13u #65 (in Review), FZ-13f
-  #55, and FZ-13s #56, which waits for Andreas. #64 is done.
+- **Coverage and cache:** FZ-09b #58 (next), then FZ-09d #60 after the FZ-10
+  tickets, in the order of C8; FZ-09e #61 stays not promoted. FZ-09a, c and
+  f are done.
+- **API budget:** FZ-10b #48, FZ-10c #49. Serial, after FZ-09b. FZ-10a #47
+  is done.
+- **M3:** FZ-13s #56, which waits for Andreas. FZ-13a to f, t and u and #64
+  are done. All of these issues sit in Backlog on the board; none is Ready.
 - **Follow-ups (P2):** #46 (needs Andreas's OK).
 - **#45** (M5), parked.
 - **FZ-08 #21** (M4): a read-only GitHub Project board view. He said not to
@@ -424,21 +485,62 @@ O1 to O5 accepted (O1's words and look are his on the FZ-10c build); FZ-08
   are refused where the old code claimed by folder; a clone with no origin
   ranks as off github.com.
 - **`CLAUDE.md` text the code contradicts:** the tick is 100 ms, not 250 ms;
-  `r` does not rebuild from cache; it names `last_github_poll` and
-  `GithubFetch::from_cache`, which no longer exist; it lists only two of the
-  four Nerd Font uses and does not mention the `icons` key. `cache_ttl`
-  decides nothing observable.
+  `r` does not rebuild from cache; it lists only two of the four Nerd Font
+  uses and does not mention the `icons` key or its row in the settings.
+  `cache_ttl` decides nothing observable. (The stale names in the launch
+  invariant were corrected on 2026-10-03.)
+- **From the reviews of 2026-10-03:**
+  - FZ-10a: two loopback tests use a 300 ms total deadline for answers
+    expected in full and could fail on an overloaded runner; a test helper
+    binds and drops a port before connecting (also `nowhere()` in FZ-09c's
+    tests); `refusal_message` shows a JSON body without a `message` key raw
+    (the wording is FZ-10c's); no test in `main.rs` pins that
+    `apply_github_poll` releases the in-flight lock on `Server` and
+    `Refused`.
+  - #64: a test that runs the event loop itself needs the dispatch and the
+    paint decision extracted from `run_event_loop` (with FZ-11 or FZ-13s);
+    a test for a key press that dismisses the field with a frame queued.
+  - FZ-13d: `README.md` lists `Tab` but not `Shift-Tab`; no test exercises
+    the `Tab` or `BackTab` arm itself; the `FocusedPanel::Contributions` doc
+    in `src/app.rs` is inaccurate; a resize or a settings change into
+    compact view leaves focus on a pane compact does not draw.
+  - FZ-13u: the doc on `set_active_icons` in `src/ui/badges.rs` still says
+    "once at startup"; the settings popup clips its save-status line on a
+    terminal shorter than 18 rows.
+  - FZ-09c: a signed-out `R` could behave like a signed-out launch; the
+    `KeyedCache::cleanable` wiring and the production use of
+    `LAUNCH_LOOKUP_BOUND` have no test; CK9 checks the helper
+    `ApiCache::new` calls, not `ApiCache::new`.
+  - FZ-13f: the doc on the test `every_view_marks_its_selection_the_same_way`
+    in `src/ui/detail.rs` says "all four views" and the test loops over five.
 - **Tests:** the real-repo tests in `src/git.rs` inherit the machine's global
   git config; the parity tests assume the system temp directory is not inside
   a repository.
 - **From #45's review:** a skipped job reports as Success, and both workflows
   name their job `check`.
 
-## How the two days ran
+## How the three days ran
 
 - On 2026-10-01 the usage limit was hit once with five agents in flight. On
   2026-10-02 the session ran from 18:34 to 22:09 with two or three agents at
-  a time and ended at 82% by Andreas's call.
+  a time and ended at 82% by Andreas's call. On 2026-10-03 it ran from 17:02
+  to 18:27 with at most two workers and their reviewers, merged six tickets
+  and ended by his call; usage was not read.
+- Sharing a file by symbol or region worked: every merge of 2026-10-03
+  auto-merged, and the combined check was rerun against the new `main`
+  before each next merge. Say in the assignment comment which lines the
+  other ticket owns, and tell the worker to stay out of them.
+- A reviewer that keeps a copy of the revision it reviewed can confirm in a
+  minute that a fix cycle changed only what was asked. Continue the same
+  reviewer for the re-review and give it both hashes.
+- When a re-review asks again for a comment's wording, have the reviewer
+  give the exact text and pass it on: FZ-13f needed three rounds for two doc
+  comments.
+- An `fz-small` wrote test code with an inline script against the file rule
+  and reported it itself. Repeat the rule in a follow-up message, not only
+  in the first brief.
+- Record a time only after reading the clock: two dispatch times were
+  written into this file from memory and were a few minutes off.
 - Most substantive tickets changed in review. Reviewers run mutants; the
   usual finding is a rule with no test that fails when the rule is removed.
 - Tell every worker to look for forced edits to existing tests before
