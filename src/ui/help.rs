@@ -45,7 +45,7 @@ const GROUPS: [Group; 6] = [
             },
             Row {
                 key: "Tab ⇧Tab",
-                desc: &["focus the next pane"],
+                desc: &["focus next / previous pane"],
             },
             Row {
                 key: "1 2 3 4",

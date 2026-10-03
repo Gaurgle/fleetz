@@ -4,7 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
-use crate::app::App;
+use crate::app::{App, FocusedPanel};
 use crate::model::RepoStatus;
 use crate::ui::badges;
 use crate::ui::colors;
@@ -21,9 +21,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         // starts at the same column in both views and the footer below lines
         // up with either one.
         .padding(Padding::horizontal(1))
-        // Compact view is a single pane -- always the focused one -- so its
-        // numbered title reads as active.
-        .title_top(crate::ui::panel_title(1, "repos", true))
+        // The contribution strip can take focus in compact too, so the title
+        // follows it rather than always reading as active.
+        .title_top(crate::ui::panel_title(
+            1,
+            "repos",
+            app.focused_panel == FocusedPanel::RepoList,
+        ))
         .title_top(
             Line::from(Span::styled(
                 format!(" {} ", visible.len()),
@@ -311,5 +315,38 @@ mod tests {
             let drawn: usize = spans.iter().map(|s| s.content.chars().count()).sum();
             assert_eq!(drawn, width, "a {width}-column cell drew {drawn}");
         }
+    }
+
+    /// The color the `repos` label of the list title is drawn in.
+    fn list_title_color(focused_panel: crate::app::FocusedPanel) -> Option<ratatui::style::Color> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let width = 60;
+        let mut app = App::new(fleet(3), "t".to_string(), width, 20);
+        app.view = crate::app::View::Compact;
+        app.focused_panel = focused_panel;
+        let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
+        term.draw(|f| render(f, f.area(), &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let row: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+        let x = row.find("repos").expect("list title not drawn") as u16;
+        buf[(x, 0)].style().fg
+    }
+
+    /// The compact list title was hardcoded focused, so with the strip
+    /// focused both panes claimed the keys.
+    #[test]
+    fn the_list_title_reads_focused_only_while_the_list_has_focus() {
+        use crate::app::FocusedPanel;
+        assert_eq!(
+            list_title_color(FocusedPanel::RepoList),
+            Some(colors::LAVENDER)
+        );
+        assert_eq!(
+            list_title_color(FocusedPanel::Contributions),
+            Some(colors::OVERLAY),
+            "the list title drawn focused while the strip has focus"
+        );
     }
 }

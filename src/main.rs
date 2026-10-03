@@ -1316,7 +1316,8 @@ async fn handle_normal_input(
         // A leftover search query (set, then Enter'd out of edit mode) is
         // cleared by Esc -- matching the strip's "esc to clear" hint.
         KeyCode::Esc if !app.search_query.is_empty() => app.clear_search(),
-        KeyCode::Tab | KeyCode::BackTab => app.toggle_panel_focus(),
+        KeyCode::Tab => app.toggle_panel_focus(),
+        KeyCode::BackTab => app.toggle_panel_focus_back(),
         // Shift+scroll: scroll the *next* pane, so you can stand in one pane
         // and pull more into view in the one beside it without leaving where
         // you are. Plain ↓/j (below) drive whatever is focused; these reach
