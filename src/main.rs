@@ -276,6 +276,16 @@ fn spawn_loading_task(
     });
 }
 
+/// One frame of the loading field: ask for a repaint while the field is up.
+///
+/// It adds to `needs_redraw` and must never overwrite it. A frame can be
+/// queued behind `Loaded`, whose paint the loop then holds because the queue
+/// is not empty; overwriting the flag with false here dropped that held paint
+/// and left the loading field on screen after the load had landed.
+fn on_loading_frame(app: &mut App) {
+    app.needs_redraw |= app.loading_field.is_some();
+}
+
 /// Whether a launch puts the loading field up: `intro` in `config.toml`
 /// switches it, and it only ever covers a load that is still running.
 fn shows_loading_field(intro_enabled: bool, loading: bool) -> bool {
@@ -794,9 +804,7 @@ async fn run_event_loop(
                 dismiss_loading_field(app, &loading_running);
                 app.needs_redraw = true;
             }
-            AppEvent::LoadingFrame => {
-                app.needs_redraw = app.loading_field.is_some();
-            }
+            AppEvent::LoadingFrame => on_loading_frame(app),
             AppEvent::Progress(p) => {
                 app.apply_progress = Some(p);
                 app.needs_redraw = true;
@@ -3324,6 +3332,54 @@ mod tests {
             finished.backend().buffer(),
             "the frame after the load is not the finished screen"
         );
+    }
+
+    /// The bug (#64): a `LoadingFrame` queued behind `Loaded` arrives after the
+    /// load's paint was held for it, and overwrote `needs_redraw` with false.
+    /// The held paint was lost and the loading field stayed on screen until
+    /// something else asked for a redraw.
+    #[test]
+    fn a_late_loading_frame_keeps_the_held_paint_of_the_finished_screen() {
+        let mut app = app_under_loading_field();
+        let running = std::sync::atomic::AtomicBool::new(true);
+
+        // What the `Loaded` arm does: the load is applied, the field goes, and
+        // the finished screen is asked for.
+        app.loading = false;
+        dismiss_loading_field(&mut app, &running);
+        app.needs_redraw = true;
+        // The late frame is already queued and nothing animates, so the loop
+        // holds that paint for it and leaves the flag set.
+        assert!(!should_paint(false, 0, app.loading_field.is_some()));
+
+        on_loading_frame(&mut app);
+        assert!(
+            app.needs_redraw,
+            "the late frame cancelled the held paint of the finished screen"
+        );
+        // The queue is drained now, so the finished screen paints at once.
+        assert!(should_paint(true, 1, app.loading_field.is_some()));
+    }
+
+    /// While the field is up, each of its frames asks for a repaint.
+    #[test]
+    fn a_loading_frame_while_the_field_is_up_asks_for_a_redraw() {
+        let mut app = app_under_loading_field();
+        app.needs_redraw = false;
+        on_loading_frame(&mut app);
+        assert!(app.needs_redraw);
+    }
+
+    /// A frame that arrives after the field is gone, with nothing pending,
+    /// does not invent a repaint.
+    #[test]
+    fn a_late_loading_frame_with_no_pending_paint_asks_for_none() {
+        let mut app = app_under_loading_field();
+        let running = std::sync::atomic::AtomicBool::new(true);
+        dismiss_loading_field(&mut app, &running);
+        app.needs_redraw = false;
+        on_loading_frame(&mut app);
+        assert!(!app.needs_redraw);
     }
 
     /// A resize while the field is up paints the field at the new size, banner
