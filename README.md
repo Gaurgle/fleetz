@@ -399,12 +399,12 @@ with `--json` output for free.
 
 ## History
 
-This tool was previously named `epoz`. The `epoz` name now belongs to the desktop app in the notez2 project; the TUI lives on as `fleetz`, the interactive sibling of `repoz`.
+This tool was previously named `epoz`. The `epoz` name now belongs to the desktop app in the notez project; the TUI lives on as `fleetz`, the interactive sibling of `repoz`.
 
 ## See also
 
 - [repoz](https://github.com/Gaurgle/repoz): the headless one-shot version
-- [notez](https://github.com/Gaurgle/notez-cli): local-first CLI note-taking with interactive todos
+- [notez](https://github.com/Gaurgle/notez): local-first notes and todos, CLI/TUI plus the epoz desktop app
 
 ## Credits
 
