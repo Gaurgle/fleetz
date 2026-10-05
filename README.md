@@ -399,7 +399,7 @@ with `--json` output for free.
 
 ## History
 
-This tool was previously named `epoz`. The `epoz` name now belongs to the desktop app in the notez project; the TUI lives on as `fleetz`, the interactive sibling of `repoz`.
+This tool was previously named `epoz`. The `epoz` name now belongs to [epoz](https://github.com/Gaurgle/epoz), a modular dashboard app; the TUI lives on as `fleetz`, the interactive sibling of `repoz`.
 
 ## See also
 
