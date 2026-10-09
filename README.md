@@ -71,8 +71,8 @@ automatic polls to last until the allowance resets, leaving a tenth of it for
 your own `r` and `R` and other tools on the same account. While the
 allowance is plentiful this changes nothing; when it runs low polls come
 further apart, and near the end they stop until the reset. A rate limit
-(GitHub refused with a 403, a 429 or a `RATE_LIMITED` error) holds polling
-until GitHub says it lifts.
+(a 403 or 429 that GitHub marks as a rate limit, or a `RATE_LIMITED` error)
+holds polling until GitHub says it lifts.
 
 While GitHub is known to be rate limiting, `r` and `R` send nothing, since a
 refused request can make GitHub hold the limit longer: `r` re-checks the local
