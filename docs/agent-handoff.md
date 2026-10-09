@@ -85,7 +85,14 @@ FZ-09b, #68, FZ-10b and FZ-10c are Done (table below). **FZ-09d (#60) was
 dispatched at 19:23 CEST:** branch `feat/fz-09d-not-covered-rows`, worktree
 `.claude/worktrees/fz-09d`, base `862b36c`, `fz-worker` (`claude-opus-5-5`,
 medium), uncommitted until review. It stops at Ready to integrate for
-Andreas's look at the not-covered mark (O4). Nothing runs beside it. **Coordinator ruling on #49** (the
+Andreas's look at the not-covered mark (O4). Nothing runs beside it.
+**Ruling of 19:37** (recorded on #60): Andreas allowed the fixtures of two
+FZ-10b tests, `s3_a_healthy_budget_keeps_the_pending_floor` and
+`s2c_a_known_budget_past_its_reset_is_unknown_and_the_floor_returns`, to
+land a poll that returns the `Pending` row, every assertion kept ("go with
+A"), because under design 4.7 a row the poll did not return no longer holds
+the 15 s floor. The coordinator accepted "Rebuilt locally" as the account
+rebuild's provisional footer word and the window-apply race as pre-existing. **Coordinator ruling on #49** (the
 header needs the poll cost and the configured interval, which only `Config`
 holds): both are copied onto `App` at startup beside `contrib_author`, and
 the three predicates (`github_pace`, `budget_slowed`, `github_limit_until`)
