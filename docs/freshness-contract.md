@@ -151,7 +151,8 @@ integrate. Everything sits in one header segment where `⚠ github` is today.
 - With watch off and a successful launch poll, the header shows nothing more:
   the watch indicator already says the dashboard is not polling.
 - Coverage is a separate note at the end of the header, not part of this
-  segment: see [amendment 10](#amendments).
+  segment: see [amendment 10](#amendments). Rows the last poll did not return
+  are drawn dimmed: see [amendment 11](#amendments).
 
 ## File ownership for FZ-03
 
@@ -309,6 +310,35 @@ Amendment 10 took effect with FZ-09b on 2026-10-09.
     apply, as before; a poll alone does not redraw it. Coverage is a counter
     (section "Status vocabulary" of `CLAUDE.md`). The words are provisional
     until Andreas has seen them on `main`.
+
+Amendment 11 takes effect when FZ-09d (#60) lands; it was written on
+2026-10-09 against the reviewed branch.
+
+11. **Rows the poll did not cover, and an account change (O4, O5).**
+    - **Rule 9 and amendment 2:** the 15 second `Pending` floor counts only
+      rows covered by the last applied poll.
+    - **Transition "Poll succeeds":** GitHub-owned fields of matched rows are
+      replaced; carrier rows the poll did not return keep their values and are
+      marked "not in the last poll" (a set of remote keys on `App`, no row
+      field). A later poll that returns the row removes the mark. Rule 4
+      holds: a failed poll changes no mark.
+    - **New transition row:** a poll that succeeds carrying a known account
+      key that differs from the rows' key, or while the rows' key is unknown,
+      rebuilds the rows from the poll's dataset through the rebuild from
+      memory (no request, no `git fetch`, no window change), clears every
+      mark, and sets `data_time`, `last_attempt`, `outcome` and the cache
+      file as "Poll succeeds" does. A poll carrying no account key never
+      rebuilds. A launch with no known account (the legacy file, or signed
+      out) is rebuilt by the first keyed poll; a token rotation on one
+      account rebuilds once.
+    - **Amendment 5:** the rebuild from memory, and every other rebuild from
+      one dataset (a launch, `R`, a window apply, the account rebuild), clears
+      the marks.
+    - **What the user sees and amendment 6:** a marked row keeps its GitHub
+      values drawn dimmed (`OVERLAY`), its `Pending` lamp stops blinking, and
+      the detail pane says "GitHub data from an earlier refresh: not in the
+      last poll"; the account rebuild reports "Rebuilt locally" when it
+      lands. The look is provisional until Andreas has seen it on `main`.
 
 ## Not in this contract
 
