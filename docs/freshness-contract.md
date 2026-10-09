@@ -252,9 +252,14 @@ Accepted by Andreas on 2026-10-02 with the owner items of
 [coverage-cache-design.md](coverage-cache-design.md), whose section 6 goes
 through every rule, changed or not. Amendments 7 to 9 took effect with FZ-09c
 on 2026-10-03. Amendments 1, 2 and 5 took effect with FZ-10b on 2026-10-09,
-and amendment 6 with it in provisional words ("GitHub rate limited, resumes
-at HH:MM"; "Rebuilt locally" in place of "Reloaded") until FZ-10c settles
-them. The changes for an account change follow with FZ-09d and are added here
+and amendment 6 with it; FZ-10c settled its words the same day, accepted by
+Andreas ("all fine"): the footer says "GitHub rate limited, resumes at HH:MM"
+for `r`, "Reloading without GitHub…" then "Rebuilt locally: GitHub rate
+limited, resumes at HH:MM" for `R`, and "Already refreshing" when `R` is
+ignored; the header's GitHub segment reads `⚠ github rate limited until
+HH:MM, as of HH:MM`, `github paused until HH:MM, allowance nearly used` or
+`github slowed, allowance low` (the last two with watch on only), with short
+forms for a narrow header and never dropped by the fit loop (O1). The changes for an account change follow with FZ-09d and are added here
 when it lands.
 
 7. **Rule 2: the fallback is this credential's file.** A fallback after a

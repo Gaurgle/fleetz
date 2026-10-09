@@ -81,17 +81,9 @@ reads `git -C <worktree> status --short` and the issue's last comment, and
 dispatches a reviewer or a fresh worker from there. Do not dispatch a second
 worker on either ticket while this session's process (pid 57964) is alive.
 
-FZ-09b, #68 and FZ-10b are Done (table below). **FZ-10c (#49) is at Ready
-to integrate, waiting on Andreas's look at the words (O1):** branch
-`feat/fz-10c-poll-state-words`, worktree `.claude/worktrees/fz-10c`, base
-`981823a`, ticket commit `4cc3bfc`, reviewer accepted diff `4b50e66`, CI
-green on the branch, combined checks clean (1033 tests; `main` had no code
-change since the base). The strings for him to settle, and the follow-ups,
-are in the Ready to integrate comment on #49. When he answers: reword only
-what he asks (a worker fix cycle plus re-review if any string changes),
-merge under the safe-merge rule, then the coordinator's docs: freshness
-contract amendment 6 becomes final with his words; `CLAUDE.md`'s docs index
-needs no change. No worker is running. **Coordinator ruling on #49** (the
+Nothing is in flight: FZ-09b, #68, FZ-10b and FZ-10c are Done (table
+below). No worker or reviewer is running. The next step is FZ-09d (#60),
+see "Next step". **Coordinator ruling on #49** (the
 header needs the poll cost and the configured interval, which only `Config`
 holds): both are copied onto `App` at startup beside `contrib_author`, and
 the three predicates (`github_pace`, `budget_slowed`, `github_limit_until`)
@@ -124,6 +116,7 @@ for this ticket, recorded on #58. The body's forced-edit list also misses the
 
 | Ticket | Issue | Ticket commit | Merge | What landed |
 |---|---|---|---|---|
+| FZ-10c | #49 | `4cc3bfc`, `3fd1236` | `862b36c` | `ui::github_segment` draws the held-back states of design 4.6 (rate limited until HH:MM; paused until HH:MM, allowance nearly used; slowed, allowance low) with short forms; `access refused`; "Already refreshing"; the load-error panel's hint on the typed flag and a corrected key hint; `App.github_poll_secs` and `github_poll_cost` copied from `Config` at startup, the three predicates as `App` methods shared by scheduler and header; README section. Andreas accepted every string ("all fine", about 18:55); amendment 6 is final. The FZ-10 series is complete. Follow-ups in the closing comment, notably the `,` row for `github_poll_interval` marked Live but never applied |
 | FZ-10b | #48 | `93f4c8e`, `24df0d7` | `b5694c9` | `ApiBudget` (reset anchored on arrival, 4.1 reading order, 10% reserve, `Every` or `Paused` pacing capped at the resume) and `GithubBackoff` (step 1 the interval, doubling from step 2 to a jittered 600 s cap; primary limits wait for the reset, secondary for `retry-after`; `Offline` and `Auth` transparent) on `App`; readings observed on every answer, give-up and load; `R` ignored during a load (A7); under a known limit `r` sweeps and `R` rebuilds from memory as `LoadKind::FromMemory` (A6); `LoadError.budget` boxed. 34 scenario tests plus 5 from review. Interim footer words until FZ-10c: "GitHub rate limited, resumes at HH:MM", "Reloading without GitHub…", "Rebuilt locally", "A refresh is already running". Docs in `981823a`: amendments 1, 2, 5 in force, 6 provisional; `CLAUDE.md` tick and `r`/`R` text. Three review rounds, one CI fix |
 | FZ-09b | #58 | `75033dd` | `8cfe187` | `totalCount` and `hasNextPage` on the three connections (free: cost 3, 1030 nodes before and after); a `Coverage` record in `FetchMeta`, built in `split_viewer`; `github::coverage_note` draws `(fetched 50 of 95 repos)`, `(fetched 12 of 15 org repos)`, `(fetched 8 of 10 orgs)` at the end of the header, `?` for a pre-change cache; `LoadResult.meta` stored only when `Some`, `App.github_meta` replaced by a successful poll. Three cache-served assertions narrowed under Andreas's one-time option A release; seven compile-forced `meta: None,`. Contract edits in `345717a` (freshness amendment 10, `CLAUDE.md` R2 fact). Words provisional until he has seen them. Follow-ups in the closing comment, notably: the header is not rebuilt by a poll alone (coordinator ruling), left for FZ-09d |
 | Mouse drag and scroll | #68 | `b5254e4` | `5d917ea` | `reclaim_terminal` asks for the alternate screen and mouse capture together after lazygit, `$EDITOR` or the shell returns; the bug was there since the first commit, and showed after the first Enter or `e` of a session. Worktree and local branch removed. Follow-ups in the closing comment: capture stays on while the child runs (`DisableMouseCapture` is never sent) |
@@ -290,20 +283,22 @@ merged. Their remote branches stay on GitHub.
 
 ## Next step, and the order after it
 
-**Next step:** FZ-10c (#49), show when GitHub polling is slowed, paused or
-rate limited. It settles the words FZ-10b left provisional (amendment 6 and
-owner item O1: the header's words for a slowed, paused or rate limited poll
-are Andreas's on the FZ-10c branch build, so this ticket stops at Ready to
-integrate for him unless he says the words are minor). It also owns the
-load-error panel's text ("r rebuilds from cache") and its word-matching for
-"rate limit" (design "Contradictions found"). Read the issue body before
-relying on this summary; record base, branch and worktree in an assignment
-comment and dispatch an `fz-worker`.
+**Next step:** FZ-09d (#60), mark rows the poll did not cover and rebuild on
+an account change. It is the last ticket of the `src/main.rs` line and of
+M1's implementation work; the standing plan-order scope covers it. Read the
+issue body and the coverage design's 4.7 and 8 (FZ-09d) before relying on
+this summary; record base, branch and worktree in an assignment comment and
+dispatch an `fz-worker`. Known inputs for it: `App.github_meta` holds the
+poll's `FetchMeta` (account and coverage, FZ-09b); the header is rebuilt by a
+load or window apply, not by a poll alone (FZ-09b ruling; this ticket touches
+that area and may close the gap); `ApiBudget::account_switched` exists
+(FZ-10b). The not-covered mark is a look change: minor under the 2026-10-02
+instruction unless it adds a new glyph or color, in which case Andreas sees
+it first.
 
 Then:
 
-1. **The `src/main.rs` line**, one worker at a time, in the order ruled for
-   FZ-09 (C8): FZ-09d #60 after FZ-10c. As
+1. **The `src/main.rs` line** ends with FZ-09d. As
    each FZ-09 ticket lands, amend `CLAUDE.md` and
    [freshness-contract.md](freshness-contract.md) as the coverage design's
    section 6 says (its rows for the `Pending` floor and the
