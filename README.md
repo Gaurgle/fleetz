@@ -81,6 +81,13 @@ screen. Both say `GitHub rate limited, resumes at 15:00` in the status line.
 `R` pressed while a reload is running, or under a limit while a GitHub
 refresh is still out, does nothing and says `Already refreshing`.
 
+A repo the last GitHub poll did not return keeps its CI and PRs, drawn dimmed:
+its `Pending` lamp stops blinking, the detail pane says the data is from an
+earlier refresh, and it no longer holds polling at the 15 second floor.
+Switching `gh` accounts while fleetz runs rebuilds the list from the new
+account's data on the next poll, with no git fetch and no change to the time
+window.
+
 The saved copy of GitHub's answer lives in the `fleetz` folder of your
 platform cache directory (`~/Library/Caches/fleetz` on macOS,
 `$XDG_CACHE_HOME/fleetz` or `~/.cache/fleetz` on Linux), one file per `gh`

@@ -103,6 +103,11 @@ const REPO_LIST_MAX_COLS: u16 = 52;
 /// beside it on a normal pane.
 const PR_NUMBERS_SHOWN: usize = 2;
 
+/// The detail pane's line under the header for a repo the last GitHub poll
+/// did not return (`App::is_not_in_last_poll`): its CI and PRs are kept, not
+/// cleared, since a blank lamp would read as "no CI". Provisional words (O4).
+const EARLIER_REFRESH_NOTE: &str = "GitHub data from an earlier refresh: not in the last poll";
+
 /// Most changed files listed in the inspector before the rest are collapsed
 /// into a "… and N more" line -- keeps a huge commit from turning the pane
 /// into an endless scroll.
@@ -164,6 +169,7 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
                 *idx == selected_idx,
                 col_width,
                 dim_pending,
+                app.is_not_in_last_poll(repo),
             ));
         }
     };
@@ -323,6 +329,7 @@ fn repo_list_item(
     is_selected: bool,
     col_width: usize,
     dim_pending: bool,
+    not_in_last_poll: bool,
 ) -> ListItem<'static> {
     let marker = if is_selected { "▸ " } else { "  " };
     let name_style = if is_selected {
@@ -339,7 +346,7 @@ fn repo_list_item(
     // badges land at the same right edge whether or not the row is selected;
     // only differing badge sets between rows shift a status token, exactly
     // as in repoz. Truncate the name rather than let it overflow when narrow.
-    let (badge_spans, badge_w) = badges::badge_spans(repo, dim_pending);
+    let (badge_spans, badge_w) = badges::badge_spans_marked(repo, dim_pending, not_in_last_poll);
     let right_len = badge_w + 1; // +1 for space after dots
     let reserved = badges::MARKER_W + badges::GLYPH_W + 1 + right_len;
     let name_budget = col_width.saturating_sub(reserved).max(3);
@@ -688,7 +695,10 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         row3_left.push(Span::styled(extra, Style::default().fg(color)));
     }
 
-    // Row 3 right: facts that live on GitHub.
+    // Row 3 right: facts that live on GitHub. From an earlier refresh when
+    // the last poll did not return this repo: the same values, in the list's
+    // grey, the lamp held still.
+    let not_in_last_poll = app.is_not_in_last_poll(repo);
     let mut row3_right: Vec<Span> = Vec::new();
     if repo.pr_count > 0 {
         let label = if repo.pr_count == 1 { "PR" } else { "PRs" };
@@ -708,11 +718,21 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
                 text.push('+');
             }
         }
-        row3_right.push(Span::styled(text, Style::default().fg(colors::PR_CLR)));
+        let pr_color = if not_in_last_poll {
+            badges::EARLIER_REFRESH
+        } else {
+            colors::PR_CLR
+        };
+        row3_right.push(Span::styled(text, Style::default().fg(pr_color)));
     }
     if repo.ci_status != CiStatus::Unknown {
         let (ci_sym, ci_color, ci_label) =
             badges::ci_display(&repo.ci_status, app.watch_mode && !app.blink_on);
+        let ci_color = if not_in_last_poll {
+            badges::EARLIER_REFRESH
+        } else {
+            ci_color
+        };
         if !row3_right.is_empty() {
             row3_right.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
         }
@@ -763,6 +783,12 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     lines.push(Line::from(row2));
     if !row3.is_empty() {
         lines.push(Line::from(row3));
+    }
+    if not_in_last_poll {
+        lines.push(Line::from(Span::styled(
+            format!("  {EARLIER_REFRESH_NOTE}"),
+            Style::default().fg(badges::EARLIER_REFRESH),
+        )));
     }
     lines.push(Line::from(""));
     // The view's own title, in the colour its tab wears up in the frame. The
@@ -5738,5 +5764,113 @@ mod tests {
         // A repo git could not date at all says nothing rather than lying
         // about it with a zero or an epoch.
         assert!(!draw(None).contains("last touched"));
+    }
+
+    // --- FZ-09d: GitHub values from an earlier refresh (O4) ---
+
+    use ratatui::style::Color as TermColor;
+
+    /// Two `Pending` rows with two PRs each, `stale` and `fresh`, under
+    /// watch, with `stale` not in the last poll.
+    fn app_with_a_stale_row() -> crate::app::App {
+        let mut repos = vec![
+            repo("stale", RepoKind::Public, Some("alice")),
+            repo("fresh", RepoKind::Public, Some("alice")),
+        ];
+        for r in &mut repos {
+            r.ci_status = CiStatus::Pending;
+            r.pr_count = 2;
+        }
+        let mut app = crate::app::App::new(repos, "t".to_string(), 120, 40);
+        app.watch_mode = true;
+        app.not_in_last_poll
+            .insert((Some("alice".to_string()), "stale".to_string()));
+        app
+    }
+
+    /// The colour of the CI lamp and of the PR count on the list row naming
+    /// `name`, as drawn.
+    fn list_colors(app: &crate::app::App, name: &str) -> (TermColor, TermColor) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        term.draw(|f| render_repo_list(f, f.area(), app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let y = (0..12u16)
+            .find(|&y| {
+                let row: String = (0..60u16).map(|x| buf[(x, y)].symbol()).collect();
+                row.contains(&format!(" {name} "))
+            })
+            .expect("row drawn");
+        let at = |symbol: &str| {
+            (0..60u16)
+                .find(|&x| buf[(x, y)].symbol() == symbol)
+                .map(|x| buf[(x, y)].fg)
+                .expect("cell drawn")
+        };
+        (at("◉"), at("P"))
+    }
+
+    #[test]
+    fn a_row_not_in_the_last_poll_is_drawn_dimmed_and_its_lamp_holds_still() {
+        let mut app = app_with_a_stale_row();
+        for blink_on in [true, false] {
+            app.blink_on = blink_on;
+            assert_eq!(
+                list_colors(&app, "stale"),
+                (badges::EARLIER_REFRESH, badges::EARLIER_REFRESH),
+                "blink_on {blink_on}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_row_in_the_last_poll_is_drawn_as_before() {
+        let mut app = app_with_a_stale_row();
+        app.blink_on = true;
+        assert_eq!(list_colors(&app, "fresh"), (colors::PEACH, colors::PR_CLR));
+        app.blink_on = false;
+        assert_eq!(
+            list_colors(&app, "fresh"),
+            (colors::SURFACE, colors::PR_CLR)
+        );
+    }
+
+    /// The detail pane of the selected repo, as text, and the colour of its
+    /// CI lamp.
+    fn detail_of(app: &crate::app::App) -> (String, TermColor) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (w, h) = (100u16, 24u16);
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let text = (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lamp = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .find(|&(x, y)| buf[(x, y)].symbol() == "◉")
+            .map(|(x, y)| buf[(x, y)].fg)
+            .expect("lamp drawn");
+        (text, lamp)
+    }
+
+    #[test]
+    fn the_detail_pane_says_a_repo_not_in_the_last_poll_is_from_an_earlier_refresh() {
+        let mut app = app_with_a_stale_row();
+        app.blink_on = true;
+        // The first row, `stale`, is selected.
+        let (text, lamp) = detail_of(&app);
+        assert!(text.contains(EARLIER_REFRESH_NOTE), "{text}");
+        assert_eq!(lamp, badges::EARLIER_REFRESH);
+
+        app.not_in_last_poll.clear();
+        let (text, lamp) = detail_of(&app);
+        assert!(!text.contains(EARLIER_REFRESH_NOTE), "{text}");
+        assert_eq!(lamp, colors::PEACH);
     }
 }

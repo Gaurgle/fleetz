@@ -2049,6 +2049,18 @@ pub struct App {
     /// successful poll; a window apply keeps it, so its header note is drawn
     /// from the same coverage as the dataset it re-filters.
     pub github_meta: crate::github::FetchMeta,
+    /// Carrier rows' remote keys (`carrier_key`) that the last applied
+    /// successful poll did not return: their GitHub fields are from an
+    /// earlier refresh. A poll that returns a key removes it, a failed poll
+    /// changes nothing (freshness rule 4), and every load that lands rows
+    /// clears it, since those rows all come from one dataset
+    /// (`docs/coverage-cache-design.md` 4.7). A set here rather than a
+    /// `RepoStatus` field, so no row literal changes.
+    pub not_in_last_poll: std::collections::HashSet<RemoteKey>,
+    /// An applied poll answered on another account than the rows were built
+    /// from (or the rows' account was unknown): the loop rebuilds them from
+    /// memory once nothing else is loading (`main.rs::start_account_rebuild`).
+    pub account_rebuild_due: bool,
     /// The active time window. None means "follow the CLI flags", which is
     /// the state until the user opens the selector (or a saved window was
     /// loaded at startup).
@@ -2074,6 +2086,27 @@ pub fn initial_view(term_width: u16, term_height: u16) -> View {
     } else {
         View::Detail
     }
+}
+
+/// A remote identity as assembly compares it: lowercased owner and name, no
+/// owner for the legacy key of a payload without `login`
+/// (`GithubRepo::identity_key`, the shape of `main.rs::remote_key`).
+pub type RemoteKey = (Option<String>, String);
+
+/// The remote key of the GitHub repo `repo` carries, or None when it carries
+/// none. Follows `main.rs::carries`: a Primary, Elsewhere or NotCloned row is
+/// keyed by its owner and name (name alone for a legacy row without owner);
+/// a LocalOnly row only when the load made it a carrier by giving it an
+/// owner, and then by the name its stored origin names, since its own `name`
+/// is its folder's.
+pub fn carrier_key(repo: &RepoStatus) -> Option<RemoteKey> {
+    use crate::github::GithubRepo;
+    if repo.location != RepoLocation::LocalOnly {
+        return Some(GithubRepo::identity_key(repo.owner.as_deref(), &repo.name));
+    }
+    let owner = repo.owner.as_deref()?;
+    let origin = crate::model::RemoteRef::parse(repo.remote_url.as_deref()?)?;
+    Some(GithubRepo::identity_key(Some(owner), &origin.name))
 }
 
 impl App {
@@ -2146,10 +2179,19 @@ impl App {
             push_detected: false,
             dataset: Vec::new(),
             github_meta: crate::github::FetchMeta::default(),
+            not_in_last_poll: std::collections::HashSet::new(),
+            account_rebuild_due: false,
             window: None,
             dirty_mode: false,
             apply_progress: None,
         }
+    }
+
+    /// Whether `repo` carries GitHub fields the last poll did not return, so
+    /// they are from an earlier refresh. False for a row that carries
+    /// nothing.
+    pub fn is_not_in_last_poll(&self, repo: &RepoStatus) -> bool {
+        carrier_key(repo).is_some_and(|key| self.not_in_last_poll.contains(&key))
     }
 
     /// Called on every tick from the event loop. The spinner advances one
