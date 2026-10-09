@@ -626,10 +626,6 @@ const _: () = assert!(MAX_ORGS < 25 && ORG_REPO_LIMIT < 50);
 /// price, so pacing on it errs slow. The headers carry no per-query cost, so
 /// this is the only source: a change to `build_query` re-measures and updates
 /// it under "Pricing a query change".
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "FZ-10b's pacing is the first caller")
-)]
 pub fn poll_cost(repo_limit: u32) -> u32 {
     match repo_limit {
         0..=20 => 2,

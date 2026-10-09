@@ -154,6 +154,11 @@ pub enum LoadKind {
     Reload,
     /// Time-window overlay: pure re-filter, persists the chosen window.
     WindowApply(time::TimeWindow),
+    /// `R` under a known rate limit: rediscovered and re-swept from the
+    /// dataset already in memory, with no request (A6). Lands as
+    /// `DatasetSource::Local`, so `GithubFreshness` is untouched, and says
+    /// when GitHub resumes instead of `Reloaded`.
+    FromMemory,
 }
 
 pub struct LoadResult {
@@ -195,6 +200,9 @@ pub struct LoadError {
     /// The GitHub attempt behind it, when that is what failed. A failed
     /// attempt still advances the retry clock even though nothing landed.
     pub github_failure: Option<github::Failure>,
+    /// The budget reading the failed attempt's answer carried, if any, so a
+    /// launch refused by a rate limit learns its reset.
+    pub budget: Option<github::BudgetReading>,
 }
 
 impl From<String> for LoadError {
@@ -202,6 +210,7 @@ impl From<String> for LoadError {
         Self {
             message,
             github_failure: None,
+            budget: None,
         }
     }
 }
@@ -508,8 +517,8 @@ fn spawn_load(
     bypass_cache: bool,
 ) {
     debug_assert!(
-        !matches!(kind, LoadKind::WindowApply(_)),
-        "window applies belong in spawn_window_apply"
+        !matches!(kind, LoadKind::WindowApply(_) | LoadKind::FromMemory),
+        "window applies and rebuilds from memory fetch nothing"
     );
     let tx = tx.clone();
     let args = args.clone();
@@ -574,6 +583,63 @@ fn spawn_window_apply(
     });
 }
 
+/// `R` under a known rate limit (A6): rediscover and re-sweep, with the git
+/// fetches `R` has, over the dataset already in memory instead of asking
+/// GitHub. On a background task like any load.
+fn spawn_memory_rebuild(
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    app: &App,
+    args: &Args,
+    config: &config::Config,
+    repo_dir: &Path,
+) {
+    let tx = tx.clone();
+    let dataset = app.dataset.clone();
+    let coverage = app.github_meta.coverage.clone();
+    let window = app.window;
+    let args = args.clone();
+    let config = config.clone();
+    let repo_dir = repo_dir.to_path_buf();
+    tokio::spawn(async move {
+        let mode = args.mode();
+        let result = match resolve_cutoff(window, &mode, &config) {
+            Ok((cutoff, header)) => assemble_view(
+                &dataset,
+                coverage.as_ref(),
+                cutoff,
+                header,
+                &args,
+                &config,
+                &repo_dir,
+                true,
+                None,
+            )
+            .await
+            .map(|(repos, notes)| Box::new(memory_rebuild_result(repos, notes)))
+            .map_err(LoadError::from),
+            Err(e) => Err(LoadError::from(e)),
+        };
+        let _ = tx.send(AppEvent::Loaded(result));
+    });
+}
+
+/// What a rebuild from memory delivers: rows and notes, nothing fetched from
+/// GitHub, so the dataset, calendar and coverage in the app stay as they are.
+fn memory_rebuild_result(repos: Vec<RepoStatus>, notes: ViewNotes) -> LoadResult {
+    LoadResult {
+        kind: LoadKind::FromMemory,
+        repos,
+        header: notes.header,
+        dataset: None,
+        github_calendar: None,
+        // No attempt: data time, last attempt and outcome stay what the last
+        // real attempt left (amendment 5).
+        source: app::DatasetSource::Local,
+        ambiguity: notes.ambiguity,
+        meta: None,
+    }
+}
+
 /// What a window apply delivers: rows and notes, and nothing fetched.
 fn window_apply_result(
     w: time::TimeWindow,
@@ -628,6 +694,8 @@ fn apply_load_result_saving_to(
             apply_groups(&mut app.repos, config);
             app.header = lr.header;
             if let Some(ds) = lr.dataset {
+                let reading = lr.meta.as_ref().and_then(|m| m.budget.as_ref());
+                record_load_attempt(app, &lr.source, reading, now);
                 app.dataset = ds;
                 // Only an attempt may start the re-poll clock. Startup serves
                 // any cached payload however old (`CacheMode::AnyCached`), and
@@ -667,6 +735,15 @@ fn apply_load_result_saving_to(
                     ),
                     _ => app.set_status("Reloaded".to_string(), false),
                 },
+                // `R` under a known limit: nothing was sent, so the status
+                // says when GitHub resumes instead of `Reloaded` (A6).
+                LoadKind::FromMemory => {
+                    let status = match github_limit_until(app, config, now) {
+                        Some(until) => format!("Rebuilt locally: {}", limited_status(until)),
+                        None => "Rebuilt locally".to_string(),
+                    };
+                    app.set_status(status, false);
+                }
                 LoadKind::WindowApply(w) => {
                     window_store.save(&w);
                     let label = app.header.clone();
@@ -682,12 +759,38 @@ fn apply_load_result_saving_to(
         }
         Err(e) => {
             if let Some(failure) = e.github_failure {
+                // An applied attempt: its reading first, then its outcome.
+                app.observe_budget(e.budget.as_ref(), true, now);
+                app.github_attempt_failed(&failure, now);
                 app.github_freshness.failed(failure, now);
             }
             // The status message says it once; `load_error` keeps saying it
             // for as long as there is nothing on screen to say it instead.
             app.set_status(format!("Load failed: {}", e.message), true);
             app.load_error = Some(e.message);
+        }
+    }
+}
+
+/// What a landed load tells the budget and the retry ladder. A load that went
+/// to GitHub is an applied attempt (it supersedes every poll out), so its
+/// reading applies and its outcome counts; a cache read and a load with no
+/// fetch behind it tell them nothing.
+fn record_load_attempt(
+    app: &mut App,
+    source: &app::DatasetSource,
+    reading: Option<&github::BudgetReading>,
+    now: chrono::DateTime<chrono::Local>,
+) {
+    match source {
+        app::DatasetSource::Local | app::DatasetSource::Cache { .. } => {}
+        app::DatasetSource::Network => {
+            app.observe_budget(reading, true, now);
+            app.github_backoff.succeeded();
+        }
+        app::DatasetSource::Fallback { failure, .. } => {
+            app.observe_budget(reading, true, now);
+            app.github_attempt_failed(failure, now);
         }
     }
 }
@@ -1579,30 +1682,18 @@ async fn handle_normal_input(
         // GitHub updated two thirds of each row and left the CI lamp beside
         // them frozen. The poll runs on a background task, so the local
         // numbers land exactly as fast as they did before.
+        // Under a known rate limit the poll is skipped (`refresh_key`).
         KeyCode::Char('r') => {
-            app.set_status("Refreshing…".to_string(), false);
-            start_sweep(app, tx, false, args.author.clone(), true);
-            start_github_poll(app, tx, config);
-            // Already in flight from the watch timer counts too: its answer
-            // is the one this refresh is waiting for.
-            app.refresh_awaits_poll = app.github_poll_inflight;
+            refresh_key(app, tx, args, config, chrono::Local::now());
         }
         // Full reload: re-fetch GitHub (cache-bypassed) and re-run discovery,
         // so a just-pushed or newly-cloned repo appears. Shifted because it
         // costs a network round trip and GitHub rate limit. Runs on a
         // background task, so the list stays scrollable while it works.
+        // Ignored while a load runs; under a known rate limit it rebuilds
+        // from memory instead (`reload_key`).
         KeyCode::Char('R') => {
-            app.loading = true;
-            app.set_status("Reloading…".to_string(), false);
-            spawn_load(
-                tx,
-                args,
-                config,
-                repo_dir,
-                app.window,
-                LoadKind::Reload,
-                true,
-            );
+            reload_key(app, tx, args, config, repo_dir, chrono::Local::now());
         }
         // Toggle watch mode: sweep the listed repos every `refresh_interval`
         // seconds (fetch included, unlike `r`), and re-poll GitHub for PR and
@@ -1702,10 +1793,13 @@ const SWEEP_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(18
 /// which the header shows (`expire_stuck_github_poll`).
 const GITHUB_POLL_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Floor on the GitHub poll interval, whatever the config says. Measured
-/// against a 5000 point/hour GraphQL budget, one poll of ~50 repos costs a
-/// few points, so this is comfortable; it exists to stop a typo turning the
-/// dashboard into a rate-limit incident.
+/// Floor on the GitHub poll interval, whatever the config says, and the
+/// interval while a repo is `Pending`. One poll at `repo_limit` 50 costs 3
+/// points, so one instance at the floor spends 720 of the 5000-point hour:
+/// comfortable for one instance, not for several on one account, which reach
+/// the limit at seven (`docs/api-budget-design.md` section 3). The floor
+/// stops a typo; the budget pacing (`app::ApiBudget::pace`) is what slows
+/// polling when the account runs low.
 const GITHUB_POLL_MIN: u64 = 15;
 
 /// Rows the detail pane scrolls per wheel notch.
@@ -1786,6 +1880,25 @@ fn apply_github_poll(
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     author: &Option<String>,
 ) {
+    apply_github_poll_at(app, attempt, result, tx, author, chrono::Local::now());
+}
+
+/// `apply_github_poll` with the arrival time passed in, so a test can plant
+/// the clock the budget reading and the not-before are anchored to.
+fn apply_github_poll_at(
+    app: &mut App,
+    attempt: u64,
+    result: Result<Box<github::GithubFetch>, github::FetchError>,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    author: &Option<String>,
+    now: chrono::DateTime<chrono::Local>,
+) {
+    // Whether or not the answer is applied, its headers are true about the
+    // account at the moment the server wrote them (design 4.1).
+    let reading = match &result {
+        Ok(fetch) => fetch.meta.budget.clone(),
+        Err(e) => e.meta.budget.clone(),
+    };
     // The in-flight lock belongs to the newest attempt. A late answer from
     // one given up on must not release it, or a second request stacks; the
     // newest one's answer always does, even when it is discarded below.
@@ -1798,16 +1911,20 @@ fn apply_github_poll(
     // poll is out. Once a newer answer has landed, applying this one would
     // move the data backwards (rule 10).
     if !app.github_freshness.accept_answer(attempt) {
+        // Its reading may still lower `remaining` on the held token, never
+        // switch it; its outcome changes no count and no not-before.
+        app.observe_budget(reading.as_ref(), false, now);
         if is_latest {
             // A refresh waiting on this request is over all the same.
             app.settle_refresh_poll(std::iter::empty());
         }
         return;
     }
-    let now = chrono::Local::now();
+    app.observe_budget(reading.as_ref(), true, now);
     match result {
         Ok(fetch) => {
             app.github_freshness.succeeded(now);
+            app.github_backoff.succeeded();
             let github::GithubFetch {
                 repos: dataset,
                 calendar,
@@ -1861,6 +1978,7 @@ fn apply_github_poll(
                 format!("GitHub refresh failed: {}", e.failure.message),
                 true,
             );
+            app.github_attempt_failed(&e.failure, now);
             app.github_freshness.failed(e.failure, now);
         }
     }
@@ -1890,6 +2008,11 @@ fn expire_stuck_github_poll(
         app.github_poll_started = None;
         app.refresh_awaits_poll = false;
         app.github_freshness.gave_up(limit, now);
+        // A give-up is a `TimedOut` failure and climbs the ladder like one
+        // (transition 5).
+        if let app::Outcome::Failed(failure) = app.github_freshness.outcome.clone() {
+            app.github_attempt_failed(&failure, now);
+        }
         app.needs_redraw = true;
     }
 }
@@ -1913,11 +2036,179 @@ fn github_poll_due(
     if !app.watch_mode {
         return freshness.awaits_first_attempt();
     }
+    // Beside the interval, not inside it: a rate limit's reset, a
+    // `retry-after`, a backoff step or a pause at the reserve.
+    let held = github_not_before(app, config).is_some_and(|t| now < t);
     // A detected push jumps the queue: it is the one moment CI is about to
     // change with nothing `Pending` yet to notice. Not while polls fail, where
-    // the next attempt waits out a full interval (rule 6).
-    let push = app.push_detected && !freshness.is_failing();
-    push || freshness.retry_due(now, github_poll_secs(app, config))
+    // the next attempt waits out at least a full interval (rule 6), nor while
+    // the budget slows polling; the next due poll serves it then.
+    let push = app.push_detected && !freshness.is_failing() && !budget_slowed(app, config);
+    !held && (push || freshness.retry_due(now, github_poll_secs(app, config)))
+}
+
+/// The configured poll interval, floored.
+fn configured_poll_secs(config: &config::Config) -> i64 {
+    config.github_poll_interval.max(GITHUB_POLL_MIN) as i64
+}
+
+/// The budget's pace, judged at the last attempt, the moment polls are
+/// spaced from. Before any attempt there is nothing to space.
+fn github_pace(app: &App, config: &config::Config) -> app::Pace {
+    match app.github_freshness.last_attempt {
+        Some(at) => app
+            .api_budget
+            .pace(github::poll_cost(config.repo_limit), at),
+        None => app::Pace::Unknown,
+    }
+}
+
+/// Whether the budget stretches polling past the configured interval or
+/// pauses it, which suspends the `Pending` floor and the push shortcut (A2).
+fn budget_slowed(app: &App, config: &config::Config) -> bool {
+    match github_pace(app, config) {
+        app::Pace::Unknown => false,
+        app::Pace::Every(secs) => secs > configured_poll_secs(config),
+        app::Pace::Paused { .. } => true,
+    }
+}
+
+/// The earliest the next automatic attempt may go besides the interval: the
+/// later of the retry ladder's not-before and a pause at the reserve.
+fn github_not_before(
+    app: &App,
+    config: &config::Config,
+) -> Option<chrono::DateTime<chrono::Local>> {
+    let ladder = app.github_backoff.not_before(configured_poll_secs(config));
+    let pause = match github_pace(app, config) {
+        app::Pace::Paused { until } => Some(until),
+        _ => None,
+    };
+    ladder.max(pause)
+}
+
+/// Until when GitHub is known to refuse a request at `now`: a rate limit's
+/// not-before that has not passed, or too few points left for one poll
+/// (`docs/api-budget-design.md` 4.3, "Manual refresh"). `r` and `R` send
+/// nothing while this is `Some`.
+fn github_limit_until(
+    app: &App,
+    config: &config::Config,
+    now: chrono::DateTime<chrono::Local>,
+) -> Option<chrono::DateTime<chrono::Local>> {
+    let limit = app
+        .github_backoff
+        .limit_until(configured_poll_secs(config))
+        .filter(|t| *t > now);
+    let exhausted = app
+        .api_budget
+        .exhausted(github::poll_cost(config.repo_limit), now)
+        .then(|| app.api_budget.resume_at())
+        .flatten();
+    limit.max(exhausted)
+}
+
+/// The status line for a refresh that sent nothing because of a known limit.
+/// Provisional words; FZ-10c settles them.
+fn limited_status(until: chrono::DateTime<chrono::Local>) -> String {
+    format!("GitHub rate limited, resumes at {}", until.format("%H:%M"))
+}
+
+/// The status line for `R` ignored because a refresh is already under way
+/// (A7, and A6 with a poll in flight). Provisional words.
+const REFRESH_RUNNING: &str = "A refresh is already running";
+
+/// What `R` does, decided before anything is spawned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReloadAction {
+    /// A full load against GitHub, as `R` always did.
+    Load,
+    /// A load is running, or a poll is in flight under a known limit: no
+    /// second load, no request.
+    AlreadyRunning,
+    /// Under a known limit: rebuild from the dataset in memory, no request.
+    FromMemory,
+    /// Under a known limit with nothing in memory: only say when GitHub
+    /// resumes.
+    ResumesOnly(chrono::DateTime<chrono::Local>),
+}
+
+fn reload_action(
+    app: &App,
+    config: &config::Config,
+    now: chrono::DateTime<chrono::Local>,
+) -> ReloadAction {
+    if app.loading {
+        return ReloadAction::AlreadyRunning;
+    }
+    let Some(until) = github_limit_until(app, config, now) else {
+        return ReloadAction::Load;
+    };
+    // A poll started before the limit was known can land newer rows; a
+    // rebuild from the older memory copy must not land after it.
+    if app.github_poll_inflight {
+        ReloadAction::AlreadyRunning
+    } else if app.dataset.is_empty() {
+        ReloadAction::ResumesOnly(until)
+    } else {
+        ReloadAction::FromMemory
+    }
+}
+
+/// `R`: a full reload, or under a known limit a rebuild from memory.
+fn reload_key(
+    app: &mut App,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    args: &Args,
+    config: &config::Config,
+    repo_dir: &Path,
+    now: chrono::DateTime<chrono::Local>,
+) {
+    match reload_action(app, config, now) {
+        ReloadAction::AlreadyRunning => app.set_status(REFRESH_RUNNING.to_string(), false),
+        ReloadAction::ResumesOnly(until) => app.set_status(limited_status(until), false),
+        ReloadAction::FromMemory => {
+            app.loading = true;
+            app.set_status("Reloading without GitHub…".to_string(), false);
+            spawn_memory_rebuild(tx, app, args, config, repo_dir);
+        }
+        ReloadAction::Load => {
+            app.loading = true;
+            app.set_status("Reloading…".to_string(), false);
+            spawn_load(
+                tx,
+                args,
+                config,
+                repo_dir,
+                app.window,
+                LoadKind::Reload,
+                true,
+            );
+        }
+    }
+}
+
+/// `r`: the local sweep, and a poll unless GitHub is known to refuse it, in
+/// which case the status says when it resumes and nothing is sent.
+fn refresh_key(
+    app: &mut App,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    args: &Args,
+    config: &config::Config,
+    now: chrono::DateTime<chrono::Local>,
+) {
+    let limited = github_limit_until(app, config, now);
+    match limited {
+        Some(until) => app.set_status(limited_status(until), false),
+        None => app.set_status("Refreshing…".to_string(), false),
+    }
+    start_sweep(app, tx, false, args.author.clone(), true);
+    if limited.is_none() {
+        start_github_poll(app, tx, config);
+    }
+    // Already in flight from the watch timer counts too: its answer
+    // is the one this refresh is waiting for.
+    app.refresh_awaits_poll = app.github_poll_inflight;
 }
 
 /// Indices into `repos` whose remote moved between two GitHub polls.
@@ -2044,25 +2335,33 @@ fn resolve_watch(flag_watch: bool, flag_no_watch: bool, config_watch: bool) -> b
 ///
 /// Not while polls fail (decision D3): a `Pending` frozen by a failing poll
 /// says nothing about what CI is doing now, and the floor would only retry a
-/// dead network four times a minute.
+/// dead network four times a minute. Nor while the budget slows polling
+/// (A2): then the pace, when longer than the configured interval, is the
+/// wait. A backoff step, a limit and a pause are not here but in
+/// `github_not_before`, which `github_poll_due` checks beside this.
 fn github_poll_secs(app: &App, config: &config::Config) -> i64 {
-    let configured = config.github_poll_interval.max(GITHUB_POLL_MIN);
-    if app.github_freshness.is_failing() {
-        return configured as i64;
-    }
+    let configured = configured_poll_secs(config);
+    let pace = match github_pace(app, config) {
+        app::Pace::Every(secs) => secs,
+        app::Pace::Unknown | app::Pace::Paused { .. } => 0,
+    };
     let any_pending = app
         .repos
         .iter()
         .any(|r| r.ci_status == model::CiStatus::Pending);
-    if any_pending {
+    let floored = any_pending && !app.github_freshness.is_failing() && !budget_slowed(app, config);
+    let interval = if floored {
         GITHUB_POLL_MIN as i64
     } else {
-        configured as i64
-    }
+        configured
+    };
+    interval.max(pace)
 }
 
 /// Kick off a GitHub re-poll, taking the in-flight lock. No-op if one is
-/// already running, so mashing `r` cannot stack requests.
+/// already running, so mashing `r` cannot stack polls. `R` does not come
+/// through here: it is a full load, and `reload_action` ignores it while a
+/// load runs (A7), which is what keeps it from stacking requests.
 fn start_github_poll(
     app: &mut App,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
@@ -2456,9 +2755,12 @@ async fn load_repos(
         // the status line say the data is not current.
         Err(github::FetchError {
             failure,
-            fallback: Some(fallback),
-            meta: _,
+            fallback: Some(mut fallback),
+            meta,
         }) => {
+            // The refused answer's budget reading, not the cache's (which
+            // has none): the attempt is applied when the load lands.
+            fallback.meta.budget = meta.budget;
             let written = match fallback.origin {
                 github::Origin::Cache { written } => written,
                 github::Origin::Network => None,
@@ -2468,11 +2770,12 @@ async fn load_repos(
         Err(github::FetchError {
             failure,
             fallback: None,
-            meta: _,
+            meta,
         }) => {
             return Err(LoadError {
                 message: failure.message.clone(),
                 github_failure: Some(failure),
+                budget: meta.budget,
             });
         }
     };
@@ -4063,6 +4366,7 @@ mod tests {
             Err(LoadError {
                 message: failure.message.clone(),
                 github_failure: Some(failure.clone()),
+                budget: None,
             }),
         );
         assert_eq!(app.load_error.as_deref(), Some("not authenticated"));
@@ -5425,6 +5729,7 @@ mod tests {
                 LoadKind::Initial => LoadKind::Initial,
                 LoadKind::Reload => LoadKind::Reload,
                 LoadKind::WindowApply(_) => LoadKind::WindowApply(window()),
+                LoadKind::FromMemory => LoadKind::FromMemory,
             };
             land_load(&mut app, kind, Some(line), &store);
             assert_eq!(status(&app).as_deref(), Some(line), "after {label}");
@@ -7445,5 +7750,1023 @@ mod tests {
             };
             assert_eq!(written, Some(config::SettingValue::Str(expected)));
         }
+    }
+
+    // FZ-10b: the scenarios of `docs/api-budget-design.md` section 5, each
+    // named after its number. Clocks, jitter and responses are planted; the
+    // interval is the default 30 s and `repo_limit` 50, a poll costing 3.
+
+    /// A jitter source that always draws the same values.
+    struct Planted {
+        factor: f64,
+        resume: i64,
+    }
+
+    impl app::Jitter for Planted {
+        fn backoff_factor(&mut self) -> f64 {
+            self.factor
+        }
+        fn resume_secs(&mut self) -> i64 {
+            self.resume
+        }
+    }
+
+    fn at(h: u32, m: u32, s: u32) -> chrono::DateTime<chrono::Local> {
+        use chrono::TimeZone;
+        chrono::Local
+            .with_ymd_and_hms(2026, 10, 1, h, m, s)
+            .single()
+            .expect("unambiguous local time")
+    }
+
+    fn secs(n: i64) -> chrono::Duration {
+        chrono::Duration::seconds(n)
+    }
+
+    /// A reading of `remaining` of 5000 on `token`, resetting at `reset`, as
+    /// stated by a server whose clock read `date`.
+    fn reading(
+        token: &str,
+        remaining: u32,
+        reset: chrono::DateTime<chrono::Local>,
+        date: chrono::DateTime<chrono::Local>,
+    ) -> github::BudgetReading {
+        github::BudgetReading {
+            limit: 5000,
+            remaining,
+            used: 5000 - remaining,
+            reset: reset.timestamp(),
+            date: Some(date.with_timezone(&chrono::Utc)),
+            token_id: token.to_string(),
+        }
+    }
+
+    /// A successful poll that changes no row, carrying `budget`.
+    fn ok_with(
+        budget: Option<github::BudgetReading>,
+    ) -> Result<Box<github::GithubFetch>, github::FetchError> {
+        Ok(Box::new(github::GithubFetch {
+            repos: Vec::new(),
+            calendar: None,
+            has_pr_counts: true,
+            origin: github::Origin::Network,
+            meta: github::FetchMeta {
+                budget,
+                ..Default::default()
+            },
+        }))
+    }
+
+    fn err_with(
+        failure: github::Failure,
+        budget: Option<github::BudgetReading>,
+    ) -> Result<Box<github::GithubFetch>, github::FetchError> {
+        Err(github::FetchError {
+            failure,
+            fallback: None,
+            meta: Box::new(github::FetchMeta {
+                budget,
+                ..Default::default()
+            }),
+        })
+    }
+
+    fn failure(kind: github::FailureKind) -> github::Failure {
+        github::Failure::new(kind, format!("{kind:?}"))
+    }
+
+    /// A 403 or 429 secondary limit, with or without `retry-after`.
+    fn secondary(retry_after: Option<u64>) -> github::Failure {
+        github::Failure {
+            rate_limited: true,
+            limit: Some(github::RateLimit::Secondary {
+                retry_after: retry_after.map(std::time::Duration::from_secs),
+            }),
+            ..github::Failure::new(github::FailureKind::Http, "HTTP 429")
+        }
+    }
+
+    /// Start a poll and land `result` as its answer at `now`.
+    fn land_at(
+        app: &mut App,
+        result: Result<Box<github::GithubFetch>, github::FetchError>,
+        now: chrono::DateTime<chrono::Local>,
+    ) {
+        let attempt = claim_github_poll(app).expect("no poll in flight");
+        answer_at(app, attempt, result, now);
+    }
+
+    fn answer_at(
+        app: &mut App,
+        attempt: u64,
+        result: Result<Box<github::GithubFetch>, github::FetchError>,
+        now: chrono::DateTime<chrono::Local>,
+    ) {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        apply_github_poll_at(app, attempt, result, &tx, &None, now);
+    }
+
+    /// A watching app with one row of `ci` (no path, so nothing is swept)
+    /// and planted jitter.
+    fn budget_app(ci: model::CiStatus, factor: f64, resume: i64) -> (App, config::Config) {
+        let mut app = App::new(
+            vec![RepoStatus {
+                ci_status: ci,
+                ..test_repo()
+            }],
+            "h".to_string(),
+            120,
+            44,
+        );
+        app.watch_mode = true;
+        app.jitter = Box::new(Planted { factor, resume });
+        (app, config::Config::default())
+    }
+
+    /// Seconds after `from` at which the next automatic attempt is first due.
+    fn next_due(app: &App, config: &config::Config, from: chrono::DateTime<chrono::Local>) -> i64 {
+        (0..=4000)
+            .find(|s| github_poll_due(app, config, from + secs(*s)))
+            .expect("never due again")
+    }
+
+    fn status_text(app: &App) -> String {
+        app.status_message
+            .as_ref()
+            .map(|m| m.text.clone())
+            .unwrap_or_default()
+    }
+
+    /// The rate limit of S6 and S15: a `RATE_LIMITED` body at 17:00:43 whose
+    /// headers say 0 left until 17:23:06.
+    fn land_primary_limit(app: &mut App) {
+        let budget = reading("A", 0, at(17, 23, 6), at(17, 0, 43));
+        land_at(
+            app,
+            err_with(
+                github::Failure::rate_limit("API rate limit exceeded"),
+                Some(budget),
+            ),
+            at(17, 0, 43),
+        );
+    }
+
+    #[test]
+    fn s2b_only_502s_since_launch_back_off_from_the_interval_without_pacing() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let mut now = at(17, 0, 0);
+        for expected in [30, 60, 120] {
+            land_at(
+                &mut app,
+                err_with(failure(github::FailureKind::Server), None),
+                now,
+            );
+            assert!(
+                app.api_budget.known(now).is_none(),
+                "a 502 made the budget known"
+            );
+            assert_eq!(github_poll_secs(&app, &config), 30, "paced on a guess");
+            assert_eq!(next_due(&app, &config, now), expected);
+            now += secs(expected);
+        }
+    }
+
+    #[test]
+    fn s2c_a_known_budget_past_its_reset_is_unknown_and_the_floor_returns() {
+        let (mut app, config) = budget_app(model::CiStatus::Pending, 1.0, 0);
+        // 600 left with 23 minutes to go stretches the pace past 30 s.
+        let budget = reading("A", 600, at(17, 23, 6), at(17, 0, 0));
+        land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
+        assert!(app.api_budget.known(at(17, 0, 0)).is_some());
+        assert!(github_poll_secs(&app, &config) > 30);
+
+        assert!(app.api_budget.known(at(17, 23, 6)).is_none());
+        land_at(&mut app, ok_with(None), at(17, 30, 0));
+        assert_eq!(github_poll_secs(&app, &config), GITHUB_POLL_MIN as i64);
+        assert_eq!(next_due(&app, &config, at(17, 30, 0)), 15);
+    }
+
+    #[test]
+    fn s3_a_healthy_budget_keeps_the_pending_floor() {
+        let (mut app, config) = budget_app(model::CiStatus::Pending, 1.0, 0);
+        let budget = reading("A", 3564, at(17, 23, 6), at(17, 0, 43));
+        land_at(&mut app, ok_with(Some(budget)), at(17, 0, 43));
+        assert_eq!(github_poll_secs(&app, &config), 15);
+        assert_eq!(next_due(&app, &config, at(17, 0, 43)), 15);
+    }
+
+    #[test]
+    fn s4_600_left_with_40_minutes_paces_at_72_seconds() {
+        let (mut app, config) = budget_app(model::CiStatus::Pending, 1.0, 0);
+        let budget = reading("A", 600, at(17, 40, 0), at(17, 0, 0));
+        assert_eq!(
+            app.api_budget.pace(3, at(17, 0, 0)),
+            app::Pace::Unknown,
+            "known before any reading"
+        );
+        land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
+        assert_eq!(app.api_budget.pace(3, at(17, 0, 0)), app::Pace::Every(72));
+        // The Pending row would ask for 15 s: the floor is suspended.
+        assert_eq!(github_poll_secs(&app, &config), 72);
+        assert_eq!(next_due(&app, &config, at(17, 0, 0)), 72);
+        // And so is the push shortcut.
+        app.push_detected = true;
+        assert!(!github_poll_due(&app, &config, at(17, 0, 1)));
+        assert_eq!(next_due(&app, &config, at(17, 0, 0)), 72);
+    }
+
+    #[test]
+    fn s5_below_the_reserve_pauses_until_the_reset_plus_jitter_and_r_still_sends() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        let budget = reading("A", 480, at(17, 23, 6), at(17, 0, 0));
+        land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
+        assert!(!github_poll_due(&app, &config, at(17, 23, 15)));
+        assert!(github_poll_due(&app, &config, at(17, 23, 16)));
+        assert_eq!(github_limit_until(&app, &config, at(17, 10, 0)), None);
+    }
+
+    #[test]
+    fn s5a_a_push_while_paused_waits_for_the_first_poll_after_the_resume() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        let budget = reading("A", 480, at(17, 23, 6), at(17, 0, 0));
+        land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
+        app.push_detected = true;
+        assert!(!github_poll_due(&app, &config, at(17, 10, 0)));
+        assert_eq!(next_due(&app, &config, at(17, 10, 0)), 13 * 60 + 16);
+        assert!(
+            app.push_detected,
+            "the push was dropped before a poll served it"
+        );
+    }
+
+    #[test]
+    fn s5b_fewer_points_than_one_poll_is_a_known_limit_and_r_sends_nothing() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        let budget = reading("A", 2, at(17, 23, 6), at(17, 0, 0));
+        land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
+        assert_eq!(
+            github_limit_until(&app, &config, at(17, 10, 0)),
+            Some(at(17, 23, 16))
+        );
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let args = Args::parse_from(["fleetz"]);
+        // Outside a runtime: a spawned request would panic here.
+        refresh_key(&mut app, &tx, &args, &config, at(17, 10, 0));
+        assert!(!app.github_poll_inflight, "a request was sent");
+        assert_eq!(status_text(&app), "GitHub rate limited, resumes at 17:23");
+    }
+
+    #[test]
+    fn s6_a_rate_limited_body_holds_until_the_reset_plus_jitter() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        land_primary_limit(&mut app);
+        assert!(matches!(
+            &app.github_freshness.outcome,
+            app::Outcome::Failed(f) if f.kind == github::FailureKind::Api && f.rate_limited
+        ));
+        assert_eq!(
+            app.github_backoff.not_before(30),
+            Some(at(17, 23, 16)),
+            "not-before"
+        );
+        assert!(!github_poll_due(&app, &config, at(17, 23, 15)));
+        assert!(github_poll_due(&app, &config, at(17, 23, 16)));
+    }
+
+    #[test]
+    fn s6a_a_local_clock_ten_minutes_ahead_anchors_the_reset_on_arrival() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        // The server's clock says 17:00:00 and the reset 17:23:06; the local
+        // clock reads 17:10:00 when the answer arrives.
+        let budget = reading("A", 0, at(17, 23, 6), at(17, 0, 0));
+        land_at(
+            &mut app,
+            err_with(
+                github::Failure::rate_limit("API rate limit exceeded"),
+                Some(budget),
+            ),
+            at(17, 10, 0),
+        );
+        assert_eq!(app.api_budget.reset_at(), Some(at(17, 33, 6)));
+        assert_eq!(app.github_backoff.not_before(30), Some(at(17, 33, 16)));
+        assert!(!github_poll_due(&app, &config, at(17, 33, 15)));
+        assert!(github_poll_due(&app, &config, at(17, 33, 16)));
+    }
+
+    #[test]
+    fn s8_a_403_with_retry_after_120_holds_120_seconds() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        land_at(&mut app, err_with(secondary(Some(120)), None), at(17, 0, 0));
+        assert_eq!(next_due(&app, &config, at(17, 0, 0)), 120);
+    }
+
+    #[test]
+    fn s9_a_429_without_retry_after_holds_the_later_of_60_s_and_the_backoff() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let mut now = at(17, 0, 0);
+        // Steps 1 and 2 of the ladder (30, 60) are under the minute; step 3
+        // (120) is over it.
+        for expected in [60, 60, 120] {
+            land_at(&mut app, err_with(secondary(None), None), now);
+            assert_eq!(next_due(&app, &config, now), expected);
+            now += secs(expected);
+        }
+    }
+
+    #[test]
+    fn s10_six_consecutive_502s_climb_to_the_cap() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let mut now = at(17, 0, 0);
+        for expected in [30, 60, 120, 240, 480, 600] {
+            land_at(
+                &mut app,
+                err_with(failure(github::FailureKind::Server), None),
+                now,
+            );
+            assert_eq!(next_due(&app, &config, now), expected);
+            now += secs(expected);
+        }
+        assert_eq!(app.github_backoff.failures(), 6);
+        // The jitter applies on top of the cap: 480 to 720 there.
+        assert_eq!(app::backoff_secs(6, 30, 0.8), 480);
+        assert_eq!(app::backoff_secs(6, 30, 1.2), 720);
+    }
+
+    #[test]
+    fn s10a_step_one_has_no_jitter_and_step_two_does() {
+        for factor in [0.8, 1.2] {
+            let (mut app, config) = budget_app(model::CiStatus::Passed, factor, 0);
+            land_at(
+                &mut app,
+                err_with(failure(github::FailureKind::Server), None),
+                at(17, 0, 0),
+            );
+            assert_eq!(next_due(&app, &config, at(17, 0, 0)), 30, "draw {factor}");
+        }
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 0.8, 0);
+        land_at(
+            &mut app,
+            err_with(failure(github::FailureKind::Server), None),
+            at(17, 0, 0),
+        );
+        land_at(
+            &mut app,
+            err_with(failure(github::FailureKind::Server), None),
+            at(17, 0, 30),
+        );
+        assert_eq!(next_due(&app, &config, at(17, 0, 30)), 48);
+    }
+
+    #[test]
+    fn s11_a_success_at_step_three_resets_the_count() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let mut now = at(17, 0, 0);
+        for wait in [30, 60, 120] {
+            land_at(
+                &mut app,
+                err_with(failure(github::FailureKind::Server), None),
+                now,
+            );
+            now += secs(wait);
+        }
+        assert_eq!(app.github_backoff.failures(), 3);
+        land_at(&mut app, ok_with(None), now);
+        assert_eq!(app.github_backoff.failures(), 0);
+        assert_eq!(app.github_backoff.not_before(30), None);
+        assert_eq!(next_due(&app, &config, now), 30);
+    }
+
+    /// With O2 accepted `r` sends nothing under the limit, so the success
+    /// here is an answer applied while the secondary limit's not-before was
+    /// still pending, which transition 3 clears all the same.
+    #[test]
+    fn s11a_a_success_inside_a_secondary_limit_clears_it() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        land_at(
+            &mut app,
+            err_with(secondary(Some(120)), None),
+            at(17, 10, 0),
+        );
+        assert_eq!(app.github_backoff.not_before(30), Some(at(17, 12, 0)));
+        land_at(&mut app, ok_with(None), at(17, 10, 0));
+        assert_eq!(app.github_backoff.not_before(30), None);
+        assert_eq!(app.github_backoff.failures(), 0);
+        assert_eq!(next_due(&app, &config, at(17, 10, 0)), 30);
+    }
+
+    #[test]
+    fn s12_three_offline_failures_each_wait_one_interval() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let mut now = at(17, 0, 0);
+        for _ in 0..3 {
+            land_at(
+                &mut app,
+                err_with(failure(github::FailureKind::Offline), None),
+                now,
+            );
+            assert_eq!(next_due(&app, &config, now), 30);
+            now += secs(30);
+        }
+        assert_eq!(app.github_backoff.failures(), 0);
+    }
+
+    #[test]
+    fn s12a_offline_keeps_the_count_between_502s() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let mut now = at(17, 0, 0);
+        for (kind, expected) in [
+            (github::FailureKind::Server, 30),
+            (github::FailureKind::Server, 60),
+            (github::FailureKind::Offline, 30),
+            (github::FailureKind::Server, 120),
+        ] {
+            land_at(&mut app, err_with(failure(kind), None), now);
+            assert_eq!(next_due(&app, &config, now), expected, "after {kind:?}");
+            now += secs(expected);
+        }
+    }
+
+    #[test]
+    fn s12b_an_offline_or_auth_r_during_backoff_leaves_it_in_place() {
+        for interrupting in [github::FailureKind::Offline, github::FailureKind::Auth] {
+            let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+            let mut now = at(17, 0, 0);
+            for wait in [30, 60] {
+                land_at(
+                    &mut app,
+                    err_with(failure(github::FailureKind::Server), None),
+                    now,
+                );
+                now += secs(wait);
+            }
+            // Step 3: not-before at +120 s.
+            land_at(
+                &mut app,
+                err_with(failure(github::FailureKind::Server), None),
+                now,
+            );
+            let step3 = now;
+            land_at(
+                &mut app,
+                err_with(failure(interrupting), None),
+                step3 + secs(20),
+            );
+            assert_eq!(app.github_backoff.failures(), 3, "{interrupting:?}");
+            assert_eq!(
+                next_due(&app, &config, step3),
+                120,
+                "{interrupting:?} moved the not-before"
+            );
+        }
+    }
+
+    #[test]
+    fn s13_no_token_retries_after_one_interval_and_a_token_then_polls() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        land_at(
+            &mut app,
+            err_with(failure(github::FailureKind::Auth), None),
+            at(17, 0, 0),
+        );
+        assert_eq!(next_due(&app, &config, at(17, 0, 0)), 30);
+        land_at(&mut app, ok_with(None), at(17, 0, 30));
+        assert_eq!(app.github_freshness.outcome, app::Outcome::Success);
+        assert_eq!(next_due(&app, &config, at(17, 0, 30)), 30);
+    }
+
+    #[test]
+    fn s14_three_401s_back_off_and_a_success_returns_to_normal() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let mut now = at(17, 0, 0);
+        for expected in [30, 60, 120] {
+            land_at(
+                &mut app,
+                err_with(failure(github::FailureKind::Refused), None),
+                now,
+            );
+            assert_eq!(next_due(&app, &config, now), expected);
+            now += secs(expected);
+        }
+        land_at(&mut app, ok_with(None), now);
+        assert_eq!(next_due(&app, &config, now), 30);
+    }
+
+    #[test]
+    fn s15_r_under_a_rate_limit_sweeps_and_sends_nothing() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        land_primary_limit(&mut app);
+        let before = app.github_freshness.clone();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let args = Args::parse_from(["fleetz"]);
+        // Outside a runtime: a spawned request would panic here.
+        refresh_key(&mut app, &tx, &args, &config, at(17, 10, 0));
+        assert!(!app.github_poll_inflight, "a request was sent");
+        assert!(status_text(&app).contains("17:23"), "{}", status_text(&app));
+        assert_eq!(app.github_freshness, before);
+    }
+
+    /// A primary limit relative to the real clock, for the paths that read
+    /// it (`apply_load_result`): 13 minutes left, jitter 10 s.
+    fn limited_now(app: &mut App) -> chrono::DateTime<chrono::Local> {
+        let now = chrono::Local::now();
+        let budget = reading("A", 0, now + secs(13 * 60), now);
+        land_at(
+            app,
+            err_with(
+                github::Failure::rate_limit("API rate limit exceeded"),
+                Some(budget),
+            ),
+            now,
+        );
+        now + secs(13 * 60 + 10)
+    }
+
+    #[test]
+    fn s16_r_under_a_rate_limit_rebuilds_from_memory_and_names_the_resume() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        app.dataset = poll_says_passed().ok().unwrap().repos;
+        let resume = limited_now(&mut app);
+        assert_eq!(
+            reload_action(&app, &config, chrono::Local::now()),
+            ReloadAction::FromMemory
+        );
+        let before = app.github_freshness.clone();
+        let notes = ViewNotes {
+            header: "h".to_string(),
+            ambiguity: None,
+        };
+        apply_load_result(
+            &mut app,
+            &config,
+            Ok(Box::new(memory_rebuild_result(vec![test_repo()], notes))),
+        );
+        assert_eq!(app.github_freshness, before, "freshness moved");
+        let status = status_text(&app);
+        assert_ne!(status, "Reloaded");
+        assert!(
+            status.contains(&resume.format("%H:%M").to_string()),
+            "{status:?}"
+        );
+        assert!(!app.github_poll_inflight);
+        assert!(!app.loading);
+    }
+
+    #[test]
+    fn s16a_r_under_a_rate_limit_with_nothing_in_memory_only_names_the_resume() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        land_primary_limit(&mut app);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let args = Args::parse_from(["fleetz"]);
+        // Outside a runtime: a spawned load would panic here.
+        reload_key(
+            &mut app,
+            &tx,
+            &args,
+            &config,
+            Path::new("/nonexistent"),
+            at(17, 10, 0),
+        );
+        assert_eq!(status_text(&app), "GitHub rate limited, resumes at 17:23");
+        assert!(!app.loading);
+        assert!(!app.github_poll_inflight);
+    }
+
+    #[test]
+    fn s16b_r_under_a_rate_limit_with_a_poll_in_flight_waits_for_it() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        app.dataset = poll_says_passed().ok().unwrap().repos;
+        land_primary_limit(&mut app);
+        let in_flight = claim_github_poll(&mut app).unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let args = Args::parse_from(["fleetz"]);
+        reload_key(
+            &mut app,
+            &tx,
+            &args,
+            &config,
+            Path::new("/nonexistent"),
+            at(17, 10, 0),
+        );
+        assert_eq!(status_text(&app), REFRESH_RUNNING);
+        assert!(!app.loading, "a rebuild started");
+
+        let budget = reading("A", 0, at(17, 23, 6), at(17, 10, 5));
+        answer_at(
+            &mut app,
+            in_flight,
+            err_with(
+                github::Failure::rate_limit("API rate limit exceeded"),
+                Some(budget),
+            ),
+            at(17, 10, 5),
+        );
+        assert_eq!(
+            reload_action(&app, &config, at(17, 10, 6)),
+            ReloadAction::FromMemory
+        );
+    }
+
+    #[test]
+    fn s17_r_during_backoff_sends_and_its_outcome_moves_the_ladder() {
+        for succeeds in [false, true] {
+            let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+            land_at(
+                &mut app,
+                err_with(failure(github::FailureKind::Server), None),
+                at(17, 0, 0),
+            );
+            land_at(
+                &mut app,
+                err_with(failure(github::FailureKind::Server), None),
+                at(17, 0, 30),
+            );
+            // Backing off, not limited: `r` goes to GitHub.
+            assert_eq!(github_limit_until(&app, &config, at(17, 0, 40)), None);
+            let result = match succeeds {
+                true => ok_with(None),
+                false => err_with(failure(github::FailureKind::Server), None),
+            };
+            land_at(&mut app, result, at(17, 0, 40));
+            let expected = if succeeds { 0 } else { 3 };
+            assert_eq!(app.github_backoff.failures(), expected);
+        }
+    }
+
+    #[test]
+    fn s18_r_while_a_load_runs_is_ignored() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        app.loading = true;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let args = Args::parse_from(["fleetz"]);
+        // Outside a runtime: a second load would panic here.
+        reload_key(
+            &mut app,
+            &tx,
+            &args,
+            &config,
+            Path::new("/nonexistent"),
+            at(17, 0, 0),
+        );
+        assert_eq!(status_text(&app), REFRESH_RUNNING);
+        assert!(!app.github_poll_inflight);
+    }
+
+    #[test]
+    fn s19b_one_failure_after_a_suspend_waits_exactly_one_interval() {
+        for kind in [github::FailureKind::Offline, github::FailureKind::TimedOut] {
+            // A 0.8 draw would show if step 1 were jittered.
+            let (mut app, config) = budget_app(model::CiStatus::Passed, 0.8, 0);
+            land_at(&mut app, ok_with(None), at(17, 0, 0));
+            land_at(&mut app, err_with(failure(kind), None), at(17, 0, 30));
+            assert_eq!(next_due(&app, &config, at(17, 0, 30)), 30, "{kind:?}");
+            assert_eq!(github_limit_until(&app, &config, at(17, 0, 31)), None);
+        }
+    }
+
+    /// Any sequence of outcomes and readings: the next automatic attempt is
+    /// never sooner than the rule 6 interval in force after the last one,
+    /// except for the push shortcut while healthy and unstretched.
+    #[test]
+    fn s20_no_automatic_attempt_sooner_than_the_interval_in_force() {
+        let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut draw = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for _run in 0..20 {
+            let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+            app.jitter = Box::new(Planted {
+                factor: 0.8 + 0.4 * (draw(100) as f64 / 99.0),
+                resume: draw(31) as i64,
+            });
+            let mut now = at(12, 0, 0);
+            for _step in 0..40 {
+                let budget = match draw(3) {
+                    0 => None,
+                    _ => Some(reading(
+                        "A",
+                        draw(5001) as u32,
+                        now + secs(draw(3600) as i64 + 1),
+                        now,
+                    )),
+                };
+                let result = match draw(9) {
+                    0 | 1 => ok_with(budget),
+                    2 => err_with(failure(github::FailureKind::Server), budget),
+                    3 => err_with(failure(github::FailureKind::Offline), None),
+                    4 => err_with(failure(github::FailureKind::Auth), None),
+                    5 => err_with(github::Failure::rate_limit("limit"), budget),
+                    6 => err_with(secondary(Some(draw(200))), budget),
+                    7 => err_with(secondary(None), budget),
+                    _ => err_with(failure(github::FailureKind::Refused), budget),
+                };
+                land_at(&mut app, result, now);
+                app.repos[0].ci_status = match draw(2) {
+                    0 => model::CiStatus::Pending,
+                    _ => model::CiStatus::Passed,
+                };
+                app.push_detected = draw(4) == 0;
+
+                let failing = app.github_freshness.is_failing();
+                let slowed = match app.api_budget.pace(3, now) {
+                    app::Pace::Unknown => false,
+                    app::Pace::Every(s) => s > 30,
+                    app::Pace::Paused { .. } => true,
+                };
+                let pending = app.repos[0].ci_status == model::CiStatus::Pending;
+                let in_force = if !failing && !slowed && pending {
+                    15
+                } else {
+                    30
+                };
+                let due = next_due(&app, &config, now);
+                if due < in_force {
+                    assert!(
+                        app.push_detected && !failing && !slowed,
+                        "due at +{due}, under {in_force}, without the push exception"
+                    );
+                }
+                assert!(due > 0 || (app.push_detected && !failing && !slowed));
+                app.push_detected = false;
+                now += secs(next_due(&app, &config, now));
+            }
+        }
+    }
+
+    #[test]
+    fn s21_a_late_reading_never_raises_remaining_in_the_same_window() {
+        let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let first = claim_github_poll(&mut app).unwrap();
+        app.github_poll_started = std::time::Instant::now()
+            .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
+        expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, at(17, 1, 0));
+        let second = claim_github_poll(&mut app).unwrap();
+        let newer = reading("A", 2900, at(17, 23, 6), at(17, 1, 10));
+        answer_at(&mut app, second, ok_with(Some(newer)), at(17, 1, 10));
+        let applied = app.github_freshness.clone();
+
+        let late = reading("A", 3000, at(17, 23, 6), at(17, 0, 30));
+        answer_at(&mut app, first, ok_with(Some(late)), at(17, 1, 20));
+        assert_eq!(app.api_budget.reading().map(|r| r.remaining), Some(2900));
+        assert_eq!(app.github_freshness, applied, "the late outcome applied");
+    }
+
+    #[test]
+    fn s21a_a_late_reading_of_a_newer_window_replaces() {
+        let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let first = claim_github_poll(&mut app).unwrap();
+        app.github_poll_started = std::time::Instant::now()
+            .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
+        expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, at(17, 1, 0));
+        let second = claim_github_poll(&mut app).unwrap();
+        answer_at(
+            &mut app,
+            second,
+            ok_with(Some(reading("A", 100, at(17, 23, 6), at(17, 1, 10)))),
+            at(17, 1, 10),
+        );
+        let late = reading("A", 4990, at(18, 23, 6), at(17, 23, 30));
+        answer_at(&mut app, first, ok_with(Some(late.clone())), at(17, 23, 30));
+        assert_eq!(app.api_budget.reading(), Some(&late));
+    }
+
+    #[test]
+    fn s22_an_applied_reading_on_another_token_replaces_and_drops_the_limit() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        land_primary_limit(&mut app);
+        assert_eq!(app.github_backoff.failures(), 1);
+        assert!(github_limit_until(&app, &config, at(17, 1, 0)).is_some());
+        // A body cut off mid-read is `Offline`, yet its headers came on the
+        // new token: transparent to the ladder, but the switch drops A's
+        // limit.
+        let other = reading("B", 4000, at(17, 23, 6), at(17, 1, 0));
+        land_at(
+            &mut app,
+            err_with(failure(github::FailureKind::Offline), Some(other.clone())),
+            at(17, 1, 0),
+        );
+        assert_eq!(app.api_budget.reading(), Some(&other));
+        assert_eq!(app.github_backoff.not_before(30), None, "A's limit kept");
+        assert_eq!(app.github_backoff.failures(), 1, "the count was reset");
+        assert_eq!(github_limit_until(&app, &config, at(17, 1, 1)), None);
+    }
+
+    #[test]
+    fn s22a_a_discarded_answer_on_the_old_token_undoes_nothing() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        let now = chrono::Local::now();
+        let a_poll = claim_github_poll(&mut app).unwrap();
+        let b = reading("B", 0, now + secs(600), now);
+        apply_load_result(
+            &mut app,
+            &config,
+            Ok(Box::new(LoadResult {
+                kind: LoadKind::Reload,
+                repos: Vec::new(),
+                header: "h".to_string(),
+                dataset: Some(Vec::new()),
+                github_calendar: None,
+                source: app::DatasetSource::Fallback {
+                    failure: github::Failure::rate_limit("API rate limit exceeded"),
+                    written: None,
+                },
+                ambiguity: None,
+                meta: Some(github::FetchMeta {
+                    budget: Some(b.clone()),
+                    ..Default::default()
+                }),
+            })),
+        );
+        let held = app.api_budget.clone();
+        let not_before = app.github_backoff.clone();
+        assert_eq!(held.reading(), Some(&b));
+        assert!(not_before.limit_until(30).is_some());
+
+        let a = reading("A", 0, now + secs(1200), now);
+        answer_at(
+            &mut app,
+            a_poll,
+            err_with(
+                github::Failure::rate_limit("API rate limit exceeded"),
+                Some(a),
+            ),
+            now + secs(1),
+        );
+        assert_eq!(app.api_budget, held, "the old token came back");
+        assert_eq!(app.github_backoff, not_before);
+    }
+
+    #[test]
+    fn s23_a_cache_served_launch_with_watch_off_polls_once_whatever_the_budget() {
+        for limited in [false, true] {
+            let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+            app.watch_mode = false;
+            launch(
+                &mut app,
+                LoadKind::Initial,
+                app::DatasetSource::Cache {
+                    written: Some(at(8, 0, 0)),
+                },
+            );
+            assert!(github_poll_due(&app, &config, at(17, 0, 0)), "not at once");
+            let result = match limited {
+                false => ok_with(Some(reading("A", 600, at(17, 40, 0), at(17, 0, 0)))),
+                true => err_with(
+                    github::Failure::rate_limit("API rate limit exceeded"),
+                    Some(reading("A", 0, at(17, 23, 6), at(17, 0, 0))),
+                ),
+            };
+            land_at(&mut app, result, at(17, 0, 0));
+            for later in [at(17, 23, 30), at(23, 0, 0)] {
+                assert!(
+                    !github_poll_due(&app, &config, later),
+                    "watch off polled again (limited: {limited})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn s24_two_instances_paused_together_resume_apart() {
+        for jitter in [3, 21] {
+            let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, jitter);
+            let budget = reading("A", 400, at(17, 23, 6), at(17, 0, 0));
+            land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
+            assert_eq!(
+                next_due(&app, &config, at(17, 0, 0)),
+                23 * 60 + 6 + jitter,
+                "jitter {jitter}"
+            );
+        }
+    }
+
+    /// Design 4.1 rule 3: within one window `remaining` only falls, so the
+    /// lower reading is the newer one, from an applied answer or a discarded
+    /// one on the held token.
+    #[test]
+    fn a_lower_remaining_in_the_same_window_replaces_the_held_reading() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let reset = at(17, 40, 0);
+        land_at(
+            &mut app,
+            ok_with(Some(reading("A", 4000, reset, at(17, 0, 0)))),
+            at(17, 0, 0),
+        );
+        assert_eq!(github_poll_secs(&app, &config), 30);
+        land_at(
+            &mut app,
+            ok_with(Some(reading("A", 600, reset, at(17, 0, 0)))),
+            at(17, 0, 0),
+        );
+        assert_eq!(app.api_budget.reading().map(|r| r.remaining), Some(600));
+        assert_eq!(app.api_budget.pace(3, at(17, 0, 0)), app::Pace::Every(72));
+        assert_eq!(github_poll_secs(&app, &config), 72);
+
+        // A given-up poll answers after a newer one: discarded, but its lower
+        // reading on the held token still applies.
+        let first = claim_github_poll(&mut app).unwrap();
+        app.github_poll_started = std::time::Instant::now()
+            .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
+        expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, at(17, 1, 0));
+        let second = claim_github_poll(&mut app).unwrap();
+        answer_at(&mut app, second, ok_with(None), at(17, 1, 10));
+        let applied = app.github_freshness.clone();
+        answer_at(
+            &mut app,
+            first,
+            ok_with(Some(reading("A", 550, reset, at(17, 0, 50)))),
+            at(17, 1, 20),
+        );
+        assert_eq!(app.api_budget.reading().map(|r| r.remaining), Some(550));
+        assert_eq!(
+            app.github_freshness, applied,
+            "the discarded outcome applied"
+        );
+    }
+
+    /// The pace never reaches past the resume: with one point above the
+    /// reserve, an hour to the reset and a cost of 3, the uncapped spacing
+    /// would be 10800 s.
+    #[test]
+    fn the_pace_is_capped_at_the_resume() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        land_at(
+            &mut app,
+            ok_with(Some(reading("A", 501, at(18, 0, 0), at(17, 0, 0)))),
+            at(17, 0, 0),
+        );
+        let to_resume = (app.api_budget.resume_at().unwrap() - at(17, 0, 0)).num_seconds();
+        assert_eq!(to_resume, 3600);
+        match app.api_budget.pace(3, at(17, 0, 0)) {
+            app::Pace::Every(secs) => assert!(secs <= to_resume, "paced {secs} s"),
+            other => panic!("expected a pace, got {other:?}"),
+        }
+        assert!(github_poll_due(&app, &config, at(18, 0, 0)));
+        assert_eq!(next_due(&app, &config, at(17, 0, 0)), 3600);
+    }
+
+    /// Transition 5: a give-up is a `TimedOut` failure and climbs the ladder.
+    #[test]
+    fn a_give_up_climbs_the_backoff_ladder() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        land_at(
+            &mut app,
+            err_with(failure(github::FailureKind::Server), None),
+            at(17, 0, 0),
+        );
+        claim_github_poll(&mut app).unwrap();
+        app.github_poll_started = std::time::Instant::now()
+            .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
+        expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, at(17, 0, 30));
+        assert_eq!(app.github_backoff.failures(), 2);
+        assert_eq!(next_due(&app, &config, at(17, 0, 30)), 60, "not step 2");
+    }
+
+    /// Transitions 3 and 6: an `R` that went to GitHub and succeeded clears
+    /// the ladder like a successful poll.
+    #[test]
+    fn a_successful_reload_clears_the_backoff_ladder() {
+        let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let mut now = at(17, 0, 0);
+        for wait in [30, 60, 120, 240, 480] {
+            land_at(
+                &mut app,
+                err_with(failure(github::FailureKind::Server), None),
+                now,
+            );
+            now += secs(wait);
+        }
+        assert_eq!(app.github_backoff.failures(), 5);
+        launch(&mut app, LoadKind::Reload, app::DatasetSource::Network);
+        assert_eq!(app.github_backoff.failures(), 0);
+        assert_eq!(app.github_backoff.not_before(30), None);
+    }
+
+    /// A launch refused by a rate limit with no cache to fall back on still
+    /// learns the reset from the refusal's headers.
+    #[test]
+    fn a_failed_load_carries_its_budget_reading() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        let now = chrono::Local::now();
+        let budget = reading("A", 0, now + secs(600), now);
+        let limit = github::Failure::rate_limit("API rate limit exceeded");
+        apply_load_result(
+            &mut app,
+            &config,
+            Err(LoadError {
+                message: limit.message.clone(),
+                github_failure: Some(limit),
+                budget: Some(budget.clone()),
+            }),
+        );
+        assert_eq!(app.api_budget.reading(), Some(&budget));
+        let until = github_limit_until(&app, &config, now).expect("no known limit");
+        assert!(until >= now + secs(610), "held only until {until}");
+        assert!(
+            until <= chrono::Local::now() + secs(610),
+            "held until {until}"
+        );
     }
 }
