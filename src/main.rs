@@ -202,7 +202,9 @@ pub struct LoadError {
     pub github_failure: Option<github::Failure>,
     /// The budget reading the failed attempt's answer carried, if any, so a
     /// launch refused by a rate limit learns its reset.
-    pub budget: Option<github::BudgetReading>,
+    /// Boxed so the error stays small enough to return by value (clippy's
+    /// `result_large_err`), as `FetchError.meta` is.
+    pub budget: Option<Box<github::BudgetReading>>,
 }
 
 impl From<String> for LoadError {
@@ -760,7 +762,7 @@ fn apply_load_result_saving_to(
         Err(e) => {
             if let Some(failure) = e.github_failure {
                 // An applied attempt: its reading first, then its outcome.
-                app.observe_budget(e.budget.as_ref(), true, now);
+                app.observe_budget(e.budget.as_deref(), true, now);
                 app.github_attempt_failed(&failure, now);
                 app.github_freshness.failed(failure, now);
             }
@@ -2775,7 +2777,7 @@ async fn load_repos(
             return Err(LoadError {
                 message: failure.message.clone(),
                 github_failure: Some(failure),
-                budget: meta.budget,
+                budget: meta.budget.map(Box::new),
             });
         }
     };
@@ -8758,7 +8760,7 @@ mod tests {
             Err(LoadError {
                 message: limit.message.clone(),
                 github_failure: Some(limit),
-                budget: Some(budget.clone()),
+                budget: Some(Box::new(budget.clone())),
             }),
         );
         assert_eq!(app.api_budget.reading(), Some(&budget));
