@@ -1676,6 +1676,11 @@ pub struct App {
     /// The time-window overlay re-filters this in memory, so applying a new
     /// window needs no network round trip.
     pub dataset: Vec<crate::github::GithubRepo>,
+    /// What the fetch behind `dataset` learned besides the repos: its
+    /// coverage and account. Replaced with `dataset` by a load and by a
+    /// successful poll; a window apply keeps it, so its header note is drawn
+    /// from the same coverage as the dataset it re-filters.
+    pub github_meta: crate::github::FetchMeta,
     /// The active time window. None means "follow the CLI flags", which is
     /// the state until the user opens the selector (or a saved window was
     /// loaded at startup).
@@ -1767,6 +1772,7 @@ impl App {
             load_error: None,
             push_detected: false,
             dataset: Vec::new(),
+            github_meta: crate::github::FetchMeta::default(),
             window: None,
             dirty_mode: false,
             apply_progress: None,

@@ -75,6 +75,40 @@ pub struct FetchMeta {
     /// unknown: a launch served from the legacy file or under the signed-out
     /// rule, or a lookup that failed. Never the token itself.
     pub account: Option<String>,
+    /// How much of GitHub's answer the payload holds, read from the payload
+    /// itself, so a cached payload and a fresh one say the same. `None` when
+    /// there was no payload (a failed attempt).
+    pub coverage: Option<Coverage>,
+}
+
+/// What one payload covers, per page, built from the pages before
+/// `merge_sources` so its dedupe does not touch the counts.
+/// See `docs/coverage-cache-design.md` 4.1.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Coverage {
+    /// `viewer.repositories`.
+    pub viewer: PageCoverage,
+    /// `viewer.organizations`, the org list itself (its `boundary` is always
+    /// `None`: orgs are not ordered by push). `None` when the payload has no
+    /// org list at all.
+    pub org_list: Option<PageCoverage>,
+    /// Each org's `repositories`, in the order the org list returned them.
+    pub org_pages: Vec<PageCoverage>,
+}
+
+/// One page of a connection as the payload describes it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageCoverage {
+    /// Nodes on the page.
+    pub returned: u32,
+    /// GitHub's `totalCount`. `None` for a payload written before it was
+    /// asked for: unknown, never "complete".
+    pub total: Option<u32>,
+    /// `pageInfo { hasNextPage }`, unknown the same way.
+    pub has_next_page: Option<bool>,
+    /// The page's oldest push. The connections order by push time, so
+    /// nothing older than this was fetched from the rest of the connection.
+    pub boundary: Option<DateTime<Utc>>,
 }
 
 /// GitHub's API budget as one response's `x-ratelimit-*` headers stated it.
@@ -370,9 +404,16 @@ fn fill(
     }
 }
 
+/// `totalCount` and `pageInfo` on the connections are absent from a payload
+/// cached before they were asked for, hence the defaults.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OrganizationConnection {
     nodes: Vec<OrganizationNode>,
+    #[serde(default)]
+    total_count: Option<u32>,
+    #[serde(default)]
+    page_info: Option<PageInfo>,
 }
 
 #[derive(Deserialize)]
@@ -381,8 +422,61 @@ struct OrganizationNode {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RepositoryConnection {
     nodes: Vec<RepoNode>,
+    #[serde(default)]
+    total_count: Option<u32>,
+    #[serde(default)]
+    page_info: Option<PageInfo>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageInfo {
+    has_next_page: bool,
+}
+
+impl RepositoryConnection {
+    fn coverage(&self) -> PageCoverage {
+        PageCoverage {
+            returned: self.nodes.len() as u32,
+            total: self.total_count,
+            has_next_page: self.page_info.as_ref().map(|p| p.has_next_page),
+            boundary: self
+                .nodes
+                .iter()
+                .filter_map(|n| DateTime::parse_from_rfc3339(n.pushed_at.as_deref()?).ok())
+                .map(|t| t.with_timezone(&Utc))
+                .min(),
+        }
+    }
+}
+
+impl Coverage {
+    /// The coverage of the viewer's pages, read before they are merged.
+    fn of(
+        repositories: &RepositoryConnection,
+        organizations: Option<&OrganizationConnection>,
+    ) -> Self {
+        Self {
+            viewer: repositories.coverage(),
+            org_list: organizations.map(|orgs| PageCoverage {
+                returned: orgs.nodes.len() as u32,
+                total: orgs.total_count,
+                has_next_page: orgs.page_info.as_ref().map(|p| p.has_next_page),
+                boundary: None,
+            }),
+            org_pages: organizations
+                .map(|orgs| {
+                    orgs.nodes
+                        .iter()
+                        .map(|org| org.repositories.coverage())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -644,15 +738,23 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate, rotation: i64) -> Stri
         recent_from.format("%Y-%m-%d"),
         recent_to.format("%Y-%m-%d")
     );
+    // `totalCount` and `pageInfo` on each of the three connections say how
+    // much of it the page holds (`Coverage`). Free: a field on a connection
+    // already asked for adds no `first:`, and measured on 2026-10-09 the query
+    // priced cost 3 / nodeCount 1030 before and after (FZ-09b, #58).
+    let page_fields = "totalCount\n    pageInfo { hasNextPage }";
     format!(
         r#"{{ viewer {{
 {calendar_fields}{recent_field}  repositories(first: {repo_limit}, orderBy: {{field: PUSHED_AT, direction: DESC}},
     affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {{
+    {page_fields}
     {repo_fields}
   }}
   organizations(first: {MAX_ORGS}) {{
+    {page_fields}
     nodes {{
       repositories(first: {ORG_REPO_LIMIT}, orderBy: {{field: PUSHED_AT, direction: DESC}}) {{
+        {page_fields}
         {repo_fields}
       }}
     }}
@@ -724,6 +826,8 @@ fn split_viewer(viewer: Viewer, today: chrono::NaiveDate, origin: Origin) -> Git
         contribution_years,
         recent,
     } = viewer;
+    // Before the merge: its dedupe would change the counts.
+    let coverage = Coverage::of(&repositories, organizations.as_ref());
     let nodes = merge_sources(Viewer {
         repositories,
         organizations,
@@ -738,7 +842,10 @@ fn split_viewer(viewer: Viewer, today: chrono::NaiveDate, origin: Origin) -> Git
         calendar: parse_calendar(contribution_years, recent, today).map(Box::new),
         has_pr_counts,
         origin,
-        meta: FetchMeta::default(),
+        meta: FetchMeta {
+            coverage: Some(coverage),
+            ..FetchMeta::default()
+        },
     }
 }
 
@@ -890,6 +997,7 @@ where
     let meta = FetchMeta {
         budget,
         account: Some(account.clone()),
+        coverage: None,
     };
     let result = with_meta(settle_attempt(attempt, &own, today), meta);
     if mode == CacheMode::AnyCached && result.is_ok() {
@@ -929,13 +1037,20 @@ fn with_budget(
     )
 }
 
-/// Attach what the attempt learned to its result, whichever way it went.
+/// Attach what the attempt learned to its result, whichever way it went. A
+/// payload's coverage is the payload's own and is kept.
 fn with_meta(
     result: Result<GithubFetch, FetchError>,
     meta: FetchMeta,
 ) -> Result<GithubFetch, FetchError> {
     match result {
-        Ok(fetch) => Ok(GithubFetch { meta, ..fetch }),
+        Ok(fetch) => Ok(GithubFetch {
+            meta: FetchMeta {
+                coverage: fetch.meta.coverage,
+                ..meta
+            },
+            ..fetch
+        }),
         Err(error) => Err(FetchError {
             meta: Box::new(meta),
             ..error
@@ -1380,19 +1495,106 @@ pub fn filter_before(repos: &[GithubRepo], before: DateTime<Utc>) -> Vec<GithubR
 /// vouch for. The GraphQL fetch returns only the top `repo_limit` repos by
 /// push date; when the dataset is at that limit AND the cutoff predates its
 /// oldest entry, repos may exist on GitHub that the view silently omits.
+///
+/// The header no longer calls this on the merged list, whose count and
+/// oldest entry include org repos; `coverage_note` applies its rule
+/// (`page_outrun`) to the viewer page of a payload without coverage fields.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "its rule lives on in `page_outrun`")
+)]
 pub fn window_exceeds_dataset(
     repos: &[GithubRepo],
     cutoff: DateTime<Utc>,
     repo_limit: u32,
 ) -> bool {
-    if (repos.len() as u32) < repo_limit {
+    page_outrun(
+        repos.len(),
+        repos.iter().map(|r| r.pushed_at).min(),
+        cutoff,
+        repo_limit,
+    )
+}
+
+/// `window_exceeds_dataset`'s rule on a page's count and oldest push, so the
+/// coverage note can apply it to a page it holds only the facts of.
+fn page_outrun(
+    returned: usize,
+    oldest: Option<DateTime<Utc>>,
+    cutoff: DateTime<Utc>,
+    repo_limit: u32,
+) -> bool {
+    if (returned as u32) < repo_limit {
         return false;
     }
-    repos
+    oldest.is_some_and(|oldest| cutoff < oldest)
+}
+
+/// The header's coverage note for a view with `cutoff` (`None` for `all`),
+/// or `None` when the view can be missing nothing GitHub has.
+///
+/// Shown when any of (`docs/coverage-cache-design.md` 4.1):
+/// - the viewer page has a next page, and the cutoff is absent or older than
+///   the page's oldest push;
+/// - an org page has a next page, and the cutoff is absent or older than that
+///   page's own oldest push;
+/// - the org list has a next page, whatever the cutoff: nothing says how
+///   recent the missing orgs' repos are.
+///
+/// A payload written before the coverage fields were asked for has the viewer
+/// page's `hasNextPage` unknown; for it the note follows
+/// `window_exceeds_dataset`'s rule on the viewer page alone, never the merged
+/// list, whose oldest entry is an org repo's and whose count includes them.
+/// Coverage is a counter, so the words are counts: "fetched 50 of 95 repos".
+pub fn coverage_note(
+    coverage: &Coverage,
+    cutoff: Option<DateTime<Utc>>,
+    repo_limit: u32,
+) -> Option<String> {
+    let reaches_past = |page: &PageCoverage| match (cutoff, page.boundary) {
+        (Some(cutoff), Some(oldest)) => cutoff < oldest,
+        _ => true,
+    };
+    let viewer = &coverage.viewer;
+    let viewer_short = match viewer.has_next_page {
+        Some(more) => more && reaches_past(viewer),
+        None => cutoff.is_some_and(|cutoff| {
+            page_outrun(
+                viewer.returned as usize,
+                viewer.boundary,
+                cutoff,
+                repo_limit,
+            )
+        }),
+    };
+    let mut parts = Vec::new();
+    if viewer_short {
+        parts.push(counted(viewer.returned, viewer.total, "repos"));
+    }
+    let short_orgs: Vec<&PageCoverage> = coverage
+        .org_pages
         .iter()
-        .map(|r| r.pushed_at)
-        .min()
-        .is_some_and(|oldest| cutoff < oldest)
+        .filter(|page| page.has_next_page == Some(true) && reaches_past(page))
+        .collect();
+    if !short_orgs.is_empty() {
+        let returned = short_orgs.iter().map(|page| page.returned).sum();
+        let total = short_orgs.iter().map(|page| page.total).sum();
+        parts.push(counted(returned, total, "org repos"));
+    }
+    if let Some(list) = &coverage.org_list
+        && list.has_next_page == Some(true)
+    {
+        parts.push(counted(list.returned, list.total, "orgs"));
+    }
+    (!parts.is_empty()).then(|| format!("fetched {}", parts.join(", ")))
+}
+
+/// "12 of 15 org repos", or "12 of ? org repos" when the total is unknown.
+fn counted(returned: u32, total: Option<u32>, what: &str) -> String {
+    match total {
+        Some(total) => format!("{returned} of {total} {what}"),
+        None => format!("{returned} of ? {what}"),
+    }
 }
 
 /// What `get_gh_token` asks `gh` (C9). `--hostname` names the host the
@@ -1660,6 +1862,272 @@ mod tests {
         assert!(!window_exceeds_dataset(&repos, old_cutoff, 50));
         // Empty dataset: nothing to warn about.
         assert!(!window_exceeds_dataset(&[], old_cutoff, 50));
+    }
+
+    fn days_ago(days: i64) -> DateTime<Utc> {
+        Utc::now() - chrono::Duration::days(days)
+    }
+
+    /// `count` repo nodes of `owner`, pushed from one day ago back to exactly
+    /// `oldest_days` ago, newest first.
+    fn nodes_back_to(owner: &str, count: usize, oldest_days: i64) -> Vec<String> {
+        (0..count)
+            .map(|i| {
+                let days = match count {
+                    1 => oldest_days,
+                    _ => 1 + (oldest_days - 1) * i as i64 / (count as i64 - 1),
+                };
+                let pushed = days_ago(days).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+                node_json(Some(owner), &format!("{owner}-{i}"), &pushed, 0)
+            })
+            .collect()
+    }
+
+    /// A connection as the payload spells it, with the coverage fields when
+    /// `facts` gives them (`totalCount`, `hasNextPage`).
+    fn page_json(nodes: &[String], facts: Option<(u32, bool)>) -> String {
+        let facts = facts.map_or(String::new(), |(total, more)| {
+            format!(r#","totalCount":{total},"pageInfo":{{"hasNextPage":{more}}}"#)
+        });
+        format!(r#"{{"nodes":[{}]{facts}}}"#, nodes.join(","))
+    }
+
+    /// A payload with the viewer page, the org list's own facts and its org
+    /// pages, parsed the way a cached body is.
+    fn covered_fetch(
+        viewer: String,
+        org_list: Option<(u32, bool)>,
+        orgs: &[String],
+    ) -> GithubFetch {
+        let pages: Vec<String> = orgs
+            .iter()
+            .map(|page| format!(r#"{{"repositories":{page}}}"#))
+            .collect();
+        let org_facts = org_list.map_or(String::new(), |(total, more)| {
+            format!(r#","totalCount":{total},"pageInfo":{{"hasNextPage":{more}}}"#)
+        });
+        let body = format!(
+            r#"{{"data":{{"viewer":{{"repositories":{viewer},
+                "organizations":{{"nodes":[{}]{org_facts}}}}}}}}}"#,
+            pages.join(",")
+        );
+        parse_cached(Some(body), day("2026-10-09")).expect("payload parses")
+    }
+
+    /// The owner's measured org shape (design 1.2): 17 repos in four complete
+    /// pages of 6, 4, 4 and 3, the oldest 2060 days back, five older than
+    /// the viewer boundary of 237 days.
+    fn owners_org_pages(facts: bool) -> Vec<String> {
+        let page = |owner: &str, count: u32, oldest: i64| {
+            let complete = facts.then_some((count, false));
+            page_json(&nodes_back_to(owner, count as usize, oldest), complete)
+        };
+        vec![
+            page("orga", 6, 2060),
+            page("orgb", 4, 900),
+            page("orgc", 4, 500),
+            page("orgd", 3, 300),
+        ]
+    }
+
+    fn note_of(fetch: &GithubFetch, cutoff: Option<DateTime<Utc>>) -> Option<String> {
+        let coverage = fetch
+            .meta
+            .coverage
+            .as_ref()
+            .expect("a payload has coverage");
+        coverage_note(coverage, cutoff, 50)
+    }
+
+    /// The owner's viewer page (design 1.2, R3): 50 of 95, a next page, the
+    /// oldest push 237 days ago.
+    fn owners_viewer_page() -> String {
+        page_json(&nodes_back_to("me", 50, 237), Some((95, true)))
+    }
+
+    /// CV1: the viewer page is cut off and the window reaches past it.
+    #[test]
+    fn cv1_a_window_past_a_cut_off_viewer_page_shows_the_note() {
+        let fetch = covered_fetch(owners_viewer_page(), None, &[]);
+        let coverage = fetch.meta.coverage.as_ref().unwrap();
+        assert_eq!(coverage.viewer.returned, 50);
+        assert_eq!(coverage.viewer.total, Some(95));
+        assert_eq!(coverage.viewer.has_next_page, Some(true));
+        assert_eq!(
+            note_of(&fetch, Some(days_ago(300))).as_deref(),
+            Some("fetched 50 of 95 repos")
+        );
+        // Inside the page, nothing can be missing.
+        assert_eq!(note_of(&fetch, Some(days_ago(200))), None);
+    }
+
+    /// CV2: org repos older than the viewer boundary used to hide the cut:
+    /// the merged list's oldest entry is theirs.
+    #[test]
+    fn cv2_org_repos_older_than_the_boundary_do_not_hide_the_note() {
+        let fetch = covered_fetch(
+            owners_viewer_page(),
+            Some((4, false)),
+            &owners_org_pages(true),
+        );
+        let cutoff = days_ago(365);
+        assert_eq!(fetch.repos.len(), 67, "50 viewer and 17 org repos");
+        assert!(
+            !window_exceeds_dataset(&fetch.repos, cutoff, 50),
+            "the old rule on the merged list: no note"
+        );
+        assert_eq!(
+            note_of(&fetch, Some(cutoff)).as_deref(),
+            Some("fetched 50 of 95 repos")
+        );
+    }
+
+    /// CV3: `all` has no cutoff, and the old rule never warned under it.
+    #[test]
+    fn cv3_no_cutoff_shows_the_note_for_a_cut_off_viewer_page() {
+        let fetch = covered_fetch(owners_viewer_page(), None, &[]);
+        assert_eq!(
+            note_of(&fetch, None).as_deref(),
+            Some("fetched 50 of 95 repos")
+        );
+    }
+
+    /// CV4: a complete viewer page plus org repos reaches `repo_limit`
+    /// merged, which the old rule read as a cut.
+    #[test]
+    fn cv4_a_complete_fetch_shows_no_note() {
+        let viewer = page_json(&nodes_back_to("me", 40, 600), Some((40, false)));
+        let fetch = covered_fetch(viewer, Some((4, false)), &owners_org_pages(true));
+        let cutoff = days_ago(3000);
+        assert_eq!(fetch.repos.len(), 57);
+        assert!(
+            window_exceeds_dataset(&fetch.repos, cutoff, 50),
+            "the old rule on the merged list: a false note"
+        );
+        assert_eq!(note_of(&fetch, Some(cutoff)), None);
+    }
+
+    /// CV5: an org page cut off at its own boundary, the viewer complete.
+    #[test]
+    fn cv5_a_cut_off_org_page_shows_the_note_past_its_own_boundary() {
+        let viewer = page_json(&nodes_back_to("me", 30, 400), Some((30, false)));
+        let org = page_json(&nodes_back_to("orga", 12, 90), Some((15, true)));
+        let fetch = covered_fetch(viewer, Some((1, false)), &[org]);
+        assert_eq!(note_of(&fetch, Some(days_ago(30))), None);
+        assert_eq!(
+            note_of(&fetch, Some(days_ago(120))).as_deref(),
+            Some("fetched 12 of 15 org repos")
+        );
+        assert_eq!(
+            note_of(&fetch, None).as_deref(),
+            Some("fetched 12 of 15 org repos")
+        );
+    }
+
+    /// CV6: a cut-off org list shows whatever the cutoff: nothing says how
+    /// recent the missing orgs' repos are.
+    #[test]
+    fn cv6_a_cut_off_org_list_shows_the_note_whatever_the_cutoff() {
+        let viewer = page_json(&nodes_back_to("me", 30, 400), Some((30, false)));
+        let orgs: Vec<String> = (0..8)
+            .map(|i| page_json(&nodes_back_to(&format!("org{i}"), 1, 20), Some((1, false))))
+            .collect();
+        let fetch = covered_fetch(viewer, Some((10, true)), &orgs);
+        assert_eq!(
+            note_of(&fetch, Some(days_ago(1))).as_deref(),
+            Some("fetched 8 of 10 orgs")
+        );
+        assert_eq!(
+            note_of(&fetch, None).as_deref(),
+            Some("fetched 8 of 10 orgs")
+        );
+    }
+
+    /// CV7: a payload cached before the coverage fields. Its coverage stays
+    /// unknown, and the note follows `window_exceeds_dataset`'s rule on the
+    /// viewer page alone, not the merged list reaching 2060 days back.
+    #[test]
+    fn cv7_a_payload_without_coverage_fields_follows_the_old_rule_on_the_viewer_page() {
+        let viewer = page_json(&nodes_back_to("me", 50, 237), None);
+        let fetch = covered_fetch(viewer, None, &owners_org_pages(false));
+        let coverage = fetch.meta.coverage.as_ref().unwrap();
+        assert_eq!(coverage.viewer.total, None);
+        assert_eq!(coverage.viewer.has_next_page, None);
+        assert_eq!(coverage.org_list.as_ref().unwrap().has_next_page, None);
+        assert!(
+            coverage
+                .org_pages
+                .iter()
+                .all(|page| page.total.is_none() && page.has_next_page.is_none())
+        );
+        assert_eq!(
+            note_of(&fetch, Some(days_ago(365))).as_deref(),
+            Some("fetched 50 of ? repos")
+        );
+        assert_eq!(note_of(&fetch, None), None, "the old rule needs a cutoff");
+    }
+
+    /// The names directly under `viewer`, aliases and the field each names
+    /// alike: what a GraphQL server would read as viewer-level fields.
+    fn viewer_level_names(query: &str) -> Vec<String> {
+        let (mut braces, mut parens) = (0, 0);
+        let mut word = String::new();
+        let mut names = Vec::new();
+        for c in query.chars() {
+            if c.is_alphanumeric() || c == '_' {
+                word.push(c);
+                continue;
+            }
+            let word = std::mem::take(&mut word);
+            if !word.is_empty() && braces == 2 && parens == 0 {
+                names.push(word);
+            }
+            match c {
+                '{' => braces += 1,
+                '}' => braces -= 1,
+                '(' => parens += 1,
+                ')' => parens -= 1,
+                _ => {}
+            }
+        }
+        names
+    }
+
+    /// CV8: the coverage fields ride the three connections already asked
+    /// for, and nothing new lands at the viewer level, where it would fall
+    /// into `Viewer`'s flattened calendar map.
+    #[test]
+    fn cv8_the_query_asks_coverage_on_the_three_connections_only() {
+        let q = build_query(50, day("2026-10-09"), 0);
+        assert_eq!(
+            q.matches("totalCount\n    pageInfo { hasNextPage }")
+                .count(),
+            3
+        );
+        assert_eq!(q.matches("pageInfo").count(), 3);
+        for connection in [
+            "affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {\n    totalCount",
+            &format!("organizations(first: {MAX_ORGS}) {{\n    totalCount"),
+            &format!(
+                "repositories(first: {ORG_REPO_LIMIT}, orderBy: {{field: PUSHED_AT, direction: DESC}}) {{\n        totalCount"
+            ),
+        ] {
+            assert!(q.contains(connection), "no coverage on: {connection}");
+        }
+        let names = viewer_level_names(&q);
+        assert!(names.contains(&"repositories".to_string()), "{names:?}");
+        assert!(names.contains(&"organizations".to_string()), "{names:?}");
+        for name in names {
+            let calendar = name == "recent"
+                || name == "contributionsCollection"
+                || name
+                    .strip_prefix('y')
+                    .is_some_and(|n| n.parse::<u32>().is_ok());
+            assert!(
+                calendar || name == "repositories" || name == "organizations",
+                "a new viewer-level field: {name}"
+            );
+        }
     }
 
     /// Regression: an install upgrading past the always-on PR count reads its
@@ -3076,6 +3544,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A network answer's coverage is the payload's, read in `split_viewer`.
+    /// The attempt's meta carries none, and attaching it must not drop the
+    /// payload's record while it adds the account.
+    #[test]
+    fn a_network_answer_keeps_its_payload_coverage_beside_the_attempts_meta() {
+        let dir = std::env::temp_dir().join(format!("fleetz_cov_meta_{}", std::process::id()));
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let body = format!(
+            r#"{{"data":{{"viewer":{{"repositories":{}}}}}}}"#,
+            owners_viewer_page()
+        );
+        let answer =
+            accept_response(&body, &cache, day("2026-10-09")).expect("the payload is accepted");
+        let payload = answer
+            .meta
+            .coverage
+            .clone()
+            .expect("the payload has coverage");
+        assert_eq!(payload.viewer.total, Some(95), "fixture");
+
+        let attempt = FetchMeta {
+            account: Some("acct".to_string()),
+            ..FetchMeta::default()
+        };
+        let fetch = with_meta(Ok(answer), attempt).ok().unwrap();
+        assert_eq!(fetch.meta.coverage, Some(payload));
+        assert_eq!(fetch.meta.account.as_deref(), Some("acct"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A refusal is decided by its status and headers. A body that stalls
     /// after them does not turn GitHub's 403 limit into a timeout.
     #[tokio::test]
@@ -3100,7 +3598,8 @@ mod tests {
         let (path, _) = planted_cache("meta_cached", std::time::Duration::from_secs(60));
         let cache = crate::cache::ApiCache::at(path.clone(), 86_400);
         let fetch = fetch_repos(50, &cache, CacheMode::AnyCached).await.unwrap();
-        assert_eq!(fetch.meta, FetchMeta::default());
+        assert_eq!(fetch.meta.budget, None);
+        assert_eq!(fetch.meta.account, None);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -3365,7 +3864,8 @@ mod tests {
 
         assert_eq!(repo_names(&fetch), ["b-repo"]);
         assert_written_near(fetch.origin, written_b);
-        assert_eq!(fetch.meta, FetchMeta::default(), "account must be unknown");
+        assert_eq!(fetch.meta.budget, None, "account must be unknown");
+        assert_eq!(fetch.meta.account, None, "account must be unknown");
         assert_eq!(scratch.names(), before, "cleanup ran without an account");
 
         let poll = fetch_with(
@@ -3545,7 +4045,8 @@ mod tests {
         let cache = crate::cache::ApiCache::at(path.clone(), 0);
         let fetch = fetch_repos(50, &cache, CacheMode::AnyCached).await.unwrap();
         assert!(matches!(fetch.origin, Origin::Cache { .. }));
-        assert_eq!(fetch.meta, FetchMeta::default());
+        assert_eq!(fetch.meta.budget, None);
+        assert_eq!(fetch.meta.account, None);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
