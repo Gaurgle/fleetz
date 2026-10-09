@@ -1374,6 +1374,361 @@ impl GithubFreshness {
     }
 }
 
+/// Where the randomness in the retry policy comes from, injected so tests can
+/// plant it. See `docs/api-budget-design.md` 4.3 and 4.4: instances that fail
+/// together would otherwise retry together.
+pub trait Jitter {
+    /// A factor for the backoff ladder from step 2 on, in 0.8 to 1.2.
+    fn backoff_factor(&mut self) -> f64;
+    /// Whole seconds added to a resume after a reset, in 0 to 30.
+    fn resume_secs(&mut self) -> i64;
+}
+
+/// The production jitter: a xorshift seeded from the clock and the process id,
+/// so two instances started together still draw apart. Not for anything that
+/// needs to be unpredictable, only spread.
+pub struct ClockJitter {
+    state: u64,
+}
+
+impl ClockJitter {
+    pub fn new() -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+        let seed = nanos ^ (u64::from(std::process::id()) << 32) ^ 0x9E37_79B9_7F4A_7C15;
+        Self { state: seed.max(1) }
+    }
+
+    /// A draw in 0.0 to 1.0.
+    fn unit(&mut self) -> f64 {
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.state = x;
+        (x >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+impl Default for ClockJitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Jitter for ClockJitter {
+    fn backoff_factor(&mut self) -> f64 {
+        BACKOFF_JITTER_MIN + (BACKOFF_JITTER_MAX - BACKOFF_JITTER_MIN) * self.unit()
+    }
+
+    fn resume_secs(&mut self) -> i64 {
+        ((self.unit() * (RESUME_JITTER_MAX_SECS + 1) as f64) as i64).min(RESUME_JITTER_MAX_SECS)
+    }
+}
+
+/// The share of the hourly limit pacing leaves untouched for `r`, `R`, the
+/// board and other clients on the token (A2).
+pub const BUDGET_RESERVE_PERCENT: u64 = 10;
+/// Where the backoff ladder stops doubling, before its jitter (A3).
+pub const BACKOFF_CAP_SECS: i64 = 600;
+/// GitHub's documented minimum wait for a secondary limit that names none.
+pub const SECONDARY_LIMIT_MIN_SECS: i64 = 60;
+const BACKOFF_JITTER_MIN: f64 = 0.8;
+const BACKOFF_JITTER_MAX: f64 = 1.2;
+const RESUME_JITTER_MAX_SECS: i64 = 30;
+/// A rate-limit window lasts at most an hour, which bounds a reset's delay.
+const RESET_WINDOW_SECS: i64 = 3600;
+
+/// The newest budget reading, anchored to the local clock on arrival. Memory
+/// only: a budget is per account and per moment (`docs/api-budget-design.md`
+/// 4.1). Unknown until a reading arrives, and unknown again once its reset
+/// has passed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ApiBudget {
+    reading: Option<crate::github::BudgetReading>,
+    /// The reading's reset as a local instant (`anchor_reset`).
+    reset_at: Option<DateTime<Local>>,
+    /// Drawn once per window, so a pause and a limit in the same window resume
+    /// at the same moment, and every check of it agrees.
+    resume_jitter_secs: i64,
+}
+
+/// What `ApiBudget::observe` did with a reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Observed {
+    /// Older than the one held, or from a discarded answer it may not apply.
+    Ignored,
+    /// Replaced the held reading on the same token, or was the first.
+    Updated,
+    /// An applied answer on another token replaced the held reading.
+    Switched,
+}
+
+/// How the budget spaces automatic polls (A2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pace {
+    /// No reading, or its window is over: the configured interval applies.
+    Unknown,
+    /// At most one automatic poll per this many seconds.
+    Every(i64),
+    /// At or below the reserve: no automatic poll before `until`, the reset
+    /// plus its jitter.
+    Paused { until: DateTime<Local> },
+}
+
+/// `x-ratelimit-reset` as a local instant. The delay to the reset is taken in
+/// the server's own time (`reset - Date`) and added to the local arrival, so a
+/// skewed local clock neither pauses too long nor resumes into a refused
+/// window; without a `Date` the local clock stands in. Clamped to one window.
+pub fn anchor_reset(
+    reading: &crate::github::BudgetReading,
+    arrival: DateTime<Local>,
+) -> DateTime<Local> {
+    let server_now = reading.date.map_or(arrival.timestamp(), |d| d.timestamp());
+    let delay = (reading.reset - server_now).clamp(0, RESET_WINDOW_SECS);
+    arrival + chrono::Duration::seconds(delay)
+}
+
+impl ApiBudget {
+    /// Take a reading under the order of `docs/api-budget-design.md` 4.1:
+    /// only an applied answer may switch the token; on the same token a later
+    /// reset is a newer window, and within one window the lower `remaining` is
+    /// the newer reading. `applied` is false for an answer `accept_answer`
+    /// discarded.
+    pub fn observe(
+        &mut self,
+        reading: &crate::github::BudgetReading,
+        applied: bool,
+        arrival: DateTime<Local>,
+        jitter: &mut dyn Jitter,
+    ) -> Observed {
+        let Some(held) = &self.reading else {
+            if !applied {
+                return Observed::Ignored;
+            }
+            self.replace(reading, arrival, jitter);
+            return Observed::Updated;
+        };
+        if held.token_id != reading.token_id {
+            if !applied {
+                return Observed::Ignored;
+            }
+            self.replace(reading, arrival, jitter);
+            return Observed::Switched;
+        }
+        match reading.reset.cmp(&held.reset) {
+            std::cmp::Ordering::Greater => {
+                self.replace(reading, arrival, jitter);
+                Observed::Updated
+            }
+            std::cmp::Ordering::Equal if reading.remaining < held.remaining => {
+                // The same window: its reset and jitter stand.
+                self.reading = Some(reading.clone());
+                Observed::Updated
+            }
+            _ => Observed::Ignored,
+        }
+    }
+
+    fn replace(
+        &mut self,
+        reading: &crate::github::BudgetReading,
+        arrival: DateTime<Local>,
+        jitter: &mut dyn Jitter,
+    ) {
+        self.reset_at = Some(anchor_reset(reading, arrival));
+        self.resume_jitter_secs = jitter.resume_secs().clamp(0, RESUME_JITTER_MAX_SECS);
+        self.reading = Some(reading.clone());
+    }
+
+    /// The held reading, whether or not its window is over. Its token decides
+    /// which later readings may apply.
+    #[cfg(test)]
+    pub fn reading(&self) -> Option<&crate::github::BudgetReading> {
+        self.reading.as_ref()
+    }
+
+    /// The reading while its window lasts at `at`; `None` is unknown.
+    pub fn known(&self, at: DateTime<Local>) -> Option<&crate::github::BudgetReading> {
+        let reset_at = self.reset_at?;
+        (reset_at > at).then_some(self.reading.as_ref()?)
+    }
+
+    /// The reset as a local instant.
+    #[cfg(test)]
+    pub fn reset_at(&self) -> Option<DateTime<Local>> {
+        self.reset_at
+    }
+
+    /// When polling resumes after this window: the reset plus its jitter.
+    pub fn resume_at(&self) -> Option<DateTime<Local>> {
+        self.reset_at
+            .map(|t| t + chrono::Duration::seconds(self.resume_jitter_secs))
+    }
+
+    /// Whether the next request would be refused at `at`: fewer points left
+    /// than one poll costs. Treated as a known primary limit until the reset.
+    pub fn exhausted(&self, cost: u32, at: DateTime<Local>) -> bool {
+        self.known(at).is_some_and(|r| r.remaining < cost)
+    }
+
+    /// How far apart automatic polls of `cost` points go, judged at `at` (the
+    /// last attempt): what is left above the reserve spread over the time to
+    /// the reset, never past the resume. At or below the reserve, or with too
+    /// little left for one poll, paused until the resume.
+    pub fn pace(&self, cost: u32, at: DateTime<Local>) -> Pace {
+        let (Some(reading), Some(resume)) = (self.known(at), self.resume_at()) else {
+            return Pace::Unknown;
+        };
+        let reserve = u64::from(reading.limit) * BUDGET_RESERVE_PERCENT / 100;
+        let remaining = u64::from(reading.remaining);
+        if remaining <= reserve || reading.remaining < cost {
+            return Pace::Paused { until: resume };
+        }
+        let to_reset = self.reset_at.map_or(0, |t| (t - at).num_seconds().max(0)) as u64;
+        let spare = remaining - reserve;
+        let secs = (u64::from(cost) * to_reset).div_ceil(spare) as i64;
+        Pace::Every(secs.min((resume - at).num_seconds().max(0)))
+    }
+}
+
+/// When the next automatic attempt may go at the earliest, beside the rule 6
+/// interval. See `GithubBackoff`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Hold {
+    /// A fixed instant: a known reset plus its jitter, or a `retry-after`.
+    At(DateTime<Local>),
+    /// A step of the ladder, counted from the failure at `from`. Resolved
+    /// against the configured interval when asked, which `App` does not hold.
+    Ladder {
+        from: DateTime<Local>,
+        step: u32,
+        factor: f64,
+        at_least_secs: i64,
+    },
+}
+
+/// The not-before and consecutive-failure count of `docs/api-budget-design.md`
+/// 4.3. Kept beside `GithubFreshness`, not inside it, so `retry_due` keeps its
+/// meaning: the not-before is a second condition, checked next to it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GithubBackoff {
+    failures: u32,
+    hold: Option<Hold>,
+    /// Whether `hold` is a rate limit's, which a token change drops and which
+    /// holds back `r` and `R`.
+    hold_is_limit: bool,
+}
+
+/// Seconds the ladder waits after the `step`th consecutive failure: exactly
+/// the interval at step 1, then doubling up to the cap, times the jitter
+/// `factor` (applied after the cap), never under the interval.
+pub fn backoff_secs(step: u32, interval_secs: i64, factor: f64) -> i64 {
+    if step <= 1 {
+        return interval_secs;
+    }
+    let doublings = (step - 1).min(32);
+    let base = interval_secs
+        .saturating_mul(1i64 << doublings)
+        .min(BACKOFF_CAP_SECS);
+    let factor = factor.clamp(BACKOFF_JITTER_MIN, BACKOFF_JITTER_MAX);
+    ((base as f64 * factor).round() as i64).max(interval_secs)
+}
+
+impl GithubBackoff {
+    /// The consecutive-failure count.
+    #[cfg(test)]
+    pub fn failures(&self) -> u32 {
+        self.failures
+    }
+
+    /// A success clears both the count and the not-before (transition 3).
+    pub fn succeeded(&mut self) {
+        *self = Self::default();
+    }
+
+    /// An applied failure at `now`. `budget` already holds the reading that
+    /// came with it. `Offline` and `Auth` say nothing about GitHub and leave
+    /// everything as it was (transition 4); every other kind counts and
+    /// replaces the not-before (transition 2).
+    pub fn failed(
+        &mut self,
+        failure: &crate::github::Failure,
+        now: DateTime<Local>,
+        budget: &ApiBudget,
+        jitter: &mut dyn Jitter,
+    ) {
+        use crate::github::{FailureKind, RateLimit};
+        if matches!(failure.kind, FailureKind::Offline | FailureKind::Auth) {
+            return;
+        }
+        self.failures = self.failures.saturating_add(1);
+        let step = self.failures;
+        let mut ladder = |at_least_secs| Hold::Ladder {
+            from: now,
+            step,
+            // Step 1 is exactly the interval: no draw.
+            factor: if step >= 2 {
+                jitter.backoff_factor()
+            } else {
+                1.0
+            },
+            at_least_secs,
+        };
+        let (hold, is_limit) = match failure.limit {
+            None => (ladder(0), false),
+            Some(RateLimit::Primary) => match budget.known(now).and(budget.resume_at()) {
+                Some(resume) => (Hold::At(resume), true),
+                None => (ladder(0), true),
+            },
+            Some(RateLimit::Secondary {
+                retry_after: Some(wait),
+            }) => {
+                let wait = chrono::Duration::from_std(wait)
+                    .unwrap_or_else(|_| chrono::Duration::seconds(RESET_WINDOW_SECS));
+                (Hold::At(now + wait), true)
+            }
+            Some(RateLimit::Secondary { retry_after: None }) => {
+                (ladder(SECONDARY_LIMIT_MIN_SECS), true)
+            }
+        };
+        self.hold = Some(hold);
+        self.hold_is_limit = is_limit;
+    }
+
+    /// An applied answer came on another token: a rate limit belonged to the
+    /// old credential and goes with it. The count describes GitHub and stays.
+    pub fn account_switched(&mut self) {
+        if self.hold_is_limit {
+            self.hold = None;
+            self.hold_is_limit = false;
+        }
+    }
+
+    /// The not-before, resolved against the configured interval.
+    pub fn not_before(&self, interval_secs: i64) -> Option<DateTime<Local>> {
+        Some(match self.hold? {
+            Hold::At(t) => t,
+            Hold::Ladder {
+                from,
+                step,
+                factor,
+                at_least_secs,
+            } => {
+                let secs = backoff_secs(step, interval_secs, factor).max(at_least_secs);
+                from + chrono::Duration::seconds(secs)
+            }
+        })
+    }
+
+    /// The not-before when it is a rate limit's.
+    pub fn limit_until(&self, interval_secs: i64) -> Option<DateTime<Local>> {
+        self.not_before(interval_secs)
+            .filter(|_| self.hold_is_limit)
+    }
+}
+
 /// What a batch of fetches someone asked for came to, once the last landed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchReport {
@@ -1648,6 +2003,12 @@ pub struct App {
     /// they had stopped moving. Rate limits are the common case and they last
     /// an hour. The header reads this.
     pub github_freshness: GithubFreshness,
+    /// The account's GitHub budget as the newest reading stated it.
+    pub api_budget: ApiBudget,
+    /// The retry ladder and not-before beside `github_freshness`'s clock.
+    pub github_backoff: GithubBackoff,
+    /// Where the backoff and resume jitter come from; planted in tests.
+    pub jitter: Box<dyn Jitter>,
     /// The fetches a keypress is waiting on (`f`, `F`, and the ones `r`'s
     /// poll sets off), reported as one status line when the last lands.
     pub manual_fetches: FetchTally,
@@ -1766,6 +2127,9 @@ impl App {
             refresh_fetches: std::collections::HashSet::new(),
             refresh_fetches_started: None,
             github_freshness: GithubFreshness::default(),
+            api_budget: ApiBudget::default(),
+            github_backoff: GithubBackoff::default(),
+            jitter: Box::new(ClockJitter::new()),
             manual_fetches: FetchTally::default(),
             github_poll_inflight: false,
             github_poll_started: None,
@@ -2737,6 +3101,38 @@ impl App {
             is_error,
             created: std::time::Instant::now(),
         });
+    }
+
+    /// A budget reading came with an answer that `applied` or was discarded.
+    /// One on another token, from an applied answer, drops the old token's
+    /// rate limit (transition 7). Call before the answer's outcome, which
+    /// sets the not-before that follows it.
+    pub fn observe_budget(
+        &mut self,
+        reading: Option<&crate::github::BudgetReading>,
+        applied: bool,
+        arrival: DateTime<Local>,
+    ) {
+        let Some(reading) = reading else {
+            return;
+        };
+        if self
+            .api_budget
+            .observe(reading, applied, arrival, self.jitter.as_mut())
+            == Observed::Switched
+        {
+            self.github_backoff.account_switched();
+        }
+    }
+
+    /// An applied attempt failed at `now`: advance the retry ladder.
+    pub fn github_attempt_failed(
+        &mut self,
+        failure: &crate::github::Failure,
+        now: DateTime<Local>,
+    ) {
+        self.github_backoff
+            .failed(failure, now, &self.api_budget, self.jitter.as_mut());
     }
 
     pub fn clear_status(&mut self) {
