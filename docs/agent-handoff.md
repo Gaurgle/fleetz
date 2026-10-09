@@ -81,9 +81,11 @@ reads `git -C <worktree> status --short` and the issue's last comment, and
 dispatches a reviewer or a fresh worker from there. Do not dispatch a second
 worker on either ticket while this session's process (pid 57964) is alive.
 
-Nothing is in flight: FZ-09b, #68, FZ-10b and FZ-10c are Done (table
-below). No worker or reviewer is running. The next step is FZ-09d (#60),
-see "Next step". **Coordinator ruling on #49** (the
+FZ-09b, #68, FZ-10b and FZ-10c are Done (table below). **FZ-09d (#60) was
+dispatched at 19:23 CEST:** branch `feat/fz-09d-not-covered-rows`, worktree
+`.claude/worktrees/fz-09d`, base `862b36c`, `fz-worker` (`claude-opus-5-5`,
+medium), uncommitted until review. It stops at Ready to integrate for
+Andreas's look at the not-covered mark (O4). Nothing runs beside it. **Coordinator ruling on #49** (the
 header needs the poll cost and the configured interval, which only `Config`
 holds): both are copied onto `App` at startup beside `contrib_author`, and
 the three predicates (`github_pace`, `budget_slowed`, `github_limit_until`)
