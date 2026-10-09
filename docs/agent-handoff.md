@@ -81,8 +81,11 @@ reads `git -C <worktree> status --short` and the issue's last comment, and
 dispatches a reviewer or a fresh worker from there. Do not dispatch a second
 worker on either ticket while this session's process (pid 57964) is alive.
 
-Nothing is in flight: FZ-09b, #68 and FZ-10b are Done (table below). The
-next step is FZ-10c (#49), see "Next step". **Rulings of 17:59 on FZ-10b**
+FZ-09b, #68 and FZ-10b are Done (table below). **FZ-10c (#49) was dispatched
+at 18:30 CEST:** branch `feat/fz-10c-poll-state-words`, worktree
+`.claude/worktrees/fz-10c`, base `981823a`, `fz-worker` (`claude-opus-5-5`,
+medium), uncommitted until review. It stops at Ready to integrate for
+Andreas's look at the words (O1). Nothing runs beside it. **Rulings of 17:59 on FZ-10b**
 (recorded on #48): Andreas allowed one match arm,
 `LoadKind::FromMemory => LoadKind::FromMemory,`, in the existing test
 `the_ambiguity_line_wins_over_every_loads_own_message` ("B1, go for A");
