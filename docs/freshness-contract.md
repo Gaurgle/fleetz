@@ -311,8 +311,8 @@ Amendment 10 took effect with FZ-09b on 2026-10-09.
     (section "Status vocabulary" of `CLAUDE.md`). The words are provisional
     until Andreas has seen them on `main`.
 
-Amendment 11 takes effect when FZ-09d (#60) lands; it was written on
-2026-10-09 against the reviewed branch.
+Amendment 11 took effect with FZ-09d on 2026-10-09; Andreas accepted the
+look the same evening ("fz09d is fine").
 
 11. **Rows the poll did not cover, and an account change (O4, O5).**
     - **Rule 9 and amendment 2:** the 15 second `Pending` floor counts only

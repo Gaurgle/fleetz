@@ -143,7 +143,13 @@ a repo only through its stored origin, never by name: matching by name put a
 stranger's CI badge on a same-named clone. Name-only matching survives in one
 place, a row or payload entry with no owner (a cache from before the field was
 asked for), and the first network poll upgrades it. Sweeps never touch the
-mark, so a poll and a sweep can land in either order.
+mark, so a poll and a sweep can land in either order. A carrier row the poll
+did not return keeps its GitHub fields and is marked "not in the last poll"
+(`App::not_in_last_poll`, a set of remote keys, never a row field): drawn
+dimmed, it no longer holds the 15 s `Pending` poll floor. Clearing those
+fields was rejected because a blank lamp reads as "no CI". A successful poll
+on another account rebuilds the rows from its dataset; a poll with no account
+key never does.
 
 **A clone is matched by its `origin` remote first, and by its folder name only
 where the remote cannot decide** (`discovery::Wanted::match_clone`). The folder
