@@ -1,13 +1,12 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-09 19:57 CEST by `claude-fable-5-1` (`claude --agent
+Last written 2026-10-09 20:14 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `99996af4-81d7-4c21-8b83-a46db044f56a`), when Andreas
 asked for a place to stop for the night. **Nothing is running: no worker, no
-reviewer, no build, no background job. One ticket is between dispatch and
-merge: FZ-09d (#60), accepted in review, committed and pushed on its branch
-with CI green, at Ready to integrate waiting for Andreas's look at the
-dimmed row (O4); its worktree `.claude/worktrees/fz-09d` stays until it is
-merged.** The board's other Ready to integrate item is #45, parked. Read this file,
+reviewer, no build, no background job. No ticket of the release line is
+between dispatch and merge, and no ticket worktree exists** (the board's one
+Ready to integrate item is #45, parked). **Every M1 implementation ticket is
+Done.** Read this file,
 the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
@@ -16,7 +15,7 @@ what to do next.
 
 ## Baton
 
-**Released** 2026-10-09 19:57 CEST by `claude-fable-5-1` (`claude --agent fz-coordinator`,
+**Released** 2026-10-09 20:14 CEST by `claude-fable-5-1` (`claude --agent fz-coordinator`,
 session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 2026-10-09 16:30 CEST. No lead is active. The next lead records its own
 session and takeover time here, after confirming with Andreas that this
@@ -26,8 +25,11 @@ session has ended.
   looking at a place to stop for the night, finish what's rolling at the
   moment, then wrap it up and write the handowver and needed docs". The one
   thing rolling was the FZ-09d review; it was accepted, the diff committed
-  and pushed, CI went green on the branch, and the ticket was left at Ready
-  to integrate because its look is Andreas's (O4). Nothing was dispatched
+  and pushed, CI went green on the branch, and the ticket stopped at Ready
+  to integrate for his look (O4). At about 20:05 he wrote "fz09d is fine"
+  and "we can stop here for today", so the coordinator merged it under the
+  safe-merge rule (`5b25efb`, CI green on `main`), landed its docs
+  (`51279e8`), closed #60, cleaned up and stopped. Nothing was dispatched
   after 19:49. No worker or reviewer is running.
 - **Taking over does not resume work.** The standing scope below is recorded
   evidence. A new lead confirms it with Andreas once before dispatching.
@@ -84,39 +86,15 @@ session has ended.
   already stopped, and no reviewer was running. Nothing was left at Ready to
   integrate and nothing was uncommitted in a ticket worktree.
 
-## Open: FZ-09d at Ready to integrate (2026-10-09)
+## FZ-09d, closed last (2026-10-09)
 
-**FZ-09d (#60)**, mark rows the poll did not cover and rebuild on an account
-change: branch `feat/fz-09d-not-covered-rows`, worktree
-`.claude/worktrees/fz-09d`, base `862b36c`, ticket commit `06cd63e`
-(the reviewer's accepted diff `3beb8cb`), pushed, CI green on the branch
-(run 37969337317). `main` had no code change since the base, so the branch
-tree is the combined tree: fmt clean, clippy clean, 1050 passed, 1 ignored
-(the reviewer ran the suite twice). **Waiting on Andreas's look at the
-dimmed row (O4)**; the Ready to integrate comment on #60 says what to look
-at and how. When he accepts (or says the look is minor):
-
-1. Merge under the safe-merge rule (`git merge --no-ff`), push, confirm CI
-   on `main`, close #60 with the evidence (the Ready to integrate comment has
-   it), board to Done, remove the worktree and local branch.
-2. Docs: in [freshness-contract.md](freshness-contract.md) change "Amendment
-   11 takes effect when FZ-09d (#60) lands; it was written on 2026-10-09
-   against the reviewed branch" to "Amendment 11 took effect with FZ-09d on
-   <date>". In `CLAUDE.md`, append to the carrier-row invariant paragraph
-   (the one ending "so a poll and a sweep can land in either order."): "A
-   carrier row the poll did not return keeps its GitHub fields and is marked
-   "not in the last poll" (`App::not_in_last_poll`, a set of remote keys,
-   never a row field): drawn dimmed, it no longer holds the 15 s `Pending`
-   poll floor. Clearing those fields was rejected because a blank lamp reads
-   as "no CI". A successful poll on another account rebuilds the rows from
-   its dataset; a poll with no account key never does."
-3. Consider the reviewer's first follow-up before or right after the merge:
-   `start_account_rebuild`'s spawn branch has no test, and removing its
-   `account_rebuild_due = false` would loop rebuilds forever with no failing
-   test. A small `fz-small` or worker task with one `#[tokio::test]`.
-
-If he asks for a different look, it is a worker fix cycle in the same
-worktree plus a re-review, then the above.
+FZ-09d (#60) merged at 20:10 as `5b25efb` after Andreas accepted the look;
+docs in `51279e8`; worktree and local branch removed. One follow-up from its
+review is worth a small task soon: `start_account_rebuild`'s spawn branch
+has no test, and removing its `account_rebuild_due = false` would loop
+rebuilds forever with no failing test; one `#[tokio::test]` calling it with
+`loading == false` and asserting the flag is cleared and `loading` is set
+closes it. Not ticketed; ask Andreas before creating the issue.
 
 **Rulings on #60** (all recorded there): Andreas allowed the fixtures of two
 FZ-10b tests to land a poll that returns the `Pending` row (option A,
@@ -162,6 +140,7 @@ for this ticket, recorded on #58. The body's forced-edit list also misses the
 
 | Ticket | Issue | Ticket commit | Merge | What landed |
 |---|---|---|---|---|
+| FZ-09d | #60 | `06cd63e` | `5b25efb` | A set of remote keys on `App` (`not_in_last_poll`) filled by an applied successful poll for carrier rows it did not return, emptied as they return, cleared by every rebuild from one dataset; such rows draw dimmed (`OVERLAY`) in list, compact grid and detail pane with a "GitHub data from an earlier refresh" line, their `Pending` lamp holds still, and they no longer hold the 15 s floor; a successful poll whose account key differs from the rows' (or arrives while unknown) rebuilds through `LoadKind::FromMemory` with no fetch. Andreas accepted the look ("fz09d is fine"). Two FZ-10b fixtures changed under his option A. Docs: amendment 11 in force, `CLAUDE.md` carrier paragraph. Closes M1's implementation |
 | FZ-10c | #49 | `4cc3bfc`, `3fd1236` | `862b36c` | `ui::github_segment` draws the held-back states of design 4.6 (rate limited until HH:MM; paused until HH:MM, allowance nearly used; slowed, allowance low) with short forms; `access refused`; "Already refreshing"; the load-error panel's hint on the typed flag and a corrected key hint; `App.github_poll_secs` and `github_poll_cost` copied from `Config` at startup, the three predicates as `App` methods shared by scheduler and header; README section. Andreas accepted every string ("all fine", about 18:55); amendment 6 is final. The FZ-10 series is complete. Follow-ups in the closing comment, notably the `,` row for `github_poll_interval` marked Live but never applied |
 | FZ-10b | #48 | `93f4c8e`, `24df0d7` | `b5694c9` | `ApiBudget` (reset anchored on arrival, 4.1 reading order, 10% reserve, `Every` or `Paused` pacing capped at the resume) and `GithubBackoff` (step 1 the interval, doubling from step 2 to a jittered 600 s cap; primary limits wait for the reset, secondary for `retry-after`; `Offline` and `Auth` transparent) on `App`; readings observed on every answer, give-up and load; `R` ignored during a load (A7); under a known limit `r` sweeps and `R` rebuilds from memory as `LoadKind::FromMemory` (A6); `LoadError.budget` boxed. 34 scenario tests plus 5 from review. Interim footer words until FZ-10c: "GitHub rate limited, resumes at HH:MM", "Reloading without GitHub…", "Rebuilt locally", "A refresh is already running". Docs in `981823a`: amendments 1, 2, 5 in force, 6 provisional; `CLAUDE.md` tick and `r`/`R` text. Three review rounds, one CI fix |
 | FZ-09b | #58 | `75033dd` | `8cfe187` | `totalCount` and `hasNextPage` on the three connections (free: cost 3, 1030 nodes before and after); a `Coverage` record in `FetchMeta`, built in `split_viewer`; `github::coverage_note` draws `(fetched 50 of 95 repos)`, `(fetched 12 of 15 org repos)`, `(fetched 8 of 10 orgs)` at the end of the header, `?` for a pre-change cache; `LoadResult.meta` stored only when `Some`, `App.github_meta` replaced by a successful poll. Three cache-served assertions narrowed under Andreas's one-time option A release; seven compile-forced `meta: None,`. Contract edits in `345717a` (freshness amendment 10, `CLAUDE.md` R2 fact). Words provisional until he has seen them. Follow-ups in the closing comment, notably: the header is not rebuilt by a poll alone (coordinator ruling), left for FZ-09d |
@@ -246,11 +225,13 @@ written into the repository.
 
 ## State of `main`
 
-`main` is at the merge of FZ-10c, `862b36c`, plus docs commits, equal to
-`origin/main`, CI green, 1033 tests passing and 1 ignored (1050 with FZ-09d).
-Since 2026-10-03 it gained #68 (mouse capture reclaimed after a child
-process), FZ-09b (the coverage note), FZ-10b (pacing and backoff) and FZ-10c
-(the header's polling states), all with Andreas's words accepted. **The first
+`main` is at the merge of FZ-09d, `5b25efb`, plus docs commits, equal to
+`origin/main`, CI green, 1050 tests passing and 1 ignored. Since 2026-10-03
+it gained #68 (mouse capture reclaimed after a child process), FZ-09b (the
+coverage note), FZ-10b (pacing and backoff), FZ-10c (the header's polling
+states) and FZ-09d (dimmed not-in-last-poll rows, the account rebuild), all
+with Andreas's words and look accepted. The local toolchain is rustc 1.99.0
+since 2026-10-09 20:05 (`rustup update`), the same as CI's. **The first
 launch of a build from this `main` changes the cache on disk** (FZ-09c): it
 paints from the old `github-50.json`, and the first successful poll writes
 `github-v2-github.com-<fingerprint>-50.json` beside it. The installed binary
@@ -326,26 +307,20 @@ Each issue holds its evidence.
 
 ## Worktrees
 
-Two exist besides the main checkout, under `.claude/worktrees/`. Every
+One exists besides the main checkout, under `.claude/worktrees/`. Every
 ticket worktree of a merged ticket (on 2026-10-09: `mouse`, `fz-09b`,
-`fz-10b`, `fz-10c`) is removed with its local branch; remote branches stay
-on GitHub.
+`fz-10b`, `fz-10c`, `fz-09d`) is removed with its local branch; remote
+branches stay on GitHub.
 
-- **`fz-09d`, branch `feat/fz-09d-not-covered-rows`:** clean, at the ticket
-  commit `06cd63e`, pushed, at Ready to integrate (see "Open" above). Keep
-  until merged.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked by
   Andreas until the repository goes public.
 
 ## Next step, and the order after it
 
-**Next step:** finish FZ-09d as the "Open" section above says, once Andreas
-has looked. It is the last implementation ticket of M1 and of the
-`src/main.rs` line; nothing else is Ready, and the standing scope has no
-other named ticket to dispatch.
-
-Then:
+**Next step:** nothing is dispatched or Ready, and the standing scope has
+no named ticket left: the `src/main.rs` line and M1's implementation are
+complete. The next lead's work is reasoning and checkpoints, with Andreas:
 
 1. **M1's exit evidence** ([release-plan.md](release-plan.md): deterministic
    regression scenarios pass; offline, incomplete and failed states remain
@@ -375,13 +350,13 @@ region when the assignment comment says so and the merges go one at a time.
 
 ## What waits on Andreas
 
-- **FZ-09d's look** (O4): the dimmed row, see "Open". Blocks that merge
-  only.
-- **Two yes/no items offered on 2026-10-09, unanswered:** an issue for the
-  follow-up where mouse capture stays on while the `o` shell runs (junk
-  mouse input in that shell; from #68's review), and whether to `rustup
-  update` so local clippy matches CI's 1.99.
-- Nothing else blocks the next step.
+- **One yes/no item offered on 2026-10-09, explained to him, unanswered:** an
+  issue for the follow-up where mouse capture stays on while the `o` shell
+  runs (junk mouse input in that shell; from #68's review). The `rustup
+  update` question is settled: he ran it.
+- **`cargo install --path .`** when he wants the day's work in the installed
+  binary (his; he said "i can install later").
+- Nothing blocks the next step.
 
 Answered on 2026-10-03:
 
@@ -540,8 +515,8 @@ O1 to O5 accepted (O1's words and look are his on the FZ-10c build); FZ-08
 
 ## Tickets that exist and wait
 
-- **Coverage and cache:** FZ-09d #60 at Ready to integrate (see "Open");
-  FZ-09e #61 stays not promoted. FZ-09a, b, c and f are done.
+- **Coverage and cache:** FZ-09a, b, c, d and f are done; FZ-09e #61 stays
+  not promoted.
 - **API budget:** FZ-10a, b and c are done.
 - **M3 regression:** #68 (mouse) done.
 - **M3:** FZ-13s #56, which waits for Andreas. FZ-13a to f, t and u and #64
@@ -642,10 +617,10 @@ O1 to O5 accepted (O1's words and look are his on the FZ-10c build); FZ-08
 
 ## How the days ran
 
-- **2026-10-09, 16:30 to about 20:00.** One lead session, one worker and one
+- **2026-10-09, 16:30 to 20:14.** One lead session, one worker and one
   reviewer at a time after the first hour (two workers for #68 and FZ-09b at
-  the start). Dispatched six tickets: #68, FZ-09b, FZ-10b, FZ-10c merged;
-  FZ-09d at Ready to integrate; nothing stopped half done. Owner decisions:
+  the start). Dispatched five tickets, all merged: #68, FZ-09b, FZ-10b,
+  FZ-10c, FZ-09d; nothing stopped half done. Owner decisions:
   five (option A on FZ-09b's three assertions, the FZ-10b match arm, FZ-10c's
   words "all fine", FZ-09d's two fixtures, and the #68 issue). Review
   outcomes: #68 and FZ-10c accepted first time; FZ-09b one fix cycle (one
