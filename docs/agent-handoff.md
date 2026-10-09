@@ -70,6 +70,26 @@ fz-coordinator`, session `99996af4-81d7-4c21-8b83-a46db044f56a`, pid 57964).
   already stopped, and no reviewer was running. Nothing was left at Ready to
   integrate and nothing was uncommitted in a ticket worktree.
 
+## In flight (2026-10-09)
+
+Dispatched 16:52 CEST after Andreas answered "sounds good to me" to the
+proposal to dispatch FZ-09b and to create and dispatch a mouse regression
+issue in the second slot. Both are `fz-worker` (`claude-opus-5-5`, medium),
+both from base `6d92be5`, both uncommitted until review. If this session
+dies, the worktrees hold whatever the workers wrote; a replacement lead
+reads `git -C <worktree> status --short` and the issue's last comment, and
+dispatches a reviewer or a fresh worker from there. Do not dispatch a second
+worker on either ticket while this session's process (pid 57964) is alive.
+
+| Ticket | Issue | Branch | Worktree | State |
+|---|---|---|---|---|
+| FZ-09b | #58 | `feat/fz-09b-coverage-facts` | `.claude/worktrees/fz-09b` | In progress, worker running |
+| Mouse drag and scroll | #68 (new, allowed 16:45) | `fix/mouse-drag-scroll` | `.claude/worktrees/mouse` | In progress, investigation running |
+
+Shared `src/main.rs`: FZ-09b owns the load and poll functions, #68 owns the
+mouse handler, the input arms, the terminal setup and `panel_rects`. Merges
+go one at a time with the combined check rerun.
+
 ## Authority and routing
 
 Andreas owns priorities, acceptance, what he installs and runs, tags and
