@@ -81,18 +81,19 @@ reads `git -C <worktree> status --short` and the issue's last comment, and
 dispatches a reviewer or a fresh worker from there. Do not dispatch a second
 worker on either ticket while this session's process (pid 57964) is alive.
 
-FZ-09b and #68 are both Done (table below). FZ-10b (#48) was dispatched at
-17:28 CEST: branch `feat/fz-10b-poll-pacing`, worktree
-`.claude/worktrees/fz-10b`, base `345717a`, `fz-worker`
-(`claude-opus-5-5`, medium), uncommitted until review. It owns `src/app.rs`
-and `src/main.rs` whole; nothing else runs beside it. **Rulings of 17:59**
+Nothing is in flight: FZ-09b, #68 and FZ-10b are Done (table below). The
+next step is FZ-10c (#49), see "Next step". **Rulings of 17:59 on FZ-10b**
 (recorded on #48): Andreas allowed one match arm,
 `LoadKind::FromMemory => LoadKind::FromMemory,`, in the existing test
 `the_ambiguity_line_wins_over_every_loads_own_message` ("B1, go for A");
 the coordinator allowed `src/github.rs` for the four-line `expect(dead_code)`
 removal on `poll_cost` only, and a compile-forced field on the `LoadError`
 literal in `a_launch_with_no_usable_cache_records_the_failed_attempt` under
-the standing exception.
+the standing exception. **CI's toolchain is ahead of the machine's:** CI runs
+`stable` (rustc 1.99.0 on 2026-10-09), the machine 1.96.1, and clippy's
+`result_large_err` fired only on CI (`LoadError` at 128 bytes; boxed to 80, as
+`FetchError.meta` is). A clean local clippy is weaker than CI's; wait for the
+branch run before merging, as the rule already says.
 
 **FZ-09b decision (Andreas, 17:08: "for fz-09b go with option A").** The
 worker stopped before writing code because the design (4.1, C2) carries
@@ -109,6 +110,7 @@ for this ticket, recorded on #58. The body's forced-edit list also misses the
 
 | Ticket | Issue | Ticket commit | Merge | What landed |
 |---|---|---|---|---|
+| FZ-10b | #48 | `93f4c8e`, `24df0d7` | `b5694c9` | `ApiBudget` (reset anchored on arrival, 4.1 reading order, 10% reserve, `Every` or `Paused` pacing capped at the resume) and `GithubBackoff` (step 1 the interval, doubling from step 2 to a jittered 600 s cap; primary limits wait for the reset, secondary for `retry-after`; `Offline` and `Auth` transparent) on `App`; readings observed on every answer, give-up and load; `R` ignored during a load (A7); under a known limit `r` sweeps and `R` rebuilds from memory as `LoadKind::FromMemory` (A6); `LoadError.budget` boxed. 34 scenario tests plus 5 from review. Interim footer words until FZ-10c: "GitHub rate limited, resumes at HH:MM", "Reloading without GitHub…", "Rebuilt locally", "A refresh is already running". Docs in `981823a`: amendments 1, 2, 5 in force, 6 provisional; `CLAUDE.md` tick and `r`/`R` text. Three review rounds, one CI fix |
 | FZ-09b | #58 | `75033dd` | `8cfe187` | `totalCount` and `hasNextPage` on the three connections (free: cost 3, 1030 nodes before and after); a `Coverage` record in `FetchMeta`, built in `split_viewer`; `github::coverage_note` draws `(fetched 50 of 95 repos)`, `(fetched 12 of 15 org repos)`, `(fetched 8 of 10 orgs)` at the end of the header, `?` for a pre-change cache; `LoadResult.meta` stored only when `Some`, `App.github_meta` replaced by a successful poll. Three cache-served assertions narrowed under Andreas's one-time option A release; seven compile-forced `meta: None,`. Contract edits in `345717a` (freshness amendment 10, `CLAUDE.md` R2 fact). Words provisional until he has seen them. Follow-ups in the closing comment, notably: the header is not rebuilt by a poll alone (coordinator ruling), left for FZ-09d |
 | Mouse drag and scroll | #68 | `b5254e4` | `5d917ea` | `reclaim_terminal` asks for the alternate screen and mouse capture together after lazygit, `$EDITOR` or the shell returns; the bug was there since the first commit, and showed after the first Enter or `e` of a session. Worktree and local branch removed. Follow-ups in the closing comment: capture stays on while the child runs (`DisableMouseCapture` is never sent) |
 
@@ -274,18 +276,20 @@ merged. Their remote branches stay on GitHub.
 
 ## Next step, and the order after it
 
-**Next step:** FZ-10b (#48), pace and back off GitHub polling, dispatched
-2026-10-09 17:28 CEST under the standing scope (see "In flight"). It owns
-`src/app.rs` and `src/main.rs` whole, so the second slot is empty while it
-runs. It must remove FZ-10a's `expect(dead_code)` on `poll_cost` with its
-first caller, and read the budget from `FetchMeta.budget`, which FZ-09b now
-stores on `App.github_meta` after a successful poll. Its interim status words
-hold until FZ-10c.
+**Next step:** FZ-10c (#49), show when GitHub polling is slowed, paused or
+rate limited. It settles the words FZ-10b left provisional (amendment 6 and
+owner item O1: the header's words for a slowed, paused or rate limited poll
+are Andreas's on the FZ-10c branch build, so this ticket stops at Ready to
+integrate for him unless he says the words are minor). It also owns the
+load-error panel's text ("r rebuilds from cache") and its word-matching for
+"rate limit" (design "Contradictions found"). Read the issue body before
+relying on this summary; record base, branch and worktree in an assignment
+comment and dispatch an `fz-worker`.
 
 Then:
 
 1. **The `src/main.rs` line**, one worker at a time, in the order ruled for
-   FZ-09 (C8): FZ-10c #49, FZ-09d #60. As
+   FZ-09 (C8): FZ-09d #60 after FZ-10c. As
    each FZ-09 ticket lands, amend `CLAUDE.md` and
    [freshness-contract.md](freshness-contract.md) as the coverage design's
    section 6 says (its rows for the `Pending` floor and the
