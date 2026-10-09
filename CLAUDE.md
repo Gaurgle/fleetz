@@ -261,7 +261,10 @@ at the 30s interval against a 5000/hour budget. One fleetz idled at 62% of the
 account and four exhausted it; sized to what it retrieves (`MAX_ORGS`,
 `ORG_REPO_LIMIT`) the identical result costs 3. Measure with `rateLimit { cost
 nodeCount }` before and after: two comments in `github.rs` disagreed about this
-for months and the optimistic one was wrong.
+for months and the optimistic one was wrong. `totalCount` and `pageInfo` on a
+connection the query already pages are free (measured for FZ-09b: cost 3 and
+1030 nodes with and without them), which is how the coverage note knows
+"50 of 95" at no cost.
 
 The first poll has no previous dataset to diff, and fetching every repo past
 the cutoff cost ~0.8s each. It uses a disk baseline: `FETCH_HEAD`'s mtime is

@@ -93,7 +93,9 @@ before generation, so the default Auto window keeps every repo. Two side
 effects of the fixture are visible on screen and in the numbers:
 
 - The large payload holds 65 repos against `repo_limit = 50`, so its header
-  carries "(window exceeds fetched repos, repo_limit=50)".
+  carries a coverage note: "(window exceeds fetched repos, repo_limit=50)"
+  before FZ-09b, "(fetched 50 of ? repos)" after it, since the fixture
+  predates the coverage fields.
 - A PENDING repo is present in both fleets, so a watch-mode run polls GitHub
   at the 15 s floor (`github_poll_secs`) instead of every 30 s.
 

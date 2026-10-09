@@ -150,6 +150,8 @@ integrate. Everything sits in one header segment where `⚠ github` is today.
   CI lamps, a `Pending` lamp that stops blinking) is raised under FZ-13.
 - With watch off and a successful launch poll, the header shows nothing more:
   the watch indicator already says the dashboard is not polling.
+- Coverage is a separate note at the end of the header, not part of this
+  segment: see [amendment 10](#amendments).
 
 ## File ownership for FZ-03
 
@@ -280,6 +282,25 @@ follow with FZ-09b and FZ-09d and are added here when those land.
    The second row is owner item O12, and Andreas accepted it for the
    signed-out case too on 2026-10-03 ("Merge as it is"): before FZ-09c a
    signed-out `R` rebuilt from the shared file.
+
+Amendment 10 took effect with FZ-09b on 2026-10-09.
+
+10. **What the user sees: a coverage note (O3).** The payload describes its
+    own coverage (`totalCount` and `hasNextPage` on the viewer repos, the org
+    list and each org's repos, with each page's oldest push as its boundary),
+    and the record travels with the dataset: it is set by a load, a
+    cache-served launch included, replaced by a successful poll and kept by a
+    failed one (rule 4: a failed poll changes no coverage mark). The header
+    ends with `(fetched 50 of 95 repos)`, `(fetched 12 of 15 org repos)` or
+    `(fetched 8 of 10 orgs)`, joined with commas when several apply, exactly
+    when the window reaches past a page that has more: a cut-off viewer or org
+    page whose boundary the cutoff is older than, or no cutoff; a cut-off org
+    list always. A payload from before the fields were asked for has unknown
+    totals, shown as `?`, and falls back to the old `window_exceeds_dataset`
+    rule on the viewer page alone. The note is rebuilt by a load or a window
+    apply, as before; a poll alone does not redraw it. Coverage is a counter
+    (section "Status vocabulary" of `CLAUDE.md`). The words are provisional
+    until Andreas has seen them on `main`.
 
 ## Not in this contract
 
