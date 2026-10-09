@@ -45,7 +45,7 @@ release: it checks the tag against `Cargo.toml`, runs fmt, clippy and tests,
 and writes commit-based notes with `scripts/release-notes.sh`. PRs are optional.
 
 The event loop is channel-driven and async: the TUI opens instantly, GitHub and
-local discovery load in the background (`AppEvent`), a 250ms tick drives spinner
+local discovery load in the background (`AppEvent`), a 100ms tick drives spinner
 and blink, watch mode re-sweeps on an interval.
 
 ## Where things are written down
@@ -289,10 +289,13 @@ re-add `-p` to the key (`cache.rs`), which decides whether PR data is
 *drawn*, not whether it is fetched.
 
 **Never widen the GitHub fetch without checking the cache.** Results are cached
-on disk with a TTL (`cache.rs`, `cache_ttl`); `r` rebuilds from cache, `R`
-bypasses it. A field with no `first:` is free, which is how the contribution
-calendars ride along at no cost; one with a `first:` is not, and a request
-never is.
+on disk (`cache.rs`); `r` is a local sweep plus a poll, `R` a full reload that
+bypasses the cache, and under a known rate limit both send nothing (`r` sweeps,
+`R` rebuilds from the dataset in memory; FZ-10b, `docs/api-budget-design.md`
+4.3). Polls pace themselves on the budget headers and back off on failures
+(`ApiBudget`, `GithubBackoff` in `app.rs`); never add an unconditional retry.
+A field with no `first:` is free, which is how the contribution calendars ride
+along at no cost; one with a `first:` is not, and a request never is.
 
 **GitHub caches `contributionsCollection` against the `from` date alone**, so
 the `recent` window rotates its `from` and must keep doing so: a fixed one

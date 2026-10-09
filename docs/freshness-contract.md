@@ -251,8 +251,11 @@ the code.
 Accepted by Andreas on 2026-10-02 with the owner items of
 [coverage-cache-design.md](coverage-cache-design.md), whose section 6 goes
 through every rule, changed or not. Amendments 7 to 9 took effect with FZ-09c
-on 2026-10-03. The changes for coverage marks and for an account change
-follow with FZ-09b and FZ-09d and are added here when those land.
+on 2026-10-03. Amendments 1, 2 and 5 took effect with FZ-10b on 2026-10-09,
+and amendment 6 with it in provisional words ("GitHub rate limited, resumes
+at HH:MM"; "Rebuilt locally" in place of "Reloaded") until FZ-10c settles
+them. The changes for an account change follow with FZ-09d and are added here
+when it lands.
 
 7. **Rule 2: the fallback is this credential's file.** A fallback after a
    failed attempt reads only the cache file keyed to the credential that made
