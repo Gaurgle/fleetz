@@ -85,7 +85,14 @@ FZ-09b and #68 are both Done (table below). FZ-10b (#48) was dispatched at
 17:28 CEST: branch `feat/fz-10b-poll-pacing`, worktree
 `.claude/worktrees/fz-10b`, base `345717a`, `fz-worker`
 (`claude-opus-5-5`, medium), uncommitted until review. It owns `src/app.rs`
-and `src/main.rs` whole; nothing else runs beside it.
+and `src/main.rs` whole; nothing else runs beside it. **Rulings of 17:59**
+(recorded on #48): Andreas allowed one match arm,
+`LoadKind::FromMemory => LoadKind::FromMemory,`, in the existing test
+`the_ambiguity_line_wins_over_every_loads_own_message` ("B1, go for A");
+the coordinator allowed `src/github.rs` for the four-line `expect(dead_code)`
+removal on `poll_cost` only, and a compile-forced field on the `LoadError`
+literal in `a_launch_with_no_usable_cache_records_the_failed_attempt` under
+the standing exception.
 
 **FZ-09b decision (Andreas, 17:08: "for fz-09b go with option A").** The
 worker stopped before writing code because the design (4.1, C2) carries
