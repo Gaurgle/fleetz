@@ -14,11 +14,24 @@ what to do next.
 
 ## Baton
 
-**Released** 2026-10-03 18:27 CEST by the session above, which held it from
-2026-10-03 17:02. No lead is active. The next lead records its own session
-and takeover time here, after confirming with Andreas that this session has
-ended.
+**Held** since 2026-10-09 16:30 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `99996af4-81d7-4c21-8b83-a46db044f56a`, pid 57964).
 
+- **How it was taken (2026-10-09).** Andreas wrote at 16:30: "how are we
+  soing on this? can you pick up the baton and keep going from hte
+  handoever?" Evidence that no lead was active: the baton was released on
+  2026-10-03 18:27 and `main` moved only by two docs commits of Andreas's own
+  on 2026-10-05 (`208b964`, `d2fdeaf`); `main` equals `origin/main` at
+  `d2fdeaf` with CI green; the only worktree is the parked `issue-45`; the
+  board shows nothing In progress or in Review; no other
+  `claude --agent fz-coordinator` process runs. The other `claude` processes
+  open on this machine are the session of 2026-10-01 13:54 in this repository
+  (retired by Andreas on 2026-10-02), one in `~/repos` (the advisor) and one
+  in `~/notez`. No Codex lead session was found. The session told Andreas in
+  its first report that it reads "keep going from the handover" as the
+  one-time confirmation of the standing scope below, so he can correct it.
+- **Released before that** 2026-10-03 18:27 CEST by session `9f425986`, which
+  held it from 2026-10-03 17:02.
 - **How it ended (2026-10-03).** At about 18:22 Andreas wrote: "we can look
   for a good place to stop for the day now. let all processes and workers
   finish what they are doing, then commit and push. update handover as
