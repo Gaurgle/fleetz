@@ -81,11 +81,22 @@ reads `git -C <worktree> status --short` and the issue's last comment, and
 dispatches a reviewer or a fresh worker from there. Do not dispatch a second
 worker on either ticket while this session's process (pid 57964) is alive.
 
-FZ-09b, #68 and FZ-10b are Done (table below). **FZ-10c (#49) was dispatched
-at 18:30 CEST:** branch `feat/fz-10c-poll-state-words`, worktree
-`.claude/worktrees/fz-10c`, base `981823a`, `fz-worker` (`claude-opus-5-5`,
-medium), uncommitted until review. It stops at Ready to integrate for
-Andreas's look at the words (O1). Nothing runs beside it. **Rulings of 17:59 on FZ-10b**
+FZ-09b, #68 and FZ-10b are Done (table below). **FZ-10c (#49) is at Ready
+to integrate, waiting on Andreas's look at the words (O1):** branch
+`feat/fz-10c-poll-state-words`, worktree `.claude/worktrees/fz-10c`, base
+`981823a`, ticket commit `4cc3bfc`, reviewer accepted diff `4b50e66`, CI
+green on the branch, combined checks clean (1033 tests; `main` had no code
+change since the base). The strings for him to settle, and the follow-ups,
+are in the Ready to integrate comment on #49. When he answers: reword only
+what he asks (a worker fix cycle plus re-review if any string changes),
+merge under the safe-merge rule, then the coordinator's docs: freshness
+contract amendment 6 becomes final with his words; `CLAUDE.md`'s docs index
+needs no change. No worker is running. **Coordinator ruling on #49** (the
+header needs the poll cost and the configured interval, which only `Config`
+holds): both are copied onto `App` at startup beside `contrib_author`, and
+the three predicates (`github_pace`, `budget_slowed`, `github_limit_until`)
+are `App` methods taking them as parameters, so the scheduler and the header
+share one definition and `ui::render`'s signature stays. **Rulings of 17:59 on FZ-10b**
 (recorded on #48): Andreas allowed one match arm,
 `LoadKind::FromMemory => LoadKind::FromMemory,`, in the existing test
 `the_ambiguity_line_wins_over_every_loads_own_message` ("B1, go for A");
