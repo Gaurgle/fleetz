@@ -37,21 +37,49 @@ filesystem work, and a spinner in the header marks the load until repos land.
 The header says when the GitHub data (CI, PRs, the contribution strip) is not
 current, in one segment beside the watch eye:
 
-- nothing, when the last request to GitHub succeeded;
+- nothing, when the last request to GitHub succeeded and polling keeps its
+  interval;
 - `github cached 14:02` (dim), when launch painted from the disk cache and the
   request that confirms it is still on its way. One request follows a cached
   launch even with watch off;
 - `⚠ github offline, as of 14:02` (orange), when the last request failed. The
-  word says how (`offline`, `rate limited`, `http error`, `api error`,
-  `not signed in`, `bad response`, `timed out`) and the time is when the data
-  on screen left GitHub, written like the `swept` time. A cache whose age
-  cannot be read says `age unknown` instead.
+  word says how (`offline`, `rate limited`, `server error`, `access refused`,
+  `http error`, `api error`, `not signed in`, `bad response`, `timed out`)
+  and the time is when the data on screen left GitHub, written like the
+  `swept` time. A cache whose age cannot be read says `age unknown` instead.
+  While a rate limit lasts it also says when polling resumes:
+  `⚠ github rate limited until 15:00, as of 14:02`;
+- `github slowed, allowance low` (dim), with watch on, when the account's
+  hourly GitHub allowance is running low and polls come further apart than
+  `github_poll_interval`;
+- `github paused until 15:00, allowance nearly used` (orange), with watch on,
+  when the allowance is nearly gone and no automatic poll goes before it
+  resets.
 
 A failed request never blanks or rewinds what is on screen and never touches
-the cache. With watch on, the next one comes a full `github_poll_interval`
-later; with watch off, none follows on its own, and `r` retries at once. The
-segment clears on the first success. A narrow header shortens it to
-`⚠ github` or `github cached` rather than dropping it.
+the cache. With watch on, the first retry comes one `github_poll_interval`
+later; after that the wait doubles with each failure in a row, up to about ten
+minutes (8 to 12, randomised so several fleetz windows do not retry
+together). Offline and signed out keep retrying every interval, so the
+dashboard recovers as soon as the network or the sign-in is back. With watch
+off, none follows on its own, and `r` retries at once. The segment clears on
+the first success. A narrow header shortens it to `⚠ github`,
+`github cached`, `github slowed` or `github paused` rather than dropping it.
+
+fleetz also reads GitHub's hourly allowance off every answer and spaces its
+automatic polls to last until the allowance resets, leaving a tenth of it for
+your own `r` and `R` and other tools on the same account. While the
+allowance is plentiful this changes nothing; when it runs low polls come
+further apart, and near the end they stop until the reset. A rate limit
+(GitHub refused with a 403, a 429 or a `RATE_LIMITED` error) holds polling
+until GitHub says it lifts.
+
+While GitHub is known to be rate limiting, `r` and `R` send nothing, since a
+refused request can make GitHub hold the limit longer: `r` re-checks the local
+repos only and `R` rescans your folders against the GitHub data already on
+screen. Both say `GitHub rate limited, resumes at 15:00` in the status line.
+`R` pressed while a reload is running, or under a limit while a GitHub
+refresh is still out, does nothing and says `Already refreshing`.
 
 The saved copy of GitHub's answer lives in the `fleetz` folder of your
 platform cache directory (`~/Library/Caches/fleetz` on macOS,
@@ -204,8 +232,8 @@ in the header instead.
 | `<` / `>` | Narrow / widen the repo list |
 | `+` / `-` | Grow / shrink the inspector pane |
 | `=` | Reset both panes to their default sizes |
-| `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates, and fetch the repos whose remote moved. No rediscovery. A failed poll keeps the rows as they are and marks the header; failed fetches are marked on their repos and counted in the status line |
-| `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear. If GitHub cannot be reached it rebuilds from the signed-in account's saved copy and says `Reloaded from cache: GitHub offline` (or why) instead of `Reloaded`; with no saved copy for that account the reload fails and says so, rather than showing another account's data |
+| `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates, and fetch the repos whose remote moved. No rediscovery. A failed poll keeps the rows as they are and marks the header; failed fetches are marked on their repos and counted in the status line. Goes at once even while automatic polling is slowed or backing off; under a rate limit it re-checks the local repos only and says when GitHub resumes |
+| `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear. If GitHub cannot be reached it rebuilds from the signed-in account's saved copy and says `Reloaded from cache: GitHub offline` (or why) instead of `Reloaded`; with no saved copy for that account the reload fails and says so, rather than showing another account's data. Under a rate limit it rescans your folders against the GitHub data already on screen, sends nothing, and says `Rebuilt locally: GitHub rate limited, resumes at 15:00`. Pressed while a reload is running, or under a rate limit while a GitHub refresh is still out, it says `Already refreshing` and does nothing |
 | `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub. A fetch that fails is marked on its repo, not in the status line. While it is on, a red eye (`󰈈 watch`) in the header pulses between two shades so the dashboard says it is live without anything moving; off, it is a grey crossed-out eye (`󰈉 watch`). With `icons = "plain"` the eye is `o watch` on and `- watch` off |
 | `?` | Toggle help overlay |
 | `Esc` | Close search or help |
@@ -290,8 +318,10 @@ refresh_interval = 60
 # machine, someone else pushed) gets a targeted fetch straight away rather
 # than waiting for the next blanket sweep. Automatically tightened to 15s
 # while a CI run is in flight, forced immediately after a local push is
-# detected, and floored at 15s. While polls are failing it is this interval
-# exactly: no 15s floor and no push shortcut.
+# detected, and floored at 15s. While polls are failing it is at least this
+# interval, doubling per failure in a row up to about ten minutes, with no
+# 15s floor and no push shortcut. A low hourly allowance or a rate limit
+# stretches it too.
 github_poll_interval = 30
 
 # GitHub API cache TTL in seconds. Launch does not wait on this: it paints

@@ -86,9 +86,10 @@ pub fn github_failure_label(failure: &crate::github::Failure) -> &'static str {
         FailureKind::Auth => "not signed in",
         FailureKind::Malformed => "bad response",
         FailureKind::TimedOut => "timed out",
-        // Provisional words: FZ-10c settles them with the owner (O1).
+        // A 5xx answer: GitHub's side, not the network's.
         FailureKind::Server => "server error",
-        FailureKind::Refused => "refused",
+        // A 401, or a 403 that is not a limit: the token or its permissions.
+        FailureKind::Refused => "access refused",
     }
 }
 
@@ -172,15 +173,11 @@ pub fn github_freshness_segment(
 ) -> Option<(String, String, Color)> {
     use crate::app::{DataTime, Outcome};
     match (&freshness.outcome, freshness.data_time) {
-        (Outcome::Failed(failure), data_time) => {
-            let label = github_failure_label(failure);
-            let long = match data_time {
-                DataTime::At(t) => format!(" ⚠ github {label}, as of {} ", swept_label(t, now)),
-                DataTime::Unknown => format!(" ⚠ github {label}, age unknown "),
-                DataTime::NoData => format!(" ⚠ github {label} "),
-            };
-            Some((long, " ⚠ github ".to_string(), colors::PEACH))
-        }
+        (Outcome::Failed(failure), data_time) => Some(failed_segment(
+            github_failure_label(failure),
+            data_time,
+            now,
+        )),
         (Outcome::NotAttempted, DataTime::At(t)) => Some((
             format!(" github cached {} ", swept_label(t, now)),
             " github cached ".to_string(),
@@ -193,6 +190,82 @@ pub fn github_freshness_segment(
         )),
         (Outcome::NotAttempted, DataTime::NoData) | (Outcome::Success, _) => None,
     }
+}
+
+/// The stale form: the failure's words and the age of the data on screen.
+fn failed_segment(
+    label: &str,
+    data_time: crate::app::DataTime,
+    now: chrono::DateTime<chrono::Local>,
+) -> (String, String, Color) {
+    use crate::app::DataTime;
+    let long = match data_time {
+        DataTime::At(t) => format!(" ⚠ github {label}, as of {} ", swept_label(t, now)),
+        DataTime::Unknown => format!(" ⚠ github {label}, age unknown "),
+        DataTime::NoData => format!(" ⚠ github {label} "),
+    };
+    (long, " ⚠ github ".to_string(), colors::PEACH)
+}
+
+/// The header's whole GitHub segment: `github_freshness_segment`, plus what
+/// is holding polling back (`docs/api-budget-design.md` 4.6).
+///
+/// - Rate limited: the failure form with when polling resumes, while the
+///   limit lasts, with watch on or off, since `r` and `R` wait for it too.
+/// - Paused at the reserve, or with too little left for one poll: until the
+///   reset. `PEACH` like a failure, without its `⚠`: nothing failed, but
+///   the data will age until then.
+/// - Slowed: the pace spaces polls past the configured interval. Dim, like
+///   `cached`: the dashboard still updates, only less often.
+/// - Backing off after failures: nothing new, the failure form already says
+///   it failed and how old the data is.
+///
+/// Paused and slowed describe automatic polls, so only under watch: with
+/// watch off the eye already says nothing polls. No remaining-allowance
+/// number: it says nothing actionable.
+pub fn github_segment(
+    app: &App,
+    now: chrono::DateTime<chrono::Local>,
+) -> Option<(String, String, Color)> {
+    use crate::app::{Outcome, Pace};
+    let freshness = &app.github_freshness;
+    let (poll_secs, poll_cost) = (app.github_poll_secs, app.github_poll_cost);
+    if let Outcome::Failed(failure) = &freshness.outcome {
+        if failure.rate_limited
+            && let Some(until) = app.github_limit_until(poll_secs, poll_cost, now)
+        {
+            let label = format!(
+                "{} until {}",
+                github_failure_label(failure),
+                swept_label(until, now)
+            );
+            return Some(failed_segment(&label, freshness.data_time, now));
+        }
+        return github_freshness_segment(freshness, now);
+    }
+    if app.watch_mode {
+        match app.github_pace(poll_cost) {
+            Pace::Paused { until } if until > now => {
+                return Some((
+                    format!(
+                        " github paused until {}, allowance nearly used ",
+                        swept_label(until, now)
+                    ),
+                    " github paused ".to_string(),
+                    colors::PEACH,
+                ));
+            }
+            Pace::Every(secs) if secs > poll_secs => {
+                return Some((
+                    " github slowed, allowance low ".to_string(),
+                    " github slowed ".to_string(),
+                    colors::OVERLAY,
+                ));
+            }
+            _ => {}
+        }
+    }
+    github_freshness_segment(freshness, now)
 }
 
 /// Refresh intervals that must elapse before the timestamp reads as overdue.
@@ -839,13 +912,19 @@ fn render_load_error(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(Span::styled(reason, Style::default().fg(colors::TEXT))),
         Line::from(""),
         Line::from(Span::styled(
-            "R retries against GitHub, r rebuilds from cache",
+            "R reloads from GitHub, r re-checks local repos and polls GitHub",
             Style::default().fg(colors::OVERLAY),
         )),
     ];
     // Rate limits are the common way this happens and they clear on their own,
     // which is worth saying: the reflex otherwise is to go looking for a bug.
-    if reason.contains("rate limit") || reason.contains("RATE_LIMIT") {
+    // The typed flag catches a 403 or 429 limit, whose message names only the
+    // status; the word match stays for a message with no attempt behind it.
+    let typed_limit = matches!(
+        &app.github_freshness.outcome,
+        crate::app::Outcome::Failed(failure) if failure.rate_limited
+    );
+    if typed_limit || reason.contains("rate limit") || reason.contains("RATE_LIMIT") {
         lines.push(Line::from(Span::styled(
             "GitHub rate limits reset hourly; this clears on its own.",
             Style::default().fg(colors::OVERLAY),
@@ -946,8 +1025,8 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     // Never dropped by the fit loop, for the same reason `loading` is not:
     // while it lasts it is the most important thing on the line. A narrow
     // header gets the short form instead. Wording and colours live in
-    // `github_freshness_segment`.
-    let gh_segment = github_freshness_segment(&app.github_freshness, chrono::Local::now());
+    // `github_segment`.
+    let gh_segment = github_segment(app, chrono::Local::now());
     // Persistent indicator so the `w` toggle's state is visible at a glance,
     // not just in the transient status message when it flips.
     //
@@ -1811,6 +1890,118 @@ mod tests {
         assert_eq!(long, " ⚠ github rate limited, age unknown ");
     }
 
+    /// A jitter that draws nothing, so a resume is the reset to the second.
+    struct NoJitter;
+
+    impl crate::app::Jitter for NoJitter {
+        fn backoff_factor(&mut self) -> f64 {
+            1.0
+        }
+        fn resume_secs(&mut self) -> i64 {
+            0
+        }
+    }
+
+    /// An app watching GitHub whose last good data is from 14:02, with the
+    /// default interval (30 s) and cost (3 points).
+    fn polled_app() -> crate::app::App {
+        let mut app = crate::app::App::new(Vec::new(), String::new(), 120, 40);
+        app.jitter = Box::new(NoJitter);
+        app.watch_mode = true;
+        app.github_freshness.succeeded(at(2026, 10, 1, 14, 2));
+        app
+    }
+
+    /// The poll at 14:10 answered with `remaining` of 5000 points left, the
+    /// window resetting at 15:00.
+    fn polled_with(app: &mut crate::app::App, remaining: u32) {
+        let arrival = at(2026, 10, 1, 14, 10);
+        let reading = crate::github::BudgetReading {
+            limit: 5000,
+            remaining,
+            used: 5000 - remaining,
+            reset: at(2026, 10, 1, 15, 0).timestamp(),
+            date: Some(arrival.with_timezone(&chrono::Utc)),
+            token_id: "t".to_string(),
+        };
+        app.observe_budget(Some(&reading), true, arrival);
+    }
+
+    /// FZ-10c, 4.6. Rate limited: today's segment, with when polling resumes.
+    #[test]
+    fn a_rate_limited_header_says_when_polling_resumes() {
+        let mut app = polled_app();
+        polled_with(&mut app, 0);
+        let refused = crate::github::Failure {
+            rate_limited: true,
+            limit: Some(crate::github::RateLimit::Primary),
+            ..crate::github::Failure::new(crate::github::FailureKind::Http, "HTTP 403")
+        };
+        app.github_attempt_failed(&refused, at(2026, 10, 1, 14, 10));
+        app.github_freshness
+            .failed(refused, at(2026, 10, 1, 14, 10));
+        let (long, short, color) = github_segment(&app, at(2026, 10, 1, 14, 20)).unwrap();
+        assert_eq!(long, " ⚠ github rate limited until 15:00, as of 14:02 ");
+        assert_eq!(short, " ⚠ github ");
+        assert_eq!(color, colors::PEACH);
+        // Once the limit has passed the time goes; the failure stays until a
+        // poll succeeds.
+        let (long, _, _) = github_segment(&app, at(2026, 10, 1, 15, 1)).unwrap();
+        assert_eq!(long, " ⚠ github rate limited, as of 14:02 ");
+    }
+
+    /// FZ-10c, 4.6. Paused at the reserve: polls succeed, but none goes again
+    /// before the reset. Watch off has no polling to pause, and says nothing.
+    #[test]
+    fn a_paused_header_says_until_when_and_why() {
+        let mut app = polled_app();
+        polled_with(&mut app, 400);
+        app.github_freshness.succeeded(at(2026, 10, 1, 14, 10));
+        let (long, short, color) = github_segment(&app, at(2026, 10, 1, 14, 20)).unwrap();
+        assert_eq!(long, " github paused until 15:00, allowance nearly used ");
+        assert_eq!(short, " github paused ");
+        assert_eq!(color, colors::PEACH);
+        assert_eq!(github_segment(&app, at(2026, 10, 1, 15, 0)), None);
+        app.watch_mode = false;
+        assert_eq!(github_segment(&app, at(2026, 10, 1, 14, 20)), None);
+    }
+
+    /// FZ-10c, 4.6. Slowed: 100 points above the reserve over 50 minutes
+    /// spaces 3-point polls 90 s apart, past the 30 s interval. Plenty left
+    /// says nothing.
+    #[test]
+    fn a_slowed_header_says_the_allowance_is_low() {
+        let mut app = polled_app();
+        polled_with(&mut app, 600);
+        app.github_freshness.succeeded(at(2026, 10, 1, 14, 10));
+        let (long, short, color) = github_segment(&app, at(2026, 10, 1, 14, 20)).unwrap();
+        assert_eq!(long, " github slowed, allowance low ");
+        assert_eq!(short, " github slowed ");
+        assert_eq!(color, colors::OVERLAY);
+
+        let mut healthy = polled_app();
+        polled_with(&mut healthy, 4000);
+        healthy.github_freshness.succeeded(at(2026, 10, 1, 14, 10));
+        assert_eq!(github_segment(&healthy, at(2026, 10, 1, 14, 20)), None);
+    }
+
+    /// FZ-10c, 4.6. Backing off after failures in a row adds nothing: the
+    /// segment already says it failed and how old the data is.
+    #[test]
+    fn a_backing_off_header_keeps_the_failure_and_its_age() {
+        let mut app = polled_app();
+        polled_with(&mut app, 4000);
+        for minute in [10, 11, 13] {
+            let now = at(2026, 10, 1, 14, minute);
+            let failed = failure(crate::github::FailureKind::Server, "HTTP 502");
+            app.github_attempt_failed(&failed, now);
+            app.github_freshness.failed(failed, now);
+        }
+        let (long, _, color) = github_segment(&app, at(2026, 10, 1, 14, 14)).unwrap();
+        assert_eq!(long, " ⚠ github server error, as of 14:02 ");
+        assert_eq!(color, colors::PEACH);
+    }
+
     /// A cache-served launch, before its attempt lands: quiet, and dated the
     /// way the `swept` label is, so yesterday's cache carries its date.
     #[test]
@@ -2157,6 +2348,49 @@ mod tests {
             !other.contains("clears on its own"),
             "wrong advice:\n{other}"
         );
+    }
+
+    /// FZ-10c. A 403 or 429 limit is `Http`, and its message is a status line
+    /// and a code with no "rate limit" in it, so the word match alone missed
+    /// it. The typed flag the fetch layer set decides.
+    #[test]
+    fn an_http_rate_limit_load_says_it_clears_on_its_own() {
+        use crate::github::{Failure, FailureKind, RateLimit};
+        let message = "GitHub answered HTTP 403 Forbidden";
+        let out = screen(80, 24, |app| {
+            let limited = Failure {
+                rate_limited: true,
+                limit: Some(RateLimit::Primary),
+                ..Failure::new(FailureKind::Http, message)
+            };
+            app.github_freshness.failed(limited, at(2026, 10, 9, 14, 2));
+            app.load_error = Some(message.to_string());
+        });
+        assert!(out.contains("clears on its own"), "no reassurance:\n{out}");
+        // The same message without the flag is an ordinary refusal.
+        let other = screen(80, 24, |app| {
+            app.github_freshness.failed(
+                Failure::new(FailureKind::Refused, message),
+                at(2026, 10, 9, 14, 2),
+            );
+            app.load_error = Some(message.to_string());
+        });
+        assert!(
+            !other.contains("clears on its own"),
+            "wrong advice:\n{other}"
+        );
+    }
+
+    /// FZ-10c. The panel said `r` rebuilds from cache; `r` sweeps the local
+    /// repos and polls GitHub, and `R` is the full reload.
+    #[test]
+    fn the_load_error_panel_names_what_each_key_does() {
+        let out = screen(100, 24, |app| {
+            app.load_error = Some("GitHub API request failed: dns error".to_string());
+        });
+        assert!(!out.contains("rebuilds from cache"), "stale hint:\n{out}");
+        assert!(out.contains("R reloads"), "no R hint:\n{out}");
+        assert!(out.contains("r re-checks"), "no r hint:\n{out}");
     }
 
     /// The clean case: nothing failed, so nothing is claimed.

@@ -390,6 +390,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(app::DEFAULT_CONTRIBUTIONS),
     ));
     app.contrib_author = config.contributions_author.clone();
+    app.github_poll_secs = configured_poll_secs(&config);
+    app.github_poll_cost = github::poll_cost(config.repo_limit);
     app.contrib_cell = config
         .contributions_cell_size
         .as_deref()
@@ -2045,34 +2047,17 @@ fn github_poll_due(
     // change with nothing `Pending` yet to notice. Not while polls fail, where
     // the next attempt waits out at least a full interval (rule 6), nor while
     // the budget slows polling; the next due poll serves it then.
-    let push = app.push_detected && !freshness.is_failing() && !budget_slowed(app, config);
+    let slowed = app.budget_slowed(
+        configured_poll_secs(config),
+        github::poll_cost(config.repo_limit),
+    );
+    let push = app.push_detected && !freshness.is_failing() && !slowed;
     !held && (push || freshness.retry_due(now, github_poll_secs(app, config)))
 }
 
 /// The configured poll interval, floored.
 fn configured_poll_secs(config: &config::Config) -> i64 {
     config.github_poll_interval.max(GITHUB_POLL_MIN) as i64
-}
-
-/// The budget's pace, judged at the last attempt, the moment polls are
-/// spaced from. Before any attempt there is nothing to space.
-fn github_pace(app: &App, config: &config::Config) -> app::Pace {
-    match app.github_freshness.last_attempt {
-        Some(at) => app
-            .api_budget
-            .pace(github::poll_cost(config.repo_limit), at),
-        None => app::Pace::Unknown,
-    }
-}
-
-/// Whether the budget stretches polling past the configured interval or
-/// pauses it, which suspends the `Pending` floor and the push shortcut (A2).
-fn budget_slowed(app: &App, config: &config::Config) -> bool {
-    match github_pace(app, config) {
-        app::Pace::Unknown => false,
-        app::Pace::Every(secs) => secs > configured_poll_secs(config),
-        app::Pace::Paused { .. } => true,
-    }
 }
 
 /// The earliest the next automatic attempt may go besides the interval: the
@@ -2082,32 +2067,24 @@ fn github_not_before(
     config: &config::Config,
 ) -> Option<chrono::DateTime<chrono::Local>> {
     let ladder = app.github_backoff.not_before(configured_poll_secs(config));
-    let pause = match github_pace(app, config) {
+    let pause = match app.github_pace(github::poll_cost(config.repo_limit)) {
         app::Pace::Paused { until } => Some(until),
         _ => None,
     };
     ladder.max(pause)
 }
 
-/// Until when GitHub is known to refuse a request at `now`: a rate limit's
-/// not-before that has not passed, or too few points left for one poll
-/// (`docs/api-budget-design.md` 4.3, "Manual refresh"). `r` and `R` send
-/// nothing while this is `Some`.
+/// `App::github_limit_until` under `config`.
 fn github_limit_until(
     app: &App,
     config: &config::Config,
     now: chrono::DateTime<chrono::Local>,
 ) -> Option<chrono::DateTime<chrono::Local>> {
-    let limit = app
-        .github_backoff
-        .limit_until(configured_poll_secs(config))
-        .filter(|t| *t > now);
-    let exhausted = app
-        .api_budget
-        .exhausted(github::poll_cost(config.repo_limit), now)
-        .then(|| app.api_budget.resume_at())
-        .flatten();
-    limit.max(exhausted)
+    app.github_limit_until(
+        configured_poll_secs(config),
+        github::poll_cost(config.repo_limit),
+        now,
+    )
 }
 
 /// The status line for a refresh that sent nothing because of a known limit.
@@ -2117,8 +2094,9 @@ fn limited_status(until: chrono::DateTime<chrono::Local>) -> String {
 }
 
 /// The status line for `R` ignored because a refresh is already under way
-/// (A7, and A6 with a poll in flight). Provisional words.
-const REFRESH_RUNNING: &str = "A refresh is already running";
+/// (A7, and A6 with a poll in flight). One status for both, so the key does
+/// not look dead. Provisional words until Andreas settles them (O1).
+const REFRESH_RUNNING: &str = "Already refreshing";
 
 /// What `R` does, decided before anything is spawned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2343,7 +2321,8 @@ fn resolve_watch(flag_watch: bool, flag_no_watch: bool, config_watch: bool) -> b
 /// `github_not_before`, which `github_poll_due` checks beside this.
 fn github_poll_secs(app: &App, config: &config::Config) -> i64 {
     let configured = configured_poll_secs(config);
-    let pace = match github_pace(app, config) {
+    let cost = github::poll_cost(config.repo_limit);
+    let pace = match app.github_pace(cost) {
         app::Pace::Every(secs) => secs,
         app::Pace::Unknown | app::Pace::Paused { .. } => 0,
     };
@@ -2351,7 +2330,8 @@ fn github_poll_secs(app: &App, config: &config::Config) -> i64 {
         .repos
         .iter()
         .any(|r| r.ci_status == model::CiStatus::Pending);
-    let floored = any_pending && !app.github_freshness.is_failing() && !budget_slowed(app, config);
+    let floored =
+        any_pending && !app.github_freshness.is_failing() && !app.budget_slowed(configured, cost);
     let interval = if floored {
         GITHUB_POLL_MIN as i64
     } else {
