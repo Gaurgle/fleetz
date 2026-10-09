@@ -83,12 +83,24 @@ worker on either ticket while this session's process (pid 57964) is alive.
 
 | Ticket | Issue | Branch | Worktree | State |
 |---|---|---|---|---|
-| FZ-09b | #58 | `feat/fz-09b-coverage-facts` | `.claude/worktrees/fz-09b` | In progress, worker running |
-| Mouse drag and scroll | #68 (new, allowed 16:45) | `fix/mouse-drag-scroll` | `.claude/worktrees/mouse` | In progress, investigation running |
+| FZ-09b | #58 | `feat/fz-09b-coverage-facts` | `.claude/worktrees/fz-09b` | In progress, worker running (resumed 17:10 after the decision below) |
 
-Shared `src/main.rs`: FZ-09b owns the load and poll functions, #68 owns the
-mouse handler, the input arms, the terminal setup and `panel_rects`. Merges
-go one at a time with the combined check rerun.
+**FZ-09b decision (Andreas, 17:08: "for fz-09b go with option A").** The
+worker stopped before writing code because the design (4.1, C2) carries
+coverage in `FetchMeta` and three tests from FZ-10a and FZ-09c assert a
+cache-served load's whole meta equals `FetchMeta::default()`. Option A:
+narrow those three assertions (`a_cache_served_load_carries_no_reading`,
+`ck4_signed_out_serves_the_newest_keyed_file_and_the_poll_is_auth`,
+`ck8_a_pinned_cache_is_served_without_an_attempt` in `src/github.rs`) to
+`budget` and `account` being `None`, nothing else moved. A one-time release
+for this ticket, recorded on #58. The body's forced-edit list also misses the
+`land_load` helper (a seventh `LoadResult` literal, compile-forced).
+
+## Done on 2026-10-09
+
+| Ticket | Issue | Ticket commit | Merge | What landed |
+|---|---|---|---|---|
+| Mouse drag and scroll | #68 | `b5254e4` | `5d917ea` | `reclaim_terminal` asks for the alternate screen and mouse capture together after lazygit, `$EDITOR` or the shell returns; the bug was there since the first commit, and showed after the first Enter or `e` of a session. Worktree and local branch removed. Follow-ups in the closing comment: capture stays on while the child runs (`DisableMouseCapture` is never sent) |
 
 ## Authority and routing
 
