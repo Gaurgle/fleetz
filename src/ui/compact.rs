@@ -75,11 +75,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 let pad = col_width.saturating_sub(prev_len) + GUTTER;
                 row_spans.push(Span::raw(" ".repeat(pad)));
             }
-            row_spans.extend(compact_repo_spans(
+            row_spans.extend(compact_repo_spans_marked(
                 entry.1,
                 entry.0 == selected,
                 col_width,
                 app.watch_mode && !app.blink_on,
+                app.is_not_in_last_poll(entry.1),
             ));
         }
         lines.push(Line::from(row_spans));
@@ -138,11 +139,25 @@ fn cell_width(columns: usize, width: usize) -> usize {
     width.saturating_sub(GUTTER * (columns - 1)) / columns
 }
 
+#[cfg(test)]
 fn compact_repo_spans(
     repo: &RepoStatus,
     is_selected: bool,
     max_width: usize,
     dim_pending: bool,
+) -> Vec<Span<'static>> {
+    compact_repo_spans_marked(repo, is_selected, max_width, dim_pending, false)
+}
+
+/// One grid cell. `not_in_last_poll` draws the CI lamp and PR count as from
+/// an earlier refresh, as the detail view's list does
+/// (`badges::badge_spans_marked`), so the mark looks the same in every view.
+fn compact_repo_spans_marked(
+    repo: &RepoStatus,
+    is_selected: bool,
+    max_width: usize,
+    dim_pending: bool,
+    not_in_last_poll: bool,
 ) -> Vec<Span<'static>> {
     let marker = if is_selected { "▸ " } else { "  " };
     let name_style = if is_selected {
@@ -158,7 +173,7 @@ fn compact_repo_spans(
     // room for marker, glyph, at least one dot, and the badges; whatever
     // remains is the name's budget -- truncate rather than overflow into the
     // next column.
-    let (badge_spans, badge_w) = badges::badge_spans(repo, dim_pending);
+    let (badge_spans, badge_w) = badges::badge_spans_marked(repo, dim_pending, not_in_last_poll);
     let right_len = badge_w + 1; // +1 for space after dots
     let reserved = badges::MARKER_W + badges::GLYPH_W + 1 + right_len;
     let name_budget = max_width.saturating_sub(reserved).max(3);
@@ -350,5 +365,53 @@ mod tests {
             Some(colors::OVERLAY),
             "the list title drawn focused while the strip has focus"
         );
+    }
+
+    /// FZ-09d: a repo the last poll did not return draws its lamp in the
+    /// grey of an earlier refresh, steady through the blink, as the detail
+    /// view's list does; a repo the poll returned draws as before.
+    #[test]
+    fn a_compact_cell_not_in_the_last_poll_is_dimmed_and_its_lamp_holds_still() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut repos = vec![repo("stale"), repo("fresh")];
+        for r in &mut repos {
+            r.ci_status = CiStatus::Pending;
+        }
+        let width = 60u16;
+        let mut app = App::new(repos, "t".to_string(), width, 20);
+        app.view = crate::app::View::Compact;
+        app.watch_mode = true;
+        app.not_in_last_poll
+            .insert((Some("gaurgle".to_string()), "stale".to_string()));
+
+        let lamp = |app: &App, name: &str| {
+            let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
+            term.draw(|f| render(f, f.area(), app)).unwrap();
+            let buf = term.backend().buffer().clone();
+            (0..20u16)
+                .find_map(|y| {
+                    let row: String = (0..width).map(|x| buf[(x, y)].symbol()).collect();
+                    let start = row.find(&format!(" {name} "))?;
+                    let start = row[..start].chars().count() as u16;
+                    (start..width)
+                        .find(|&x| buf[(x, y)].symbol() == "◉")
+                        .map(|x| buf[(x, y)].fg)
+                })
+                .expect("lamp drawn")
+        };
+        for blink_on in [true, false] {
+            app.blink_on = blink_on;
+            assert_eq!(
+                lamp(&app, "stale"),
+                badges::EARLIER_REFRESH,
+                "blink_on {blink_on}"
+            );
+        }
+        app.blink_on = true;
+        assert_eq!(lamp(&app, "fresh"), colors::PEACH);
+        app.blink_on = false;
+        assert_eq!(lamp(&app, "fresh"), colors::SURFACE);
     }
 }

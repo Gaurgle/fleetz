@@ -587,15 +587,17 @@ fn spawn_window_apply(
     });
 }
 
-/// `R` under a known rate limit (A6): rediscover and re-sweep, with the git
-/// fetches `R` has, over the dataset already in memory instead of asking
-/// GitHub. On a background task like any load.
+/// Rediscover and re-sweep over the dataset already in memory instead of
+/// asking GitHub. On a background task like any load. `R` under a known rate
+/// limit (A6) passes `git_fetch` true, for the git fetches `R` has; the
+/// account rebuild (design 4.7) passes false.
 fn spawn_memory_rebuild(
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     app: &App,
     args: &Args,
     config: &config::Config,
     repo_dir: &Path,
+    git_fetch: bool,
 ) {
     let tx = tx.clone();
     let dataset = app.dataset.clone();
@@ -615,7 +617,7 @@ fn spawn_memory_rebuild(
                 &args,
                 &config,
                 &repo_dir,
-                true,
+                git_fetch,
                 None,
             )
             .await
@@ -695,6 +697,16 @@ fn apply_load_result_saving_to(
         Ok(lr) => {
             app.load_error = None;
             app.repos = carry_fetch_facts(&app.repos, lr.repos);
+            // Every row now comes from one dataset, so none is "not in" it
+            // (design 4.7): a launch, `R`, a window apply, a rebuild from
+            // memory and an account rebuild alike.
+            app.not_in_last_poll.clear();
+            // A load that fetched rebuilt the rows from that fetch's account,
+            // which a pending account rebuild would only repeat; a later poll
+            // on another account asks again.
+            if lr.meta.is_some() {
+                app.account_rebuild_due = false;
+            }
             apply_groups(&mut app.repos, config);
             app.header = lr.header;
             if let Some(ds) = lr.dataset {
@@ -932,6 +944,8 @@ async fn run_event_loop(
             AppEvent::Input(_) => {}
             AppEvent::Loaded(result) => {
                 apply_load_result(app, config, result);
+                // An account rebuild that waited for this load goes now.
+                start_account_rebuild(app, &tx, args, config, repo_dir);
                 // The field gives way to the finished screen: the paint that
                 // follows is the first screenful of real content.
                 dismiss_loading_field(app, &loading_running);
@@ -948,7 +962,8 @@ async fn run_event_loop(
                 fetch,
             } => apply_repo_updated(app, &path, *status, fetch),
             AppEvent::Github { attempt, result } => {
-                apply_github_poll(app, attempt, result, &tx, &args.author)
+                apply_github_poll(app, attempt, result, &tx, &args.author);
+                start_account_rebuild(app, &tx, args, config, repo_dir);
             }
             AppEvent::SweepDone { at } => {
                 app.sweep_started = None;
@@ -1938,6 +1953,11 @@ fn apply_github_poll_at(
                 origin: _,
                 meta,
             } = *fetch;
+            // Before the meta is replaced: the rows were built on the account
+            // the meta held until now.
+            if account_rebuild_needed(app.github_meta.account.as_deref(), meta.account.as_deref()) {
+                app.account_rebuild_due = true;
+            }
             // The dataset is replaced below, so its coverage is too: the next
             // window apply draws its note from what this poll covered.
             app.github_meta = meta;
@@ -1955,9 +1975,20 @@ fn apply_github_poll_at(
             // Only on the row the load made the carrier
             // (`carries`), so a same-named row of another owner, or
             // a local-only checkout, never takes these.
+            // A carrier row the poll did not return keeps its values and is
+            // marked as from an earlier refresh; one it returned loses the
+            // mark (design 4.7).
             for repo in &mut app.repos {
-                if let Some(gh) = dataset.iter().find(|g| carries(repo, g)) {
+                let entry = dataset.iter().find(|g| carries(repo, g));
+                if let Some(gh) = entry {
                     repo.apply_github(gh);
+                }
+                if let Some(key) = app::carrier_key(repo) {
+                    if entry.is_some() {
+                        app.not_in_last_poll.remove(&key);
+                    } else {
+                        app.not_in_last_poll.insert(key);
+                    }
                 }
             }
             // One API call just told us which remotes moved, so
@@ -1992,6 +2023,35 @@ fn apply_github_poll_at(
         app.settle_refresh_poll(std::iter::empty());
     }
     app.needs_redraw = true;
+}
+
+/// Whether an applied successful poll on account `poll` must rebuild rows
+/// built on account `rows` (design 4.7, O5). Only a poll whose account is
+/// known decides: it rebuilds when the rows' account differs or is unknown
+/// (a launch from the legacy file or under the signed-out rule). A poll with
+/// no account never does. A token rotation on one account changes the key
+/// and costs one rebuild from that account's own data, which is accepted.
+fn account_rebuild_needed(rows: Option<&str>, poll: Option<&str>) -> bool {
+    poll.is_some() && rows != poll
+}
+
+/// Rebuild the rows from the dataset in memory after an account change,
+/// once nothing else is loading: through the rebuild from memory, with no
+/// request, no `git fetch`, no `window.toml` write and no "Window:" status.
+/// While a load runs the flag waits; a load that fetched clears it.
+fn start_account_rebuild(
+    app: &mut App,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    args: &Args,
+    config: &config::Config,
+    repo_dir: &Path,
+) {
+    if !app.account_rebuild_due || app.loading {
+        return;
+    }
+    app.account_rebuild_due = false;
+    app.loading = true;
+    spawn_memory_rebuild(tx, app, args, config, repo_dir, false);
 }
 
 /// Give up on a background poll that has not answered within `limit`.
@@ -2150,7 +2210,7 @@ fn reload_key(
         ReloadAction::FromMemory => {
             app.loading = true;
             app.set_status("Reloading without GitHub…".to_string(), false);
-            spawn_memory_rebuild(tx, app, args, config, repo_dir);
+            spawn_memory_rebuild(tx, app, args, config, repo_dir, true);
         }
         ReloadAction::Load => {
             app.loading = true;
@@ -2326,10 +2386,12 @@ fn github_poll_secs(app: &App, config: &config::Config) -> i64 {
         app::Pace::Every(secs) => secs,
         app::Pace::Unknown | app::Pace::Paused { .. } => 0,
     };
+    // A row the last poll did not return holds a `Pending` frozen at an
+    // earlier refresh, which says nothing about CI now (design 4.7).
     let any_pending = app
         .repos
         .iter()
-        .any(|r| r.ci_status == model::CiStatus::Pending);
+        .any(|r| r.ci_status == model::CiStatus::Pending && !app.is_not_in_last_poll(r));
     let floored =
         any_pending && !app.github_freshness.is_failing() && !app.budget_slowed(configured, cost);
     let interval = if floored {
@@ -7799,6 +7861,26 @@ mod tests {
         }))
     }
 
+    /// A successful poll that returns `budget_app`'s row `r`, still
+    /// `Pending`, so the row stays covered by the last poll (FZ-09d).
+    fn ok_with_pending_r(
+        budget: Option<github::BudgetReading>,
+    ) -> Result<Box<github::GithubFetch>, github::FetchError> {
+        let mut fetch = ok_with(budget)?;
+        fetch.repos.push(github::GithubRepo {
+            name: "r".to_string(),
+            pushed_at: chrono::DateTime::UNIX_EPOCH,
+            pr_count: 0,
+            prs: vec![],
+            ci_status: model::CiStatus::Pending,
+            ci_workflow: None,
+            ci_duration: None,
+            repo_kind: model::RepoKind::Unknown,
+            owner: None,
+        });
+        Ok(fetch)
+    }
+
     fn err_with(
         failure: github::Failure,
         budget: Option<github::BudgetReading>,
@@ -7918,12 +8000,12 @@ mod tests {
         let (mut app, config) = budget_app(model::CiStatus::Pending, 1.0, 0);
         // 600 left with 23 minutes to go stretches the pace past 30 s.
         let budget = reading("A", 600, at(17, 23, 6), at(17, 0, 0));
-        land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
+        land_at(&mut app, ok_with_pending_r(Some(budget)), at(17, 0, 0));
         assert!(app.api_budget.known(at(17, 0, 0)).is_some());
         assert!(github_poll_secs(&app, &config) > 30);
 
         assert!(app.api_budget.known(at(17, 23, 6)).is_none());
-        land_at(&mut app, ok_with(None), at(17, 30, 0));
+        land_at(&mut app, ok_with_pending_r(None), at(17, 30, 0));
         assert_eq!(github_poll_secs(&app, &config), GITHUB_POLL_MIN as i64);
         assert_eq!(next_due(&app, &config, at(17, 30, 0)), 15);
     }
@@ -7932,7 +8014,7 @@ mod tests {
     fn s3_a_healthy_budget_keeps_the_pending_floor() {
         let (mut app, config) = budget_app(model::CiStatus::Pending, 1.0, 0);
         let budget = reading("A", 3564, at(17, 23, 6), at(17, 0, 43));
-        land_at(&mut app, ok_with(Some(budget)), at(17, 0, 43));
+        land_at(&mut app, ok_with_pending_r(Some(budget)), at(17, 0, 43));
         assert_eq!(github_poll_secs(&app, &config), 15);
         assert_eq!(next_due(&app, &config, at(17, 0, 43)), 15);
     }
@@ -8750,5 +8832,647 @@ mod tests {
             until <= chrono::Local::now() + secs(610),
             "held until {until}"
         );
+    }
+
+    // --- FZ-09d: rows a poll did not cover, and an account change ---
+    //
+    // `docs/coverage-cache-design.md` 4.7 and scenarios CV9 to CV20.
+
+    /// A Primary carrier row of `owner`/`name` with CI `ci` and two PRs.
+    fn carrier_row(owner: &str, name: &str, ci: model::CiStatus) -> RepoStatus {
+        RepoStatus {
+            name: name.to_string(),
+            owner: Some(owner.to_string()),
+            ci_status: ci,
+            ci_workflow: Some("ci".to_string()),
+            pr_count: 2,
+            repo_kind: model::RepoKind::Public,
+            ..test_repo()
+        }
+    }
+
+    /// The dataset entry for `owner`/`name`, with CI `ci` and no PRs.
+    fn entry(owner: &str, name: &str, ci: model::CiStatus) -> github::GithubRepo {
+        github::GithubRepo {
+            name: name.to_string(),
+            pushed_at: chrono::DateTime::UNIX_EPOCH,
+            pr_count: 0,
+            prs: vec![],
+            ci_status: ci,
+            ci_workflow: Some("ci".to_string()),
+            ci_duration: None,
+            repo_kind: model::RepoKind::Public,
+            owner: Some(owner.to_string()),
+        }
+    }
+
+    /// A successful poll on `account` returning `repos` and, when given, a
+    /// GitHub calendar whose year totals `calendar_total`.
+    fn fetch_on(
+        account: Option<&str>,
+        repos: Vec<github::GithubRepo>,
+        calendar_total: Option<u32>,
+    ) -> Result<Box<github::GithubFetch>, github::FetchError> {
+        Ok(Box::new(github::GithubFetch {
+            repos,
+            calendar: calendar_total.map(calendar_of),
+            has_pr_counts: true,
+            origin: github::Origin::Network,
+            meta: github::FetchMeta {
+                account: account.map(str::to_string),
+                ..Default::default()
+            },
+        }))
+    }
+
+    fn calendar_of(total: u32) -> Box<contributions::Calendar> {
+        let today = chrono::Local::now().date_naive();
+        let mut calendar = contributions::Calendar::new(today, contributions::Source::Github);
+        calendar.set(today, total);
+        Box::new(calendar)
+    }
+
+    fn remote(owner: &str, name: &str) -> app::RemoteKey {
+        (Some(owner.to_string()), name.to_string())
+    }
+
+    /// Rows for `alice/a` and `alice/b`, both passing, as CV9 gives them.
+    fn alice_app() -> App {
+        App::new(
+            vec![
+                carrier_row("alice", "a", model::CiStatus::Passed),
+                carrier_row("alice", "b", model::CiStatus::Passed),
+            ],
+            "h".to_string(),
+            120,
+            44,
+        )
+    }
+
+    fn row<'a>(app: &'a App, name: &str) -> &'a RepoStatus {
+        app.repos.iter().find(|r| r.name == name).expect("row")
+    }
+
+    /// Land a fetched load of `kind` on `account` with `rows` and `dataset`,
+    /// saving any window to `store`.
+    fn land_fetched(
+        app: &mut App,
+        kind: LoadKind,
+        account: Option<&str>,
+        rows: Vec<RepoStatus>,
+        dataset: Vec<github::GithubRepo>,
+        calendar_total: Option<u32>,
+        store: &window_state::WindowState,
+    ) {
+        apply_load_result_saving_to(
+            app,
+            &config::Config::default(),
+            Ok(Box::new(LoadResult {
+                kind,
+                repos: rows,
+                header: "h".to_string(),
+                dataset: Some(dataset),
+                github_calendar: calendar_total.map(calendar_of),
+                source: app::DatasetSource::Network,
+                ambiguity: None,
+                meta: Some(github::FetchMeta {
+                    account: account.map(str::to_string),
+                    ..Default::default()
+                }),
+            })),
+            store,
+        );
+    }
+
+    /// The rows assembly builds from `dataset` with nothing on disk: an
+    /// empty home and an empty root, no `git fetch`, as the account rebuild
+    /// asks `assemble_view` for them.
+    async fn rows_from(scratch: &Path, dataset: &[github::GithubRepo]) -> Vec<RepoStatus> {
+        let home = scratch.join("home");
+        let root = scratch.join("repos");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        id_assemble(&home, &[root], dataset, None).await.0
+    }
+
+    /// Land what the account rebuild delivers: a rebuild from memory over
+    /// `app.dataset`, saving any window to `store`.
+    async fn land_account_rebuild(
+        app: &mut App,
+        scratch: &Path,
+        store: &window_state::WindowState,
+    ) {
+        let rows = rows_from(scratch, &app.dataset).await;
+        let notes = ViewNotes {
+            header: "h".to_string(),
+            ambiguity: None,
+        };
+        let result = memory_rebuild_result(rows, notes);
+        assert!(matches!(result.kind, LoadKind::FromMemory));
+        assert!(result.meta.is_none() && result.dataset.is_none());
+        apply_load_result_saving_to(app, &config::Config::default(), Ok(Box::new(result)), store);
+    }
+
+    #[test]
+    fn cv9_a_carrier_row_the_poll_did_not_return_is_marked_and_keeps_its_values() {
+        let mut app = alice_app();
+        poll_with(
+            &mut app,
+            fetch_on(
+                None,
+                vec![entry("alice", "a", model::CiStatus::Failed)],
+                None,
+            ),
+        );
+        assert!(app.not_in_last_poll.contains(&remote("alice", "b")));
+        assert!(!app.not_in_last_poll.contains(&remote("alice", "a")));
+        let b = row(&app, "b");
+        assert_eq!(b.ci_status, model::CiStatus::Passed, "b's CI was cleared");
+        assert_eq!(b.pr_count, 2, "b's PRs were cleared");
+        assert!(app.is_not_in_last_poll(b));
+        assert_eq!(row(&app, "a").ci_status, model::CiStatus::Failed);
+
+        poll_with(
+            &mut app,
+            fetch_on(
+                None,
+                vec![
+                    entry("alice", "a", model::CiStatus::Failed),
+                    entry("alice", "b", model::CiStatus::Passed),
+                ],
+                None,
+            ),
+        );
+        assert!(
+            app.not_in_last_poll.is_empty(),
+            "{:?}",
+            app.not_in_last_poll
+        );
+    }
+
+    #[test]
+    fn cv10_a_failed_poll_leaves_the_not_covered_set_unchanged() {
+        let mut app = alice_app();
+        poll_with(
+            &mut app,
+            fetch_on(
+                None,
+                vec![entry("alice", "a", model::CiStatus::Passed)],
+                None,
+            ),
+        );
+        let before = app.not_in_last_poll.clone();
+        assert!(!before.is_empty());
+        poll(&mut app, Err("HTTP 502".to_string()));
+        assert_eq!(app.not_in_last_poll, before);
+    }
+
+    #[test]
+    fn cv11_a_pending_row_the_poll_did_not_cover_does_not_hold_the_floor() {
+        let config = config::Config {
+            github_poll_interval: 90,
+            ..config::Config::default()
+        };
+        let mut app = App::new(
+            vec![
+                carrier_row("alice", "a", model::CiStatus::Passed),
+                carrier_row("alice", "b", model::CiStatus::Pending),
+            ],
+            "h".to_string(),
+            120,
+            44,
+        );
+        app.watch_mode = true;
+        assert_eq!(github_poll_secs(&app, &config), GITHUB_POLL_MIN as i64);
+        poll_with(
+            &mut app,
+            fetch_on(
+                None,
+                vec![entry("alice", "a", model::CiStatus::Passed)],
+                None,
+            ),
+        );
+        assert_eq!(row(&app, "b").ci_status, model::CiStatus::Pending);
+        assert_eq!(github_poll_secs(&app, &config), 90);
+    }
+
+    #[tokio::test]
+    async fn cv12_a_poll_on_another_account_rebuilds_the_rows_from_its_dataset() {
+        let scratch = wt_scratch("cv12");
+        let store = window_state::WindowState::at(scratch.join("window.toml"));
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        let a_dataset = vec![
+            entry("alice", "a", model::CiStatus::Passed),
+            entry("alice", "b", model::CiStatus::Failed),
+        ];
+        let a_rows = rows_from(&scratch, &a_dataset).await;
+        land_fetched(
+            &mut app,
+            LoadKind::Initial,
+            Some("A"),
+            a_rows,
+            a_dataset,
+            Some(3),
+            &store,
+        );
+        assert_eq!(app.repos.len(), 2);
+        let attempts_before = app.github_freshness.clone();
+
+        poll_with(
+            &mut app,
+            fetch_on(
+                Some("B"),
+                vec![entry("bob", "x", model::CiStatus::Pending)],
+                Some(11),
+            ),
+        );
+        assert!(app.account_rebuild_due, "no rebuild asked for");
+        // The poll itself marks A's rows, until the rebuild lands.
+        assert!(app.not_in_last_poll.contains(&remote("alice", "a")));
+        let after_poll = app.github_freshness.clone();
+        assert_ne!(after_poll, attempts_before);
+
+        land_account_rebuild(&mut app, &scratch, &store).await;
+        let names: Vec<_> = app
+            .repos
+            .iter()
+            .map(|r| (r.owner.clone(), r.name.clone(), r.ci_status.clone()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![(
+                Some("bob".to_string()),
+                "x".to_string(),
+                model::CiStatus::Pending
+            )],
+            "a row kept A-only data"
+        );
+        assert!(app.not_in_last_poll.is_empty());
+        assert_eq!(
+            app.github_calendar.as_ref().map(|c| c.total()),
+            Some(11),
+            "B's calendar is not shown"
+        );
+        // No request: freshness is what the poll left. No window written,
+        // no "Window:" status.
+        assert_eq!(app.github_freshness, after_poll);
+        assert!(!scratch.join("window.toml").exists(), "window.toml written");
+        let status = status_text(&app);
+        assert!(!status.starts_with("Window:"), "{status}");
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn cv13_a_late_answer_on_the_old_account_triggers_no_rebuild() {
+        let scratch = wt_scratch("cv13");
+        let store = window_state::WindowState::at(scratch.join("window.toml"));
+        let mut app = alice_app();
+        land_fetched(
+            &mut app,
+            LoadKind::Initial,
+            Some("A"),
+            alice_app().repos,
+            vec![entry("alice", "a", model::CiStatus::Passed)],
+            None,
+            &store,
+        );
+        let first = claim_github_poll(&mut app).unwrap();
+        app.github_poll_started = std::time::Instant::now()
+            .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
+        expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, chrono::Local::now());
+        let second = claim_github_poll(&mut app).unwrap();
+        answer(
+            &mut app,
+            second,
+            fetch_on(
+                Some("B"),
+                vec![entry("bob", "x", model::CiStatus::Passed)],
+                None,
+            ),
+        );
+        assert!(app.account_rebuild_due);
+        // As `start_account_rebuild` takes the flag when it spawns.
+        app.account_rebuild_due = false;
+
+        answer(
+            &mut app,
+            first,
+            fetch_on(
+                Some("A"),
+                vec![entry("alice", "a", model::CiStatus::Failed)],
+                None,
+            ),
+        );
+        assert!(!app.account_rebuild_due, "the discarded answer rebuilt");
+        assert_eq!(app.github_meta.account.as_deref(), Some("B"));
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[tokio::test]
+    async fn cv15_every_rebuild_from_one_dataset_clears_the_not_covered_set() {
+        let scratch = wt_scratch("cv15");
+        let store = window_state::WindowState::at(scratch.join("window.toml"));
+        let alice = || {
+            vec![
+                entry("alice", "a", model::CiStatus::Passed),
+                entry("alice", "b", model::CiStatus::Passed),
+            ]
+        };
+        let marked = || {
+            let mut app = alice_app();
+            app.dataset = alice();
+            poll_with(
+                &mut app,
+                fetch_on(
+                    None,
+                    vec![entry("alice", "a", model::CiStatus::Passed)],
+                    None,
+                ),
+            );
+            assert!(app.not_in_last_poll.contains(&remote("alice", "b")));
+            app
+        };
+        let notes = || ViewNotes {
+            header: "h".to_string(),
+            ambiguity: None,
+        };
+        let config = config::Config::default();
+
+        let mut app = marked();
+        land_fetched(
+            &mut app,
+            LoadKind::Initial,
+            None,
+            alice_app().repos,
+            alice(),
+            None,
+            &store,
+        );
+        assert!(app.not_in_last_poll.is_empty(), "after a launch");
+
+        let mut app = marked();
+        land_fetched(
+            &mut app,
+            LoadKind::Reload,
+            None,
+            alice_app().repos,
+            alice(),
+            None,
+            &store,
+        );
+        assert!(app.not_in_last_poll.is_empty(), "after R");
+
+        let mut app = marked();
+        let w = time::TimeWindow::clamped(2, time::WindowUnit::Days);
+        let result = window_apply_result(w, alice_app().repos, notes());
+        apply_load_result_saving_to(&mut app, &config, Ok(Box::new(result)), &store);
+        assert!(app.not_in_last_poll.is_empty(), "after a window apply");
+
+        let mut app = marked();
+        let result = memory_rebuild_result(alice_app().repos, notes());
+        apply_load_result_saving_to(&mut app, &config, Ok(Box::new(result)), &store);
+        assert!(
+            app.not_in_last_poll.is_empty(),
+            "after a rebuild from memory"
+        );
+
+        let mut app = marked();
+        poll_with(
+            &mut app,
+            fetch_on(
+                Some("B"),
+                vec![entry("bob", "x", model::CiStatus::Passed)],
+                None,
+            ),
+        );
+        assert!(app.account_rebuild_due);
+        assert!(!app.not_in_last_poll.is_empty());
+        land_account_rebuild(&mut app, &scratch, &store).await;
+        assert!(app.not_in_last_poll.is_empty(), "after an account rebuild");
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[tokio::test]
+    async fn cv16_a_launch_on_an_unknown_account_rebuilds_once_on_the_first_keyed_poll() {
+        let scratch = wt_scratch("cv16");
+        let store = window_state::WindowState::at(scratch.join("window.toml"));
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        // Served from the legacy file, or under the signed-out rule: the
+        // load's account is unknown.
+        apply_load_result_saving_to(
+            &mut app,
+            &config::Config::default(),
+            Ok(Box::new(LoadResult {
+                kind: LoadKind::Initial,
+                repos: alice_app().repos,
+                header: "h".to_string(),
+                dataset: Some(vec![entry("alice", "a", model::CiStatus::Passed)]),
+                github_calendar: None,
+                source: app::DatasetSource::Cache { written: None },
+                ambiguity: None,
+                meta: Some(github::FetchMeta::default()),
+            })),
+            &store,
+        );
+        assert_eq!(app.github_meta.account, None);
+        let a_poll = || {
+            fetch_on(
+                Some("A"),
+                vec![entry("alice", "a", model::CiStatus::Failed)],
+                None,
+            )
+        };
+
+        poll_with(&mut app, a_poll());
+        assert!(
+            app.account_rebuild_due,
+            "the first keyed poll did not rebuild"
+        );
+        app.account_rebuild_due = false;
+        land_account_rebuild(&mut app, &scratch, &store).await;
+        let rows: Vec<_> = app.repos.iter().map(|r| r.name.clone()).collect();
+        assert_eq!(rows, vec!["a".to_string()], "not rebuilt from A's dataset");
+
+        poll_with(&mut app, a_poll());
+        assert!(!app.account_rebuild_due, "a second rebuild");
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[tokio::test]
+    async fn cv17_a_rotated_token_on_one_account_rebuilds_once() {
+        let scratch = wt_scratch("cv17");
+        let store = window_state::WindowState::at(scratch.join("window.toml"));
+        let dataset = vec![
+            entry("alice", "a", model::CiStatus::Passed),
+            entry("alice", "b", model::CiStatus::Passed),
+        ];
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        let rows = rows_from(&scratch, &dataset).await;
+        land_fetched(
+            &mut app,
+            LoadKind::Initial,
+            Some("F1"),
+            rows,
+            dataset,
+            None,
+            &store,
+        );
+
+        let polled = vec![
+            entry("alice", "a", model::CiStatus::Failed),
+            entry("alice", "c", model::CiStatus::Passed),
+        ];
+        poll_with(&mut app, fetch_on(Some("F2"), polled.clone(), None));
+        assert!(app.account_rebuild_due, "no rebuild on a new fingerprint");
+        app.account_rebuild_due = false;
+        land_account_rebuild(&mut app, &scratch, &store).await;
+
+        let shape = |rows: &[RepoStatus]| -> Vec<_> {
+            rows.iter()
+                .map(|r| {
+                    (
+                        r.owner.clone(),
+                        r.name.clone(),
+                        r.ci_status.clone(),
+                        r.location.clone(),
+                    )
+                })
+                .collect()
+        };
+        let alone = rows_from(&scratch, &polled).await;
+        assert_eq!(shape(&app.repos), shape(&alone));
+
+        poll_with(&mut app, fetch_on(Some("F2"), polled, None));
+        assert!(!app.account_rebuild_due, "a second rebuild on the same key");
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn cv18_a_poll_with_no_account_key_never_rebuilds() {
+        let scratch = wt_scratch("cv18");
+        let store = window_state::WindowState::at(scratch.join("window.toml"));
+        // Never had a load, and had one whose account is unknown.
+        let mut never_loaded = alice_app();
+        let mut unknown = alice_app();
+        land_fetched(
+            &mut unknown,
+            LoadKind::Initial,
+            None,
+            alice_app().repos,
+            vec![],
+            None,
+            &store,
+        );
+        for app in [&mut never_loaded, &mut unknown] {
+            let before = app.repos.clone();
+            poll_with(
+                app,
+                fetch_on(
+                    None,
+                    vec![entry("alice", "a", model::CiStatus::Failed)],
+                    None,
+                ),
+            );
+            assert!(!app.account_rebuild_due, "a keyless poll rebuilt");
+            assert_eq!(row(app, "a").ci_status, model::CiStatus::Failed);
+            assert_eq!(row(app, "a").pr_count, 0);
+            let b = row(app, "b");
+            let b_before = before.iter().find(|r| r.name == "b").unwrap();
+            assert_eq!(b.ci_status, b_before.ci_status);
+            assert_eq!(b.pr_count, b_before.pr_count);
+            assert_eq!(b.repo_kind, b_before.repo_kind);
+            assert_eq!(app.repos.len(), 2);
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn cv20_a_window_apply_keeps_the_account_so_a_poll_on_it_does_not_rebuild() {
+        let scratch = wt_scratch("cv20");
+        let store = window_state::WindowState::at(scratch.join("window.toml"));
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        land_fetched(
+            &mut app,
+            LoadKind::Initial,
+            Some("A"),
+            alice_app().repos,
+            vec![entry("alice", "a", model::CiStatus::Passed)],
+            None,
+            &store,
+        );
+        let w = time::TimeWindow::clamped(2, time::WindowUnit::Days);
+        let notes = ViewNotes {
+            header: "h".to_string(),
+            ambiguity: None,
+        };
+        apply_load_result_saving_to(
+            &mut app,
+            &config::Config::default(),
+            Ok(Box::new(window_apply_result(w, alice_app().repos, notes))),
+            &store,
+        );
+        assert_eq!(app.github_meta.account.as_deref(), Some("A"));
+        poll_with(
+            &mut app,
+            fetch_on(
+                Some("A"),
+                vec![entry("alice", "a", model::CiStatus::Passed)],
+                None,
+            ),
+        );
+        assert!(
+            !app.account_rebuild_due,
+            "a poll on the same account rebuilt"
+        );
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// The rebuild waits while a load runs: outside a runtime a spawn would
+    /// panic, so returning at all says nothing was spawned.
+    #[test]
+    fn an_account_rebuild_waits_for_a_running_load() {
+        let mut app = alice_app();
+        app.loading = true;
+        app.account_rebuild_due = true;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let args = Args::parse_from(["fleetz"]);
+        start_account_rebuild(
+            &mut app,
+            &tx,
+            &args,
+            &config::Config::default(),
+            Path::new("/nonexistent"),
+        );
+        assert!(app.account_rebuild_due, "the waiting rebuild was dropped");
+    }
+
+    /// A load that fetched rebuilt the rows on its own account, so a pending
+    /// account rebuild is dropped rather than repeated.
+    #[test]
+    fn a_fetched_load_settles_a_pending_account_rebuild() {
+        let scratch = wt_scratch("fz09d_settle");
+        let store = window_state::WindowState::at(scratch.join("window.toml"));
+        let mut app = alice_app();
+        app.account_rebuild_due = true;
+        land_fetched(
+            &mut app,
+            LoadKind::Reload,
+            Some("B"),
+            vec![],
+            vec![],
+            None,
+            &store,
+        );
+        assert!(!app.account_rebuild_due);
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn the_rebuild_rule_needs_a_known_poll_account() {
+        assert!(!account_rebuild_needed(None, None));
+        assert!(!account_rebuild_needed(Some("A"), None));
+        assert!(!account_rebuild_needed(Some("A"), Some("A")));
+        assert!(account_rebuild_needed(Some("A"), Some("B")));
+        assert!(account_rebuild_needed(None, Some("A")));
     }
 }

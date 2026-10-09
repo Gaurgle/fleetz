@@ -228,6 +228,24 @@ pub fn status_color(repo: &RepoStatus) -> Color {
 /// `app.watch_mode && !app.blink_on`, so a running job pulses only while the
 /// dashboard is actually live.
 pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>, usize) {
+    badge_spans_marked(repo, dim_pending, false)
+}
+
+/// The colour of GitHub values from an earlier refresh: a carrier row the
+/// last poll did not return (`App::is_not_in_last_poll`). Its CI lamp and PR
+/// count keep their values and take this grey, steady, so a `Pending` lamp
+/// stops blinking: it says nothing about a run now. Provisional (O4 in
+/// `docs/coverage-cache-design.md`); an existing colour, not a new one.
+pub const EARLIER_REFRESH: Color = colors::OVERLAY;
+
+/// `badge_spans`, with the CI lamp and PR count drawn in `EARLIER_REFRESH`
+/// when `not_in_last_poll`. Widths and glyphs are unchanged, so a marked row
+/// lines up with the rest.
+pub fn badge_spans_marked(
+    repo: &RepoStatus,
+    dim_pending: bool,
+    not_in_last_poll: bool,
+) -> (Vec<Span<'static>>, usize) {
     let mut spans = Vec::new();
     let mut width = 0usize;
 
@@ -249,13 +267,23 @@ pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>,
             }
             CiStatus::Unknown => colors::OVERLAY,
         };
+        let ci_color = if not_in_last_poll {
+            EARLIER_REFRESH
+        } else {
+            ci_color
+        };
         spans.push(Span::styled(ci, Style::default().fg(ci_color)));
     }
 
     let pr = pr_text(repo);
     if !pr.is_empty() {
         width += pr.chars().count();
-        spans.push(Span::styled(pr, Style::default().fg(colors::PR_CLR)));
+        let pr_color = if not_in_last_poll {
+            EARLIER_REFRESH
+        } else {
+            colors::PR_CLR
+        };
+        spans.push(Span::styled(pr, Style::default().fg(pr_color)));
     }
 
     let stash = stash_text(repo);
