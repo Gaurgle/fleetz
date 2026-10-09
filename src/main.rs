@@ -1617,8 +1617,7 @@ fn suspend_and_run(
     // Run the command
     let _ = with_input_paused(|| StdCommand::new(cmd).args(args).status());
 
-    // Re-enter alternate screen
-    crossterm::execute!(terminal.backend_mut(), EnterAlternateScreen).map_err(|e| e.to_string())?;
+    reclaim_terminal(terminal.backend_mut()).map_err(|e| e.to_string())?;
     enable_raw_mode().map_err(|e| e.to_string())?;
     terminal.clear().map_err(|e| e.to_string())?;
     Ok(())
@@ -1643,10 +1642,20 @@ fn suspend_and_run_in_dir(
             .status()
     });
 
-    crossterm::execute!(terminal.backend_mut(), EnterAlternateScreen).map_err(|e| e.to_string())?;
+    reclaim_terminal(terminal.backend_mut()).map_err(|e| e.to_string())?;
     enable_raw_mode().map_err(|e| e.to_string())?;
     terminal.clear().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Take the terminal back from a child process that ran in it.
+///
+/// Mouse capture is requested again every time, not just at startup: lazygit
+/// and nvim switch mouse reporting off on their way out, and the modes belong
+/// to the terminal rather than to a screen, so re-entering the alternate
+/// screen alone left wheel and drag dead for the rest of the session (#68).
+fn reclaim_terminal(out: &mut impl io::Write) -> io::Result<()> {
+    crossterm::execute!(out, EnterAlternateScreen, EnableMouseCapture)
 }
 
 /// One repo queued for a sweep.
@@ -3251,6 +3260,28 @@ async fn build_repo_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression (#68): returning from lazygit or `$EDITOR` left the mouse
+    /// dead for the rest of the session. Both switch mouse reporting off as
+    /// they exit, and the modes belong to the terminal, not to a screen, so
+    /// re-entering the alternate screen does not bring them back. Measured in
+    /// tmux: `mouse_any_flag` and `mouse_sgr_flag` went from 1 to 0 across
+    /// one Enter-and-quit of lazygit, and the same across `e` and nvim.
+    #[test]
+    fn reclaiming_the_terminal_asks_for_the_mouse_again() {
+        let mut capture = Vec::new();
+        crossterm::execute!(capture, EnableMouseCapture).unwrap();
+        let mut written = Vec::new();
+        reclaim_terminal(&mut written).unwrap();
+        assert!(
+            written
+                .windows(capture.len())
+                .any(|window| window == capture.as_slice()),
+            "reclaim wrote {:?}, without the mouse capture request {:?}",
+            String::from_utf8_lossy(&written),
+            String::from_utf8_lossy(&capture),
+        );
+    }
 
     /// An idle loop paints as soon as it has something to paint. This is the
     /// ordinary case and must not be delayed by the coalescing at all.
