@@ -81,9 +81,11 @@ reads `git -C <worktree> status --short` and the issue's last comment, and
 dispatches a reviewer or a fresh worker from there. Do not dispatch a second
 worker on either ticket while this session's process (pid 57964) is alive.
 
-| Ticket | Issue | Branch | Worktree | State |
-|---|---|---|---|---|
-| FZ-09b | #58 | `feat/fz-09b-coverage-facts` | `.claude/worktrees/fz-09b` | In progress, worker running (resumed 17:10 after the decision below) |
+FZ-09b and #68 are both Done (table below). FZ-10b (#48) was dispatched at
+17:28 CEST: branch `feat/fz-10b-poll-pacing`, worktree
+`.claude/worktrees/fz-10b`, base `345717a`, `fz-worker`
+(`claude-opus-5-5`, medium), uncommitted until review. It owns `src/app.rs`
+and `src/main.rs` whole; nothing else runs beside it.
 
 **FZ-09b decision (Andreas, 17:08: "for fz-09b go with option A").** The
 worker stopped before writing code because the design (4.1, C2) carries
@@ -100,6 +102,7 @@ for this ticket, recorded on #58. The body's forced-edit list also misses the
 
 | Ticket | Issue | Ticket commit | Merge | What landed |
 |---|---|---|---|---|
+| FZ-09b | #58 | `75033dd` | `8cfe187` | `totalCount` and `hasNextPage` on the three connections (free: cost 3, 1030 nodes before and after); a `Coverage` record in `FetchMeta`, built in `split_viewer`; `github::coverage_note` draws `(fetched 50 of 95 repos)`, `(fetched 12 of 15 org repos)`, `(fetched 8 of 10 orgs)` at the end of the header, `?` for a pre-change cache; `LoadResult.meta` stored only when `Some`, `App.github_meta` replaced by a successful poll. Three cache-served assertions narrowed under Andreas's one-time option A release; seven compile-forced `meta: None,`. Contract edits in `345717a` (freshness amendment 10, `CLAUDE.md` R2 fact). Words provisional until he has seen them. Follow-ups in the closing comment, notably: the header is not rebuilt by a poll alone (coordinator ruling), left for FZ-09d |
 | Mouse drag and scroll | #68 | `b5254e4` | `5d917ea` | `reclaim_terminal` asks for the alternate screen and mouse capture together after lazygit, `$EDITOR` or the shell returns; the bug was there since the first commit, and showed after the first Enter or `e` of a session. Worktree and local branch removed. Follow-ups in the closing comment: capture stays on while the child runs (`DisableMouseCapture` is never sent) |
 
 ## Authority and routing
@@ -264,25 +267,23 @@ merged. Their remote branches stay on GitHub.
 
 ## Next step, and the order after it
 
-**Next step:** FZ-09b (#58), coverage facts and a correct header note. It is
-next on the `src/main.rs` line by C8 and its dependency FZ-09c is merged.
-Read the issue and the coverage design's sections 4.1 and 8 (FZ-09b); move
-it to Ready, record base, branch and worktree in an assignment comment and
-dispatch an `fz-worker`. As the handoff of 2026-10-02 and the design record
-it: it adds coverage facts inside `FetchMeta` (the account key is there
-since FZ-09c), replaces `window_exceeds_dataset`, and draws a note in the
-header, whose words and look (owner items O3 and O4) Andreas judges on the
-branch build before it merges. Check the body before relying on this
-summary.
+**Next step:** FZ-10b (#48), pace and back off GitHub polling, dispatched
+2026-10-09 17:28 CEST under the standing scope (see "In flight"). It owns
+`src/app.rs` and `src/main.rs` whole, so the second slot is empty while it
+runs. It must remove FZ-10a's `expect(dead_code)` on `poll_cost` with its
+first caller, and read the budget from `FetchMeta.budget`, which FZ-09b now
+stores on `App.github_meta` after a successful poll. Its interim status words
+hold until FZ-10c.
 
 Then:
 
 1. **The `src/main.rs` line**, one worker at a time, in the order ruled for
-   FZ-09 (C8): FZ-10b #48, FZ-10c #49, FZ-09d #60. As
+   FZ-09 (C8): FZ-10c #49, FZ-09d #60. As
    each FZ-09 ticket lands, amend `CLAUDE.md` and
    [freshness-contract.md](freshness-contract.md) as the coverage design's
-   section 6 says (its rows for coverage marks, the `Pending` floor and the
-   account rebuild are still to come; amendments 7 to 9 cover FZ-09c).
+   section 6 says (its rows for the `Pending` floor and the
+   account rebuild are still to come; amendments 7 to 9 cover FZ-09c,
+   amendment 10 covers FZ-09b).
 2. **M3 in the second slot:** no M3 ticket with an issue is left that does
    not wait on Andreas. Wave 3
    and the rendering tickets in the split on #26 have no issues yet; write
