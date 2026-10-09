@@ -2007,6 +2007,13 @@ pub struct App {
     pub api_budget: ApiBudget,
     /// The retry ladder and not-before beside `github_freshness`'s clock.
     pub github_backoff: GithubBackoff,
+    /// The configured GitHub poll interval in seconds, floored, and what one
+    /// poll costs in points (`github::poll_cost` of `repo_limit`). Copied from
+    /// `Config` at startup, as `contrib_author` is, because the header judges
+    /// the pace and holds an `App`, not a `Config`. Neither changes while
+    /// fleetz runs.
+    pub github_poll_secs: i64,
+    pub github_poll_cost: u32,
     /// Where the backoff and resume jitter come from; planted in tests.
     pub jitter: Box<dyn Jitter>,
     /// The fetches a keypress is waiting on (`f`, `F`, and the ones `r`'s
@@ -2129,6 +2136,8 @@ impl App {
             github_freshness: GithubFreshness::default(),
             api_budget: ApiBudget::default(),
             github_backoff: GithubBackoff::default(),
+            github_poll_secs: crate::config::Config::default().github_poll_interval as i64,
+            github_poll_cost: crate::github::poll_cost(crate::config::Config::default().repo_limit),
             jitter: Box::new(ClockJitter::new()),
             manual_fetches: FetchTally::default(),
             github_poll_inflight: false,
@@ -3133,6 +3142,53 @@ impl App {
     ) {
         self.github_backoff
             .failed(failure, now, &self.api_budget, self.jitter.as_mut());
+    }
+
+    /// The budget's pace for polls of `poll_cost` points, judged at the last
+    /// attempt, the moment polls are spaced from. Before any attempt there is
+    /// nothing to space.
+    ///
+    /// The interval and cost are parameters rather than read off
+    /// `github_poll_secs` and `github_poll_cost` so the poll scheduler can
+    /// pass the `Config` it holds; the header passes the copies.
+    pub fn github_pace(&self, poll_cost: u32) -> Pace {
+        match self.github_freshness.last_attempt {
+            Some(at) => self.api_budget.pace(poll_cost, at),
+            None => Pace::Unknown,
+        }
+    }
+
+    /// Whether the budget stretches polling past the configured interval of
+    /// `poll_secs` or pauses it, which suspends the `Pending` floor and the
+    /// push shortcut (A2).
+    pub fn budget_slowed(&self, poll_secs: i64, poll_cost: u32) -> bool {
+        match self.github_pace(poll_cost) {
+            Pace::Unknown => false,
+            Pace::Every(secs) => secs > poll_secs,
+            Pace::Paused { .. } => true,
+        }
+    }
+
+    /// Until when GitHub is known to refuse a request at `now`: a rate limit's
+    /// not-before that has not passed, or too few points left for one poll
+    /// (`docs/api-budget-design.md` 4.3, "Manual refresh"). `r` and `R` send
+    /// nothing while this is `Some`.
+    pub fn github_limit_until(
+        &self,
+        poll_secs: i64,
+        poll_cost: u32,
+        now: DateTime<Local>,
+    ) -> Option<DateTime<Local>> {
+        let limit = self
+            .github_backoff
+            .limit_until(poll_secs)
+            .filter(|t| *t > now);
+        let exhausted = self
+            .api_budget
+            .exhausted(poll_cost, now)
+            .then(|| self.api_budget.resume_at())
+            .flatten();
+        limit.max(exhausted)
     }
 
     pub fn clear_status(&mut self) {
