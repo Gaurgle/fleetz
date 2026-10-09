@@ -175,6 +175,10 @@ pub struct LoadResult {
     /// `docs/repository-identity-design.md`), naming the first such clone by
     /// path. None when discovery found no ambiguity.
     pub ambiguity: Option<String>,
+    /// What the fetch behind `dataset` learned: its coverage and account.
+    /// None for a load that fetched nothing (a window apply, `-d`), which
+    /// keeps the one `App` holds (C3 in `docs/coverage-cache-design.md`).
+    pub meta: Option<github::FetchMeta>,
 }
 
 /// What an assembly says besides its rows: the header, and the ambiguity
@@ -515,7 +519,7 @@ fn spawn_load(
         let mode = args.mode();
         let result = load_repos(&args, &config, &repo_dir, &mode, window, bypass_cache)
             .await
-            .map(|(repos, notes, dataset, calendar, source)| {
+            .map(|(repos, notes, dataset, calendar, source, meta)| {
                 Box::new(LoadResult {
                     kind,
                     repos,
@@ -524,6 +528,7 @@ fn spawn_load(
                     github_calendar: calendar,
                     source,
                     ambiguity: notes.ambiguity,
+                    meta,
                 })
             });
         let _ = tx.send(AppEvent::Loaded(result));
@@ -543,6 +548,8 @@ fn spawn_window_apply(
 ) {
     let tx = tx.clone();
     let dataset = app.dataset.clone();
+    // The note is drawn from the coverage of the dataset being re-filtered.
+    let coverage = app.github_meta.coverage.clone();
     let args = args.clone();
     let config = config.clone();
     let repo_dir = repo_dir.to_path_buf();
@@ -551,6 +558,7 @@ fn spawn_window_apply(
         let header = w.label(config.work_start, config.work_end);
         let result = assemble_view(
             &dataset,
+            coverage.as_ref(),
             Some(cutoff),
             header,
             &args,
@@ -560,25 +568,35 @@ fn spawn_window_apply(
             Some(&tx),
         )
         .await
-        .map(|(repos, notes)| {
-            Box::new(LoadResult {
-                kind: LoadKind::WindowApply(w),
-                repos,
-                header: notes.header,
-                dataset: None,
-                github_calendar: None,
-                // A window apply re-filters what is already in memory and
-                // fetches nothing, so it must not touch the poll clock either
-                // way. `dataset: None` already guards that.
-                source: app::DatasetSource::Local,
-                // Discovery runs again, so the ambiguity rides along like any
-                // load's.
-                ambiguity: notes.ambiguity,
-            })
-        })
+        .map(|(repos, notes)| Box::new(window_apply_result(w, repos, notes)))
         .map_err(LoadError::from);
         let _ = tx.send(AppEvent::Loaded(result));
     });
+}
+
+/// What a window apply delivers: rows and notes, and nothing fetched.
+fn window_apply_result(
+    w: time::TimeWindow,
+    repos: Vec<RepoStatus>,
+    notes: ViewNotes,
+) -> LoadResult {
+    LoadResult {
+        kind: LoadKind::WindowApply(w),
+        repos,
+        header: notes.header,
+        dataset: None,
+        github_calendar: None,
+        // A window apply re-filters what is already in memory and
+        // fetches nothing, so it must not touch the poll clock either
+        // way. `dataset: None` already guards that.
+        source: app::DatasetSource::Local,
+        // Discovery runs again, so the ambiguity rides along like any
+        // load's.
+        ambiguity: notes.ambiguity,
+        // Nothing was fetched: the app keeps the dataset's coverage, which
+        // the header note above was drawn from.
+        meta: None,
+    }
 }
 
 /// Swap a finished load into the app, preserving UI state (selection is
@@ -620,6 +638,11 @@ fn apply_load_result_saving_to(
                 // current. A cache read leaves it unset, so the poll is due on
                 // the first tick instead.
                 app.github_freshness.loaded(&lr.source, now);
+            }
+            // Only a load that fetched carries one; a window apply keeps the
+            // coverage its dataset came with.
+            if let Some(meta) = lr.meta {
+                app.github_meta = meta;
             }
             // The calendar rides the same fetch as the dataset. Dropping it
             // here left the strip blank until the first background poll
@@ -1792,8 +1815,11 @@ fn apply_github_poll(
                 // The poll always bypasses the cache, so this is
                 // network data by construction.
                 origin: _,
-                meta: _,
+                meta,
             } = *fetch;
+            // The dataset is replaced below, so its coverage is too: the next
+            // window apply draws its note from what this poll covered.
+            app.github_meta = meta;
             // The calendar rides the same payload as the repos, so
             // a poll that updated CI also refreshed the year at no
             // extra cost. A payload predating the field leaves the
@@ -2366,6 +2392,7 @@ async fn load_repos(
         Vec<github::GithubRepo>,
         Option<Box<contributions::Calendar>>,
         app::DatasetSource,
+        Option<github::FetchMeta>,
     ),
     LoadError,
 > {
@@ -2404,7 +2431,14 @@ async fn load_repos(
             header,
             ambiguity: None,
         };
-        return Ok((repos, notes, Vec::new(), None, app::DatasetSource::Local));
+        return Ok((
+            repos,
+            notes,
+            Vec::new(),
+            None,
+            app::DatasetSource::Local,
+            None,
+        ));
     }
 
     // Fetch from GitHub (with caching)
@@ -2442,13 +2476,23 @@ async fn load_repos(
             });
         }
     };
-    let (dataset, calendar) = (fetch.repos, fetch.calendar);
+    let (dataset, calendar, meta) = (fetch.repos, fetch.calendar, fetch.meta);
 
     let (cutoff, header) = resolve_cutoff(window, mode, config)?;
-    let (repos, notes) =
-        assemble_view(&dataset, cutoff, header, args, config, repo_dir, true, None).await?;
+    let (repos, notes) = assemble_view(
+        &dataset,
+        meta.coverage.as_ref(),
+        cutoff,
+        header,
+        args,
+        config,
+        repo_dir,
+        true,
+        None,
+    )
+    .await?;
 
-    Ok((repos, notes, dataset, calendar, source))
+    Ok((repos, notes, dataset, calendar, source, Some(meta)))
 }
 
 /// One repo's full local status for `-d` mode. Returns None for a repo with
@@ -2691,6 +2735,7 @@ fn unclaimed_local(
 #[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 async fn assemble_view(
     dataset: &[github::GithubRepo],
+    coverage: Option<&github::Coverage>,
     cutoff: Option<chrono::DateTime<chrono::Utc>>,
     header: String,
     args: &Args,
@@ -2708,7 +2753,7 @@ async fn assemble_view(
     scan_roots.extend(config.resolved_extra_dirs());
     let home = dirs::home_dir().unwrap_or_default();
 
-    assemble_view_in(
+    let (repos, mut notes) = assemble_view_in(
         dataset,
         cutoff,
         header,
@@ -2719,7 +2764,24 @@ async fn assemble_view(
         git_fetch,
         progress,
     )
-    .await
+    .await?;
+    notes.header = with_coverage_note(notes.header, coverage, cutoff, config.repo_limit);
+    Ok((repos, notes))
+}
+
+/// The header with the coverage note appended when the view can be missing
+/// repos GitHub has (`github::coverage_note`), so an incomplete view never
+/// masquerades as complete. No coverage (nothing fetched) adds nothing.
+fn with_coverage_note(
+    header: String,
+    coverage: Option<&github::Coverage>,
+    cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    repo_limit: u32,
+) -> String {
+    match coverage.and_then(|coverage| github::coverage_note(coverage, cutoff, repo_limit)) {
+        Some(note) => format!("{header} ({note})"),
+        None => header,
+    }
 }
 
 /// The body of `assemble_view`, with the two filesystem anchors it used to
@@ -2727,13 +2789,16 @@ async fn assemble_view(
 /// (the repo dir first, then the configured extra dirs) is what passes 1 and 3
 /// walk. This is the test seam: a test can run the whole assembly against a
 /// temp home and temp roots instead of the real `$HOME`.
+///
+/// `_config` is unread since the coverage note moved to `assemble_view`
+/// (FZ-09b), and kept so the seam's existing callers stand unchanged.
 #[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 async fn assemble_view_in(
     dataset: &[github::GithubRepo],
     cutoff: Option<chrono::DateTime<chrono::Utc>>,
     header: String,
     args: &Args,
-    config: &config::Config,
+    _config: &config::Config,
     home: &Path,
     scan_roots: &[PathBuf],
     git_fetch: bool,
@@ -2959,16 +3024,8 @@ async fn assemble_view_in(
     if let Some(ref a) = args.author {
         full_header = format!("{full_header} (author: {a})");
     }
-    // The dataset only reaches back repo_limit repos; flag a window that
-    // outruns it so an incomplete view never masquerades as complete.
-    if let Some(c) = cutoff
-        && github::window_exceeds_dataset(dataset, c, config.repo_limit)
-    {
-        full_header = format!(
-            "{full_header} (window exceeds fetched repos, repo_limit={})",
-            config.repo_limit
-        );
-    }
+    // The coverage note goes last, in `assemble_view`, which has the payload's
+    // coverage; the merged dataset here cannot say what was cut off.
 
     let notes = ViewNotes {
         header: full_header,
@@ -3908,6 +3965,7 @@ mod tests {
                 github_calendar: None,
                 source,
                 ambiguity: None,
+                meta: None,
             })),
         );
     }
@@ -4029,6 +4087,7 @@ mod tests {
                 github_calendar: None,
                 source,
                 ambiguity: None,
+                meta: None,
             })),
         );
     }
@@ -5334,6 +5393,7 @@ mod tests {
                 github_calendar: None,
                 source: app::DatasetSource::Network,
                 ambiguity: ambiguity.map(str::to_string),
+                meta: None,
             })),
             store,
         );
@@ -6451,6 +6511,7 @@ mod tests {
                 github_calendar: Some(Box::new(cal)),
                 source: app::DatasetSource::Network,
                 ambiguity: None,
+                meta: None,
             })),
         );
         assert_eq!(
@@ -6484,6 +6545,7 @@ mod tests {
                 github_calendar: None,
                 source: app::DatasetSource::Cache { written: None },
                 ambiguity: None,
+                meta: None,
             })),
         );
         assert!(
@@ -6509,12 +6571,97 @@ mod tests {
                 github_calendar: None,
                 source: app::DatasetSource::Network,
                 ambiguity: None,
+                meta: None,
             })),
         );
         assert!(
             app.github_freshness.last_attempt.is_some(),
             "fresh data should not re-poll at once"
         );
+    }
+
+    /// The owner's viewer page (design 1.2): 50 of 95, cut off 237 days back.
+    fn owners_coverage() -> github::Coverage {
+        github::Coverage {
+            viewer: github::PageCoverage {
+                returned: 50,
+                total: Some(95),
+                has_next_page: Some(true),
+                boundary: Some(chrono::Utc::now() - chrono::Duration::days(237)),
+            },
+            org_list: None,
+            org_pages: Vec::new(),
+        }
+    }
+
+    /// CV19: a window apply fetches nothing, so it carries no `FetchMeta`;
+    /// the app keeps the load's, and the apply draws its note from it.
+    #[test]
+    fn cv19_a_window_apply_keeps_the_loads_coverage_and_draws_its_note() {
+        let scratch = wt_scratch("cv19");
+        let store = window_state::WindowState::at(scratch.join("window.toml"));
+        let config = config::Config::default();
+        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
+        let meta = github::FetchMeta {
+            coverage: Some(owners_coverage()),
+            ..Default::default()
+        };
+        apply_load_result_saving_to(
+            &mut app,
+            &config,
+            Ok(Box::new(LoadResult {
+                kind: LoadKind::Initial,
+                repos: Vec::new(),
+                header: "h".to_string(),
+                dataset: Some(Vec::new()),
+                github_calendar: None,
+                source: app::DatasetSource::Network,
+                ambiguity: None,
+                meta: Some(meta.clone()),
+            })),
+            &store,
+        );
+        assert_eq!(app.github_meta, meta);
+
+        // As `spawn_window_apply` builds it, from the app's coverage.
+        let w = time::TimeWindow::clamped(1, time::WindowUnit::Years);
+        let header = with_coverage_note(
+            w.label(config.work_start, config.work_end),
+            app.github_meta.coverage.as_ref(),
+            Some(w.cutoff(config.work_start, config.work_end)),
+            config.repo_limit,
+        );
+        let notes = ViewNotes {
+            header,
+            ambiguity: None,
+        };
+        let result = window_apply_result(w, Vec::new(), notes);
+        assert!(result.meta.is_none(), "a window apply fetched nothing");
+        apply_load_result_saving_to(&mut app, &config, Ok(Box::new(result)), &store);
+
+        assert_eq!(app.github_meta, meta, "the load's coverage was dropped");
+        assert!(
+            app.header.ends_with("(fetched 50 of 95 repos)"),
+            "no note at 365 days: {}",
+            app.header
+        );
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// A successful poll replaces the dataset and its coverage with it; a
+    /// failed one changes neither (contract rule 4).
+    #[test]
+    fn a_poll_replaces_the_coverage_and_a_failed_one_keeps_it() {
+        let mut app = app_with_pending_repo();
+        let coverage = owners_coverage();
+        let mut fetch = poll_says_passed().unwrap();
+        fetch.meta.coverage = Some(coverage.clone());
+        poll(&mut app, Ok(fetch));
+        assert_eq!(app.github_meta.coverage.as_ref(), Some(&coverage));
+
+        poll(&mut app, Err("boom".to_string()));
+        assert!(app.github_freshness.is_failing(), "the failure landed");
+        assert_eq!(app.github_meta.coverage.as_ref(), Some(&coverage));
     }
 
     /// A time-window apply re-filters what is already loaded and carries no
@@ -6537,6 +6684,7 @@ mod tests {
                 github_calendar: None,
                 source: app::DatasetSource::Network,
                 ambiguity: None,
+                meta: None,
             })),
         );
         assert_eq!(app.github_calendar.as_ref().map(|c| c.total()), Some(9));
