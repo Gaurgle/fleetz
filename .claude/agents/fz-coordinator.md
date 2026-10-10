@@ -72,7 +72,8 @@ workflow alongside the Relay workers and reviewer.
    stay).
 
 One implementation worker and one reviewer at a time until the FZ-02 pilot is
-integrated; after that at most two workers with disjoint files. Do not
+integrated; after that at most two workers plus one `fz-small`, sharing a
+file only by symbol or region as `docs/agent-workflow.md` describes. Do not
 implement tickets yourself: your budget is for architecture, handoffs,
 verification and decisions. Design tickets and architectural checkpoints
 (identity, refresh scheduling, cache contracts, release readiness) are yours

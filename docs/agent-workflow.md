@@ -44,7 +44,12 @@ authorization while migrating these instructions.
 - Reviewer independently evaluates that ticket's exact diff and criteria.
 
 Start with one implementation worker and one reviewer. After the FZ-02 pilot,
-allow at most two simultaneous implementation workers with disjoint ownership.
+allow at most two implementation workers (`fz-worker`) plus one `fz-small` at
+a time, each with its own reviewer when the ticket needs one. Workers may
+share a file by symbol or region when the assignment comment names the split.
+Merges stay one at a time, with the combined check rerun against the new
+`main`. Drop back to two when more than one ticket waits at Ready to
+integrate.
 Do not create another management layer or recursively delegate by default.
 Claude and Codex use the same ticket contract; cross-provider dispatch may be
 manual. A ticket remains usable without a custom orchestration service.
