@@ -158,9 +158,10 @@ Note for the first launch of a build from this `main`: the first successful
 poll writes the keyed cache file beside the legacy one, and the installed
 binary keeps using the legacy file until it is reinstalled.
 
-Checkpoint verdict: M1's exit evidence is met on the record above, subject to
-the owner's confirmation. The release scope decision the plan asks for "after
-M1 and the performance baseline" is his next call.
+Checkpoint verdict: M1's exit evidence is met on the record above. Andreas
+confirmed it on 2026-10-10 at 12:52 ("all looks good"). The release scope
+decision the plan asks for "after M1 and the performance baseline" is his
+next call.
 
 ## First dispatch
 

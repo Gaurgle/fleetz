@@ -39,6 +39,14 @@ fz-coordinator`, effort `high`, session
   standing scope's `src/main.rs` line is complete and the three issues
   Andreas filed since the plan (#66, #67, #69) are untriaged and were not
   named. He is told so in the first report and can correct it.
+- **Authorized on 2026-10-10.** At 12:46 Andreas chose option (c) of the
+  first report ("go with c"): triage and dispatch #66 now, one worker and
+  one reviewer, while the lead writes the M1 checkpoint; #69 and #67 are
+  not named and are not dispatched. At 12:52 ("all looks good") he
+  approved the second existing-test edit on #66
+  (`no_day_is_marked_until_the_user_moves`, recorded on the issue) and
+  confirmed the M1 checkpoint in [release-plan.md](release-plan.md). #66
+  changes the screen, so it stops at Ready to integrate for his look.
 
 **Released before that** 2026-10-09 20:14 CEST by `claude-fable-5-1` (`claude --agent fz-coordinator`,
 session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
