@@ -323,3 +323,5 @@ Behavioral parity with repoz is a design goal, not an accident: `EXTRA_DIRS`,
 the dot-prefixed name match, `section_div` headers, the glyphs, push ordering
 and the time-slot logic all mirror it. When the two disagree, repoz has usually
 been right longer: read `~/repos/repoz/repoz` before assuming fleetz is right.
+fleetz filters archived repositories server-side (`isArchived: false`) and
+repoz does not, a deliberate divergence (#69).
