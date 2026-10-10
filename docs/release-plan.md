@@ -73,6 +73,95 @@ start.
 See [agent-handoff.md](agent-handoff.md) for coordinator takeover and the
 next FZ-02 pilot. GitHub remains the live status source.
 
+## M0 checkpoint and retrospective: written 2026-10-10
+
+M0's exit evidence was met on 2026-10-01: FZ-01's results are in
+[performance-baseline.md](performance-baseline.md) (merge `b084d21`), and
+FZ-02 was integrated (`28ebba7`) and verified by the owner, who closed it.
+The pilot cost: FZ-02 ran from dispatch at 12:30 to Ready to integrate at
+12:38 UTC (one worker fix cycle, review accepted first time) and merged at
+13:10; FZ-01 needed one review fix cycle (a comparison rule that failed across
+sessions), and its reviewer reproduced case A from the document alone with
+wall time 4 to 5% higher at equal CPU, which is why later tickets compare
+binaries interleaved in one session rather than against the table.
+
+What the method showed over M0 and M1 (data in the issues and in the
+handoff's "How the days ran"):
+
+- **Throughput.** 40 ticket merges on `main` between 2026-10-01 15:06 and
+  2026-10-09 20:09, over four working sessions: 17 on 10-01, 13 on 10-02,
+  6 on 10-03, 5 on 10-09. The 10-01 and 10-02 runs used two or three agents
+  at a time; 10-03 and 10-09 at most two workers, mostly one.
+- **Review earns its cost.** On 10-02 five of thirteen tickets needed a fix
+  cycle after first review; on 10-03 three of six; on 10-09 two of five. The
+  usual finding is a rule with no test that fails when the rule is removed
+  (reviewers run mutants). Two tickets that passed the worker's own checks
+  had tests that could not fail (FZ-09c). One coordinator ruling was wrong
+  and the reviewer caught it (the strict owner rule, FZ-05d).
+- **What creaked.** Ticket bodies' "existing tests unaffected" lists went
+  stale three times in one day; stale handoff times written from memory;
+  a reviewer that could not find a mid-ticket ruling because it was only in
+  the worker's message; CI's clippy newer than the machine's; a `sed -i`
+  slip against the file rule; one `fz-small` that wrote a file through an
+  inline script. Each has a rule in the handoff now.
+- **Usage.** The limit was hit once (10-01, five agents in flight); 10-02
+  ended at 82% by the owner's call. One worker and one reviewer at a time
+  ran a full afternoon on 10-09 without reading the limit.
+- **Owner decisions per day:** about five, all on test edits, option
+  choices in a design, or words on screen. Nothing waited on him for more
+  than one turn when he was present.
+
+Keep for the template: one coordinator, worker and reviewer as separate
+invocations, mutants as part of review, rulings posted on the issue when
+made, cleanup as part of Done, the standing test-edit exception.
+
+## M1 checkpoint: written 2026-10-10
+
+Every M1 implementation ticket is Done: FZ-03, FZ-04, FZ-05a to f, FZ-06a to
+e, FZ-09a to d and f, FZ-10a to c, plus #42, #43 and #44 (29 issues closed
+under the milestone). The last merge was FZ-09d at `5b25efb` on 2026-10-09.
+Two M1 issues stay open and do not block the exit: #46 (a regression test
+that also passes on the old code; editing it is the owner's call) and #61
+(FZ-09e, deliberately not promoted).
+
+Exit evidence, against the table above:
+
+- **Deterministic regression scenarios pass.** `cargo test` on `main` at
+  `fe39168`: 1050 passed, 0 failed, 1 ignored (the ignored test needs a
+  live `repoz`). The accepted designs' numbered scenarios are tests:
+  identity (`S1` to `S22` across `discovery.rs` and `main.rs`), cache keys
+  (`E` scenarios in `git.rs` and `main.rs`), coverage and cache (`CK`
+  scenarios in `github.rs` and `cache.rs`), API budget (`S1` to `S3` with
+  sub-cases, 34 tests in `app.rs` and `main.rs` plus five from review). Each
+  behavior change landed with a test that fails on the old code; the one
+  known exception is #46.
+- **Offline, incomplete and failed states remain distinguishable.** A
+  cache-served launch records no attempt and the header shows the data's
+  age (`DatasetSource::Cache`, freshness contract); a failed load says why
+  instead of drawing nothing (`a_failed_load_says_why_instead_of_drawing_nothing`);
+  rate limited, paused and slowed each have their own header words with the
+  resume time (FZ-10c, `github_segment`, accepted by the owner); `access
+  refused` and `not authenticated` are named; a backing-off header keeps the
+  failure and its age; the coverage note says `(fetched 50 of 95 repos)`
+  when the window is smaller than the account; a carrier row the last poll
+  did not return is dimmed with "GitHub data from an earlier refresh" and
+  never shown as "no CI" (FZ-09d, look accepted); a failed `git fetch` stays
+  marked per repo until that repo is fetched again (FZ-04); a signed-out
+  `R` leaves the rows and says the load failed. Every one of these has a
+  named test in `src/ui/mod.rs`, `src/main.rs` or `src/github.rs`.
+
+Carried out of M1 as follow-ups, not exit conditions: the ssh fetch hang
+(`ConnectTimeout`, `BatchMode`), refetch on recovery (fetch rule 6), the ref
+query cost at 20,000 refs, one key for "same remote", the `,` interval row
+that is never applied, and the review follow-ups listed in the handoff.
+Note for the first launch of a build from this `main`: the first successful
+poll writes the keyed cache file beside the legacy one, and the installed
+binary keeps using the legacy file until it is reinstalled.
+
+Checkpoint verdict: M1's exit evidence is met on the record above, subject to
+the owner's confirmation. The release scope decision the plan asks for "after
+M1 and the performance baseline" is his next call.
+
 ## First dispatch
 
 1. Coordinator checks the working tree, captures the base commit and prepares
