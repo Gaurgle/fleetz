@@ -1,8 +1,8 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-09 20:14 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `99996af4-81d7-4c21-8b83-a46db044f56a`), when Andreas
-asked for a place to stop for the night. **Nothing is running: no worker, no
+Last written 2026-10-10 12:42 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `863d1cbe-79c0-452e-b932-62c7f31e06a9`), at takeover.
+**Nothing is running: no worker, no
 reviewer, no build, no background job. No ticket of the release line is
 between dispatch and merge, and no ticket worktree exists** (the board's one
 Ready to integrate item is #45, parked). **Every M1 implementation ticket is
@@ -15,11 +15,34 @@ what to do next.
 
 ## Baton
 
-**Released** 2026-10-09 20:14 CEST by `claude-fable-5-1` (`claude --agent fz-coordinator`,
+**Held** since 2026-10-10 12:42 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, effort `high`, session
+`863d1cbe-79c0-452e-b932-62c7f31e06a9`).
+
+- **How it was taken (2026-10-10).** Andreas opened the session, asked
+  whether Fable 5.1 or Opus 5.5 suits the lead role (answer: Fable for
+  checkpoints and messy takeovers, an Opus variant at effort `high` possible
+  for pure dispatch days; no change made), then wrote: "yes, proceed with the
+  startup read, then get started on the project". Evidence that the previous
+  lead stopped: it released the baton itself at 20:14 the day before (below);
+  `main` equals `origin/main` at `05a8d16`, clean, with the last code CI run
+  green at `5b25efb`; the only worktree is the parked `issue-45`; the board
+  shows nothing In progress or in Review; the only `claude --agent
+  fz-coordinator` process is this session. Other processes seen: a plain
+  `claude` started 12:37 in this repository (not a lead agent), a
+  `claude --agent nz-coordinator` in `~/repos/notez`, the Codex app-server
+  daemon of 2026-09-30 (retired) and a Codex exec-server started 11:02 today
+  from the ChatGPT app with no working directory in a repository. No Astra
+  lead session was found. "Get started on the project" is read as the
+  takeover and as a request to proceed with the recorded next step (M1 exit
+  evidence, the M0 retrospective), not as naming a ticket to dispatch; the
+  standing scope's `src/main.rs` line is complete and the three issues
+  Andreas filed since the plan (#66, #67, #69) are untriaged and were not
+  named. He is told so in the first report and can correct it.
+
+**Released before that** 2026-10-09 20:14 CEST by `claude-fable-5-1` (`claude --agent fz-coordinator`,
 session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
-2026-10-09 16:30 CEST. No lead is active. The next lead records its own
-session and takeover time here, after confirming with Andreas that this
-session has ended.
+2026-10-09 16:30 CEST.
 
 - **How it ended (2026-10-09).** At 19:49 Andreas wrote: "we can start
   looking at a place to stop for the night, finish what's rolling at the
