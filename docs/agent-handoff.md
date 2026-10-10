@@ -1,12 +1,12 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-10 13:30 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `863d1cbe-79c0-452e-b932-62c7f31e06a9`), with one
-ticket in flight. **Running: one `fz-worker` on #69 in
-`.claude/worktrees/issue-69` (see "Running now"); no reviewer yet.** The
-board's one Ready to integrate item is #45, parked. **Every M1
-implementation ticket is Done and the M1 checkpoint is confirmed.** Read
-this file,
+Last written 2026-10-10 13:43 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `863d1cbe-79c0-452e-b932-62c7f31e06a9`), when
+Andreas asked to wrap up for the day. **Nothing is running: no worker, no
+reviewer, no build, no background job. No ticket is between dispatch and
+merge, and no ticket worktree exists** (the board's one Ready to integrate
+item is #45, parked). **Every M1 implementation ticket is Done and the M1
+checkpoint is confirmed.** Read this file,
 the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
@@ -15,10 +15,24 @@ what to do next.
 
 ## Baton
 
-**Held** since 2026-10-10 12:42 CEST by `claude-fable-5-1` (`claude --agent
+**Released** 2026-10-10 13:43 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, effort `high`, session
-`863d1cbe-79c0-452e-b932-62c7f31e06a9`).
+`863d1cbe-79c0-452e-b932-62c7f31e06a9`), which held it from 2026-10-10
+12:42 CEST. No lead is active. The next lead records its own session and
+takeover time here, after confirming with Andreas that this session has
+ended.
 
+- **How it ended (2026-10-10).** At 13:35 Andreas wrote: "after the active
+  workers come back green, we can stop for today", and at 13:38, when the
+  #69 branch CI was still running, "ok, merge when it's green and wrap up
+  for today". The one thing in flight was #69, already accepted in review
+  and committed; its branch CI went green, the coordinator merged it under
+  the safe-merge rule (`677e8cc`, CI green on `main`), closed the issue,
+  cleaned up and stopped. Nothing was dispatched after 13:35. No worker or
+  reviewer is running. Usage was not read.
+- **Taking over does not resume work.** The standing scope below is recorded
+  evidence; every ticket Andreas named is Done. A new lead confirms the
+  standing instructions with him once before dispatching anything.
 - **How it was taken (2026-10-10).** Andreas opened the session, asked
   whether Fable 5.1 or Opus 5.5 suits the lead role (answer: Fable for
   checkpoints and messy takeovers, an Opus variant at effort `high` possible
@@ -117,28 +131,11 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
   already stopped, and no reviewer was running. Nothing was left at Ready to
   integrate and nothing was uncommitted in a ticket worktree.
 
-## Running now (2026-10-10)
-
-- **#69 "Don't list archived GitHub repos as live", In progress.** Andreas:
-  "can we start on #69 in parallel?" (13:05) and "option 1!" (13:27). Base
-  `5705b13`, branch `fix/69-skip-archived-repos`, worktree
-  `.claude/worktrees/issue-69`, worker `fz-worker` (`claude-opus-5-5`,
-  medium) dispatched about 13:30. Option 1: `isArchived: false` on both
-  `repositories(...)` connections in `build_query`, cost measured before
-  and after with two live queries, payload and cache format unchanged, one
-  sentence in `CLAUDE.md` on the repoz divergence. Allowed files
-  `src/github.rs` and `CLAUDE.md`. **Open with Andreas:** whether the
-  worker may update the query-text literals in existing `github.rs` tests
-  (`cv8_the_query_asks_coverage_on_the_three_connections_only` is expected
-  to need it); asked twice, not yet answered; the worker reports the exact
-  edit and leaves the test failing until he does. Milestone M1 (addendum
-  after the checkpoint), P1, set by the lead. Nothing on screen changes, so
-  it merges under the safe-merge rule once reviewed.
-
 ## Done on 2026-10-10
 
 | Ticket | Issue | Ticket commit | Merge | What landed |
 |---|---|---|---|---|
+| Archived repos not live | #69 | `0e7e7bb` | `677e8cc` | `isArchived: false` on both `repositories(...)` connections in `build_query` (option 1, Andreas 13:27); measured cost 3 / 1030 nodes before and after, viewer `totalCount` 98 to 97, `notez-cli` gone and `AoC-2025` back in the window; payload and cache format unchanged; one `cv8` literal edited under his ruling of 13:33; new test `both_repo_connections_skip_archived_repos`; `CLAUDE.md` notes the deliberate repoz divergence. Milestone M1 (addendum after the checkpoint), P1. Review accepted first time. Merged without a look: nothing on screen changes. CI green on `main`. Worktree and local branch removed |
 | Strip opens on today | #66 | `9ab6f6e` | `5705b13` | `open_contributions(mode, today)` seeds the day cursor on today; `App::contributions_unfolded` does the same when `4` or the `[4]` click unfolds a never-shown strip, a travelled strip keeps its day; `ui::contributions::period_total` split out of `title`, drawn on the left of the bottom border beside the legend, shortening on the title's ladder; README `c` row. Three existing tests edited under Andreas's approval (recorded on the issue), ten new tests. Two review rounds (one stale doc comment). Andreas accepted the look ("looks great", 13:23). Worktree and local branch removed |
 
 Also on 2026-10-10: the M0 retrospective and the M1 checkpoint were
@@ -285,9 +282,11 @@ written into the repository.
 
 ## State of `main`
 
-`main` is at the merge of FZ-09d, `5b25efb`, plus docs commits, equal to
-`origin/main`, CI green, 1050 tests passing and 1 ignored. Since 2026-10-03
-it gained #68 (mouse capture reclaimed after a child process), FZ-09b (the
+`main` is at the merge of #69, `677e8cc`, plus docs commits, equal to
+`origin/main`, 1061 tests passing and 1 ignored. On 2026-10-10 it gained
+#66 (the strip opens on today, total on the bottom border, look accepted)
+and #69 (archived repos filtered server-side). Since 2026-10-03 it had
+gained #68 (mouse capture reclaimed after a child process), FZ-09b (the
 coverage note), FZ-10b (pacing and backoff), FZ-10c (the header's polling
 states) and FZ-09d (dimmed not-in-last-poll rows, the account rebuild), all
 with Andreas's words and look accepted. The local toolchain is rustc 1.99.0
@@ -367,27 +366,38 @@ Each issue holds its evidence.
 
 ## Worktrees
 
-Two exist besides the main checkout, under `.claude/worktrees/`. Every
-ticket worktree of a merged ticket (on 2026-10-10: `issue-66`; on
-2026-10-09: `mouse`, `fz-09b`, `fz-10b`, `fz-10c`, `fz-09d`) is removed
+One exists besides the main checkout, under `.claude/worktrees/`. Every
+ticket worktree of a merged ticket (on 2026-10-10: `issue-66`, `issue-69`;
+on 2026-10-09: `mouse`, `fz-09b`, `fz-10b`, `fz-10c`, `fz-09d`) is removed
 with its local branch; remote branches stay on GitHub.
 
-- **`issue-69`, branch `fix/69-skip-archived-repos`:** the running
-  ticket, see "Running now".
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked by
   Andreas until the repository goes public.
 
 ## Next step, and the order after it
 
-**Next step (2026-10-10):** finish #69 (worker running; then `fz-reviewer`,
-commit, push, combined check, merge under the safe-merge rule, cleanup).
-After it, nothing is dispatched or Ready: #67 (the CI pane) is a planning
-issue Andreas marked not authorized to start, and the standing scope's
-`src/main.rs` line is complete. Items 1, 3 and 4 below are done (the M1
-checkpoint and the M0 retrospective are in the release plan, confirmed);
-item 2 stands. The release scope decision after M1 is Andreas's; raise it
-with him when #69 is Done. The earlier text follows for the record:
+**Next step (written 2026-10-10 at the day's end):** nothing is dispatched,
+Ready or in a worktree. Every ticket Andreas has named is Done (#66, #69).
+#67 (the CI pane) is a planning issue he marked not authorized to start;
+the standing scope's `src/main.rs` line is complete; FZ-13s #56 and the
+FZ-13 wave 4 questions wait for him. The next lead's work, with Andreas:
+
+1. **The release scope decision** the plan asks for after M1 and the
+   baseline: which of M2 to M5 goes into the first public release. Not yet
+   raised with him. Draft a proposal from the release plan's tables and the
+   follow-ups below; it is his call.
+2. **Follow-ups he may want ticketed** (ask before creating issues): the
+   settings-save cursor reset (from #66's review), the `o` shell mouse
+   capture (from #68's review, offered 2026-10-09, unanswered), the
+   `start_account_rebuild` test (from #60's review), and the list under
+   "Follow-ups found and not ticketed".
+3. **`cargo install --path .`** is his; the installed binary predates
+   FZ-09b onward and still lists `notez-cli`.
+
+Items 1, 3 and 4 of the earlier list below are done (the M1 checkpoint and
+the M0 retrospective are in the release plan, confirmed by Andreas); item 2
+stands. The earlier text follows for the record:
 
 1. **M1's exit evidence** ([release-plan.md](release-plan.md): deterministic
    regression scenarios pass; offline, incomplete and failed states remain
@@ -684,6 +694,29 @@ O1 to O5 accepted (O1's words and look are his on the FZ-10c build); FZ-08
 
 ## How the days ran
 
+- **2026-10-10, 12:42 to the release below.** One lead session; one worker
+  and one reviewer at a time (the second slot was offered and used for #69
+  only after #66 had merged). Two tickets dispatched, both merged: #66
+  (three worker passes: initial, a coordinator ruling on unfolding, three
+  small review fixes; two review rounds) and #69 (one pass, accepted first
+  time). Owner decisions: six (option c for the day, the second test edit on
+  #66, the M1 confirmation, #69 in parallel, option 1, the `cv8` literal),
+  each answered within a few minutes. Also written: the M0 retrospective and
+  the M1 checkpoint. Worker turns 5 to 10 minutes, reviews 2 to 9. Usage was
+  not read.
+- **A ticket body's "reached from" claims need checking against the code**
+  before dispatch: #66's body said the open key and the click reach
+  `open_contributions`; they only fold and unfold, and the worker stopped to
+  ask. The ruling cost one extra pass. Grep the call sites when writing the
+  body.
+- **Reviewers find orphaned doc comments the worker missed** (#66, twice:
+  `month_and_caret_line`, then the `contrib_cursor` field). Tell workers to
+  grep for prose that states the old rule, not only code.
+- **Live measurements in a worker are fine when bounded**: the #69 brief
+  said two requests, no loop; the worker did exactly that and saved the
+  responses, which let the reviewer verify without spending a request.
+- **The re-review pattern held**: continuing the same reviewer with both
+  diff hashes gave a one-minute re-review on #66.
 - **2026-10-09, 16:30 to 20:14.** One lead session, one worker and one
   reviewer at a time after the first hour (two workers for #68 and FZ-09b at
   the start). Dispatched five tickets, all merged: #68, FZ-09b, FZ-10b,
