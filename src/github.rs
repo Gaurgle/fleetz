@@ -738,18 +738,25 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate, rotation: i64) -> Stri
     // much of it the page holds (`Coverage`). Free: a field on a connection
     // already asked for adds no `first:`, and measured on 2026-10-09 the query
     // priced cost 3 / nodeCount 1030 before and after (FZ-09b, #58).
+    //
+    // `isArchived: false` on both repo connections keeps archived repos out
+    // (#69): archiving counts as a push, so one sorted near the top and took
+    // a slot in `repo_limit`. Measured on 2026-10-10 at `repo_limit` 50 it is
+    // free too, cost 3 / nodeCount 1030 before and after. `totalCount` is the
+    // filtered count, so coverage counts live repos only: the viewer's went
+    // 98 -> 97 and the four orgs' (6, 5, 4, 5) held, having no archived repos.
     let page_fields = "totalCount\n    pageInfo { hasNextPage }";
     format!(
         r#"{{ viewer {{
 {calendar_fields}{recent_field}  repositories(first: {repo_limit}, orderBy: {{field: PUSHED_AT, direction: DESC}},
-    affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {{
+    isArchived: false, affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {{
     {page_fields}
     {repo_fields}
   }}
   organizations(first: {MAX_ORGS}) {{
     {page_fields}
     nodes {{
-      repositories(first: {ORG_REPO_LIMIT}, orderBy: {{field: PUSHED_AT, direction: DESC}}) {{
+      repositories(first: {ORG_REPO_LIMIT}, orderBy: {{field: PUSHED_AT, direction: DESC}}, isArchived: false) {{
         {page_fields}
         {repo_fields}
       }}
@@ -2105,7 +2112,7 @@ mod tests {
             "affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {\n    totalCount",
             &format!("organizations(first: {MAX_ORGS}) {{\n    totalCount"),
             &format!(
-                "repositories(first: {ORG_REPO_LIMIT}, orderBy: {{field: PUSHED_AT, direction: DESC}}) {{\n        totalCount"
+                "repositories(first: {ORG_REPO_LIMIT}, orderBy: {{field: PUSHED_AT, direction: DESC}}, isArchived: false) {{\n        totalCount"
             ),
         ] {
             assert!(q.contains(connection), "no coverage on: {connection}");
@@ -2865,6 +2872,26 @@ mod tests {
             1,
             "the org fallback is reusing repo_limit"
         );
+    }
+
+    /// #69: an archived repo is not live. Archiving counts as a push, so with
+    /// the filter missing on either connection an archived repo sorted near
+    /// the top and took a slot a live repo needed.
+    #[test]
+    fn both_repo_connections_skip_archived_repos() {
+        let q = build_query(50, day("2026-10-10"), 0);
+        for connection in [
+            "repositories(first: 50, orderBy: {field: PUSHED_AT, direction: DESC},\n    isArchived: false, affiliations:",
+            &format!(
+                "repositories(first: {ORG_REPO_LIMIT}, orderBy: {{field: PUSHED_AT, direction: DESC}}, isArchived: false)"
+            ),
+        ] {
+            assert!(
+                q.contains(connection),
+                "archived repos not filtered on: {connection}"
+            );
+        }
+        assert_eq!(q.matches("isArchived: false").count(), 2);
     }
 
     /// The PR page is deliberately *not* shrunk to save cost. Measured on the
