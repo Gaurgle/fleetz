@@ -200,26 +200,21 @@ pub fn thousands(n: u32) -> String {
     out
 }
 
-/// The strip's title. With a day marked it reads that day out; otherwise it
-/// reports the year's total and which source filled it, because the two
-/// sources legitimately disagree.
-///
-/// Shortens to fit `width` rather than letting the renderer clip it. The
-/// source label is the last thing dropped: a strip that does not say where
-/// its numbers came from is the one failure this line exists to prevent.
-pub fn title(calendar: &Calendar, cursor: Option<usize>, width: u16) -> String {
-    let width = width as usize;
-    let source = calendar.source().label();
-    // "1 contributions" is the kind of thing that makes a dashboard look
-    // unfinished, and a one-commit day is common enough to hit often.
-    let noun = |n: u32| {
-        if n == 1 {
-            "contribution"
-        } else {
-            "contributions"
-        }
-    };
+/// "1 contributions" is the kind of thing that makes a dashboard look
+/// unfinished, and a one-commit day is common enough to hit often.
+fn noun(n: u32) -> &'static str {
+    if n == 1 {
+        "contribution"
+    } else {
+        "contributions"
+    }
+}
 
+/// The strip's title. With a day marked it reads that day out; otherwise it
+/// falls back to `period_total`.
+///
+/// Shortens to fit `width` rather than letting the renderer clip it.
+pub fn title(calendar: &Calendar, cursor: Option<usize>, width: u16) -> String {
     if let Some(slot) = cursor
         && let Some((date, count)) = calendar.day_at(slot / 7, slot % 7)
     {
@@ -229,12 +224,25 @@ pub fn title(calendar: &Calendar, cursor: Option<usize>, width: u16) -> String {
         } else {
             format!("{} {} on {when}", thousands(count), noun(count))
         };
-        if full.chars().count() <= width {
+        if full.chars().count() <= width as usize {
             return full;
         }
         return format!("{} on {when}", thousands(count));
     }
+    period_total(calendar, width)
+}
 
+/// The total for the whole span and which source filled it, because the two
+/// sources legitimately disagree. Drawn on the bottom border beside the
+/// legend, and in the title when no day is marked.
+///
+/// Shortens to fit `width`. The source label is the last thing dropped: a
+/// strip that does not say where its numbers came from is the one failure
+/// this line exists to prevent. The bare total is returned even when it does
+/// not fit; callers that must not overflow check the length.
+pub fn period_total(calendar: &Calendar, width: u16) -> String {
+    let width = width as usize;
+    let source = calendar.source().label();
     let total = thousands(calendar.total());
     let span = crate::contributions::span_label();
     for candidate in [
@@ -348,29 +356,45 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let heading = title(&calendar, cursor, inner_width);
+    let legend = legend_line(calendar.source(), glyph);
+    // The total takes the left of the bottom border. Its budget leaves its own
+    // two padding spaces and two border columns of clearance before the
+    // legend, so it sheds words rather than running into it, and is dropped
+    // outright when even the bare number would.
+    let total_room = inner_width.saturating_sub(legend.width() as u16 + 2);
+    let total = period_total(&calendar, total_room);
+    let total = (total.chars().count() <= total_room as usize).then(|| {
+        Line::from(Span::styled(
+            format!(" {total} "),
+            Style::default().fg(colors::OVERLAY),
+        ))
+    });
+    let mut block = block
+        .title_top(crate::ui::panel_title(
+            crate::ui::CONTRIBUTIONS_NUM,
+            "contributions",
+            focused,
+        ))
+        .title_top(
+            Line::from(Span::styled(
+                format!(" {heading} "),
+                Style::default().fg(if focused {
+                    colors::TEXT
+                } else {
+                    colors::OVERLAY
+                }),
+            ))
+            .right_aligned(),
+        );
+    if let Some(total) = total {
+        block = block.title_bottom(total);
+    }
     frame.render_widget(
         Paragraph::new(lines).block(
-            block
-                .title_top(crate::ui::panel_title(
-                    crate::ui::CONTRIBUTIONS_NUM,
-                    "contributions",
-                    focused,
-                ))
-                .title_top(
-                    Line::from(Span::styled(
-                        format!(" {heading} "),
-                        Style::default().fg(if focused {
-                            colors::TEXT
-                        } else {
-                            colors::OVERLAY
-                        }),
-                    ))
-                    .right_aligned(),
-                )
-                // The legend rides in the bottom border rather than costing a
-                // row of its own, which is what the other panes do with their
-                // secondary information.
-                .title_bottom(legend_line(calendar.source(), glyph).right_aligned()),
+            // The legend rides in the bottom border rather than costing a row
+            // of its own, which is what the other panes do with their
+            // secondary information.
+            block.title_bottom(legend.right_aligned()),
         ),
         area,
     );
@@ -392,13 +416,13 @@ fn calendar_for(app: &App, today: chrono::NaiveDate) -> Option<std::borrow::Cow<
 /// sitting over the column its month starts in, with the day cursor's caret
 /// sharing the row.
 ///
-/// They share it because the caret is absent most of the time, and a row that
-/// is blank most of the time reads as a gap in the strip rather than as
-/// breathing room under the labels. A label that would collide with the caret
-/// is dropped rather than drawn through: the caret says which column you are
-/// on, which is the more urgent of the two, and the title spells the date out
-/// in full regardless. A label colliding with the label before it is dropped
-/// for the reason it always was.
+/// They share it because a row of its own would hold the caret's single
+/// column and nothing else, and a row that is blank but for one character
+/// reads as a gap in the strip rather than as breathing room under the labels.
+/// A label that would collide with the caret is dropped rather than drawn
+/// through: the caret says which column you are on, which is the more urgent
+/// of the two, and the title spells the date out in full regardless. A label
+/// colliding with the label before it is dropped for the reason it always was.
 fn month_and_caret_line(
     calendar: &Calendar,
     first: usize,
@@ -1053,21 +1077,20 @@ mod tests {
         assert!(!lines[3].contains(CELL), "no cells painted: {}", lines[3]);
     }
 
-    /// Nothing is highlighted until the user travels the grid. A box cannot
-    /// be drawn around a one-cell icon, so the marked day is painted in plain
-    /// white with a caret over its column.
+    /// The strip opens with today marked (#66), and travelling moves the
+    /// mark. A box cannot be drawn around a one-cell icon, so the marked day
+    /// is painted in plain white with a caret over its column.
     #[test]
-    fn the_marked_day_is_flagged_by_a_caret_and_only_after_travelling() {
+    fn the_marked_day_is_flagged_by_a_caret_from_the_moment_the_strip_opens() {
         let mut app = app_with_calendar(1);
         app.focused_panel = FocusedPanel::Contributions;
-        app.contrib_scroll.set(WEEKS);
-        assert_eq!(app.contrib_cursor, None);
+        app.apply_contributions_setting(ContributionsMode::Github);
 
-        let bare = drawn(120, &app);
+        let opened = drawn(120, &app);
         assert!(
-            !bare[HEADER_ROW].contains(CARET),
-            "no caret before travelling: {}",
-            bare[HEADER_ROW]
+            opened[HEADER_ROW].contains(CARET),
+            "caret drawn on open: {}",
+            opened[HEADER_ROW]
         );
 
         let last = app.contrib_last_slot(chrono::Local::now().date_naive());
@@ -1084,6 +1107,259 @@ mod tests {
             lines[marked_row].chars().count() > caret_col,
             "the marked row reaches the caret column"
         );
+    }
+
+    /// Opening the strip marks today at every width: the caret sits over
+    /// today's column, which is inside the drawn window, and the title reads
+    /// today's count out (#66).
+    #[test]
+    fn an_opened_strip_marks_today_in_view_at_every_width() {
+        let today = chrono::Local::now().date_naive();
+        for width in [40u16, 80, 120, 260] {
+            let mut app = app_with_calendar(1);
+            app.contrib_scroll.set(0);
+            app.apply_contributions_setting(ContributionsMode::Github);
+            let last = app.contrib_last_slot(today);
+            assert_eq!(app.contrib_cursor, Some(last), "width {width}");
+
+            let lines = drawn(width, &app);
+            let area = Rect::new(0, 0, width, CONTRIB_HEIGHT);
+            let first = app.contrib_scroll.get();
+            let visible = visible_weeks(area);
+            let week = last / 7;
+            assert!(
+                week >= first && week < first + visible,
+                "width {width}: today's week {week} outside [{first}, {})",
+                first + visible
+            );
+            let expected = (FRAME_COLS + grid_pad(area) + GUTTER) as usize
+                + (week - first) * WEEK_COLS as usize;
+            let caret = lines[HEADER_ROW]
+                .chars()
+                .position(|c| c.to_string() == CARET);
+            assert_eq!(
+                caret,
+                Some(expected),
+                "width {width}: caret over today's column: {}",
+                lines[HEADER_ROW]
+            );
+        }
+
+        for width in [120u16, 260] {
+            let mut app = app_with_calendar(1);
+            app.apply_contributions_setting(ContributionsMode::Github);
+            let top = &drawn(width, &app)[0];
+            let when = today.format("%a %-d %b").to_string();
+            assert!(
+                top.contains(&format!("1 contribution on {when}")),
+                "width {width}: top title reads today out: {top}"
+            );
+        }
+    }
+
+    /// Launch with the setting off: the strip starts folded and never opened,
+    /// so it has no cursor. Unfolding it must stand on today with the caret
+    /// over today's column, whichever way it is unfolded (#66).
+    fn assert_unfolds_onto_today(unfold: impl Fn(&mut App), path: &str) {
+        let mut app = app_with_calendar(1);
+        app.apply_contributions_setting(ContributionsMode::Off);
+        assert!(
+            app.contributions_folded,
+            "{path}: premise, folded at launch"
+        );
+        assert_eq!(app.contrib_cursor, None, "{path}: premise, never opened");
+        app.contrib_scroll.set(0);
+
+        unfold(&mut app);
+        assert!(!app.contributions_folded, "{path}: unfolded");
+        let last = app.contrib_last_slot(chrono::Local::now().date_naive());
+        assert_eq!(app.contrib_cursor, Some(last), "{path}: on today");
+
+        let width = 120;
+        let lines = drawn(width, &app);
+        let area = Rect::new(0, 0, width, CONTRIB_HEIGHT);
+        let first = app.contrib_scroll.get();
+        let week = last / 7;
+        assert!(
+            week >= first && week < first + visible_weeks(area),
+            "{path}: today's week in view"
+        );
+        let expected =
+            (FRAME_COLS + grid_pad(area) + GUTTER) as usize + (week - first) * WEEK_COLS as usize;
+        let caret = lines[HEADER_ROW]
+            .chars()
+            .position(|c| c.to_string() == CARET);
+        assert_eq!(
+            caret,
+            Some(expected),
+            "{path}: caret over today: {}",
+            lines[HEADER_ROW]
+        );
+    }
+
+    #[test]
+    fn the_4_key_unfolds_a_never_opened_strip_onto_today() {
+        assert_unfolds_onto_today(
+            |app| app.press_panel_key(FocusedPanel::Contributions),
+            "4 key",
+        );
+    }
+
+    #[test]
+    fn a_tag_click_unfolds_a_never_opened_strip_onto_today() {
+        assert_unfolds_onto_today(
+            |app| app.toggle_fold(FocusedPanel::Contributions),
+            "tag click",
+        );
+    }
+
+    /// The unfold scrolls to the newest weeks itself. With the window already
+    /// measured at this width, the first draw is not a resize, so nothing in
+    /// the renderer would pull a cursor back into view: today's column is on
+    /// screen only because unfolding asked for it.
+    #[test]
+    fn unfolding_onto_today_scrolls_today_into_view_without_a_resize() {
+        let width = 120;
+        let area = Rect::new(0, 0, width, CONTRIB_HEIGHT);
+        let visible = visible_weeks(area);
+        let mut app = app_with_calendar(1);
+        app.apply_contributions_setting(ContributionsMode::Off);
+        app.contrib_visible_weeks.set(visible);
+        app.contrib_scroll.set(0);
+
+        app.toggle_fold(FocusedPanel::Contributions);
+        let lines = drawn(width, &app);
+        let last = app.contrib_last_slot(chrono::Local::now().date_naive());
+        let (first, week) = (app.contrib_scroll.get(), last / 7);
+        assert!(
+            week >= first && week < first + visible,
+            "today's week {week} outside [{first}, {})",
+            first + visible
+        );
+        assert!(
+            lines[HEADER_ROW].contains(CARET),
+            "caret drawn: {}",
+            lines[HEADER_ROW]
+        );
+    }
+
+    /// Folding gets the strip out of the way; it does not reset it. A
+    /// travelled day survives a fold and unfold by either path.
+    #[test]
+    fn a_travelled_strip_keeps_its_day_through_a_fold() {
+        let mut app = app_with_calendar(1);
+        app.apply_contributions_setting(ContributionsMode::Github);
+        let last = app.contrib_last_slot(chrono::Local::now().date_naive());
+        let travelled = last - 7 * 3 - 2;
+        app.contrib_cursor = Some(travelled);
+
+        app.toggle_fold(FocusedPanel::Contributions);
+        assert!(app.contributions_folded);
+        app.toggle_fold(FocusedPanel::Contributions);
+        assert!(!app.contributions_folded);
+        assert_eq!(
+            app.contrib_cursor,
+            Some(travelled),
+            "tag click kept the day"
+        );
+
+        app.focused_panel = FocusedPanel::Contributions;
+        app.press_panel_key(FocusedPanel::Contributions);
+        assert!(app.contributions_folded);
+        app.press_panel_key(FocusedPanel::Contributions);
+        assert!(!app.contributions_folded);
+        assert_eq!(app.contrib_cursor, Some(travelled), "4 key kept the day");
+    }
+
+    /// While travelling, the top title reads out the day under the cursor,
+    /// not the period total.
+    #[test]
+    fn the_top_title_follows_the_travelled_day() {
+        let mut app = app_with_calendar(1);
+        app.focused_panel = FocusedPanel::Contributions;
+        app.apply_contributions_setting(ContributionsMode::Github);
+        let today = chrono::Local::now().date_naive();
+        app.move_contrib_cursor(-1, 0, today);
+        let when = (today - chrono::Duration::days(7))
+            .format("%a %-d %b")
+            .to_string();
+        let top = &drawn(120, &app)[0];
+        assert!(
+            top.contains(&format!("1 contribution on {when}")),
+            "top title reads the travelled day: {top}"
+        );
+    }
+
+    /// The text left of the legend on the bottom border, trimmed of border
+    /// and padding, and whether at least one border column still separates
+    /// it from the legend. A row with no legend is read whole, so whatever
+    /// overwrote the legend shows up as the label.
+    fn bottom_total(bottom: &str) -> (String, bool) {
+        let after_corner: String = bottom.chars().skip(1).collect();
+        let before_legend = after_corner
+            .find(" Less")
+            .map_or(after_corner.as_str(), |at| &after_corner[..at]);
+        let label = before_legend
+            .trim_matches(|c| c == '─' || c == ' ')
+            .to_string();
+        let clear = label.is_empty() || before_legend.trim_end_matches(' ').ends_with('─');
+        (label, clear)
+    }
+
+    /// The period total moved from the top title to the bottom border, left
+    /// of the Less/More legend (#66, option b). It sheds words on the title's
+    /// ladder before it can touch the legend, and the legend always survives.
+    #[test]
+    fn the_period_total_rides_the_bottom_border_beside_the_legend() {
+        let app = app_with_calendar(1);
+        let today = chrono::Local::now().date_naive();
+        let calendar = app.github_calendar.as_deref().unwrap();
+        let total = thousands(calendar.total());
+        let span = crate::contributions::span_label();
+        let full = format!("{total} contributions in {span} (github)");
+        let ladder = [
+            full.clone(),
+            format!("{total} in {span} (github)"),
+            format!("{total} (github)"),
+            total.clone(),
+        ];
+        assert_eq!(calendar.today_slot(), app.contrib_last_slot(today));
+
+        for width in [120u16, 200, 260] {
+            let lines = drawn(width, &app);
+            assert_eq!(
+                bottom_total(&lines[LEGEND_ROW]),
+                (full.clone(), true),
+                "width {width}: {}",
+                lines[LEGEND_ROW]
+            );
+        }
+
+        let legend_cols = legend_line(Source::Github, CELL).width() as u16;
+        let mut shortened = false;
+        // Narrower than the legend plus its corners, the legend itself is
+        // clipped, as it was before the total moved here.
+        for width in legend_cols + 2..=260 {
+            let lines = drawn(width, &app);
+            let bottom = &lines[LEGEND_ROW];
+            let (label, clear) = bottom_total(bottom);
+            assert!(
+                clear,
+                "width {width}: the total ran into the legend: {bottom}"
+            );
+            if !label.is_empty() {
+                assert!(
+                    ladder.contains(&label),
+                    "width {width}: not a ladder step: {label:?}"
+                );
+                shortened |= label != full;
+            }
+            assert!(
+                bottom.contains("Less") && bottom.contains("More"),
+                "width {width}: legend lost: {bottom}"
+            );
+        }
+        assert!(shortened, "no width exercised the shortening ladder");
     }
 
     /// The marked day is painted in plain text white, which has to beat both

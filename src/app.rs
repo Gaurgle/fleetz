@@ -1932,10 +1932,11 @@ pub struct App {
     /// Which square icon the strip draws a day as, from the
     /// `contributions_cell_size` config key and the settings row.
     pub contrib_cell: CellSize,
-    /// Grid slot the day cursor sits on, or None while the user has not
-    /// travelled the grid yet. None is the resting state on purpose: a cell
-    /// highlighted before anyone asked for it reads as a selection you did
-    /// not make, and the title shows the year's total instead.
+    /// Grid slot the day cursor sits on. The strip stands on today once it
+    /// is opened or unfolded (#66), so the title reads today's count. None
+    /// remains only for an `App` whose strip was never shown: there the first
+    /// move seeds the cursor on today, and the title falls back to
+    /// `ui::contributions::period_total`.
     pub contrib_cursor: Option<usize>,
     /// Leftmost visible week. The grid is wider than any terminal at the
     /// square size we draw, so it scrolls instead of shrinking. Written by
@@ -2333,6 +2334,7 @@ impl App {
         if let Some(folded) = self.fold_flag(panel) {
             *folded = focused && !*folded;
         }
+        self.contributions_unfolded(panel, chrono::Local::now().date_naive());
         self.needs_redraw = true;
     }
 
@@ -2348,7 +2350,26 @@ impl App {
         if !*folded {
             self.focus_panel(panel);
         }
+        self.contributions_unfolded(panel, chrono::Local::now().date_naive());
         self.needs_redraw = true;
+    }
+
+    /// The one unfold entry point the `4` key and the `[4]` tag click share:
+    /// a strip on screen with no day marked yet (launched with the setting
+    /// off, so never opened) stands on `today`, with today's column in view,
+    /// exactly as opening it does (#66). A strip that was travelled keeps its
+    /// day: folding is getting it out of the way, not resetting it.
+    fn contributions_unfolded(&mut self, panel: FocusedPanel, today: chrono::NaiveDate) {
+        if panel != FocusedPanel::Contributions
+            || self.contributions_folded
+            || self.contrib_cursor.is_some()
+        {
+            return;
+        }
+        self.contrib_cursor = Some(self.contrib_last_slot(today));
+        // Out of range on purpose, as in `open_contributions`: the renderer
+        // clamps it to "newest week at the right edge", which holds today.
+        self.contrib_scroll.set(crate::contributions::WEEKS);
     }
 
     pub fn visible_repos(&self) -> Vec<(usize, &RepoStatus)> {
@@ -2811,7 +2832,7 @@ impl App {
     pub fn apply_contributions_setting(&mut self, mode: ContributionsMode) {
         match mode {
             ContributionsMode::Off => self.contributions_folded = true,
-            mode => self.open_contributions(mode),
+            mode => self.open_contributions(mode, chrono::Local::now().date_naive()),
         }
         self.needs_redraw = true;
     }
@@ -2826,16 +2847,20 @@ impl App {
             ContributionsMode::Github => ContributionsMode::Local,
             ContributionsMode::Local | ContributionsMode::Off => ContributionsMode::Github,
         };
-        self.open_contributions(next);
+        self.open_contributions(next, chrono::Local::now().date_naive());
         self.needs_redraw = true;
     }
 
-    /// Show the strip unfolded on `mode`, with no day marked and the grid
-    /// scrolled to the newest weeks.
-    fn open_contributions(&mut self, mode: ContributionsMode) {
+    /// Show the strip unfolded on `mode`, standing on `today` with the grid
+    /// scrolled to the newest weeks, so the first look reads today's count
+    /// and the first arrow key is a real step (#66).
+    ///
+    /// `today` is a parameter so tests can pin the date; the public callers
+    /// read the local clock, as the renderer does.
+    fn open_contributions(&mut self, mode: ContributionsMode, today: chrono::NaiveDate) {
         self.contributions = mode;
         self.contributions_folded = false;
-        self.contrib_cursor = None;
+        self.contrib_cursor = Some(self.contrib_last_slot(today));
         // Out of range on purpose, exactly as at startup: the renderer is the
         // only place the visible width is known, and it clamps this down to
         // "newest week at the right edge". Computing it here from the last
@@ -2853,8 +2878,9 @@ impl App {
     /// Move the day cursor `dweeks` columns and `ddays` rows, which is how
     /// the grid actually reads: a week is a column, a weekday is a row.
     ///
-    /// The first move seeds the cursor on today rather than jumping from
-    /// nowhere, so pressing any direction key starts from where the eye is.
+    /// Opening or unfolding the strip already stands on today. A cursor can
+    /// still be unset on an `App` whose strip was never shown; there the
+    /// first move seeds it on today rather than jumping from nowhere.
     /// Both axes clamp independently, so walking up a column never spills
     /// into the neighbouring week, and the final column stops at today.
     pub fn move_contrib_cursor(&mut self, dweeks: i32, ddays: i32, today: chrono::NaiveDate) {
@@ -4715,11 +4741,12 @@ mod tests {
         assert_eq!(app.contrib_cursor, Some(last - 1), "right returns");
     }
 
-    /// Nothing is marked until the user actually travels the grid: a
-    /// highlighted cell nobody asked for reads as a selection you did not
-    /// make.
+    /// Opening the strip stands on today (#66). A strip that was never opened
+    /// (launched with the setting off) has no cursor, and focusing it does not
+    /// invent one: its first move marks today. A source change reopens the
+    /// strip, so it returns to today.
     #[test]
-    fn no_day_is_marked_until_the_user_moves() {
+    fn an_unopened_strip_marks_today_on_the_first_move_and_a_source_change_returns_to_it() {
         let mut app = make_app(1);
         assert_eq!(app.contrib_cursor, None, "starting marks nothing");
         app.focus_panel(FocusedPanel::Contributions);
@@ -4729,9 +4756,60 @@ mod tests {
         app.move_contrib_cursor(-1, 0, today());
         assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(today())));
 
-        // And it goes back to unmarked when the source changes.
+        // And it goes back to today when the source changes.
         app.cycle_contributions_source();
-        assert_eq!(app.contrib_cursor, None);
+        let now = chrono::Local::now().date_naive();
+        assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(now)));
+    }
+
+    /// Opening the strip stands on today, so the first look answers "what
+    /// did I do today" without a throwaway keypress (#66). A cursor left
+    /// somewhere else, and a grid scrolled away, both come back to today.
+    #[test]
+    fn opening_the_strip_stands_on_today() {
+        let mut app = make_app(1);
+        app.contrib_cursor = Some(0);
+        app.contrib_scroll.set(0);
+        app.open_contributions(ContributionsMode::Github, today());
+        assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(today())));
+        assert!(
+            app.contrib_scroll.get() >= crate::contributions::WEEKS,
+            "still asks for the newest weeks, which holds today's column"
+        );
+    }
+
+    /// The first arrow after opening is a real step from today, not the
+    /// marking-only keypress it used to be.
+    #[test]
+    fn the_first_arrow_after_opening_moves_one_step_from_today() {
+        let mut app = make_app(1);
+        app.focus_panel(FocusedPanel::Contributions);
+        let last = app.contrib_last_slot(today());
+
+        app.open_contributions(ContributionsMode::Github, today());
+        app.move_contrib_cursor(-1, 0, today());
+        assert_eq!(app.contrib_cursor, Some(last - 7), "one week back");
+
+        app.open_contributions(ContributionsMode::Github, today());
+        app.move_contrib_cursor(0, -1, today());
+        assert_eq!(app.contrib_cursor, Some(last - 1), "one weekday up");
+    }
+
+    /// A source change reopens the strip, so it lands on today as well, even
+    /// after the user travelled away.
+    #[test]
+    fn a_source_change_leaves_the_cursor_on_today() {
+        let mut app = make_app(1);
+        app.contrib_cursor = Some(0);
+        app.cycle_contributions_source();
+        assert_eq!(app.contributions, ContributionsMode::Local);
+        let today = chrono::Local::now().date_naive();
+        assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(today)));
+
+        app.contrib_cursor = Some(0);
+        app.cycle_contributions_source();
+        assert_eq!(app.contributions, ContributionsMode::Github);
+        assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(today)));
     }
 
     /// Walking up a column must not spill into the neighbouring week, and
@@ -5299,7 +5377,7 @@ mod tests {
     fn shift_scroll_never_aims_at_the_contributions_strip() {
         let mut app = make_app(1);
         app.view = View::Detail;
-        app.open_contributions(ContributionsMode::Github);
+        app.open_contributions(ContributionsMode::Github, today());
         for focused in [
             FocusedPanel::RepoList,
             FocusedPanel::Detail,
