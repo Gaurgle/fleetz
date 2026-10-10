@@ -1,6 +1,6 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-10 13:43 CEST by `claude-fable-5-1` (`claude --agent
+Last written 2026-10-10 13:46 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `863d1cbe-79c0-452e-b932-62c7f31e06a9`), when
 Andreas asked to wrap up for the day. **Nothing is running: no worker, no
 reviewer, no build, no background job. No ticket is between dispatch and
@@ -392,8 +392,12 @@ FZ-13 wave 4 questions wait for him. The next lead's work, with Andreas:
    capture (from #68's review, offered 2026-10-09, unanswered), the
    `start_account_rebuild` test (from #60's review), and the list under
    "Follow-ups found and not ticketed".
-3. **`cargo install --path .`** is his; the installed binary predates
-   FZ-09b onward and still lists `notez-cli`.
+3. **Installed.** Andreas ran `cargo install --path ~/repos/fleetz` at
+   about 13:45 on 2026-10-10 ("i installed"), so the installed `fleetz` is
+   the `main` of `677e8cc` as version `0.5.1`. He chose not to bump the
+   version yet; `main` is 190 commits past `v0.5.1` with a cache format
+   change (FZ-09c), so the next release is at least `0.6.0` and is prepared
+   only when he asks ("prepare 0.6.0").
 
 Items 1, 3 and 4 of the earlier list below are done (the M1 checkpoint and
 the M0 retrospective are in the release plan, confirmed by Andreas); item 2
