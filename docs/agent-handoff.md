@@ -1,12 +1,12 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-10 12:42 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `863d1cbe-79c0-452e-b932-62c7f31e06a9`), at takeover.
-**Nothing is running: no worker, no
-reviewer, no build, no background job. No ticket of the release line is
-between dispatch and merge, and no ticket worktree exists** (the board's one
-Ready to integrate item is #45, parked). **Every M1 implementation ticket is
-Done.** Read this file,
+Last written 2026-10-10 13:30 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `863d1cbe-79c0-452e-b932-62c7f31e06a9`), with one
+ticket in flight. **Running: one `fz-worker` on #69 in
+`.claude/worktrees/issue-69` (see "Running now"); no reviewer yet.** The
+board's one Ready to integrate item is #45, parked. **Every M1
+implementation ticket is Done and the M1 checkpoint is confirmed.** Read
+this file,
 the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
@@ -116,6 +116,35 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
   should be let finish and its report recorded; by then the FZ-10a worker was
   already stopped, and no reviewer was running. Nothing was left at Ready to
   integrate and nothing was uncommitted in a ticket worktree.
+
+## Running now (2026-10-10)
+
+- **#69 "Don't list archived GitHub repos as live", In progress.** Andreas:
+  "can we start on #69 in parallel?" (13:05) and "option 1!" (13:27). Base
+  `5705b13`, branch `fix/69-skip-archived-repos`, worktree
+  `.claude/worktrees/issue-69`, worker `fz-worker` (`claude-opus-5-5`,
+  medium) dispatched about 13:30. Option 1: `isArchived: false` on both
+  `repositories(...)` connections in `build_query`, cost measured before
+  and after with two live queries, payload and cache format unchanged, one
+  sentence in `CLAUDE.md` on the repoz divergence. Allowed files
+  `src/github.rs` and `CLAUDE.md`. **Open with Andreas:** whether the
+  worker may update the query-text literals in existing `github.rs` tests
+  (`cv8_the_query_asks_coverage_on_the_three_connections_only` is expected
+  to need it); asked twice, not yet answered; the worker reports the exact
+  edit and leaves the test failing until he does. Milestone M1 (addendum
+  after the checkpoint), P1, set by the lead. Nothing on screen changes, so
+  it merges under the safe-merge rule once reviewed.
+
+## Done on 2026-10-10
+
+| Ticket | Issue | Ticket commit | Merge | What landed |
+|---|---|---|---|---|
+| Strip opens on today | #66 | `9ab6f6e` | `5705b13` | `open_contributions(mode, today)` seeds the day cursor on today; `App::contributions_unfolded` does the same when `4` or the `[4]` click unfolds a never-shown strip, a travelled strip keeps its day; `ui::contributions::period_total` split out of `title`, drawn on the left of the bottom border beside the legend, shortening on the title's ladder; README `c` row. Three existing tests edited under Andreas's approval (recorded on the issue), ten new tests. Two review rounds (one stale doc comment). Andreas accepted the look ("looks great", 13:23). Worktree and local branch removed |
+
+Also on 2026-10-10: the M0 retrospective and the M1 checkpoint were
+written into [release-plan.md](release-plan.md) (`78c534d`) and Andreas
+confirmed M1 ("all looks good", 12:52). The release scope decision the plan
+asks for after M1 is his and has not been raised with him yet.
 
 ## FZ-09d, closed last (2026-10-09)
 
@@ -338,20 +367,27 @@ Each issue holds its evidence.
 
 ## Worktrees
 
-One exists besides the main checkout, under `.claude/worktrees/`. Every
-ticket worktree of a merged ticket (on 2026-10-09: `mouse`, `fz-09b`,
-`fz-10b`, `fz-10c`, `fz-09d`) is removed with its local branch; remote
-branches stay on GitHub.
+Two exist besides the main checkout, under `.claude/worktrees/`. Every
+ticket worktree of a merged ticket (on 2026-10-10: `issue-66`; on
+2026-10-09: `mouse`, `fz-09b`, `fz-10b`, `fz-10c`, `fz-09d`) is removed
+with its local branch; remote branches stay on GitHub.
 
+- **`issue-69`, branch `fix/69-skip-archived-repos`:** the running
+  ticket, see "Running now".
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked by
   Andreas until the repository goes public.
 
 ## Next step, and the order after it
 
-**Next step:** nothing is dispatched or Ready, and the standing scope has
-no named ticket left: the `src/main.rs` line and M1's implementation are
-complete. The next lead's work is reasoning and checkpoints, with Andreas:
+**Next step (2026-10-10):** finish #69 (worker running; then `fz-reviewer`,
+commit, push, combined check, merge under the safe-merge rule, cleanup).
+After it, nothing is dispatched or Ready: #67 (the CI pane) is a planning
+issue Andreas marked not authorized to start, and the standing scope's
+`src/main.rs` line is complete. Items 1, 3 and 4 below are done (the M1
+checkpoint and the M0 retrospective are in the release plan, confirmed);
+item 2 stands. The release scope decision after M1 is Andreas's; raise it
+with him when #69 is Done. The earlier text follows for the record:
 
 1. **M1's exit evidence** ([release-plan.md](release-plan.md): deterministic
    regression scenarios pass; offline, incomplete and failed states remain
