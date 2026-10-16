@@ -162,9 +162,23 @@ Ticket worktrees added in this session are listed under "In flight".
 
 ## In flight
 
-Nothing dispatched yet in this session (17:20). Being prepared under the
-17:12 authorization: issues for the dirty-worktree list row, one key for
-"same remote" (`fz-worker`) and the stale `CLAUDE.md` lines (`fz-small`).
+Issues created 17:30 under the 17:12 authorization: #73 (one key for "same
+remote"), #74 (the stale `CLAUDE.md` lines), #75 (the dirty worktree in the
+list row; Backlog, P1, M3, dispatched after #72 merges; the coordinator's
+colour-not-count ruling is on the issue). Dispatched 17:36, both from base
+`a3bd0b5`, assignment comments on the issues:
+
+- **#73**, `fz-worker` (`claude-opus-5-5`, medium), branch
+  `refactor/one-remote-key`, worktree `.claude/worktrees/one-remote-key`,
+  files `src/model.rs`, `src/github.rs`, `src/main.rs`, `src/discovery.rs`
+  (`src/app.rs` for a path only). Board: In progress, P2. Reviewer next.
+- **#74**, `fz-small` (`sonnet`, medium), branch `docs/claude-md-stale`,
+  worktree `.claude/worktrees/claude-md-stale`, file `CLAUDE.md` only.
+  Board: In progress, P2. Reviewer next.
+
+If this session ends before they report, the next lead checks each
+worktree's `git status --short` for the uncommitted result and dispatches
+the reviewer, or re-dispatches the worker if the worktree is clean.
 
 ## Next step, and the order after it
 
