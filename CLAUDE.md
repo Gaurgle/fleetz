@@ -59,6 +59,7 @@ and blink, watch mode re-sweeps on an interval.
 | `docs/agent-workflow.md` | Shared worker/reviewer instructions and integration rules |
 | `docs/agent-handoff.md` | Coordinator state between leads: read first when taking over |
 | `docs/agent-log.md` | Finished tickets and earlier lead records, moved out of the handoff, each with a metrics line |
+| `scripts/relay-status` | The Relay status block: version, lead and baton, `main` and CI, worktrees, next step |
 | `scripts/relay-check` | Reports Relay template drift; the coordinator runs it on start |
 | `scripts/relay-sweep` | Removes merged, clean ticket worktrees once `main` CI is green |
 | `docs/performance-baseline.md` | Measured startup, idle, refresh and input baseline, with fixtures and commands to rerun |

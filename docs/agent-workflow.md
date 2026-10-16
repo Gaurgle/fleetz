@@ -1,4 +1,4 @@
-<!-- relay-template: 0.5.0; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
+<!-- relay-template: 0.5.1; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
 # Agent workflow for the release effort
 
 This is a project-specific working agreement for the tickets in

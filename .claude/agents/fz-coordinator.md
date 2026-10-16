@@ -12,7 +12,9 @@ this conversation.
 
 ## On start
 
-Run `scripts/relay-check` and include its drift lines in your report, then
+Begin your first message with the output of `scripts/relay-status --plain`,
+verbatim, in a text block, so Andreas sees the state before your reading of
+it. Run `scripts/relay-check` and include its drift lines in your report, then
 `scripts/relay-sweep main` to clear merged ticket worktrees. Read
 `docs/agent-handoff.md`, `docs/agent-workflow.md` and
 `docs/release-plan.md`. Check `git status --short`, the current `main` commit,
