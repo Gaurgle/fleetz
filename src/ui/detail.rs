@@ -659,13 +659,12 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
     // Stashes carry the same glyph the repo list uses, so the eye can find
-    // them here the way it learned to find them there. Both these and the
-    // worktree count are drawn in SUBTEXT rather than OVERLAY: OVERLAY is for
-    // paths and furniture, and at that brightness real news reads as
-    // decoration you have already dismissed.
-    // Each carries its own colour rather than a shared grey. A stash is real
-    // news and gets the colour its badge uses; a worktree count is closer to
-    // furniture, so it keeps the quieter one.
+    // them here the way it learned to find them there. Neither is drawn in
+    // OVERLAY: that is for paths and furniture, and at that brightness real
+    // news reads as decoration you have already dismissed.
+    // Each carries the colour its badge uses (one colour per concept): the
+    // stash count is STASH_CLR and the worktree count is WORKTREE_CLR, so the
+    // header fact is recognised as the same thing the list row flags.
     let mut local_extra: Vec<(String, ratatui::style::Color)> = Vec::new();
     if repo.stash_count > 0 {
         let noun = if repo.stash_count == 1 {
@@ -684,7 +683,10 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             "worktrees"
         };
-        local_extra.push((format!("{} {noun}", repo.worktrees.len()), colors::SUBTEXT));
+        local_extra.push((
+            format!("{} {noun}", repo.worktrees.len()),
+            colors::WORKTREE_CLR,
+        ));
     }
     for (extra, color) in local_extra {
         if row3_left.is_empty() {
@@ -3269,6 +3271,51 @@ mod tests {
         assert!(
             !text.contains("build-and-test"),
             "the workflow name is still drawn"
+        );
+    }
+
+    /// The header's worktree count is the same concept as the list badge, so
+    /// it wears the badge's colour; a repo with no linked worktree draws none.
+    #[test]
+    fn the_header_worktree_count_wears_the_badge_colour() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (w, h) = (100u16, 30u16);
+        let draw = |repo: RepoStatus| {
+            let mut app = crate::app::App::new(vec![repo], "t".to_string(), w, h);
+            app.history_view = HistoryView::Info;
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            term.draw(|f| render_detail_pane(f, f.area(), &app))
+                .unwrap();
+            term.backend().buffer().clone()
+        };
+        let row_text = |buf: &ratatui::buffer::Buffer, y: u16| -> Vec<String> {
+            (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect()
+        };
+
+        let mut with_one = busy_repo();
+        with_one.worktrees = vec![crate::model::Worktree {
+            path: "/tmp/wt".to_string(),
+            branch: "feature".to_string(),
+        }];
+        let buf = draw(with_one);
+        let found = (0..h).find_map(|y| {
+            let cells = row_text(&buf, y);
+            let line = cells.concat();
+            line.find("1 worktree").map(|byte| {
+                let x = line[..byte].chars().count() as u16;
+                (x, y)
+            })
+        });
+        let (x, y) = found.expect("the header has no `1 worktree` text");
+        assert_eq!(buf[(x, y)].fg, colors::WORKTREE_CLR);
+
+        let buf = draw(busy_repo());
+        let text: String = (0..h).flat_map(|y| row_text(&buf, y)).collect();
+        assert!(
+            !text.contains("worktree"),
+            "a repo with no worktrees draws a worktree count"
         );
     }
 
