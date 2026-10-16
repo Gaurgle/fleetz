@@ -15,18 +15,28 @@ decisions, facts, the follow-up list and the longer practical notes are in
 
 ## Baton
 
-**Held** since 2026-10-16 17:42 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `0bb15090-2029-4863-be6e-4e690d6882e5`, pid 333).
-Andreas opened with "you got the baton, start work." Evidence that no lead
-was active: the previous session released the baton at 17:40 and its
-process (pid 13907) was gone; the only `claude --agent fz-coordinator`
-process was this one; `main` equalled `origin/main` at `b7ff095`, clean,
-CI green; `relay-check` reported template and skill both at 0.5.0, the
-handoff at 285 lines (over 150, to trim). Under the 17:33 authorization
-below this session dispatched #75 (`fz-small`), #76 and #77 (`fz-worker`),
-each from `b7ff095`, each with its own reviewer.
+**Released** 2026-10-16 about 18:40 CEST by `claude-fable-5-1` (`claude
+--agent fz-coordinator`, session `0bb15090-2029-4863-be6e-4e690d6882e5`),
+which held it from 17:42 CEST. Andreas opened with "you got the baton, start
+work." and at about 18:30 wrote "you can start closing up the current
+tickets, dont start any new today. then let me know, im going out".
+**No worker, reviewer, build or background job is running.** Nothing is
+dispatched; no new ticket starts today. Next lead records its own session and
+takeover time here after confirming with Andreas.
 
-**Released before that** 2026-10-16 17:40 CEST by `claude-fable-5-1`
+- **Closed on 2026-10-16.** #75 (`c7e3395`), #76 (`5dad29a`), #77 (`57b885c`),
+  all merged with `--no-ff`, each with its branch CI green and a combined
+  check on `main` (1089 after #76; 1090 after #77), `main` CI green, all three
+  worktrees and branches swept, all three issues closed, board Done.
+  Records and metrics are in the log.
+- **Look not yet seen on `main`:** #75 (the `WT` badge in the dirty colour),
+  #71 and #72 (Info header and worktrees section). Run
+  `cargo run --release --manifest-path ~/repos/fleetz/Cargo.toml`.
+- **Earlier session in this record:** the 17:40 release by `claude-fable-5-1`
+  (`claude --agent fz-coordinator`, session
+  `80d0c941-d673-4c3a-bccd-ab7e3949c00d`, pid 13907), which held it from
+  17:10 CEST (released once at 17:30, then taken up again by the same session
+  when Andreas answered at 17:33).
 (`claude --agent fz-coordinator`, session
 `80d0c941-d673-4c3a-bccd-ab7e3949c00d`, pid 13907), which held it from
 17:10 CEST (released once at 17:30, then taken up again by the same session
@@ -184,9 +194,9 @@ written into the repository.
 
 ## State of `main`
 
-`main` is at the merge of #75, `c7e3395`, equal to `origin/main` plus the
-docs commit that records this, 1087 tests passing and 1 ignored, CI green.
-On 2026-10-16 it gained #75 (the `WT` badge in the dirty colour, a look
+`main` is at the merge of #77, `57b885c`, 1090 tests passing and 1 ignored,
+CI green. On 2026-10-16 it gained #76 (refetch on recovery, a contract
+amendment), #77 (`cache_ttl` removed), #75 (the `WT` badge in the dirty colour, a look
 change merged under the standing instruction and not yet seen by Andreas
 on `main`), #72 (the Info view's `worktrees` section, look
 accepted), #73 (one `model::identity_key` for "same remote", a pure
@@ -211,48 +221,17 @@ The worktrees of #72 (`worktrees-section`), #73 (`one-remote-key`) and #74
 
 ## In flight
 
-Dispatched 2026-10-16 17:45 CEST under the 17:33 entry, each from
-`b7ff095` with its own reviewer. #75 is Done (merged `c7e3395`, swept, the
-record is in the log). Two remain:
-
-- **#76**, refetch `Unreachable` and `TimedOut` repos once when the GitHub
-  poll recovers from `Offline`. Branch `feat/76-refetch-on-recovery`,
-  worktree `.claude/worktrees/issue-76`, worker `fz-worker`
-  (`claude-opus-5-5`) done: `recovery_refetch` beside
-  `apply_github_poll_at` in `src/main.rs`, rows added to the
-  `remotes_that_moved` batch, contract rule 6 and a dated amendment entry,
-  two new tests, 1087 tests, no existing test touched. Coordinator ruling
-  on the issue (18:08): `Refused` is a GitHub kind, so the untouched fetch
-  kinds are `Auth`, `NoRemote`, `Other`; applied by the worker. Revision
-  for review: uncommitted, diff sha256
-  `115f540b0838fc116999162eb5d4d35d90b600d2be41811b67b4e7b3e3277a72`.
-  **At Review**, `fz-reviewer` running.
-- **#77**, remove the inert `cache_ttl` key and the dead TTL read path.
-  Branch `cleanup/77-remove-cache-ttl`, worktree
-  `.claude/worktrees/issue-77`, worker `fz-worker` (`claude-opus-5-5`)
-  done after one stop-and-report. Coordinator rulings on the issue
-  (17:55), under the owner's "do what you need for cache_ttl": delete the
-  one precondition assertion of the expired state in
-  `startup_serves_an_expired_payload_rather_than_waiting_on_the_network`
-  (github.rs base line 2396, the one ruling beyond the ticket's list,
-  Andreas may override); TTL doc comments on tests reworded; `ApiCache::read`
-  kept only as a `#[cfg(test)]` wrapper over `read_stale` so three
-  assertions stay; the removed test is exactly `cache_expired_returns_none`,
-  `a_stale_read_reports_when_the_file_was_written` keeps its body. Two new
-  tests, 1086 tests. The worker also fixed README's comparison table row
-  (base line 381, "Disk cache with a TTL"), outside its named region but
-  made false by the change. **At Review**, `fz-reviewer` running.
-
-`src/main.rs` was split by symbol (#76 the poll code, #77 the two
-`KeyedCache::new` calls); README's `WT` sentences went with #75. Merge one
-at a time, combined check rerun against the new `main`.
+Nothing in flight. #75, #76 and #77 are Done (see Baton). The dispatch was
+under the 17:33 owner entry, each from `b7ff095`, each with its own
+reviewer. One owner-visible ruling beyond the ticket text: #77 deletes the
+precondition assertion `assert!(cache.read().is_none())` in
+`startup_serves_an_expired_payload_rather_than_waiting_on_the_network`
+(under "do what you need for cache_ttl"); Andreas may override it. The
+records, including the rulings, are in the log.
 
 ## Next step, and the order after it
 
-1. **Finish #76 and #77** (above): review verdict, commit the accepted
-   diff, push, branch CI, combined check against current `main`, merge one
-   at a time, sweep, log.
-2. **Andreas's idea of 2026-10-16 (about 17:50), not yet an issue:** with
+1. **Andreas's idea of 2026-10-16 (about 17:50), not yet an issue:** with
    watch off, a failed launch poll leaves `⚠ github offline, as of 3h` in
    the header indefinitely; the failure kind reads as present tense though
    the attempt may be hours old and nothing retries. The coordinator

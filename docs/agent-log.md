@@ -159,6 +159,26 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-16
 
+#### #77, remove the inert cache_ttl key (batch 2)
+
+| Ticket | Issue | Ticket commit | Merge | What landed |
+|---|---|---|---|---|
+| Remove the inert `cache_ttl` key and the dead TTL read path (batch 2) | #77 | `206898f` | `57b885c` | `cache_ttl` gone from `Config`, no `deny_unknown_fields` (a new test pins that an old file still parses); the TTL gone from `ApiCache` and `KeyedCache` and their constructors; one production read path (`serve_cached` is `usable(read_cached(...))`, through `read_stale`); README's example and comparison row fixed. Coordinator rulings on the issue, under the owner's "do what you need for cache_ttl": the worker stopped before editing with three findings the ticket missed, and the coordinator ruled on them: delete the precondition `assert!(cache.read().is_none())` in `startup_serves_an_expired_payload_rather_than_waiting_on_the_network` (the one ruling beyond the ticket's list; Andreas may override); TTL doc comments reworded; `ApiCache::read` kept as a `#[cfg(test)]` wrapper so three existing assertions stay untouched. The removed test: `cache_expired_returns_none` only. Two new tests, one of them pinning that a two-hour-old saved copy still paints at launch. Reviewer mutants: `deny_unknown_fields` killed the config test; an age cut at 120 s killed the launch test and ten others. Reviewer's notes: `startup_serves_an_expired_payload...` now checks only a fresh cache (its name is stale); `docs/ideas.md` line 895 still says `cache_ttl` (outside the ticket's files). Worker `fz-worker` `claude-opus-5-5` medium, reviewer `claude-opus-5-5` medium. 1090 tests on the combined result. Worktree and local branch removed |
+
+```text
+#77: review accepted first; fix cycles 0; coordinator rulings 3 (worker stopped before editing); worker 6 min; review 2 min; usage not read
+```
+
+#### #76, refetch on recovery (batch 2)
+
+| Ticket | Issue | Ticket commit | Merge | What landed |
+|---|---|---|---|---|
+| Refetch unreachable and timed-out repos once when the GitHub poll recovers (batch 2) | #76 | `828e39d` | `5dad29a` | Fetch contract rule 6 has one exception, owner-approved ("Rule 6 yes for refetch"): a poll that succeeds after an `Offline` one fetches the rows marked `Unreachable` or `TimedOut` once, through `recovery_refetch` and the same moved-remote batch, so the tally and status line are the existing ones. Auth, NoRemote and Other are not touched. Dated amendment entry at the bottom of `docs/fetch-outcome-contract.md`. Coordinator correction before review: `Refused` is a GitHub kind, not a fetch kind, so it is not named in the rule. Two new tests (the predicate and the poll scenario), failing on the base. Reviewer mutants killed by named tests: predicate empty; `Auth` added to the filter; previous-outcome check removed; previous outcome read after the update. Reviewer follow-ups, not blocking: a recovery batch can start one `git fetch` per clone that failed in the outage, each with its own concurrency cap (the moved-remote path has the same shape); the row dedupe guard has no test; a poll that fails mid-request as GitHub `TimedOut` does not arm the refetch (per the wording). Worker `fz-worker` `claude-opus-5-5` medium, reviewer `claude-opus-5-5` medium, accepted first round. 1089 tests on the combined result. Worktree and local branch removed |
+
+```text
+#76: review accepted first; fix cycles 0; owner decisions 0 (rule 6 approved 2026-10-16 17:33); worker 5 min; review 5 min; usage not read
+```
+
 #### #75, the WT badge takes the dirty colour (batch 2)
 
 | Ticket | Issue | Ticket commit | Merge | What landed |
