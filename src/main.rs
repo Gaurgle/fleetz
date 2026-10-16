@@ -1940,6 +1940,9 @@ fn apply_github_poll_at(
         return;
     }
     app.observe_budget(reading.as_ref(), true, now);
+    // Read before the outcome below replaces it: a recovery from `Offline`
+    // refetches the rows the outage failed (fetch contract rule 6).
+    let previous_outcome = app.github_freshness.outcome.clone();
     match result {
         Ok(fetch) => {
             app.github_freshness.succeeded(now);
@@ -1994,7 +1997,15 @@ fn apply_github_poll_at(
             // One API call just told us which remotes moved, so
             // fetch only those instead of waiting for the next
             // blanket sweep to fetch all of them.
-            let moved = remotes_that_moved(&app.dataset, &dataset, &app.repos);
+            let mut moved = remotes_that_moved(&app.dataset, &dataset, &app.repos);
+            // The outage's failures ride the same batch, each row once.
+            for idx in
+                recovery_refetch(&previous_outcome, &app.github_freshness.outcome, &app.repos)
+            {
+                if !moved.contains(&idx) {
+                    moved.push(idx);
+                }
+            }
             for &idx in &moved {
                 start_single_sweep(app, tx, idx, true, author.clone());
             }
@@ -2023,6 +2034,39 @@ fn apply_github_poll_at(
         app.settle_refresh_poll(std::iter::empty());
     }
     app.needs_redraw = true;
+}
+
+/// The rows fetched once because the GitHub poll recovered (fetch contract
+/// rule 6): when `previous` failed as `Offline` and `current` succeeded,
+/// every row with a path whose last fetch failed as `Unreachable` or
+/// `TimedOut`. Any other pair selects nothing, so the refetch never repeats
+/// on its own, and a row marked for any other reason is left alone.
+fn recovery_refetch(
+    previous: &app::Outcome,
+    current: &app::Outcome,
+    repos: &[RepoStatus],
+) -> Vec<usize> {
+    let recovered = matches!(
+        previous,
+        app::Outcome::Failed(f) if f.kind == github::FailureKind::Offline
+    ) && *current == app::Outcome::Success;
+    if !recovered {
+        return Vec::new();
+    }
+    repos
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.path.is_some())
+        .filter(|(_, r)| {
+            r.fetch.failure().is_some_and(|f| {
+                matches!(
+                    f.kind,
+                    git::FetchFailureKind::Unreachable | git::FetchFailureKind::TimedOut
+                )
+            })
+        })
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// Whether an applied successful poll on account `poll` must rebuild rows
@@ -4881,6 +4925,114 @@ mod tests {
         assert!(!app.github_poll_inflight);
         assert!(!app.push_detected);
         assert_eq!(app.last_refreshed, refreshed);
+    }
+
+    fn offline_outcome() -> app::Outcome {
+        app::Outcome::Failed(github::Failure::new(
+            github::FailureKind::Offline,
+            "no route",
+        ))
+    }
+
+    /// Rule 6, amended: only the step from an `Offline` poll to a success
+    /// selects, and only the rows the outage failed (`Unreachable`,
+    /// `TimedOut`), never one marked for another reason or a clean one.
+    #[test]
+    fn a_poll_recovering_from_offline_refetches_only_the_network_failures() {
+        let mut app = fleet_app(7);
+        land(
+            &mut app,
+            0,
+            fetch_failed(git::FetchFailureKind::Unreachable),
+        );
+        land(&mut app, 1, fetch_failed(git::FetchFailureKind::TimedOut));
+        land(&mut app, 2, fetch_failed(git::FetchFailureKind::Auth));
+        land(&mut app, 3, fetch_failed(git::FetchFailureKind::NoRemote));
+        land(&mut app, 4, fetch_failed(git::FetchFailureKind::Other));
+        land(&mut app, 5, git::FetchOutcome::Succeeded);
+        // Row 6 was never fetched.
+        let success = app::Outcome::Success;
+
+        assert_eq!(
+            recovery_refetch(&offline_outcome(), &success, &app.repos),
+            vec![0, 1]
+        );
+        assert!(recovery_refetch(&success, &success, &app.repos).is_empty());
+        assert!(recovery_refetch(&app::Outcome::NotAttempted, &success, &app.repos).is_empty());
+        let still_failing = app::Outcome::Failed(github::Failure::new(
+            github::FailureKind::Server,
+            "HTTP 502",
+        ));
+        assert!(recovery_refetch(&offline_outcome(), &still_failing, &app.repos).is_empty());
+        assert!(recovery_refetch(&offline_outcome(), &offline_outcome(), &app.repos).is_empty());
+        let other_failure = app::Outcome::Failed(github::Failure::new(
+            github::FailureKind::TimedOut,
+            "no answer",
+        ));
+        assert!(recovery_refetch(&other_failure, &success, &app.repos).is_empty());
+    }
+
+    /// Rule 6, amended, through the poll: a row the outage failed is in the
+    /// fetch batch of the first successful poll after an `Offline` one, the
+    /// way a moved remote is, and not in the next poll's when it failed
+    /// again: the recovery refetch happens once.
+    #[tokio::test]
+    async fn a_row_the_outage_failed_is_fetched_once_when_the_poll_recovers() {
+        // A path that does not exist, so the spawned fetch touches nothing.
+        let path = std::env::temp_dir()
+            .join("fleetz-76-no-such-dir")
+            .join("repo")
+            .display()
+            .to_string();
+        let mut repo = test_repo();
+        repo.path = Some(path.clone());
+        let mut app = App::new(vec![repo], "h".to_string(), 120, 44);
+        let status = app.repos[0].clone();
+        let unreachable = || fetch_failed(git::FetchFailureKind::Unreachable);
+        apply_repo_updated(&mut app, &path, status.clone(), unreachable());
+        let ok = || {
+            Ok(Box::new(github::GithubFetch {
+                repos: Vec::new(),
+                calendar: None,
+                has_pr_counts: true,
+                origin: github::Origin::Network,
+                meta: Default::default(),
+            }))
+        };
+        let offline = || {
+            Err(github::FetchError {
+                failure: github::Failure::new(github::FailureKind::Offline, "no route"),
+                fallback: None,
+                meta: Default::default(),
+            })
+        };
+
+        app.refresh_awaits_poll = true;
+        poll_with(&mut app, offline());
+        assert!(app.refresh_fetches.is_empty(), "an offline poll fetched");
+
+        app.refresh_awaits_poll = true;
+        poll_with(&mut app, ok());
+        assert_eq!(
+            app.refresh_fetches.iter().collect::<Vec<_>>(),
+            vec![&path],
+            "the recovering poll did not refetch the failed row"
+        );
+
+        // Its refetch fails again; the next poll leaves it for the next
+        // trigger.
+        apply_repo_updated(&mut app, &path, status, unreachable());
+        assert!(app.refresh_fetches.is_empty());
+        app.refresh_awaits_poll = true;
+        poll_with(&mut app, ok());
+        assert!(
+            app.refresh_fetches.is_empty(),
+            "the recovery refetch repeated"
+        );
+        assert_eq!(
+            app.repos[0].fetch.failure().map(|f| f.kind),
+            Some(git::FetchFailureKind::Unreachable)
+        );
     }
 
     /// A reload replaces every row; the session's fetch facts go across by
