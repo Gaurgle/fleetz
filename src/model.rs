@@ -564,10 +564,11 @@ impl RemoteRef {
     /// treats owners and names case-insensitively. Compare keys, never the
     /// parsed spelling, which is kept for display.
     pub fn key(&self) -> Self {
+        let (owner, name) = identity_key(Some(&self.owner), &self.name);
         Self {
             host: host_key(&self.host),
-            owner: self.owner.to_lowercase(),
-            name: self.name.to_lowercase(),
+            owner: owner.unwrap_or_default(),
+            name,
         }
     }
 }
@@ -576,6 +577,17 @@ impl RemoteRef {
 /// and the cache file name (`cache::host_part`) both spell a host by.
 pub fn host_key(host: &str) -> String {
     host.to_lowercase()
+}
+
+/// The key two remotes are the same repo by: lowercased owner and name, the
+/// one rule every "same remote" check spells an owner and a name by
+/// (`RemoteRef::key`, `GithubRepo::identity_key`, `main.rs::remote_key`,
+/// `main.rs::names_remote`, discovery's `repo_key`). No owner is the legacy
+/// key of a payload without `login`, so such an entry is the same as another
+/// only by name, and never the same as an owned one. Logins and repo names
+/// are ASCII, so lowercasing agrees with `eq_ignore_ascii_case`.
+pub fn identity_key(owner: Option<&str>, name: &str) -> (Option<String>, String) {
+    (owner.map(str::to_lowercase), name.to_lowercase())
 }
 
 /// `host` from `user@host`, or the input when there is no user.
@@ -820,6 +832,19 @@ impl Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_key_lowers_both_parts_and_keeps_no_owner_apart() {
+        assert_eq!(
+            identity_key(Some("GaurGLE"), "FleetZ"),
+            (Some("gaurgle".to_string()), "fleetz".to_string())
+        );
+        assert_eq!(identity_key(None, "FleetZ"), (None, "fleetz".to_string()));
+        assert_ne!(
+            identity_key(Some("gaurgle"), "fleetz"),
+            identity_key(None, "fleetz")
+        );
+    }
 
     #[test]
     fn owner_parsed_from_every_remote_url_form() {

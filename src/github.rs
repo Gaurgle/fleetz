@@ -21,17 +21,13 @@ pub struct GithubRepo {
 }
 
 impl GithubRepo {
-    /// The key two dataset entries are the same remote by: lowercased owner
-    /// and name, as `main.rs::remote_key` and discovery's `repo_key` build it.
-    /// No owner is the legacy key of a payload without `login`, so such an
-    /// entry is the same as another only by name, and never the same as an
-    /// owned one. Logins and repo names are ASCII, so this agrees with the
-    /// `eq_ignore_ascii_case` in `main.rs::names_remote` too.
+    /// The key two dataset entries are the same remote by: `model::identity_key`,
+    /// which states the rule.
     ///
     /// Takes the parts rather than `&self` so `merge_sources` can key the raw
     /// nodes before they are parsed into entries.
     pub fn identity_key(owner: Option<&str>, name: &str) -> (Option<String>, String) {
-        (owner.map(str::to_lowercase), name.to_lowercase())
+        crate::model::identity_key(owner, name)
     }
 }
 

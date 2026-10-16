@@ -2311,18 +2311,15 @@ fn remotes_that_moved(
 /// owner, only an entry of that owner (case-insensitive) matches; an entry
 /// without one does not. With no owner, the name alone decides, whatever the
 /// entry's owner: that is the legacy path of a payload without `login` (m2
-/// and D1 in `docs/repository-identity-design.md`).
+/// and D1 in `docs/repository-identity-design.md`). Decided through
+/// `model::identity_key`.
 fn names_remote(owner: Option<&str>, name: &str, entry: &github::GithubRepo) -> bool {
-    if !entry.name.eq_ignore_ascii_case(name) {
-        return false;
+    let ours = model::identity_key(owner, name);
+    let theirs = model::identity_key(entry.owner.as_deref(), &entry.name);
+    match owner {
+        Some(_) => ours == theirs,
+        None => ours.1 == theirs.1,
     }
-    let Some(owner) = owner else {
-        return true;
-    };
-    entry
-        .owner
-        .as_deref()
-        .is_some_and(|theirs| theirs.eq_ignore_ascii_case(owner))
 }
 
 /// Whether `repo` is the row that carries `entry`'s GitHub fields, the mark
@@ -2347,11 +2344,7 @@ fn carries(repo: &RepoStatus, entry: &github::GithubRepo) -> bool {
     let Some(origin) = model::RemoteRef::parse(url) else {
         return false;
     };
-    entry
-        .owner
-        .as_deref()
-        .is_some_and(|theirs| theirs.eq_ignore_ascii_case(owner))
-        && entry.name.eq_ignore_ascii_case(&origin.name)
+    names_remote(Some(owner), &origin.name, entry)
 }
 
 /// Resolve watch mode at startup: an explicit flag wins, otherwise the config
@@ -3388,7 +3381,7 @@ async fn assemble_view_in(
 type RemoteKey = (Option<String>, String);
 
 fn remote_key(owner: Option<&str>, name: &str) -> RemoteKey {
-    (owner.map(str::to_lowercase), name.to_lowercase())
+    model::identity_key(owner, name)
 }
 
 /// The D4 status line for the first ambiguous clone by path, or None. The
@@ -9474,5 +9467,23 @@ mod tests {
         assert!(!account_rebuild_needed(Some("A"), Some("A")));
         assert!(account_rebuild_needed(Some("A"), Some("B")));
         assert!(account_rebuild_needed(None, Some("A")));
+    }
+
+    #[test]
+    fn names_remote_matches_case_insensitively_by_owner_or_by_name_alone() {
+        let entry = github::GithubRepo {
+            owner: Some("gaurgle".to_string()),
+            ..gh("fleetz", "2026-01-01T00:00:00Z")
+        };
+        assert!(names_remote(Some("GAURGLE"), "Fleetz", &entry));
+        assert!(!names_remote(Some("someone"), "fleetz", &entry));
+        assert!(!names_remote(Some("gaurgle"), "other", &entry));
+        // No owner: the legacy path, the name alone decides.
+        assert!(names_remote(None, "FLEETZ", &entry));
+        assert!(!names_remote(None, "other", &entry));
+        // An owned row never matches an entry without an owner.
+        let legacy = gh("fleetz", "2026-01-01T00:00:00Z");
+        assert!(!names_remote(Some("gaurgle"), "fleetz", &legacy));
+        assert!(names_remote(None, "Fleetz", &legacy));
     }
 }

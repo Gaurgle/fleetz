@@ -37,9 +37,9 @@ pub struct Ambiguity {
 /// Lowercased `owner/name`, or the lowercased name for a repo with no owner.
 /// The two cannot collide, since a repo name holds no slash.
 fn repo_key(owner: Option<&str>, name: &str) -> String {
-    match owner {
-        Some(owner) => format!("{owner}/{name}").to_lowercase(),
-        None => name.to_lowercase(),
+    match crate::model::identity_key(owner, name) {
+        (Some(owner), name) => format!("{owner}/{name}"),
+        (None, name) => name,
     }
 }
 
