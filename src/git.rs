@@ -380,8 +380,71 @@ pub async fn fetch(repo_path: &Path) -> FetchOutcome {
     fetch_within(repo_path, GIT_TIMEOUT).await
 }
 
+/// The ssh command a fetch hands git when the user chose none. ssh's own TCP
+/// connect wait outlasts `GIT_TIMEOUT` (75 s measured on macOS), so an
+/// unreachable host ended as `TimedOut` after the whole limit; with a 10 s
+/// connect timeout it fails sooner, with ssh's reason. `BatchMode` stops ssh
+/// prompting on the TUI's terminal (a passphrase, an unknown host key), which
+/// `GIT_TERMINAL_PROMPT=0` does not cover. A slow but reachable remote still
+/// has the full `GIT_TIMEOUT`.
+const FETCH_SSH_COMMAND: &str = "ssh -o ConnectTimeout=10 -o BatchMode=yes";
+
+/// Whether a fetch adds `FETCH_SSH_COMMAND`: only when the user has set none
+/// of `GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand`, so their own ssh
+/// setup always wins. An empty string counts as set, as it does for git,
+/// which tries to run the empty command rather than fall back to `ssh`.
+fn fetch_ssh_command(
+    git_ssh_command: Option<&str>,
+    git_ssh: Option<&str>,
+    core_ssh_command: Option<&str>,
+) -> Option<&'static str> {
+    let user_chose = git_ssh_command.is_some() || git_ssh.is_some() || core_ssh_command.is_some();
+    (!user_chose).then_some(FETCH_SSH_COMMAND)
+}
+
+/// `core.sshCommand` as git sees it in this repo, from any config scope.
+/// `None` when it is unset or cannot be read: a config git cannot read fails
+/// the fetch itself before ssh runs.
+async fn configured_ssh_command(repo_path: &Path) -> Option<String> {
+    let output = run_git(repo_path, &["config", "--get", "core.sshCommand"]).await?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout);
+    Some(value.strip_suffix('\n').unwrap_or(&value).to_string())
+}
+
+/// The fetch command, with `ssh_command` passed as `-c core.sshCommand=...`
+/// when given. `-c` rather than `GIT_SSH_COMMAND` on the child: git ranks a
+/// `GIT_SSH_COMMAND` in its environment above any `core.sshCommand`, so a
+/// user's variable wins even if the decision above misread it, where a
+/// variable set by fleetz would replace theirs.
+fn fetch_cmd(repo_path: &Path, ssh_command: Option<&str>) -> Command {
+    let ssh_config = ssh_command.map(|ssh| format!("core.sshCommand={ssh}"));
+    let mut args: Vec<&str> = Vec::with_capacity(FETCH_ARGS.len() + 2);
+    if let Some(config) = &ssh_config {
+        args.extend(["-c", config.as_str()]);
+    }
+    args.extend(FETCH_ARGS);
+    git_cmd(repo_path, &args)
+}
+
+/// The fetch command for this repo, with the ssh options unless the user's
+/// environment or git config already names an ssh command.
+async fn prepared_fetch_cmd(repo_path: &Path) -> Command {
+    let env = |name: &str| std::env::var_os(name).map(|v| v.to_string_lossy().into_owned());
+    let configured = configured_ssh_command(repo_path).await;
+    let ssh_command = fetch_ssh_command(
+        env("GIT_SSH_COMMAND").as_deref(),
+        env("GIT_SSH").as_deref(),
+        configured.as_deref(),
+    );
+    fetch_cmd(repo_path, ssh_command)
+}
+
 async fn fetch_within(repo_path: &Path, limit: std::time::Duration) -> FetchOutcome {
-    let run = match tokio::time::timeout(limit, git_cmd(repo_path, FETCH_ARGS).output()).await {
+    let attempt = async { prepared_fetch_cmd(repo_path).await.output().await };
+    let run = match tokio::time::timeout(limit, attempt).await {
         Err(_) => FetchRun::TimedOut,
         Ok(Err(_)) => FetchRun::NotStarted,
         Ok(Ok(output)) => FetchRun::Exited(output),
@@ -3114,6 +3177,82 @@ mod real_repo_tests {
         );
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    // --- #70: ssh gets a connect timeout and batch mode, unless the user
+    // chose their own ssh ---
+
+    #[test]
+    fn a_fetch_with_no_ssh_override_adds_the_ssh_options() {
+        assert_eq!(
+            fetch_ssh_command(None, None, None),
+            Some("ssh -o ConnectTimeout=10 -o BatchMode=yes")
+        );
+    }
+
+    #[test]
+    fn a_user_git_ssh_command_adds_nothing() {
+        assert_eq!(fetch_ssh_command(Some("ssh -i key"), None, None), None);
+    }
+
+    #[test]
+    fn a_user_git_ssh_adds_nothing() {
+        assert_eq!(fetch_ssh_command(None, Some("/usr/bin/myssh"), None), None);
+    }
+
+    #[test]
+    fn a_user_core_ssh_command_adds_nothing() {
+        assert_eq!(fetch_ssh_command(None, None, Some("ssh -i key")), None);
+    }
+
+    /// git treats each of the three as set when it holds an empty string: it
+    /// tries to run the empty command rather than fall back to plain `ssh`.
+    /// So fleetz does too, and leaves the user's (broken) choice alone.
+    #[test]
+    fn an_empty_ssh_override_counts_as_set() {
+        assert_eq!(fetch_ssh_command(Some(""), None, None), None);
+        assert_eq!(fetch_ssh_command(None, Some(""), None), None);
+        assert_eq!(fetch_ssh_command(None, None, Some("")), None);
+    }
+
+    /// The `-c core.sshCommand=...` a built fetch command carries, if any.
+    fn ssh_config_args(cmd: &Command) -> Vec<String> {
+        cmd.as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .filter(|a| a.starts_with("core.sshCommand="))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_fetch_in_a_repo_without_core_ssh_command_carries_the_ssh_options() {
+        let dir = temp_repo("sshplain");
+        let configured = configured_ssh_command(&dir).await;
+        assert_eq!(configured, None, "no core.sshCommand in any scope");
+        let cmd = fetch_cmd(&dir, fetch_ssh_command(None, None, configured.as_deref()));
+        assert_eq!(
+            ssh_config_args(&cmd),
+            ["core.sshCommand=ssh -o ConnectTimeout=10 -o BatchMode=yes"]
+        );
+        let args: Vec<_> = cmd.as_std().get_args().collect();
+        let fetch_at = args.iter().position(|a| *a == "fetch").expect("a fetch");
+        let config_at = args
+            .iter()
+            .position(|a| a.to_string_lossy().starts_with("core.sshCommand="))
+            .expect("the ssh option");
+        assert!(config_at < fetch_at, "-c must precede the subcommand");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_fetch_in_a_repo_with_core_ssh_command_adds_nothing() {
+        let dir = temp_repo("sshown");
+        sh(&dir, &["git", "config", "core.sshCommand", "ssh -i mykey"]);
+        let configured = configured_ssh_command(&dir).await;
+        assert_eq!(configured.as_deref(), Some("ssh -i mykey"));
+        let cmd = fetch_cmd(&dir, fetch_ssh_command(None, None, configured.as_deref()));
+        assert!(ssh_config_args(&cmd).is_empty(), "{cmd:?}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     // --- FZ-06b: the key follows ref content (scenario ids from
