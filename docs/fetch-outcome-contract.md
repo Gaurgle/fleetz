@@ -55,9 +55,15 @@ Rules, each one a test:
 5. **Counts against stale refs say so.** While `outcome` is `Failed`, behind
    and ahead are "as of the last successful fetch", and the row or the detail
    pane says the fetch failed.
-6. **No retry storm.** A failed repo is fetched again when it would have been
-   anyway: the next watch sweep, a moved remote, `f` or `r`. Nothing new
-   retries it.
+6. **No retry storm, one refetch on recovery.** A failed repo is fetched
+   again when it would have been anyway: the next watch sweep, a moved
+   remote, `f` or `r`. One exception: when a GitHub poll succeeds and the
+   previous poll's outcome was `Offline`, the repos whose fetch mark is
+   `Unreachable` or `TimedOut` are fetched once, in the same batch as a
+   moved-remote fetch would be. A refetch that fails again keeps its mark
+   and waits for the next trigger; the recovery refetch never repeats on its
+   own, and a repo marked for any other reason (`Auth`, `NoRemote` or
+   `Other`, a git error) is not touched. Amended: see [amendment 1](#amendments).
 7. **An empty `FETCH_HEAD` is not a fetch.** `stale_remotes` treats it as
    never fetched, so the repo is fetched instead of skipped. This keeps the
    existing rule that unknowns must fetch.
@@ -121,3 +127,18 @@ userinfo never appearing in the detail.
 - **Linked worktrees.** `FETCH_HEAD` is per worktree (FZ-06, executed), so a
   fetch in the main checkout does not advance a linked worktree's
   `last_success`. Accepted: extra fetches, not wrong data.
+
+## Amendments
+
+1. **2026-10-16, rule 6: one refetch on recovery** (Andreas, "Rule 6 yes for
+   refetch"; [#76](https://github.com/Gaurgle/fleetz/issues/76)). "Nothing
+   new retries it" becomes the exception in rule 6: when the network drops,
+   every clone's fetch fails as `Unreachable` or `TimedOut`, and outside
+   watch mode nothing fetched it again, so the marks stayed until `f` or
+   `r`. Now the first successful GitHub poll after an `Offline` one fetches
+   those repos once, through the moved-remote batch
+   (`main.rs::recovery_refetch`, called from `apply_github_poll_at`), so the
+   fetch tally, the per-repo marks and the status line are a moved-remote
+   batch's. Of the fetch kinds in [State](#state), `Auth`, `NoRemote` and
+   `Other` (a git error) are not refetched. No fetch backoff, no new config key, and `r`, `f`,
+   `F`, the watch sweep and `stale_remotes` are unchanged.
