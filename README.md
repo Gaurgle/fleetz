@@ -95,9 +95,11 @@ account, for example `github-v2-github.com-2a8d4ab865f3ca20-50.json`: format
 version, host, a 16 character fingerprint computed from your `gh` token (never
 the token itself) and `repo_limit`. Files are readable only by you. Launch asks
 `gh auth token --hostname github.com` which account is signed in, waiting at
-most 2 seconds, and paints only that account's copy; an account with no saved
-copy yet paints nothing until GitHub answers. Signed out, or when `gh` does
-not answer in time, launch paints the most recently saved copy on the machine.
+most 2 seconds, and paints only that account's copy, whatever its age, which
+the first poll replaces a moment later (with watch off too); an account with
+no saved copy yet paints nothing until GitHub answers. Signed out, or when
+`gh` does not answer in time, launch paints the most recently saved copy on
+the machine.
 The single `github-{repo_limit}.json` that earlier versions wrote is read only
 until any account has saved its own copy. A copy superseded by another account,
 token or format version is deleted at launch once it has gone 30 days without
@@ -331,12 +333,6 @@ refresh_interval = 60
 # stretches it too.
 github_poll_interval = 30
 
-# GitHub API cache TTL in seconds. Launch does not wait on this: it paints
-# from whatever is cached, however old, and the poll that fires a moment
-# later replaces it (with watch off too). The TTL bounds how long a *running*
-# fleetz will reuse a payload before going back to the network.
-cache_ttl = 120
-
 # Write pane sizes back on exit and restore them next launch. Off by
 # default: every launch starts from the built-in split, so a layout nudged
 # for one repo doesn't silently become permanent. Toggle it in the `,` menu.
@@ -378,7 +374,7 @@ The three time slots are derived from `work_start` and `work_end`:
 | Form | Bash one-shot | Rust TUI |
 | Output | Static text dump | Interactive dashboard |
 | Fetch | Yes, every repo on every run | On demand (`f` / `F`) and in watch mode |
-| GitHub calls | Uncached, one GraphQL call per run | Disk cache with a TTL, `R` bypasses it |
+| GitHub calls | Uncached, one GraphQL call per run | Disk cache painted at launch, `R` bypasses it |
 | Branch cleanup | No | Yes (`b`) |
 | CI status | No | Yes (◉ green passed, red failed, blinking orange running) |
 | Worktrees / stashes | No | Yes (badges) |

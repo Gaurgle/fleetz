@@ -24,7 +24,6 @@ pub struct CachedBody {
 /// not tilde-expanded and so lands under the current directory.
 pub struct ApiCache {
     path: PathBuf,
-    ttl: Duration,
 }
 
 impl ApiCache {
@@ -37,23 +36,19 @@ impl ApiCache {
     /// passed `args.prs` (false by default) while the background poll
     /// hardcoded true. They wrote two files and each only ever read its own,
     /// so the poll's fresh payload could not warm the next launch.
-    pub fn new(ttl_secs: u64, repo_limit: u32) -> Self {
+    pub fn new(repo_limit: u32) -> Self {
         let cache_dir = dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("~/.cache"))
             .join("fleetz");
         remove_obsolete_names(&cache_dir, repo_limit);
         Self {
             path: cache_dir.join(legacy_name(repo_limit)),
-            ttl: Duration::from_secs(ttl_secs),
         }
     }
 
     /// A cache at an explicit path, for the keyed files of `KeyedCache`.
-    fn located(path: PathBuf, ttl_secs: u64) -> Self {
-        Self {
-            path,
-            ttl: Duration::from_secs(ttl_secs),
-        }
+    fn located(path: PathBuf) -> Self {
+        Self { path }
     }
 
     /// The file this cache reads and writes.
@@ -64,28 +59,18 @@ impl ApiCache {
     /// Test constructor with an explicit path, so a test can plant a payload
     /// of a chosen age without going near the real cache directory.
     #[cfg(test)]
-    pub fn at(path: PathBuf, ttl_secs: u64) -> Self {
-        Self {
-            path,
-            ttl: Duration::from_secs(ttl_secs),
-        }
+    pub fn at(path: PathBuf) -> Self {
+        Self { path }
     }
 
-    /// Read cached data if it exists and is within TTL.
+    /// The body alone, kept so the existing tests' assertions stay untouched.
+    #[cfg(test)]
     pub fn read(&self) -> Option<String> {
-        let metadata = std::fs::metadata(&self.path).ok()?;
-        let modified = metadata.modified().ok()?;
-        let age = SystemTime::now().duration_since(modified).ok()?;
-
-        if age > self.ttl {
-            return None;
-        }
-
-        std::fs::read_to_string(&self.path).ok()
+        self.read_stale().map(|cached| cached.body)
     }
 
-    /// Read cached data even if expired (for offline fallback), with the time
-    /// the file was written.
+    /// Read cached data however old, with the time the file was written.
+    /// Launch paints from it and the offline fallback is built from it.
     ///
     /// The write time is the payload's data time: only an accepted GitHub
     /// answer is ever written (`github::accept_response`), so the file is as
@@ -296,7 +281,6 @@ pub struct KeyedCache {
     /// Already through `host_part`.
     host: String,
     repo_limit: u32,
-    ttl_secs: u64,
     legacy: ApiCache,
 }
 
@@ -312,8 +296,8 @@ pub struct LaunchRead {
 impl KeyedCache {
     /// The production cache under `dirs::cache_dir()`. `ApiCache::new` names
     /// the legacy file, and with it the directory.
-    pub fn new(ttl_secs: u64, repo_limit: u32, host: &str) -> Self {
-        let legacy = ApiCache::new(ttl_secs, repo_limit);
+    pub fn new(repo_limit: u32, host: &str) -> Self {
+        let legacy = ApiCache::new(repo_limit);
         let dir = legacy
             .path
             .parent()
@@ -323,7 +307,6 @@ impl KeyedCache {
             cleanable: cache_root().is_some(),
             host: host_part(host),
             repo_limit,
-            ttl_secs,
             legacy,
         }
     }
@@ -331,14 +314,13 @@ impl KeyedCache {
     /// A cache in an explicit directory, so a test can plant files without
     /// going near the real one.
     #[cfg(test)]
-    pub fn at(dir: PathBuf, ttl_secs: u64, repo_limit: u32, host: &str) -> Self {
-        let legacy = ApiCache::located(dir.join(legacy_name(repo_limit)), ttl_secs);
+    pub fn at(dir: PathBuf, repo_limit: u32, host: &str) -> Self {
+        let legacy = ApiCache::located(dir.join(legacy_name(repo_limit)));
         Self {
             dir,
             cleanable: true,
             host: host_part(host),
             repo_limit,
-            ttl_secs,
             legacy,
         }
     }
@@ -347,7 +329,7 @@ impl KeyedCache {
     pub fn for_account(&self, account: &str) -> ApiCache {
         debug_assert!(is_lower_hex_16(account), "not a fingerprint");
         let name = keyed_name(FORMAT_VERSION, &self.host, account, self.repo_limit);
-        ApiCache::located(self.dir.join(name), self.ttl_secs)
+        ApiCache::located(self.dir.join(name))
     }
 
     /// The files launch may serve, in order (design 4.5):
@@ -374,7 +356,7 @@ impl KeyedCache {
                     .max_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)))
                 {
                     reads.push(LaunchRead {
-                        cache: ApiCache::located(path.clone(), self.ttl_secs),
+                        cache: ApiCache::located(path.clone()),
                         own: false,
                     });
                 }
@@ -382,7 +364,7 @@ impl KeyedCache {
         }
         if keyed.is_empty() {
             reads.push(LaunchRead {
-                cache: ApiCache::located(self.legacy.path.clone(), self.ttl_secs),
+                cache: ApiCache::located(self.legacy.path.clone()),
                 own: false,
             });
         }
@@ -565,8 +547,8 @@ mod tests {
         // meant startup and the background poll wrote two files and each read
         // only its own, so a launch could never be warmed by the poll before
         // it.
-        assert_ne!(ApiCache::new(300, 50).path, ApiCache::new(300, 100).path);
-        assert_eq!(ApiCache::new(300, 50).path, ApiCache::new(999, 50).path);
+        assert_ne!(ApiCache::new(50).path, ApiCache::new(100).path);
+        assert_eq!(ApiCache::new(50).path, ApiCache::new(50).path);
     }
 
     #[test]
@@ -575,34 +557,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let cache = ApiCache {
             path: dir.join("test.json"),
-            ttl: Duration::from_secs(300),
         };
 
         cache.write(r#"{"test": true}"#);
         let data = cache.read();
         assert!(data.is_some());
         assert!(data.unwrap().contains("test"));
-
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
-    fn cache_expired_returns_none() {
-        let dir = std::env::temp_dir().join("fleetz_cache_expired");
-        let _ = std::fs::remove_dir_all(&dir);
-        let cache = ApiCache {
-            path: dir.join("test.json"),
-            ttl: Duration::from_secs(0), // immediate expiry
-        };
-
-        cache.write("data");
-        // TTL is 0, so read should return None
-        let data = cache.read();
-        assert!(data.is_none());
-
-        // But stale read should still work
-        let stale = cache.read_stale();
-        assert!(stale.is_some());
 
         std::fs::remove_dir_all(dir).ok();
     }
@@ -616,7 +576,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let cache = ApiCache {
             path: dir.join("test.json"),
-            ttl: Duration::from_secs(0),
         };
         cache.write("data");
         // Planted, because a test cannot wait three hours for a file to age.
@@ -687,7 +646,7 @@ mod tests {
     #[test]
     fn cw3_two_writes_in_sequence_leave_the_second_body_and_its_mtime() {
         let scratch = Scratch::new("cw3");
-        let cache = ApiCache::at(scratch.0.join("github-50.json"), 0);
+        let cache = ApiCache::at(scratch.0.join("github-50.json"));
         cache.write("first body, the longer of the two");
         let aged = SystemTime::now() - Duration::from_secs(3 * 3600);
         std::fs::File::options()
@@ -723,7 +682,7 @@ mod tests {
         assert!(full.len() > 1000);
         std::fs::write(&path, &full.as_bytes()[..1000]).unwrap();
 
-        ApiCache::at(path.clone(), 86_400).write(&full);
+        ApiCache::at(path.clone()).write(&full);
 
         assert_eq!(std::fs::read(&path).unwrap(), full.as_bytes());
         assert_eq!(scratch.names(), ["github-50.json"]);
@@ -751,7 +710,7 @@ mod tests {
             return;
         }
 
-        ApiCache::at(path.clone(), 86_400).write("new body");
+        ApiCache::at(path.clone()).write("new body");
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "old body");
         assert_eq!(scratch.names(), ["github-50.json"]);
@@ -767,7 +726,7 @@ mod tests {
         let scratch = Scratch::new("cw8");
         let path = scratch.0.join("github-50.json");
 
-        ApiCache::at(path.clone(), 86_400).write("body");
+        ApiCache::at(path.clone()).write("body");
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "mode was {mode:o}");
@@ -784,7 +743,7 @@ mod tests {
         std::fs::write(&path, "old body").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        ApiCache::at(path.clone(), 86_400).write("new body");
+        ApiCache::at(path.clone()).write("new body");
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "mode was {mode:o}");
@@ -944,7 +903,7 @@ mod tests {
     #[test]
     fn ck1_two_tokens_get_two_files_and_writing_one_leaves_the_other() {
         let scratch = Scratch::new("ck1");
-        let cache = KeyedCache::at(scratch.0.clone(), 86_400, 50, "github.com");
+        let cache = KeyedCache::at(scratch.0.clone(), 50, "github.com");
         let file_a = cache.for_account(&account(TOKEN_A));
         let file_b = cache.for_account(&account(TOKEN_B));
         assert_ne!(file_a.path(), file_b.path());
@@ -964,8 +923,8 @@ mod tests {
     #[test]
     fn ck3_one_token_two_repo_limits_get_two_files() {
         let dir = std::env::temp_dir().join("fleetz_ck3_unused");
-        let at_50 = KeyedCache::at(dir.clone(), 86_400, 50, "github.com");
-        let at_100 = KeyedCache::at(dir, 86_400, 100, "github.com");
+        let at_50 = KeyedCache::at(dir.clone(), 50, "github.com");
+        let at_100 = KeyedCache::at(dir, 100, "github.com");
         let a = account(TOKEN_A);
         assert_ne!(at_50.for_account(&a).path(), at_100.for_account(&a).path());
         assert!(file_name(at_50.for_account(&a).path()).ends_with("-50.json"));
@@ -1006,7 +965,7 @@ mod tests {
     /// the empty token's; the design's example name exactly.
     #[test]
     fn ck6_the_file_name_carries_the_pinned_fingerprint() {
-        let cache = KeyedCache::at(PathBuf::from("/nonexistent"), 0, 50, "github.com");
+        let cache = KeyedCache::at(PathBuf::from("/nonexistent"), 50, "github.com");
         let named = |token: &str| file_name(cache.for_account(&account(token)).path());
         assert_eq!(
             named(TOKEN_A),
@@ -1091,7 +1050,7 @@ mod tests {
     #[test]
     fn launch_offers_the_own_file_then_the_legacy_one_only_while_nothing_is_keyed() {
         let scratch = Scratch::new("reads_known");
-        let cache = KeyedCache::at(scratch.0.clone(), 86_400, 50, "github.com");
+        let cache = KeyedCache::at(scratch.0.clone(), 50, "github.com");
         let (a, b) = (account(TOKEN_A), account(TOKEN_B));
         let own = keyed_name(FORMAT_VERSION, "github.com", &a, 50);
         plant(&scratch.0.join("github-50.json"), "legacy", DAY);
@@ -1122,7 +1081,7 @@ mod tests {
     #[test]
     fn launch_signed_out_offers_the_newest_keyed_file_or_else_the_legacy_one() {
         let scratch = Scratch::new("reads_unknown");
-        let cache = KeyedCache::at(scratch.0.clone(), 86_400, 50, "github.com");
+        let cache = KeyedCache::at(scratch.0.clone(), 50, "github.com");
         let (a, b) = (account(TOKEN_A), account(TOKEN_B));
         assert_eq!(
             offered(&cache, None),
@@ -1332,7 +1291,7 @@ mod tests {
     /// looks for.
     #[test]
     fn the_temporary_names_writes_use_are_the_ones_cleanup_matches() {
-        let cache = KeyedCache::at(PathBuf::from("/nonexistent"), 0, 50, "github.com");
+        let cache = KeyedCache::at(PathBuf::from("/nonexistent"), 50, "github.com");
         let target = cache.for_account(&account(TOKEN_A)).path().to_path_buf();
         let temp = temp_path_for(&target).unwrap();
         assert!(is_cache_temp_name(&file_name(&temp)));

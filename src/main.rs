@@ -2701,7 +2701,7 @@ fn spawn_github_poll(
     let tx = tx.clone();
     let repo_limit = config.repo_limit;
     // PR data is always fetched now, so the cache key no longer varies by it.
-    let cache = cache::KeyedCache::new(config.cache_ttl, repo_limit, github::HOST);
+    let cache = cache::KeyedCache::new(repo_limit, github::HOST);
     tokio::spawn(async move {
         let result = github::fetch_github(repo_limit, &cache, github::CacheMode::Bypass).await;
         let _ = tx.send(AppEvent::Github {
@@ -2778,7 +2778,7 @@ async fn load_repos(
     }
 
     // Fetch from GitHub (with caching)
-    let api_cache = cache::KeyedCache::new(config.cache_ttl, config.repo_limit, github::HOST);
+    let api_cache = cache::KeyedCache::new(config.repo_limit, github::HOST);
     let (fetch, source) = match fetch_dataset(config, &api_cache, bypass_cache).await {
         Ok(fetch) => {
             let source = match fetch.origin {

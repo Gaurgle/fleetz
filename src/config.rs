@@ -10,7 +10,6 @@ pub struct Config {
     pub repo_limit: u32,
     pub repo_dir: String,
     pub refresh_interval: u64,
-    pub cache_ttl: u64,
     /// Extra directories to scan for local repos alongside `repo_dir` --
     /// e.g. `~/.dotfiles`. Mirrors repoz's `EXTRA_DIRS`; lets repos outside
     /// the main repo dir (or under a hidden path the walker skips) surface
@@ -113,7 +112,6 @@ impl Default for Config {
             repo_limit: 50,
             repo_dir: "~/repos".to_string(),
             refresh_interval: 60,
-            cache_ttl: 120,
             extra_dirs: Vec::new(),
             groups: HashMap::new(),
             view: None,
@@ -315,6 +313,16 @@ mod tests {
         assert_eq!(c.forced_view(), Some(crate::app::View::Detail));
         assert_eq!(c.repo_limit, 50, "untouched keys keep their defaults");
         assert_eq!(c.refresh_interval, 60);
+    }
+
+    /// #77 removed the expiry key. A file written before that still sets it
+    /// and must keep loading: unknown keys are ignored, so adding
+    /// `deny_unknown_fields` would break every such config.
+    #[test]
+    fn a_config_still_setting_the_removed_expiry_key_parses() {
+        let c: Config = toml::from_str("cache_ttl = 120\nrepo_limit = 70")
+            .expect("a config with the removed key still parses");
+        assert_eq!(c.repo_limit, 70, "the keys beside it are still read");
     }
 
     #[test]
