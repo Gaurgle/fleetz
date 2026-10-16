@@ -227,6 +227,28 @@ Existing issues [#1](https://github.com/Gaurgle/fleetz/issues/1),
 [#7](https://github.com/Gaurgle/fleetz/issues/7) remain open for triage. The
 planning issues link related work rather than duplicating those scopes.
 
+## Dispatch order after M1: written 2026-10-16
+
+Andreas's direction (2026-10-16): every ticket is to be completed eventually;
+the release is not in a hurry; fleetz is a project he uses daily, so
+functionality and reliability come first, the look second ("sleek, still
+Rust/TUI style, with passion"), and polish is deferred or picked up in
+parallel when a slot is free. Optimizations are wanted, scheduled by what and
+when. A blocker is a blocker. The release scope decision stays open; it is
+not needed to keep building.
+
+| Batch | Tickets | Why here |
+|---|---|---|
+| 1 (running) | #70 ssh fetch bound; #72 worktrees section in Info (spec first); #71 Info header worktree colour | The one daily reliability bug, and the owner's two UI ideas |
+| 2 | Refetch on network recovery (changes fetch rule 6, owner decision); dirty worktree in the list row (after #72); FZ-13 wave 4 (maximize/restore, hints follow focus) after the owner answers its questions | Reliability and look, each needing one decision |
+| 3 | #67 CI pane, FZ-14 attention view, FZ-15 changes since seen, FZ-16 worktree overlay | The daily-use features |
+| 4 | FZ-12 progressive load, FZ-11 scheduler, the ref query cost at 20,000 refs | Optimizations, each measured against the FZ-01 baseline before and after |
+| filler | One key for "same remote", stale `CLAUDE.md` lines, help wording, test sharpening (the handoff's follow-up list) | `fz-small` whenever its slot is free |
+| release | #3 distribution, FZ-17 doctor, #2 graceful degradation, #5 config schema, #45 | When the owner asks for the release |
+
+Three slots are in force: two `fz-worker` plus one `fz-small`, each with its
+own reviewer, merges one at a time.
+
 ## Completion rule
 
 An agent finishing a turn is not a completed ticket. Done requires accepted
