@@ -1,12 +1,13 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-10 13:46 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `863d1cbe-79c0-452e-b932-62c7f31e06a9`), when
-Andreas asked to wrap up for the day. **Nothing is running: no worker, no
-reviewer, no build, no background job. No ticket is between dispatch and
-merge, and no ticket worktree exists** (the board's one Ready to integrate
-item is #45, parked). **Every M1 implementation ticket is Done and the M1
-checkpoint is confirmed.** Read this file,
+Last written 2026-10-16 16:35 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `29766f98-d471-41a5-998a-292c8326b5f7`), when
+Andreas asked to find a good place to stop. **Nothing is running: no worker,
+no reviewer, no build, no background job. One ticket is between dispatch and
+merge: #72, the worktrees section, at Ready to integrate in its worktree,
+waiting for Andreas's look** (the board's other Ready to integrate item is
+#45, parked). **M0 and M1 are checkpointed; batch 1 of the post-M1 order
+landed #70 and #71 today.** Read this file,
 the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
@@ -15,8 +16,27 @@ what to do next.
 
 ## Baton
 
-**Held** since 2026-10-16 15:21 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `29766f98-d471-41a5-998a-292c8326b5f7`). Andreas
+**Released** 2026-10-16 16:35 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `29766f98-d471-41a5-998a-292c8326b5f7`), which held
+it from 15:21 CEST. **No worker, reviewer, build or background job is
+running.** One ticket is between dispatch and merge: #72 at Ready to
+integrate, committed and pushed, waiting for Andreas's look (details under
+"Next step"). The next lead records its own session and takeover time here,
+after confirming with Andreas that this session has ended.
+
+- **How it ended (2026-10-16).** At about 16:28 Andreas wrote: "find a good
+  place to stop. finish the running tickets/tasks, and find a good place to
+  stop". Nothing was running: #72's second review had been accepted, the
+  diff committed (`6fbacce`), pushed, branch CI green, the coordinator's own
+  fmt/clippy/tests green (1083). #72 changes the screen and so stops at
+  Ready to integrate for his look; it was not merged. Nothing was dispatched
+  after his message. Usage was not read.
+- **Taking over does not resume work.** #72's merge needs Andreas's
+  acceptance of the look first; batch 2 needs his decisions; filler tickets
+  need his OK for issues (two were offered at about 16:14, unanswered: one
+  key for "same remote", and the stale `CLAUDE.md` lines).
+
+**Held before that** from 2026-10-16 15:21 CEST by the same session. Andreas
 opened the session with "how is the status here? give me a short report, and
 prioritize tasks", plus two UI ideas (the Info tab's worktree line, a worktree
 section). Evidence that no lead was active: the baton below was released on
@@ -410,26 +430,51 @@ Each issue holds its evidence.
 
 ## Worktrees
 
-One exists besides the main checkout, under `.claude/worktrees/`. Every
+Two exist besides the main checkout, under `.claude/worktrees/`. Every
 ticket worktree of a merged ticket (on 2026-10-16: `ssh-fetch`,
 `info-wt-colour`; on 2026-10-10: `issue-66`, `issue-69`;
 on 2026-10-09: `mouse`, `fz-09b`, `fz-10b`, `fz-10c`, `fz-09d`) is removed
 with its local branch; remote branches stay on GitHub.
 
+- **`worktrees-section`, branch `feat/72-worktrees-section`:** #72, clean,
+  committed `6fbacce` and pushed, CI green, Ready to integrate, waiting for
+  Andreas's look; a `target/release` build of it exists there. Kept until
+  the ticket is merged or withdrawn.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked by
   Andreas until the repository goes public.
 
 ## Next step, and the order after it
 
-**Next step (written 2026-10-16 16:05 CEST, session live):** batch 1's A
-(#70) and C (#71) are Done; nothing is dispatched or in a ticket worktree.
-B, the worktrees section (#72), waits for Andreas to accept its spec,
-`docs/superpowers/specs/2026-10-16-worktrees-section-design.md` (status
-"proposed"); when he does, complete #72's body from the spec, create its
-branch and worktree from current `main` and dispatch one `fz-worker` (allowed
-files `src/git.rs`, `src/model.rs`, `src/main.rs` near `linked_worktrees`,
-`src/ui/detail.rs`, `README.md`); it stops at Ready to integrate for his look.
+**Next step (written 2026-10-16 16:35 CEST at the day's end):** batch 1's A
+(#70) and C (#71) are Done. B, the worktrees section (**#72**), is at
+**Ready to integrate**: spec accepted by Andreas ("yes, looks perfect"),
+worker `claude-opus-5-5` medium, two review rounds (round 1 blocker: a
+worktree row wider than the pane wrapped and shifted the commit list's row
+tops; fixed by bounding the row to the pane width with the ellipsis, plus a
+narrow-width test), round 2 accepted revision `4661605` (saved diff sha1
+`466160516547885a6998a00ad45bd8d661909d8b`), committed as `6fbacce` on
+`feat/72-worktrees-section`, pushed, branch CI green, coordinator's
+fmt/clippy/tests green on the branch (main differs from the base `99aed78`
+only in docs), 1083 tests. Board: Ready to integrate. **It waits for his
+look** (a new section on screen): `cargo run --release --manifest-path
+~/repos/fleetz/.claude/worktrees/worktrees-section/Cargo.toml`, select
+`fleetz` (it has linked worktrees) and read the Info view's `worktrees`
+section. When he accepts: merge with `--no-ff` under the safe-merge rule
+(all other conditions hold), close #72 with the merge sha, confirm CI on
+`main`, then remove the worktree and local branch. If he wants changes, they
+go back through the worker and a re-review. Coordinator rulings given during
+the ticket, recorded on the issue thread by this file: detached worktrees
+count in the `WT` badge and the header count; counter colours and text come
+from the new counts-based helpers `badges::counter_color` and
+`model::counters_text`, which `status_color` and `short_status` delegate to.
+Review follow-ups, not ticketed: `git::worktree_state` on a worktree that
+lost its `.git` file reports the enclosing repo's state (guard on
+`<wt>/.git`); the `branch_row_lines` doc comment about `shown` is stale and
+Info's `shown_worktrees` set is always empty; launch now pays two git
+processes per linked worktree (note it when the performance baseline is
+rerun); the section label itself is not clipped below 9 columns, like the
+other labels.
 The order after that is the "Dispatch order after M1" table in
 [release-plan.md](release-plan.md): batch 2 needs his decisions (fetch rule
 6 for refetch on recovery; the FZ-13 wave 4 questions on #26) and the
