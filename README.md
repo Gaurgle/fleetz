@@ -216,7 +216,7 @@ in the header instead.
 | `J` / `K` | Drive the **next** pane without leaving the one you are in: repo list → window 2, window 2 → the inspector, inspector → back to the list. Aimed at window 2 it steps that pane's commit cursor, so the inspector reads out each commit in turn; past the last commit it falls through to scrolling, so the sections below a short list stay reachable. Two exceptions: `graph` docks no inspector, so there the keys stay on the pane and walk its **rows** a line at a time where plain `j`/`k` jumps whole commit blocks; and the contributions strip is skipped, being a horizontal timeline with nothing below the fold to scroll into |
 | `PgUp` / `PgDn` | Scroll the focused pane itself by a page, leaving its selection where it is |
 | `v` | Toggle detail vs compact view. The compact grid packs as many columns as the terminal has room for |
-| `[` / `]` | Repo pane: step its body between five views. `info` is the glance (branches, worktrees, stashes, newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`, wrapped to the pane and given the whole column (its blocks already carry what the inspector would repeat, so no inspector is docked there); `branches` every local branch and every remote-tracking branch in one list, read-only, with the inspector showing the highlighted branch's tip commit (a remote branch nothing local claims is marked `not fetched`, and its tip is not on any local branch, so the inspector says so rather than drawing a blank). Each keeps its own scroll position and selection, and the inspector follows whichever is active. The active view is named in the pane's top border in its own colour (the tabs are capitalised; the pane's own headliner repeats the same name over a divider that fades from the view's colour into the background across the pane), and the repo header below it stays pinned, so both survive scrolling. In `info` the local branches pin with it where the pane has the rows to spare, since they are what the repo's behind count is a sum of; the remote-only list below them collapses to a count, being bounded by what everyone else has pushed rather than by what you have: `B` expands it in place, and `branches` lists them all |
+| `[` / `]` | Repo pane: step its body between five views. `info` is the glance (branches; worktrees, one row each with its branch or detached HEAD, dirty count, ahead/behind, last commit age and path, relative when inside the repo; stashes; newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`, wrapped to the pane and given the whole column (its blocks already carry what the inspector would repeat, so no inspector is docked there); `branches` every local branch and every remote-tracking branch in one list, read-only, with the inspector showing the highlighted branch's tip commit (a remote branch nothing local claims is marked `not fetched`, and its tip is not on any local branch, so the inspector says so rather than drawing a blank). Each keeps its own scroll position and selection, and the inspector follows whichever is active. The active view is named in the pane's top border in its own colour (the tabs are capitalised; the pane's own headliner repeats the same name over a divider that fades from the view's colour into the background across the pane), and the repo header below it stays pinned, so both survive scrolling. In `info` the local branches pin with it where the pane has the rows to spare, since they are what the repo's behind count is a sum of; the remote-only list below them collapses to a count, being bounded by what everyone else has pushed rather than by what you have: `B` expands it in place, and `branches` lists them all |
 | `B` | `info`: expand or collapse the remote branch summary. The full list, with each branch's state, is the `branches` view |
 | `c` | Switch the contributions strip's source, while it is unfolded (the footer's `[c]` lights up in that source's colour): GitHub's own calendar, or your commits in the listed repos. The strip is always on screen, folded or not: three years of activity, GitHub-style. Each day is a Nerd Font square icon, which sits level with the `Mon`/`Wed`/`Fri` labels where a half block cannot, in three sizes (`contributions_cell_size`); the grid scrolls rather than shrinking, with the newest week pinned to the right edge. It opens on today: the title reads out the marked day's count, and the total for the span rides the bottom border beside the legend |
 | `4` | Focus the contributions strip, unfolding it if it is folded; on the focused strip, fold or unfold it |
@@ -419,15 +419,16 @@ reacting to change rather than polling for it:
 - GitHub conditional polling with stored ETags (`If-None-Match`) so PR and CI
   badges refresh live without burning rate limit.
 
-First-class worktrees (today: a read-only `Nw` badge and a path list, only for
-GitHub-matched repos):
+First-class worktrees (today: a read-only `WT` badge, and in `info` a
+`worktrees` section with each linked worktree's branch or detached HEAD, dirty
+count, ahead/behind, last commit age and path):
 
-- A `w` overlay like the branch overlay: per-worktree dirty/ahead-behind,
-  Enter opens lazygit or a shell there.
+- A `w` overlay like the branch overlay, reusing those rows: Enter opens
+  lazygit or a shell there.
 - Create and prune from the overlay (`git worktree add` under a configured
   root; prune merged ones with the existing y/n confirm flow).
-- Per-worktree dirty state surfaced in the main views (badge + `-d` mode), so
-  uncommitted work in a worktree stops being invisible.
+- Per-worktree dirty state surfaced in the repo list (badge + `-d` mode), so
+  uncommitted work in a worktree is visible without opening `info`.
 
 Shared core with repoz: extract discovery, git porcelain parsing, and the
 GitHub client + cache into a library crate both tools consume; a repoz TUI (or

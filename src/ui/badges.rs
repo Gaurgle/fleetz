@@ -196,11 +196,21 @@ fn worktree_text(repo: &RepoStatus) -> String {
 pub fn status_color(repo: &RepoStatus) -> Color {
     if repo.is_not_cloned() {
         colors::RED
-    } else if repo.behind > 0 {
+    } else {
+        counter_color(repo.behind, repo.ahead, repo.dirty)
+    }
+}
+
+/// The sync-state ladder on bare counts: behind first, then dirty, then
+/// ahead, else synced green. The single source `status_color` delegates to,
+/// and what a linked worktree's counters wear in the Info view, so the two
+/// cannot drift. Knows nothing of not-cloned, which only a repo can be.
+pub fn counter_color(behind: u32, ahead: u32, dirty: u32) -> Color {
+    if behind > 0 {
         colors::PEACH
-    } else if repo.dirty > 0 {
+    } else if dirty > 0 {
         colors::YELLOW
-    } else if repo.ahead > 0 {
+    } else if ahead > 0 {
         colors::PEACH
     } else {
         colors::GREEN
@@ -448,6 +458,7 @@ mod tests {
         busy.worktrees = vec![crate::model::Worktree {
             path: "~/repos/x-hotfix".to_string(),
             branch: "hotfix".to_string(),
+            ..Default::default()
         }];
 
         let (text, _) = rendered(&busy);
@@ -480,6 +491,7 @@ mod tests {
         with_worktree.worktrees = vec![crate::model::Worktree {
             path: "~/repos/x-hotfix".to_string(),
             branch: "hotfix".to_string(),
+            ..Default::default()
         }];
         let (spans, _) = badge_spans(&with_worktree, false);
         let span = spans
@@ -516,6 +528,29 @@ mod tests {
         busy.stash_count = 3;
         let (text, width) = rendered(&busy);
         assert_eq!(width, text.chars().count(), "got {text:?}");
+    }
+
+    /// `status_color` is `counter_color` on a cloned repo's own counts, so a
+    /// worktree's counters coloured from bare numbers wear the repo list's
+    /// ladder; only not-cloned stays the repo's own case.
+    #[test]
+    fn counter_color_is_the_ladder_status_color_uses() {
+        for (behind, ahead, dirty) in [
+            (0, 0, 0),
+            (3, 0, 0),
+            (0, 2, 0),
+            (0, 0, 4),
+            (2, 1, 4),
+            (0, 1, 4),
+        ] {
+            let mut r = repo("r");
+            r.behind = behind;
+            r.ahead = ahead;
+            r.dirty = dirty;
+            assert_eq!(counter_color(behind, ahead, dirty), status_color(&r));
+        }
+        assert_eq!(counter_color(0, 0, 4), colors::YELLOW);
+        assert_eq!(counter_color(0, 0, 0), colors::GREEN);
     }
 
     #[test]
@@ -632,6 +667,7 @@ mod tests {
         busy.worktrees = vec![crate::model::Worktree {
             path: "~/repos/x-hotfix".to_string(),
             branch: "hotfix".to_string(),
+            ..Default::default()
         }];
         let (text, width) = rendered(&busy);
         assert!(text.contains(&format!("3{PLAIN_STASH_GLYPH}")), "{text:?}");

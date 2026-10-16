@@ -331,11 +331,23 @@ pub struct HistogramKey {
     pub head_sha: String,
 }
 
-/// An active git worktree.
-#[derive(Debug, Clone)]
+/// An active linked git worktree and the state the Info view's `worktrees`
+/// section draws for it.
+#[derive(Debug, Clone, Default)]
 pub struct Worktree {
+    /// `~`-collapsed, as the pane draws it.
     pub path: String,
+    /// The checked-out branch, empty when `detached`.
     pub branch: String,
+    /// HEAD is detached: no branch, so no ahead or behind to compare.
+    pub detached: bool,
+    /// HEAD's short sha, what a detached row names.
+    pub head: String,
+    /// `git status --porcelain` lines in this worktree. `None` when the probe
+    /// failed, so a broken worktree draws as unknown, never as clean.
+    pub dirty: Option<u32>,
+    /// When HEAD was committed. `None` when the probe failed.
+    pub head_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// One entry from `git reflog` -- a HEAD movement, for "what did I just do"
@@ -606,6 +618,28 @@ pub fn owner_from_remote_url(url: &str) -> Option<String> {
 /// what the state is called.
 pub const NOT_CLONED: &str = "not cloned";
 
+/// Bare counts spelled as the repo list spells them: `N↓ N↑ N!` in that
+/// order, the zeros left out, or `✓` when all are zero. The single source
+/// `RepoStatus::short_status` delegates to, and what a linked worktree's
+/// counters read in the Info view.
+pub fn counters_text(behind: u32, ahead: u32, dirty: u32) -> String {
+    let mut parts = Vec::new();
+    if behind > 0 {
+        parts.push(format!("{behind}↓"));
+    }
+    if ahead > 0 {
+        parts.push(format!("{ahead}↑"));
+    }
+    if dirty > 0 {
+        parts.push(format!("{dirty}!"));
+    }
+    if parts.is_empty() {
+        "✓".to_string()
+    } else {
+        parts.join(" ")
+    }
+}
+
 impl RepoStatus {
     /// Active on GitHub with no local clone, so its counters are all zero for
     /// want of a working tree rather than because it's up to date.
@@ -733,25 +767,14 @@ impl RepoStatus {
     /// synced case is a bare checkmark rather than the word -- in a list
     /// that's mostly synced repos, the glyph reads as "all good" at a glance
     /// without a column of repeated "synced" text.
+    ///
+    /// Not-cloned is said in words; everything else is `counters_text` on
+    /// the repo's own counts.
     pub fn short_status(&self) -> String {
         if self.is_not_cloned() {
             return NOT_CLONED.to_string();
         }
-        let mut parts = Vec::new();
-        if self.behind > 0 {
-            parts.push(format!("{}↓", self.behind));
-        }
-        if self.ahead > 0 {
-            parts.push(format!("{}↑", self.ahead));
-        }
-        if self.dirty > 0 {
-            parts.push(format!("{}!", self.dirty));
-        }
-        if parts.is_empty() {
-            "✓".to_string()
-        } else {
-            parts.join(" ")
-        }
+        counters_text(self.behind, self.ahead, self.dirty)
     }
 
     /// A longer status string like "3 behind, 2 ahead, 4 uncommitted".
@@ -1161,6 +1184,18 @@ mod tests {
         let r = make_repo("messy", 2, 1, 4);
         assert_eq!(r.short_status(), "2↓ 1↑ 4!");
         assert_eq!(r.long_status(), "2 behind, 1 ahead, 4 uncommitted");
+    }
+
+    /// `short_status` is `counters_text` on the repo's own counts, so a
+    /// worktree's counters spelled from bare numbers read like a repo's.
+    #[test]
+    fn counters_text_spells_a_repos_counts_the_way_short_status_does() {
+        for (behind, ahead, dirty) in [(0, 0, 0), (3, 0, 0), (0, 2, 0), (0, 0, 4), (2, 1, 4)] {
+            let r = make_repo("r", behind, ahead, dirty);
+            assert_eq!(counters_text(behind, ahead, dirty), r.short_status());
+        }
+        assert_eq!(counters_text(2, 1, 4), "2↓ 1↑ 4!");
+        assert_eq!(counters_text(0, 0, 0), "✓");
     }
 
     #[test]
