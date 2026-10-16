@@ -15,7 +15,40 @@ what to do next.
 
 ## Baton
 
-**Released** 2026-10-10 13:43 CEST by `claude-fable-5-1` (`claude --agent
+**Held** since 2026-10-16 15:21 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `29766f98-d471-41a5-998a-292c8326b5f7`). Andreas
+opened the session with "how is the status here? give me a short report, and
+prioritize tasks", plus two UI ideas (the Info tab's worktree line, a worktree
+section). Evidence that no lead was active: the baton below was released on
+2026-10-10 13:43; `main` equals `origin/main` at `f981642`, clean, docs CI
+green; the only worktree is the parked `issue-45`; the board shows nothing
+In progress or in Review; the only `claude --agent fz-coordinator` process is
+this session (pid 72479, started 15:17). Codex processes seen: the app-server
+daemon of 2026-10-13 and an app-server started 14:29 today, neither a lead in
+this repository.
+
+- **Authorized on 2026-10-16.** After the first report Andreas wrote (about
+  15:40): "i think all tickets should be completed, but prioritize. polish on
+  polish on polish can be deferred, or pickued up in parallel when it fits.
+  But the release is not in a hurry at all, this is and will still be a
+  project i use, so lets prioritize that. I want it too look sleek (still
+  Rust/TUI style) but with passion, but the functionality and reliability
+  must come first, ofcourse! so all optimizations ARE good, we just need to
+  think of what and when they are being worked on. A blocker is a blocker."
+  and "lets get to building, I guess?". The coordinator proposed the order
+  in [release-plan.md](release-plan.md) ("Dispatch order after M1") and a
+  first batch of three: A, the ssh fetch hang; B, a worktrees section in
+  the Info view (spec by the coordinator first); C, the Info header's
+  worktree count in the `WT` colour. It asked for an OK to create the three
+  issues and for "run batch 1". Andreas answered "sopunds good. lets get
+  started" (about 15:48). Under that: the three issues may be created, A
+  and C are dispatched now, B after its spec. Three slots are in force (two
+  `fz-worker` plus one `fz-small`, `f981642`). Pace and dispatch, "small
+  look changes no longer wait" and the existing-test rules hold as recorded
+  below; B changes the screen, so it stops at Ready to integrate for his
+  look.
+
+**Released before that** 2026-10-10 13:43 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, effort `high`, session
 `863d1cbe-79c0-452e-b932-62c7f31e06a9`), which held it from 2026-10-10
 12:42 CEST. No lead is active. The next lead records its own session and
