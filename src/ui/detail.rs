@@ -809,7 +809,8 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // in; every view that draws no branches keeps the header's own count.
     let mut pinned_rows = header_rows;
 
-    // Branches (worktrees shown inline under the branch they're checked out on)
+    // Branches. Info lists worktrees in a section of their own; the branches
+    // view still draws each inline under the branch it has checked out.
     let view = app.history_view;
 
     // How old the local work is. Only local-only repos carry this: they are
@@ -839,7 +840,9 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     {
         lines.push(Line::from(section_label("branches")));
         for b in &repo.branches {
-            lines.extend(branch_row_lines(b, &repo.worktrees, &mut shown_worktrees));
+            // No worktrees: Info's `worktrees` section below holds the path,
+            // with its state, so an inline row here would say it twice.
+            lines.extend(branch_row_lines(b, &[], &mut shown_worktrees));
         }
 
         // The pinned region ends here, with the local branches and not the
@@ -880,6 +883,16 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             }
         }
         lines.push(Line::from(""));
+    }
+
+    // Not pinned: the local branches are, because the behind count is their
+    // sum; this list is bounded by the checkouts you made and sits just below.
+    if view == HistoryView::Info {
+        let worktrees = worktree_rows(repo, width);
+        if !worktrees.is_empty() {
+            lines.extend(worktrees);
+            lines.push(Line::from(""));
+        }
     }
 
     // The compact graph list: git's topology in a column, then hash, author,
@@ -1124,30 +1137,6 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // head, and the status line at the top of the pane already carries the
     // number. A bare heading repeating it three sections down was the same
     // fact twice.
-
-    // Worktrees not matched to a local branch above (e.g. detached HEAD) --
-    // the common case is already shown inline under its branch.
-    let orphan_worktrees: Vec<_> = repo
-        .worktrees
-        .iter()
-        .filter(|wt| !shown_worktrees.contains(&wt.path))
-        .collect();
-    if view == HistoryView::Info && !orphan_worktrees.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(section_label("other worktrees")));
-        for wt in orphan_worktrees {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {}", wt.branch),
-                    Style::default().fg(colors::TEXT),
-                ),
-                Span::styled(
-                    format!("  {}", wt.path),
-                    Style::default().fg(colors::OVERLAY),
-                ),
-            ]));
-        }
-    }
 
     // Stashes
     if view == HistoryView::Info && repo.stash_count > 0 {
@@ -2288,6 +2277,178 @@ fn view_switcher(active: HistoryView, focused: bool, budget: usize) -> Line<'sta
     Line::from(spans).right_aligned()
 }
 
+/// A worktree's path as the `worktrees` section draws it: relative to the
+/// repo when it lives inside it (`.claude/worktrees/issue-45`), `.` when it
+/// is the repo, otherwise unchanged. Both are the `~`-collapsed spellings the
+/// pane already prints, so this is a comparison of strings, never of disks.
+/// A sibling that merely shares the prefix (`fleetz-hotfix` beside `fleetz`)
+/// is outside.
+fn path_within_repo(path: &str, repo_path: &str) -> String {
+    let repo = repo_path.trim_end_matches('/');
+    if repo.is_empty() {
+        return path.to_string();
+    }
+    if path == repo {
+        return ".".to_string();
+    }
+    match path
+        .strip_prefix(repo)
+        .and_then(|rest| rest.strip_prefix('/'))
+    {
+        Some(rest) if !rest.is_empty() => rest.to_string(),
+        _ => path.to_string(),
+    }
+}
+
+/// Widest a worktree's branch column grows before the name is cut.
+const WORKTREE_NAME_MAX: usize = 32;
+
+/// The Info view's `worktrees` section: the label, then one row per linked
+/// worktree with its branch (or `detached @ <sha>`), dirty count, ahead and
+/// behind, the age of its last commit, and its path. Empty when the repo has
+/// no linked worktree.
+///
+/// Ahead and behind come from the main checkout's `branches`: a linked
+/// worktree's branch is a local branch of the same repository. A detached
+/// worktree has nothing to compare, so that column reads `·`.
+///
+/// Every counter is spelled by `model::counters_text` and coloured by
+/// `badges::counter_color`, the helpers the repo list's status token is
+/// built from, so a worktree's `3!` is the repo list's `3!` in the repo
+/// list's colour and cannot drift from it.
+///
+/// Each row fits `width`, the pane's: the path is cut to what the columns
+/// before it leave, and a row whose columns alone are wider is clipped
+/// (`clip_spans`), so one row is always one rendered row in the wrapping
+/// body.
+fn worktree_rows(repo: &RepoStatus, width: usize) -> Vec<Line<'static>> {
+    if repo.worktrees.is_empty() {
+        return Vec::new();
+    }
+    let token = |behind: u32, ahead: u32, dirty: u32| -> Span<'static> {
+        Span::styled(
+            crate::model::counters_text(behind, ahead, dirty),
+            Style::default().fg(badges::counter_color(behind, ahead, dirty)),
+        )
+    };
+    let unknown = |text: &str| Span::styled(text.to_string(), Style::default().fg(colors::OVERLAY));
+    let repo_path = repo.path.as_deref().unwrap_or_default();
+
+    struct Row {
+        name: String,
+        dirty: Option<Span<'static>>,
+        sync: Option<Span<'static>>,
+        age: String,
+        path: String,
+    }
+    let rows: Vec<Row> = repo
+        .worktrees
+        .iter()
+        .map(|wt| {
+            let branch = (!wt.detached)
+                .then(|| repo.branches.iter().find(|b| b.name == wt.branch))
+                .flatten();
+            let level =
+                branch.is_some_and(|b| b.upstream.is_some() && b.behind == 0 && b.ahead == 0);
+            let dirty = match wt.dirty {
+                None => Some(unknown("?")),
+                Some(n) if n > 0 => Some(token(0, 0, n)),
+                Some(_) if wt.detached => Some(unknown("·")),
+                Some(_) if level => Some(token(0, 0, 0)),
+                Some(_) => None,
+            };
+            let sync = match branch {
+                None => Some(unknown("·")),
+                Some(b) if b.upstream.is_none() => Some(unknown("no upstream")),
+                Some(b) if b.behind > 0 || b.ahead > 0 => Some(token(b.behind, b.ahead, 0)),
+                Some(_) => None,
+            };
+            let name = if wt.detached {
+                format!("detached @ {}", wt.head)
+            } else {
+                wt.branch.clone()
+            };
+            Row {
+                name: crate::ui::truncate(&name, WORKTREE_NAME_MAX),
+                dirty,
+                sync,
+                age: wt.head_at.map_or_else(|| "·".to_string(), format_age),
+                path: path_within_repo(&wt.path, repo_path),
+            }
+        })
+        .collect();
+
+    let width_of =
+        |span: &Option<Span<'static>>| span.as_ref().map_or(0, |s| s.content.chars().count());
+    let name_w = rows
+        .iter()
+        .map(|r| r.name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let dirty_w = rows.iter().map(|r| width_of(&r.dirty)).max().unwrap_or(0);
+    let sync_w = rows.iter().map(|r| width_of(&r.sync)).max().unwrap_or(0);
+    let age_w = rows
+        .iter()
+        .map(|r| r.age.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let mut lines = vec![Line::from(section_label("worktrees"))];
+    for row in rows {
+        let mut spans = vec![Span::raw("  ")];
+        spans.extend(pad_to(
+            vec![Span::styled(row.name, Style::default().fg(colors::TEXT))],
+            name_w,
+        ));
+        for (cell, w) in [(row.dirty, dirty_w), (row.sync, sync_w)] {
+            if w == 0 {
+                continue;
+            }
+            spans.push(Span::raw("  "));
+            spans.extend(pad_to(cell.into_iter().collect(), w));
+        }
+        spans.push(Span::styled(
+            format!("  {:>age_w$}", row.age),
+            Style::default().fg(colors::OVERLAY),
+        ));
+        let path_budget = width.saturating_sub(span_width(&spans) + 2);
+        if path_budget > 0 {
+            spans.push(Span::styled(
+                format!("  {}", crate::ui::truncate(&row.path, path_budget)),
+                Style::default().fg(colors::OVERLAY),
+            ));
+        }
+        lines.push(Line::from(clip_spans(spans, width)));
+    }
+    lines
+}
+
+/// `spans` cut to `width` columns, the span that crosses the edge ending in
+/// the pane's ellipsis and everything after it dropped. For a row in the
+/// wrapping body that must stay one rendered row: the commit list's row tops
+/// are counted in source lines, so a row that wrapped would put every commit
+/// below it lower than recorded.
+fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let mut left = width;
+    let mut out = Vec::new();
+    for span in spans {
+        let w = span.content.chars().count();
+        if w <= left {
+            left -= w;
+            out.push(span);
+            continue;
+        }
+        if left > 0 {
+            out.push(Span::styled(
+                crate::ui::truncate(&span.content, left),
+                span.style,
+            ));
+        }
+        break;
+    }
+    out
+}
+
 fn section_label(text: &str) -> Span<'static> {
     Span::styled(
         text.to_string(),
@@ -3298,6 +3459,7 @@ mod tests {
         with_one.worktrees = vec![crate::model::Worktree {
             path: "/tmp/wt".to_string(),
             branch: "feature".to_string(),
+            ..Default::default()
         }];
         let buf = draw(with_one);
         let found = (0..h).find_map(|y| {
@@ -3316,6 +3478,349 @@ mod tests {
         assert!(
             !text.contains("worktree"),
             "a repo with no worktrees draws a worktree count"
+        );
+    }
+
+    /// `busy_repo` with a second local branch `feature`, two ahead of its
+    /// upstream, checked out in a linked worktree inside the repo with three
+    /// uncommitted changes, last committed to two days ago.
+    fn repo_with_a_worktree() -> RepoStatus {
+        let mut r = busy_repo();
+        r.branches.push(crate::model::BranchStatus {
+            name: "feature".to_string(),
+            upstream: Some("origin/feature".to_string()),
+            behind: 0,
+            ahead: 2,
+            is_head: false,
+            tip: "b2c3d4e".to_string(),
+        });
+        r.worktrees = vec![crate::model::Worktree {
+            path: "~/repos/fleetz/.claude/worktrees/feat".to_string(),
+            branch: "feature".to_string(),
+            detached: false,
+            head: "b2c3d4e".to_string(),
+            dirty: Some(3),
+            head_at: Some(chrono::Utc::now() - chrono::Duration::days(2)),
+        }];
+        r
+    }
+
+    /// The detail pane drawn in `view`, as the buffer and its rows of text,
+    /// the side borders blanked so a row trims to its content. One cell per
+    /// character, so a column in the text is a column in the buffer.
+    fn drawn(repo: RepoStatus, view: HistoryView) -> (ratatui::buffer::Buffer, Vec<String>) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let (w, h) = (100u16, 40u16);
+        let mut app = crate::app::App::new(vec![repo], "t".to_string(), w, h);
+        app.history_view = view;
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let rows = (0..h)
+            .map(|y| {
+                (0..w)
+                    .map(|x| match buf[(x, y)].symbol() {
+                        "│" => " ",
+                        s => s,
+                    })
+                    .collect::<String>()
+            })
+            .collect();
+        (buf, rows)
+    }
+
+    /// The colour of the first cell of `needle` on row `y`.
+    fn fg_at(
+        buf: &ratatui::buffer::Buffer,
+        rows: &[String],
+        y: usize,
+        needle: &str,
+    ) -> ratatui::style::Color {
+        let byte = rows[y]
+            .find(needle)
+            .unwrap_or_else(|| panic!("`{needle}` not on row {y}: {}", rows[y]));
+        let x = rows[y][..byte].chars().count() as u16;
+        buf[(x, y as u16)].fg
+    }
+
+    /// Info's `worktrees` section answers the glance: which branch, dirty,
+    /// ahead or behind, how long since the last commit, and where, relative
+    /// to the repo when it lives inside it. The counters wear the repo list's
+    /// colours. The branch row above no longer repeats the path, and the old
+    /// `other worktrees` section is gone.
+    #[test]
+    fn info_draws_a_worktrees_section_with_per_worktree_state() {
+        let (buf, rows) = drawn(repo_with_a_worktree(), HistoryView::Info);
+        let text = rows.join("\n");
+
+        let label = rows
+            .iter()
+            .position(|r| r.trim() == "worktrees")
+            .unwrap_or_else(|| panic!("no `worktrees` label:\n{text}"));
+        let branches = rows
+            .iter()
+            .position(|r| r.trim() == "branches")
+            .expect("the branches block");
+        let recent = rows
+            .iter()
+            .position(|r| r.trim() == "recent commits")
+            .expect("the recent commits block");
+        assert!(
+            branches < label && label < recent,
+            "after branches, before recent commits:\n{text}"
+        );
+
+        let row = label + 1;
+        let line = &rows[row];
+        assert!(line.contains("feature"), "the branch: {line}");
+        assert!(line.contains("3!"), "the dirty count: {line}");
+        assert!(line.contains("2↑"), "the ahead count: {line}");
+        assert!(line.contains("2d ago"), "the age: {line}");
+        assert!(
+            line.contains(" .claude/worktrees/feat"),
+            "the path, relative to the repo: {line}"
+        );
+        assert!(
+            !line.contains("~/repos/fleetz"),
+            "not the full path: {line}"
+        );
+
+        let mut dirty_only = busy_repo();
+        dirty_only.dirty = 3;
+        let mut ahead_only = busy_repo();
+        ahead_only.ahead = 2;
+        assert_eq!(
+            fg_at(&buf, &rows, row, "3!"),
+            badges::status_color(&dirty_only)
+        );
+        assert_eq!(
+            fg_at(&buf, &rows, row, "2↑"),
+            badges::status_color(&ahead_only)
+        );
+        assert_eq!(fg_at(&buf, &rows, row, "2d ago"), colors::OVERLAY);
+        assert_eq!(fg_at(&buf, &rows, row, ".claude"), colors::OVERLAY);
+        assert_eq!(fg_at(&buf, &rows, row, "feature"), colors::TEXT);
+
+        assert!(
+            !rows.iter().any(|r| r.trim_start().starts_with("worktree ")),
+            "Info still draws the inline worktree row:\n{text}"
+        );
+        assert!(
+            !text.contains("other worktrees"),
+            "the old section is still drawn:\n{text}"
+        );
+    }
+
+    /// A clean worktree level with its upstream reads `✓` in the synced
+    /// colour; one with no upstream says so in words, as a branch row does;
+    /// a dirty probe that failed is `?`, never clean.
+    #[test]
+    fn a_worktree_row_says_clean_unknown_and_no_upstream() {
+        let mut r = repo_with_a_worktree();
+        r.branches[1].ahead = 0;
+        r.worktrees[0].dirty = Some(0);
+        let (buf, rows) = drawn(r.clone(), HistoryView::Info);
+        let row = rows
+            .iter()
+            .position(|l| l.trim() == "worktrees")
+            .expect("label")
+            + 1;
+        assert!(rows[row].contains('✓'), "clean and level: {}", rows[row]);
+        assert_eq!(
+            fg_at(&buf, &rows, row, "✓"),
+            badges::status_color(&busy_repo())
+        );
+
+        r.branches[1].upstream = None;
+        r.worktrees[0].dirty = None;
+        let (buf, rows) = drawn(r, HistoryView::Info);
+        let row = rows
+            .iter()
+            .position(|l| l.trim() == "worktrees")
+            .expect("label")
+            + 1;
+        assert!(rows[row].contains("no upstream"), "{}", rows[row]);
+        assert!(
+            !rows[row].contains('✓'),
+            "unknown is not clean: {}",
+            rows[row]
+        );
+        assert_eq!(fg_at(&buf, &rows, row, "no upstream"), colors::OVERLAY);
+        assert_eq!(fg_at(&buf, &rows, row, "?"), colors::OVERLAY);
+    }
+
+    /// A detached worktree is named by its HEAD and has no branch to compare,
+    /// so its counter columns read `·`; a path outside the repo keeps `~`.
+    #[test]
+    fn a_detached_worktree_is_named_by_its_head() {
+        let mut r = busy_repo();
+        r.worktrees = vec![crate::model::Worktree {
+            path: "~/scratch/bisect".to_string(),
+            branch: String::new(),
+            detached: true,
+            head: "9a2eb79".to_string(),
+            dirty: Some(0),
+            head_at: None,
+        }];
+        let (_, rows) = drawn(r, HistoryView::Info);
+        let row = rows
+            .iter()
+            .position(|l| l.trim() == "worktrees")
+            .expect("label")
+            + 1;
+        let line = &rows[row];
+        assert!(line.contains("detached @ 9a2eb79"), "{line}");
+        assert!(line.contains("~/scratch/bisect"), "{line}");
+        let after_name = &line[line.find("9a2eb79").unwrap() + 7..line.find("~/").unwrap()];
+        assert_eq!(
+            after_name.split_whitespace().collect::<Vec<_>>(),
+            ["·", "·", "·"],
+            "dirty, ahead/behind and age all read `·`: {line}"
+        );
+    }
+
+    /// The body wraps, while the commit list's row tops are counted in source
+    /// lines. A worktree row wider than the pane wrapped and put every commit
+    /// below it a row lower than recorded, so the cursor follow misjudged the
+    /// selection. A row is bounded to the pane, the path cut to what is left.
+    #[test]
+    fn a_wide_worktree_row_stays_one_row_and_the_commit_tops_hold() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut r = repo_with_a_worktree();
+        r.branches[1].name = "feat/a-very-long-branch-name-for-the-worktree".to_string();
+        r.branches[1].upstream = None;
+        r.worktrees[0].branch = r.branches[1].name.clone();
+        r.worktrees[0].path = "~/repos/fleetz-worktrees/a/deeply/nested/checkout/path".to_string();
+
+        let (w, h) = (50u16, 40u16);
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), w, h);
+        app.history_view = HistoryView::Info;
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let rows: Vec<String> = (0..h)
+            .map(|y| {
+                (0..w)
+                    .map(|x| match buf[(x, y)].symbol() {
+                        "│" => " ",
+                        s => s,
+                    })
+                    .collect()
+            })
+            .collect();
+        let text = rows.join("\n");
+
+        let label = rows
+            .iter()
+            .position(|l| l.trim() == "worktrees")
+            .unwrap_or_else(|| panic!("no label:\n{text}"));
+        assert!(rows[label + 1].contains("feat/a-very"), "{text}");
+        assert!(
+            rows[label + 1].contains('…'),
+            "the row is cut at the pane's edge:\n{text}"
+        );
+        assert_eq!(
+            rows[label + 2].trim(),
+            "",
+            "the worktree row wrapped onto a second row:\n{text}"
+        );
+
+        // The pinned block ends with the last local branch; the body starts
+        // on the blank row below it, and the first commit must sit where its
+        // recorded top says.
+        let branches = rows
+            .iter()
+            .position(|l| l.trim() == "branches")
+            .unwrap_or_else(|| panic!("no branches block:\n{text}"));
+        let body_top = branches
+            + rows[branches..]
+                .iter()
+                .position(|l| l.trim().is_empty())
+                .expect("a blank row closes the branches block");
+        let first_top = *app
+            .detail_row_tops
+            .borrow()
+            .first()
+            .expect("the commit list recorded its tops") as usize;
+        let commit = rows
+            .iter()
+            .position(|l| l.contains("a1b2c3d") && !l.contains('['))
+            .unwrap_or_else(|| panic!("no commit row:\n{text}"));
+        assert_eq!(
+            commit,
+            body_top + first_top,
+            "the commit is not where its top says:\n{text}"
+        );
+
+        // Where the columns leave room, it is the path that gives way.
+        let r = app.selected_repo().expect("the repo").clone();
+        let row: String = worktree_rows(&r, 70)[1]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(row.chars().count(), 70, "{row}");
+        assert!(row.ends_with('…'), "{row}");
+        assert!(row.contains("2d ago  ~/repos/"), "{row}");
+    }
+
+    /// A branch longer than the column's cap is cut at `WORKTREE_NAME_MAX`
+    /// with the pane's ellipsis.
+    #[test]
+    fn a_long_worktree_branch_is_cut_at_the_cap() {
+        let mut r = repo_with_a_worktree();
+        let long = "b".repeat(WORKTREE_NAME_MAX + 10);
+        r.branches[1].name = long.clone();
+        r.worktrees[0].branch = long;
+        let lines = worktree_rows(&r, 200);
+        let row: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        let expected = format!("{}…", "b".repeat(WORKTREE_NAME_MAX - 1));
+        assert!(row.contains(&expected), "{row}");
+        assert!(!row.contains(&"b".repeat(WORKTREE_NAME_MAX)), "{row}");
+    }
+
+    #[test]
+    fn info_with_no_linked_worktree_draws_no_worktrees_label() {
+        let (_, rows) = drawn(busy_repo(), HistoryView::Info);
+        assert!(!rows.iter().any(|r| r.trim() == "worktrees"));
+    }
+
+    /// The Branches view has no worktrees section, so its inline row is still
+    /// the place it says "checked out elsewhere".
+    #[test]
+    fn the_branches_view_keeps_the_inline_worktree_row() {
+        let (_, rows) = drawn(repo_with_a_worktree(), HistoryView::Branches);
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("worktree ~/repos/fleetz/.claude/worktrees/feat")),
+            "{}",
+            rows.join("\n")
+        );
+        assert!(!rows.iter().any(|r| r.trim() == "worktrees"));
+    }
+
+    #[test]
+    fn a_worktree_path_is_shortened_only_under_the_repo() {
+        assert_eq!(
+            path_within_repo("~/repos/fleetz/.claude/worktrees/x", "~/repos/fleetz"),
+            ".claude/worktrees/x"
+        );
+        assert_eq!(
+            path_within_repo("~/repos/fleetz-hotfix", "~/repos/fleetz"),
+            "~/repos/fleetz-hotfix",
+            "a sibling sharing the prefix is outside"
+        );
+        assert_eq!(path_within_repo("/tmp/wt", "~/repos/fleetz"), "/tmp/wt");
+        assert_eq!(path_within_repo("~/repos/fleetz", "~/repos/fleetz"), ".");
+        assert_eq!(
+            path_within_repo("~/repos/fleetz/wt", "~/repos/fleetz/"),
+            "wt",
+            "a trailing separator on the repo path"
         );
     }
 

@@ -5925,6 +5925,7 @@ mod tests {
             repo.worktrees = vec![crate::model::Worktree {
                 path: format!("~/repos/repo-{i}-wt"),
                 branch: "wt".to_string(),
+                ..Default::default()
             }];
             // Uneven badge groups, so a right edge that lines up is evidence.
             repo.pr_count = i as u32 % 2;

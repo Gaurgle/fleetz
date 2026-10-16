@@ -1530,7 +1530,8 @@ pub async fn linked_worktrees(repo_path: &Path) -> Vec<crate::model::Worktree> {
     worktree_list(repo_path).await
 }
 
-/// List active worktrees (excluding the main one).
+/// List active worktrees (excluding the main one), each with its own dirty
+/// count and HEAD time (`worktree_state`): two processes per linked worktree.
 pub async fn worktree_list(repo_path: &Path) -> Vec<crate::model::Worktree> {
     let output = run_git(repo_path, &["worktree", "list", "--porcelain"]).await;
 
@@ -1540,7 +1541,65 @@ pub async fn worktree_list(repo_path: &Path) -> Vec<crate::model::Worktree> {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_worktree_output(&stdout, repo_path)
+    let mut worktrees = parse_worktree_output(&stdout, repo_path);
+    fill_worktree_state(&mut worktrees).await;
+    worktrees
+}
+
+/// One linked worktree's own state: its `status --porcelain` line count and
+/// its HEAD commit's time. Each is `None` when its probe fails, so a broken or
+/// vanished worktree draws as unknown, never as clean. Both go through
+/// `run_git` for its hardening and ceiling, and run concurrently.
+///
+/// The commit time, not the index's mtime: `status` itself may rewrite the
+/// index, and it runs here every sweep, so that age would read "now" forever.
+pub async fn worktree_state(worktree_path: &Path) -> (Option<u32>, Option<DateTime<chrono::Utc>>) {
+    let (status, log) = tokio::join!(
+        run_git(worktree_path, &["status", "--porcelain"]),
+        run_git(worktree_path, &["log", "-1", "--format=%ct"]),
+    );
+    let dirty = status.filter(|o| o.status.success()).map(|o| {
+        String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .count() as u32
+    });
+    let head_at = log
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<i64>()
+                .ok()
+        })
+        .and_then(|secs| DateTime::from_timestamp(secs, 0));
+    (dirty, head_at)
+}
+
+/// The filesystem path behind a `tilde_path` spelling, for probing it.
+fn untilde_path(path: &str) -> std::path::PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => dirs::home_dir().unwrap_or_default().join(rest),
+        None => std::path::PathBuf::from(path),
+    }
+}
+
+/// `worktree_state` for every worktree in the list, concurrently, written
+/// into each entry.
+async fn fill_worktree_state(worktrees: &mut [crate::model::Worktree]) {
+    let probes: Vec<_> = worktrees
+        .iter()
+        .map(|wt| {
+            let path = untilde_path(&wt.path);
+            tokio::spawn(async move { worktree_state(&path).await })
+        })
+        .collect();
+    for (wt, probe) in worktrees.iter_mut().zip(probes) {
+        if let Ok((dirty, head_at)) = probe.await {
+            wt.dirty = dirty;
+            wt.head_at = head_at;
+        }
+    }
 }
 
 /// Whether two paths name the same directory, tolerating spellings that
@@ -1575,44 +1634,60 @@ fn tilde_path(path: &Path) -> String {
     }
 }
 
+/// The linked worktrees in `git worktree list --porcelain` output, with
+/// their branch, or `detached` and no branch, and HEAD's short sha. The
+/// state fields are left for `worktree_state`.
+///
+/// A detached entry is kept: it has a `detached` line where a branch entry
+/// has `branch`, and it is a bisect or a review checkout, exactly the thing
+/// that is forgotten. A bare entry (no branch, not detached) is skipped.
 fn parse_worktree_output(output: &str, main_path: &Path) -> Vec<crate::model::Worktree> {
     let mut worktrees = Vec::new();
-    let mut current_path = String::new();
-    let mut current_branch = String::new();
+    let mut current = crate::model::Worktree::default();
 
     // Only LINKED worktrees are worth listing. The main one is just the repo,
     // whose path the pane header already prints.
-    let push_linked = |path: &str, branch: &str, out: &mut Vec<crate::model::Worktree>| {
-        let wt_path = std::path::Path::new(path);
-        if branch.is_empty() || same_dir(wt_path, main_path) {
+    let push_linked = |entry: &mut crate::model::Worktree,
+                       out: &mut Vec<crate::model::Worktree>| {
+        let entry = std::mem::take(entry);
+        let wt_path = std::path::Path::new(&entry.path);
+        if (entry.branch.is_empty() && !entry.detached) || same_dir(wt_path, main_path) {
             return;
         }
         out.push(crate::model::Worktree {
             path: tilde_path(wt_path),
-            branch: branch.to_string(),
+            ..entry
         });
     };
 
     for line in output.lines() {
         if let Some(p) = line.strip_prefix("worktree ") {
-            current_path = p.to_string();
-            current_branch.clear();
+            current = crate::model::Worktree {
+                path: p.to_string(),
+                ..Default::default()
+            };
+        } else if let Some(sha) = line.strip_prefix("HEAD ") {
+            current.head = sha.chars().take(SHORT_SHA_LEN).collect();
         } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
-            current_branch = b.to_string();
-        } else if line.is_empty() && !current_path.is_empty() {
-            push_linked(&current_path, &current_branch, &mut worktrees);
-            current_path.clear();
-            current_branch.clear();
+            current.branch = b.to_string();
+        } else if line == "detached" {
+            current.detached = true;
+        } else if line.is_empty() && !current.path.is_empty() {
+            push_linked(&mut current, &mut worktrees);
         }
     }
 
     // Last entry when the output has no trailing blank line.
-    if !current_path.is_empty() {
-        push_linked(&current_path, &current_branch, &mut worktrees);
+    if !current.path.is_empty() {
+        push_linked(&mut current, &mut worktrees);
     }
 
     worktrees
 }
+
+/// How many hex digits a worktree's HEAD is shown with: git's own default
+/// abbreviation, so it reads like `%h` elsewhere in the pane.
+const SHORT_SHA_LEN: usize = 7;
 
 const PROTECTED_BRANCHES: &[&str] = &["main", "master", "develop", "dev"];
 
@@ -1907,6 +1982,42 @@ mod tests {
         assert_eq!(wts[0].branch, "hotfix");
         // Trailing entry with no blank line after it still lands.
         assert!(wts[0].path.ends_with("pinz-hotfix"));
+    }
+
+    /// A detached worktree is a bisect or a review checkout, exactly the thing
+    /// that is forgotten. It was dropped for having no `branch` line; it is
+    /// kept now, named by its short HEAD.
+    #[test]
+    fn parse_worktree_output_keeps_a_detached_worktree() {
+        let main = std::path::Path::new("/Users/me/repos/pinz");
+        let output = format!(
+            "{}\nworktree /Users/me/scratch/bisect\nHEAD 9a2eb79c0ffee1234567890abcdef1234567890\ndetached\n",
+            worktree_block("/Users/me/repos/pinz", "16d99c6", "main"),
+        );
+        let wts = parse_worktree_output(&output, main);
+        assert_eq!(wts.len(), 1, "the detached one is listed, got {wts:?}");
+        assert!(wts[0].detached);
+        assert_eq!(wts[0].head, "9a2eb79");
+        assert_eq!(wts[0].branch, "");
+    }
+
+    #[test]
+    fn a_branch_worktree_carries_its_head_and_is_not_detached() {
+        let main = std::path::Path::new("/Users/me/repos/pinz");
+        let output = format!(
+            "{}\n{}",
+            worktree_block("/Users/me/repos/pinz", "16d99c6", "main"),
+            worktree_block(
+                "/Users/me/repos/pinz-hotfix",
+                "abc1234def5678abc1234def5678abc1234def56",
+                "hotfix"
+            ),
+        );
+        let wts = parse_worktree_output(&output, main);
+        assert_eq!(wts.len(), 1);
+        assert!(!wts[0].detached);
+        assert_eq!(wts[0].head, "abc1234");
+        assert_eq!(wts[0].branch, "hotfix");
     }
 
     /// Regression: `format!("~{}", ..)` dropped the separator and printed
@@ -2374,6 +2485,56 @@ mod real_repo_tests {
             "the last one went, so did the probe"
         );
         assert!(linked_worktrees(&dir).await.is_empty());
+    }
+
+    /// The two per-worktree probes on a real linked worktree: the dirty count
+    /// follows a file written there, and the HEAD time is the commit's.
+    #[tokio::test]
+    async fn worktree_state_reads_the_dirty_count_and_head_time() {
+        let dir = temp_repo("wtstate");
+        let wt = linked_worktree(&dir, "wtstate");
+        sh_at(
+            &wt,
+            "2024-03-05T10:20:30+00:00",
+            &["git", "commit", "-q", "--allow-empty", "-m", "wt work"],
+        );
+        let (clean, head_at) = worktree_state(&wt).await;
+        assert_eq!(clean, Some(0), "a fresh worktree is clean");
+        assert_eq!(
+            head_at,
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2024-03-05T10:20:30+00:00")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc)
+            )
+        );
+
+        std::fs::write(wt.join("new.txt"), "wip\n").unwrap();
+        std::fs::write(wt.join("a.txt"), "changed\n").unwrap();
+        let (dirty, _) = worktree_state(&wt).await;
+
+        let listed = linked_worktrees(&dir).await;
+        let _ = std::fs::remove_dir_all(&wt);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(dirty, Some(2), "one new file and one change");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].dirty, Some(2), "the list carries the probe");
+        assert!(listed[0].head_at.is_some());
+        assert_eq!(listed[0].head.len(), 7);
+    }
+
+    /// A path that is not a worktree is unknown, never clean.
+    #[tokio::test]
+    async fn worktree_state_is_unknown_off_a_worktree() {
+        let dir = std::env::temp_dir().join(format!("fleetz_it_notwt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = worktree_state(&dir).await;
+        let gone = worktree_state(&dir.join("missing")).await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(state, (None, None));
+        assert_eq!(gone, (None, None));
     }
 
     /// The parts of `WorkKey` shared by every checkout of one clone: the

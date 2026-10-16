@@ -3972,6 +3972,7 @@ mod tests {
         status.worktrees = vec![model::Worktree {
             path: "~/repos/r-wt".to_string(),
             branch: "wt".to_string(),
+            ..Default::default()
         }];
         status.remote_only_branches = vec!["origin/other".to_string()];
         status.work_key = Some(key("bbb"));
