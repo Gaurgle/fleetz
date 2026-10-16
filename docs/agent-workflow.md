@@ -1,4 +1,4 @@
-<!-- relay-template: 0.4.0; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
+<!-- relay-template: 0.5.0; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
 # Agent workflow for the release effort
 
 This is a project-specific working agreement for the tickets in
@@ -271,6 +271,19 @@ deletes remote branches.
 At Ready to integrate and after each merge, tell Andreas how to try the build:
 `cargo run --release --manifest-path <worktree>/Cargo.toml` before the merge,
 `cargo run --release` from `main` after it.
+
+## Commits and tickets
+
+Every commit traces to its ticket, so history, the board and any issue agree
+even before a merge and after a branch is deleted.
+
+- Ticket commit: Conventional Commits subject, a body for the why, and a last
+  line `Refs: <ticket>` (here `#72`).
+- Merge commit: `Merge branch '<branch>' (<ticket>)` as the subject and
+  `Closes #<n>` in the body, so GitHub closes the issue when the merge
+  reaches `main`.
+- Coordination commits about one ticket (handoff, specs, plans) also end with
+  `Refs: <ticket>`.
 
 ## Records
 

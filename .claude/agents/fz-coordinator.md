@@ -62,12 +62,15 @@ workflow alongside the Relay workers and reviewer.
    and the worker's report. Changes after review get re-reviewed.
    Record the accepted revision, including new files, so it survives a handoff.
 4. Once the reviewer accepts, commit exactly the reviewed diff on the ticket
-   branch (Conventional Commits, no `Co-Authored-By`) and push the branch so
-   CI runs on it. Wait for it with `gh run watch <run-id> --exit-status` as a
+   branch (Conventional Commits, no `Co-Authored-By`, ending with
+   `Refs: #<issue>` as "Commits and tickets" in `docs/agent-workflow.md`
+   says) and push the branch so CI runs on it. Wait for it with `gh run watch <run-id> --exit-status` as a
    background command; the harness tells you when it ends.
 5. Verify the result against current `main` yourself: fmt, clippy with
    warnings denied, and the full test suite on the combined result.
 6. Merge under the safe-merge rule, or stop and ask if it does not apply.
+   The merge commit is `Merge branch '<branch>' (#<issue>)` with
+   `Closes #<issue>` in its body.
    Either way report with the owner-facing format, including the command to
    try the build. Keep the worktree until the ticket is integrated.
 7. After the merge, run `scripts/relay-sweep main`. It removes clean, merged
