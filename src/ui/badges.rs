@@ -189,6 +189,22 @@ fn worktree_text(repo: &RepoStatus) -> String {
     }
 }
 
+/// The `WT` badge's color: the dirty counter's when any linked worktree holds
+/// uncommitted work, so a clean main checkout does not read as nothing to do.
+/// Clean, unknown or `None` keeps the worktree color. Colour only: the `!`
+/// counter still counts the main checkout.
+fn worktree_color(repo: &RepoStatus) -> Color {
+    if repo
+        .worktrees
+        .iter()
+        .any(|w| w.dirty.is_some_and(|n| n > 0))
+    {
+        counter_color(0, 0, 1)
+    } else {
+        colors::WORKTREE_CLR
+    }
+}
+
 /// The color a repo's status token renders in. Shared by the list badge and
 /// the detail pane so the two can never disagree about what a state looks
 /// like. Not-cloned is checked first and gets the alert color: its counters
@@ -307,7 +323,7 @@ pub fn badge_spans_marked(
         width += worktree.chars().count();
         spans.push(Span::styled(
             worktree,
-            Style::default().fg(colors::WORKTREE_CLR),
+            Style::default().fg(worktree_color(repo)),
         ));
     }
 
@@ -483,6 +499,46 @@ mod tests {
         // `2PR` is letters, but `PR` is not a duration, so it was never the
         // problem the other two were.
         assert!(text.contains("2PR"), "got {text:?}");
+    }
+
+    fn wt(dirty: Option<u32>) -> crate::model::Worktree {
+        crate::model::Worktree {
+            path: "~/repos/x-hotfix".to_string(),
+            branch: "hotfix".to_string(),
+            dirty,
+            ..Default::default()
+        }
+    }
+
+    fn wt_color(repo: &RepoStatus) -> Option<Color> {
+        let (spans, _) = badge_spans(repo, false);
+        spans
+            .iter()
+            .find(|s| s.content.contains("WT"))
+            .expect("a WT span")
+            .style
+            .fg
+    }
+
+    #[test]
+    fn a_dirty_linked_worktree_draws_the_badge_in_the_dirty_color() {
+        let mut r = repo("wt");
+        r.worktrees = vec![wt(Some(2))];
+        assert_eq!(wt_color(&r), Some(counter_color(0, 0, 1)));
+        assert_ne!(wt_color(&r), Some(colors::WORKTREE_CLR));
+
+        // One clean and one dirty: any dirty worktree is enough.
+        r.worktrees = vec![wt(Some(0)), wt(Some(3))];
+        assert_eq!(wt_color(&r), Some(counter_color(0, 0, 1)));
+    }
+
+    #[test]
+    fn a_clean_or_unknown_worktree_keeps_the_worktree_color() {
+        for dirty in [Some(0), None] {
+            let mut r = repo("wt");
+            r.worktrees = vec![wt(dirty)];
+            assert_eq!(wt_color(&r), Some(colors::WORKTREE_CLR), "{dirty:?}");
+        }
     }
 
     #[test]

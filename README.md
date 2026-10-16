@@ -24,7 +24,7 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
   in the working tree
 - Open pull requests per repo
 - CI status as a `◉` status lamp: green passed, red failed, blinking orange while running. It pulses on the same phase in the repo row and in the repo pane, since both are reading one repo's CI. From GitHub's `statusCheckRollup`, kept live in watch mode
-- Active worktrees (`WT` badge) and stashes (archive-glyph badge)
+- Active worktrees (`WT` badge, drawn in the dirty colour when a linked worktree has uncommitted work) and stashes (archive-glyph badge)
 - Open PR count and numbers on the repo row, in the repo pane, and in the footer
 - Repo pane header reads local-to-remote: local path, branch and stashes on the left of each row, remote URL, PRs and CI flush right
 - Repo groups defined in your config (cycle with `g`)
@@ -419,7 +419,7 @@ reacting to change rather than polling for it:
 - GitHub conditional polling with stored ETags (`If-None-Match`) so PR and CI
   badges refresh live without burning rate limit.
 
-First-class worktrees (today: a read-only `WT` badge, and in `info` a
+First-class worktrees (today: a read-only `WT` badge, in the dirty colour when a linked worktree is dirty, and in `info` a
 `worktrees` section with each linked worktree's branch or detached HEAD, dirty
 count, ahead/behind, last commit age and path):
 
