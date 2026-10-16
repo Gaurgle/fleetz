@@ -42,8 +42,8 @@ pub struct GithubFetch {
     /// ordinary answer. A payload written before the count was requested has
     /// the field absent on every node, so the two are told apart by the
     /// presence of the key rather than by its value. Without that, an
-    /// upgraded install serves its old cache and reports no PRs anywhere for
-    /// a full TTL, silently.
+    /// upgraded install serves its old cache and reports no PRs anywhere
+    /// until a poll replaces it, silently.
     pub has_pr_counts: bool,
     /// Whether this came off the network or the disk cache, and how old.
     ///
@@ -896,8 +896,7 @@ pub async fn fetch_repos(
 fn serve_cached(cache: &crate::cache::ApiCache, today: chrono::NaiveDate) -> Option<GithubFetch> {
     let usable =
         |fetch: Option<GithubFetch>| fetch.filter(|f| f.calendar.is_some() && f.has_pr_counts);
-    usable(parse_cached(cache.read(), today).map(|f| stamp_written(f, cache.written())))
-        .or_else(|| usable(read_cached(cache, today)))
+    usable(read_cached(cache, today))
 }
 
 /// The host every request goes to, as the cache file name and a `RemoteRef`
@@ -2348,8 +2347,8 @@ mod tests {
     }
 
     /// A payload cached before the calendar field existed parses fine and
-    /// carries no calendar. Serving it would show an empty year for as long
-    /// as the TTL lasts, which is exactly what a fresh upgrade hits.
+    /// carries no calendar. Serving it would show an empty year until a poll
+    /// replaces it, which is exactly what a fresh upgrade hits.
     #[test]
     fn a_cached_payload_without_a_calendar_is_not_good_enough_to_serve() {
         let old = r#"{"data":{"viewer":{"repositories":{"nodes":[]}}}}"#;
@@ -2370,10 +2369,10 @@ mod tests {
     }
     /// Startup used to block on the network for the whole GitHub fetch --
     /// measured at 5.7s to 8.7s against a 57-repo account -- because the repo
-    /// list is derived from that dataset and a `cache_ttl` of two minutes
-    /// meant any launch after a short break was a miss. It serves whatever is
-    /// on disk now, however old; a poll fires on the first tick of the event
-    /// loop and replaces it a moment later.
+    /// list is derived from that dataset and a payload older than two minutes
+    /// was a miss, so any launch after a short break waited. It serves
+    /// whatever is on disk now, however old; a poll fires on the first tick of
+    /// the event loop and replaces it a moment later.
     #[tokio::test]
     async fn startup_serves_an_expired_payload_rather_than_waiting_on_the_network() {
         let dir = std::env::temp_dir().join(format!("fleetz_stale_cache_{}", std::process::id()));
@@ -2391,9 +2390,7 @@ mod tests {
         )
         .unwrap();
 
-        // TTL zero, so the payload is expired the instant it is written.
-        let cache = crate::cache::ApiCache::at(path, 0);
-        assert!(cache.read().is_none(), "fixture is not actually expired");
+        let cache = crate::cache::ApiCache::at(path);
 
         let fetch = fetch_repos(50, &cache, CacheMode::AnyCached)
             .await
@@ -2405,8 +2402,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The ordinary case, alongside the expired one above: a payload inside
-    /// its TTL is served without a network round trip at all.
+    /// The ordinary case, alongside the old one above: a payload written
+    /// moments ago is served without a network round trip at all.
     ///
     /// `CacheMode::Bypass` is deliberately not covered here. Observing it
     /// means observing a network call, and a unit test that reaches GitHub is
@@ -2425,7 +2422,7 @@ mod tests {
               {"contributionDays":[{"date":"2026-08-18","contributionCount":7}]}]}}}}}"#,
         )
         .unwrap();
-        let cache = crate::cache::ApiCache::at(path, 86_400);
+        let cache = crate::cache::ApiCache::at(path);
         assert!(cache.read().is_some(), "fixture should be fresh");
         assert!(
             fetch_repos(50, &cache, CacheMode::AnyCached).await.is_ok(),
@@ -2449,7 +2446,7 @@ mod tests {
             "contributionsCollection":{"contributionCalendar":{"weeks":[
               {"contributionDays":[{"date":"2026-08-18","contributionCount":7}]}]}}}}}"#;
         std::fs::write(&path, good).unwrap();
-        let cache = crate::cache::ApiCache::at(path.clone(), 86_400);
+        let cache = crate::cache::ApiCache::at(path.clone());
 
         let rate_limited =
             r#"{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}"#;
@@ -2473,7 +2470,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("github-50.json");
-        let cache = crate::cache::ApiCache::at(path.clone(), 86_400);
+        let cache = crate::cache::ApiCache::at(path.clone());
 
         let good = r#"{"data":{"viewer":{"repositories":{"nodes":[]},
             "contributionsCollection":{"contributionCalendar":{"weeks":[
@@ -2527,7 +2524,7 @@ mod tests {
     #[test]
     fn a_failed_attempt_with_a_cache_is_a_failure_carrying_the_cache() {
         let (path, planted) = planted_cache("fallback", std::time::Duration::from_secs(2 * 3600));
-        let cache = crate::cache::ApiCache::at(path.clone(), 86_400);
+        let cache = crate::cache::ApiCache::at(path.clone());
         let failure = Failure::new(FailureKind::Offline, "GitHub API request failed: dns");
 
         let Err(error) = settle_attempt(Err(failure.clone()), &cache, day("2026-08-18")) else {
@@ -2546,7 +2543,7 @@ mod tests {
     fn a_failed_attempt_without_a_cache_has_nothing_to_fall_back_on() {
         let dir = std::env::temp_dir().join(format!("fleetz_nocache_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"));
         let failure = Failure::new(FailureKind::Http, "GitHub API returned 502");
         let Err(error) = settle_attempt(Err(failure.clone()), &cache, day("2026-08-18")) else {
             panic!("no data, yet Ok");
@@ -2560,7 +2557,7 @@ mod tests {
     #[tokio::test]
     async fn a_cache_served_launch_reports_the_files_age() {
         let (path, planted) = planted_cache("aged", std::time::Duration::from_secs(3 * 3600));
-        let cache = crate::cache::ApiCache::at(path.clone(), 0);
+        let cache = crate::cache::ApiCache::at(path.clone());
         let fetch = fetch_repos(50, &cache, CacheMode::AnyCached)
             .await
             .expect("an expired payload should still be served");
@@ -2568,11 +2565,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
-    /// The fresh-within-TTL read is dated the same way as the stale one.
+    /// A read of a minute-old file is dated the same way as the old one.
     #[tokio::test]
     async fn a_fresh_cache_read_reports_the_files_age_too() {
         let (path, planted) = planted_cache("aged_fresh", std::time::Duration::from_secs(60));
-        let cache = crate::cache::ApiCache::at(path.clone(), 86_400);
+        let cache = crate::cache::ApiCache::at(path.clone());
         assert!(cache.read().is_some(), "fixture should be fresh");
         let fetch = fetch_repos(50, &cache, CacheMode::AnyCached).await.unwrap();
         assert_written_near(fetch.origin, planted);
@@ -2585,7 +2582,7 @@ mod tests {
     fn accepted_answers_are_network_and_refusals_have_a_kind() {
         let dir = std::env::temp_dir().join(format!("fleetz_kinds_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"));
         let today = day("2026-08-18");
 
         let ok = accept_response(SERVABLE, &cache, today).ok().unwrap();
@@ -2605,7 +2602,7 @@ mod tests {
     #[test]
     fn a_typed_rate_limit_body_is_a_rate_limit() {
         let dir = std::env::temp_dir().join(format!("fleetz_typed_rl_{}", std::process::id()));
-        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"));
         let today = day("2026-08-18");
         let fail = |body| accept_response(body, &cache, today).err().unwrap();
 
@@ -2625,7 +2622,7 @@ mod tests {
     #[test]
     fn an_untyped_rate_limit_body_falls_back_to_the_message() {
         let dir = std::env::temp_dir().join(format!("fleetz_untyped_rl_{}", std::process::id()));
-        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"));
         let today = day("2026-08-18");
         let fail = |body| accept_response(body, &cache, today).err().unwrap();
 
@@ -3217,7 +3214,7 @@ mod tests {
     #[test]
     fn s6_a_rate_limited_body_is_the_primary_limit() {
         let dir = std::env::temp_dir().join(format!("fleetz_s6_{}", std::process::id()));
-        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"));
         let body = r#"{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}"#;
         let failure = accept_response(body, &cache, day("2026-08-18"))
             .err()
@@ -3449,7 +3446,7 @@ mod tests {
     ) -> (Result<GithubFetch, Failure>, Option<BudgetReading>) {
         let dir = std::env::temp_dir().join(format!("fleetz_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"));
         let client = build_client(
             std::time::Duration::from_secs(2),
             std::time::Duration::from_millis(300),
@@ -3549,7 +3546,7 @@ mod tests {
         let budget = read_budget(&headers(&m1_headers()), "t");
         assert!(budget.is_some(), "fixture");
         let dir = std::env::temp_dir().join(format!("fleetz_meta_{}", std::process::id()));
-        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"));
         let ok = accept_response(SERVABLE, &cache, day("2026-08-18"))
             .ok()
             .unwrap();
@@ -3569,7 +3566,7 @@ mod tests {
     #[test]
     fn a_network_answer_keeps_its_payload_coverage_beside_the_attempts_meta() {
         let dir = std::env::temp_dir().join(format!("fleetz_cov_meta_{}", std::process::id()));
-        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"), 86_400);
+        let cache = crate::cache::ApiCache::at(dir.join("github-50.json"));
         let body = format!(
             r#"{{"data":{{"viewer":{{"repositories":{}}}}}}}"#,
             owners_viewer_page()
@@ -3615,7 +3612,7 @@ mod tests {
     #[tokio::test]
     async fn a_cache_served_load_carries_no_reading() {
         let (path, _) = planted_cache("meta_cached", std::time::Duration::from_secs(60));
-        let cache = crate::cache::ApiCache::at(path.clone(), 86_400);
+        let cache = crate::cache::ApiCache::at(path.clone());
         let fetch = fetch_repos(50, &cache, CacheMode::AnyCached).await.unwrap();
         assert_eq!(fetch.meta.budget, None);
         assert_eq!(fetch.meta.account, None);
@@ -3669,7 +3666,7 @@ mod tests {
         }
 
         fn cache(&self) -> crate::cache::KeyedCache {
-            crate::cache::KeyedCache::at(self.0.clone(), 86_400, 50, HOST)
+            crate::cache::KeyedCache::at(self.0.clone(), 50, HOST)
         }
 
         fn names(&self) -> Vec<String> {
@@ -3851,6 +3848,31 @@ mod tests {
             std::fs::read_to_string(&file_a).unwrap(),
             servable_named("a-repo")
         );
+    }
+
+    /// #77: launch paints this credential's saved copy whatever its age. Two
+    /// hours is past the two-minute default of the removed expiry key, and
+    /// the request failing proves nothing waited on the network.
+    #[tokio::test]
+    async fn a_two_hour_old_saved_copy_is_still_painted_at_launch() {
+        let scratch = Scratch::new("aged_launch");
+        let planted = plant(
+            &scratch.own_path(TOKEN_A),
+            &servable_named("a-repo"),
+            2 * HOUR,
+        );
+
+        let fetch = fetch_with(
+            &scratch.cache(),
+            CacheMode::AnyCached,
+            signed_in(TOKEN_A),
+            &nowhere(),
+        )
+        .await
+        .expect("the two-hour-old copy is served");
+
+        assert_eq!(repo_names(&fetch), ["a-repo"]);
+        assert_written_near(fetch.origin, planted);
     }
 
     /// CK4: signed out, the newest current keyed file is painted as a cache
@@ -4061,7 +4083,7 @@ mod tests {
     #[tokio::test]
     async fn ck8_a_pinned_cache_is_served_without_an_attempt() {
         let (path, _) = planted_cache("ck8", std::time::Duration::from_secs(60));
-        let cache = crate::cache::ApiCache::at(path.clone(), 0);
+        let cache = crate::cache::ApiCache::at(path.clone());
         let fetch = fetch_repos(50, &cache, CacheMode::AnyCached).await.unwrap();
         assert!(matches!(fetch.origin, Origin::Cache { .. }));
         assert_eq!(fetch.meta.budget, None);
