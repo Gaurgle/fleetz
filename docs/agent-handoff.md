@@ -1,8 +1,11 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-16 17:20 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `80d0c941-d673-4c3a-bccd-ab7e3949c00d`). Read this
-file, the repository instructions, [agent-workflow.md](agent-workflow.md) and
+Last written 2026-10-16 17:30 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `80d0c941-d673-4c3a-bccd-ab7e3949c00d`), when
+Andreas asked to stop at a good place ("we have new claude rules").
+**Nothing is running: no worker, no reviewer, no build, no background job.
+#73 and #74 are Done; #72 is still at Ready to integrate waiting for his
+look.** Read this file, the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
 authoritative for status; this file says why things are where they are and
@@ -12,18 +15,36 @@ decisions, facts, the follow-up list and the longer practical notes are in
 
 ## Baton
 
-**Held** since 2026-10-16 17:10 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `80d0c941-d673-4c3a-bccd-ab7e3949c00d`, pid 13907).
-Andreas opened with "update Relay. continue the work! start with giving me a
-quick status". Evidence that no lead was active: the previous session
-released the baton at 16:35 and its process (pid 72479) is gone; the only
-`claude --agent fz-coordinator` process is this one; `main` equals
-`origin/main` at `9e34da3`, clean, CI green; `relay-check` reports the
-template and skill both at 0.4.0 ("Up to date"), with one drift line, the
-handoff at 649 lines (shortened in this session); `relay-sweep` kept
-`worktrees-section` (not merged) and `issue-45` (parked, uncommitted CI
-changes). Nothing was running. Earlier lead records: the log, "Earlier
-leads".
+**Released** 2026-10-16 17:30 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `80d0c941-d673-4c3a-bccd-ab7e3949c00d`, pid 13907),
+which held it from 17:10 CEST. **No worker, reviewer, build or background
+job is running.** The next lead records its own session and takeover time
+here, after confirming with Andreas that this session has ended (he said he
+would restart it for new Claude rules).
+
+- **How it ended (2026-10-16).** At about 17:22 Andreas wrote "stop at a
+  good place soon. we have new claude rules", and at about 17:27 "let me
+  know when im good to restart this session". #74 was already merged;
+  #73's review had been accepted and its branch pushed, so the coordinator
+  finished it: branch CI green, merged `4b8d13f`, `main` CI confirmed,
+  issue closed, worktree swept. Nothing was dispatched after his message.
+  Usage was not read.
+- **Session summary.** Takeover 17:10; handoff shortened to the 0.4.0 shape
+  (`a3bd0b5`); issues #73, #74, #75 created and #73, #74 dispatched under
+  the 17:12 authorization below; both accepted at first review and merged.
+  One coordinator slip: the times in the coordinator's comments on #73
+  (17:50) and #74 (18:00, 18:15 in the record) were written from memory;
+  the clock read 17:20 to 17:25. An attempt to edit them was refused by the
+  permission check; the closing comment on #73 says so.
+
+**Held before that** from 17:10 CEST by the same session. Andreas opened
+with "update Relay. continue the work! start with giving me a quick
+status". Evidence that no lead was active: the previous session released
+the baton at 16:35 and its process (pid 72479) was gone; the only
+`claude --agent fz-coordinator` process was this one; `main` equalled
+`origin/main` at `9e34da3`, clean, CI green; `relay-check` reported the
+template and skill both at 0.4.0 with one drift line, the handoff at 649
+lines. Earlier lead records: the log, "Earlier leads".
 
 ## Authorized by the owner
 
@@ -136,11 +157,12 @@ written into the repository.
 
 ## State of `main`
 
-`main` is at `9e34da3` (docs), equal to `origin/main`, CI green. Its last
-code merge is #70 at `5af75ea`, 1069 tests passing and 1 ignored. On
-2026-10-16 it gained #71 (the Info header's worktree count in lavender, a
-look change merged under the standing instruction and not yet seen by
-Andreas on `main`) and #70 (ssh fetches bounded at 10 s). The installed
+`main` is at the merge of #73, `4b8d13f`, equal to `origin/main`, 1071
+tests passing and 1 ignored, CI green. On 2026-10-16 it gained #73 (one
+`model::identity_key` for "same remote", a pure refactor), #74 (the
+`CLAUDE.md` Nerd Font sentence), #71 (the Info header's worktree count in
+lavender, a look change merged under the standing instruction and not yet
+seen by Andreas on `main`) and #70 (ssh fetches bounded at 10 s). The installed
 binary is the `main` of 2026-10-10 (`677e8cc`, version `0.5.1`); `main` is
 far past `v0.5.1` with a cache format change (FZ-09c), so the next release
 is at least `0.6.0`, prepared only when he asks. Local toolchain rustc
@@ -158,27 +180,15 @@ Under `.claude/worktrees/`, besides the main checkout:
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked by
   Andreas until the repository goes public.
 
-Ticket worktrees added in this session are listed under "In flight".
+The worktrees of #73 (`one-remote-key`) and #74 (`claude-md-stale`) were
+removed by the sweep after their merges.
 
 ## In flight
 
-Issues created 17:30 under the 17:12 authorization: #73 (one key for "same
-remote"), #74 (the stale `CLAUDE.md` lines), #75 (the dirty worktree in the
-list row; Backlog, P1, M3, dispatched after #72 merges; the coordinator's
-colour-not-count ruling is on the issue). Dispatched 17:36, both from base
-`a3bd0b5`, assignment comments on the issues:
-
-- **#73**, `fz-worker` (`claude-opus-5-5`, medium), branch
-  `refactor/one-remote-key`, worktree `.claude/worktrees/one-remote-key`,
-  files `src/model.rs`, `src/github.rs`, `src/main.rs`, `src/discovery.rs`
-  (`src/app.rs` for a path only). Board: In progress, P2. Reviewer next.
-- **#74**, `fz-small` (`sonnet`, medium), branch `docs/claude-md-stale`,
-  worktree `.claude/worktrees/claude-md-stale`, file `CLAUDE.md` only.
-  Board: In progress, P2. Reviewer next.
-
-If this session ends before they report, the next lead checks each
-worktree's `git status --short` for the uncommitted result and dispatches
-the reviewer, or re-dispatches the worker if the worktree is clean.
+Nothing. #73 and #74 are Done (records in the log, "Merged on
+2026-10-16"). #75 (the dirty worktree in the list row) exists in Backlog,
+P1, M3, with the coordinator's colour-not-count ruling on the issue; it is
+dispatched after #72 merges, under the 17:12 authorization.
 
 ## Next step, and the order after it
 
@@ -193,10 +203,11 @@ the reviewer, or re-dispatches the worker if the worktree is clean.
    `--no-ff` (all other safe-merge conditions hold), close #72 with the
    merge sha, confirm CI on `main`, sweep. Changes go back through the
    worker and a re-review. Rulings and review follow-ups are in the log.
-2. **Fillers now** (17:12 authorization): one key for "same remote" and the
-   stale `CLAUDE.md` lines, each with its own reviewer.
-3. **After #72 merges:** the dirty worktree marker in the list row (issue to
-   be created under the same authorization).
+2. **Fillers:** #73 and #74 are Done. The `fz-small` slot is free; the next
+   filler candidates are in the log's "Follow-ups found and not ticketed",
+   each needing his OK for an issue.
+3. **After #72 merges:** #75, the dirty worktree marker in the list row
+   (issue exists; dispatch is authorized once #72 is in).
 4. **Batch 2, parked on his decisions:** refetch on network recovery
    (changes fetch contract rule 6; "yes or no?" asked 2026-10-16, no
    answer yet) and FZ-13 wave 4 (maximize and restore, hints follow focus;
@@ -208,6 +219,12 @@ the reviewer, or re-dispatches the worker if the worktree is clean.
 
 - #72's look (above).
 - Rule 6 refetch on recovery: yes or no.
+- **`cache_ttl` is dead config** (found by #74, confirmed by its reviewer):
+  `config.cache_ttl` reaches only `ApiCache::read`, whose one production
+  caller `github::serve_cached` falls back to `read_stale` on the same
+  file, so launch serves the same payload whatever the value; the poll and
+  `R` bypass the cache. README still documents it as a TTL. Remove the key
+  (a config contract change, his) or correct README's sentence.
 - FZ-13 wave 4 questions on #26; FZ-13s #56 (he said not prioritized).
 - Follow-ups that may become issues (the log's "Follow-ups found and not
   ticketed"): the `o` shell mouse capture (offered 2026-10-09), the

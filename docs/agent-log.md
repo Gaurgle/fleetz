@@ -159,6 +159,34 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-16
 
+#### #73, one key for "same remote" (filler)
+
+| Ticket | Issue | Ticket commit | Merge | What landed |
+|---|---|---|---|---|
+| One key for "same remote" (filler) | #73 | `d153d77` | `4b8d13f` | `model::identity_key` beside `host_key` states the lowercased owner-and-name rule; `RemoteRef::key`, `GithubRepo::identity_key`, `main.rs::remote_key` (one-line delegate), `names_remote`, `discovery::repo_key` and the LocalOnly branch of `carries` (a hand-written copy of `names_remote`) delegate to it. `FoundRepo::key`'s string form kept (an existing test pins it). Two new tests, mutation-checked by worker and reviewer. Coordinator ruling on the issue: half-key sites (discovery's name-only maps and owner set, `ambiguity_line`, group names) stay; the grep criterion was narrowed to full owner-and-name comparisons. No behaviour change, no existing test touched. Worker `claude-opus-5-5` medium, reviewer `claude-opus-5-5` medium, accepted first round. 1071 tests. CI green on the branch; the merged `src` is byte-identical to the ticket tip, so the branch run is the combined check. Worktree and local branch removed |
+
+```text
+#73: review accepted first; fix cycles 0; owner decisions 0; worker 3 min; review 2 min; usage not read
+```
+
+The follow-up entry this ticket closed, from "Follow-ups found and not
+ticketed" below: one key for "same remote".
+
+#### #74, CLAUDE.md lines the code contradicts (filler)
+
+| Ticket | Issue | Ticket commit | Merge | What landed |
+|---|---|---|---|---|
+| CLAUDE.md lines the code contradicts (filler) | #74 | `20939bc` | `f269574` | The "Build" sentence names the four Nerd Font uses by symbol (`kind_glyph`, `STASH_GLYPH`, the watch eye glyphs, `CellSize::glyph`), the `icons = "plain"` key and the `,` row, and says the day squares have no plain fallback (the ticket text claimed all four had one; the worker corrected it against `enum Icons`). Tick (100 ms) and `r` confirmed, no edit. `cache_ttl` escalated to the owner: the key decides nothing observable (only `ApiCache::read` checks it, and `serve_cached` falls back to `read_stale`; the poll and `R` bypass), README still documents it as a TTL. Worker `fz-small` resolved `claude-sonnet-5-5` medium, reviewer `claude-opus-5-5` medium. Docs CI green on the branch and on `main`. Worktree and local branch removed |
+
+```text
+#74: review accepted first; fix cycles 0; owner decisions 0; worker 1 min; review 2 min; usage not read
+```
+
+The follow-up entry this ticket closed, from "Follow-ups found and not
+ticketed" below: `CLAUDE.md` text the code contradicts (the tick and `r`
+had been corrected earlier; the Nerd Font list and `icons` key are now
+right; `cache_ttl` is an open owner question, not a doc fix).
+
 #### #70, ssh fetch bound (batch 1 A)
 
 | Ticket | Issue | Ticket commit | Merge | What landed |
@@ -746,7 +774,7 @@ text come from the new counts-based helpers `badges::counter_color` and
 
 ### Follow-ups found and not ticketed
 
-- **One key for "same remote".** Five sites lowercase an owner and a name:
+- **One key for "same remote"** (done, #73). Five sites lowercase an owner and a name:
   `main.rs::remote_key`, `main.rs::names_remote`, discovery's `repo_key`,
   `GithubRepo::identity_key` and `RemoteRef::key`. `remote_key` should
   delegate to `identity_key`; the rest should become one key and one match.
@@ -791,7 +819,7 @@ text come from the new counts-based helpers `badges::counter_color` and
 - **From the FZ-05b review:** a `file://` origin and a renamed GitHub account
   are refused where the old code claimed by folder; a clone with no origin
   ranks as off github.com.
-- **`CLAUDE.md` text the code contradicts:** the tick is 100 ms, not 250 ms;
+- **`CLAUDE.md` text the code contradicts** (done, #74; `cache_ttl` is an open owner question): the tick is 100 ms, not 250 ms;
   `r` does not rebuild from cache; it lists only two of the four Nerd Font
   uses and does not mention the `icons` key or its row in the settings.
   `cache_ttl` decides nothing observable. (The stale names in the launch
