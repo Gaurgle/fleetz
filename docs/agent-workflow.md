@@ -1,3 +1,4 @@
+<!-- relay-template: 0.4.0; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
 # Agent workflow for the release effort
 
 This is a project-specific working agreement for the tickets in
@@ -54,10 +55,11 @@ Do not create another management layer or recursively delegate by default.
 Claude and Codex use the same ticket contract; cross-provider dispatch may be
 manual. A ticket remains usable without a custom orchestration service.
 
-## Task method and Superpowers
+## Task method and task skills
 
-Relay owns authority, staffing, durable state and integration. Superpowers can
-guide discovery, design, planning, test-first work and debugging within that
+Relay owns authority, staffing, durable state and integration. The task skills
+(brainstorming, writing-plans, test-driven-development, systematic-debugging,
+verification-before-completion, receiving-code-review) can guide discovery, design, planning, test-first work and debugging within that
 structure. Choose a proportionate path:
 
 - **Spike:** answer a narrow feasibility question with a disposable probe.
@@ -72,7 +74,7 @@ structure. Choose a proportionate path:
 Approval of a spec or plan accepts that artifact; it does not add tickets to
 the authorized scope. Use the owner's named tickets or standing instruction
 to determine what Relay may execute. When Relay is active, its coordinator is
-the only dispatcher. Do not run Superpowers' subagent-driven implementation
+the only dispatcher. Do not run another subagent-driven implementation
 workflow alongside Relay's worker and reviewer assignments. Workers may use
 relevant task skills within their ticket but cannot delegate. The independent
 Relay review remains required.
@@ -221,15 +223,16 @@ contract, handoff templates and limits in this document apply unchanged.
    integration against current `main` in an isolated checkout, reports conflicts
    and runs checks on the combined result, then merges under the safe-merge
    rule. If `main` moves, revalidate the changed integration result before merging.
-   Worktree checks alone do not establish integration safety.
+   Worktree checks alone do not establish integration safety. Wait for CI with
+   `gh run watch <run-id> --exit-status` as a background command, so the
+   harness reports when it ends; never poll with short sleeps.
 8. Retain the worktree until the result is integrated or explicitly discarded.
-9. Cleanup is part of Done. Once the ticket is merged and CI on `main` is
-   green at the merge, the coordinator removes the ticket's worktree and
-   deletes its local branch, after checking three things: the worktree has
-   nothing uncommitted or untracked, the branch tip is an ancestor of `main`,
-   and the branch is on `origin` at that same commit. Use
-   `git worktree remove <path>` and `git branch -d <branch>` without force;
-   if either refuses, stop and report instead of forcing. Remote branches
+9. Cleanup is part of Done. The coordinator runs `scripts/relay-sweep main`
+   on start and after every merge. It removes a ticket's worktree and local
+   branch only when the worktree has nothing uncommitted or untracked, the
+   branch tip is in `origin/main`, and the latest CI on `main` is green, and
+   it lists everything it keeps and why. Anything kept that should go is a
+   question for Andreas. Remote branches
    stay on GitHub. A worktree whose ticket is not merged (blocked, parked,
    discarded) is removed only when Andreas says so.
 
@@ -268,6 +271,38 @@ deletes remote branches.
 At Ready to integrate and after each merge, tell Andreas how to try the build:
 `cargo run --release --manifest-path <worktree>/Cargo.toml` before the merge,
 `cargo run --release` from `main` after it.
+
+## Records
+
+`docs/agent-handoff.md` is the baton: the lead and baton state, the owner's
+authority, work in flight, open decisions and the next step. Keep it short; a
+new lead reads all of it. When a ticket is Done, move its record to
+[agent-log.md](agent-log.md) and end it with one metrics line:
+
+```text
+<ticket>: review <accepted first | changes n>; fix cycles <n>; owner decisions <n>; worker <min>; review <min>; usage <read | not read>
+```
+
+Post every ruling on a ticket (scope, design or test decisions) as a comment
+on its issue when it is made, not only in the handoff. Where this file's
+policy and the latest dated authorization in the handoff differ, the narrower
+one applies and the coordinator asks Andreas to reconcile them.
+
+## Unattended runs (Andreas switches them on)
+
+Andreas may run the coordinator as a loop: `/loop` with no interval in the
+lead session, plus a standing scope such as "work through the post-M1 order".
+Before the first round, record in the handoff the scope, date, a cap (tickets
+or hours) and any extra stop conditions. Each round the coordinator
+reconciles live state, runs the sweeper, integrates what is ready under the
+safe-merge rule, dispatches the next ticket in scope and updates the handoff.
+Wait for workers and reviewers through the harness's completion notices and
+for CI through a background `gh run watch`; the loop's own fallback wakeup is
+long (20 minutes or more). The loop ends, with an owner-facing report, when
+the scope or cap is reached, a safe-merge condition fails or is unclear,
+acceptance needs Andreas's judgment, a blocker survives two fix cycles, CI on
+`main` is red, or the usage limit is near. A loop grants no authority this
+file does not.
 
 ## Validation contract
 

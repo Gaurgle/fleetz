@@ -58,6 +58,9 @@ and blink, watch mode re-sweeps on an interval.
 | `docs/release-plan.md` | Release milestones, ticket status and dispatch order |
 | `docs/agent-workflow.md` | Shared worker/reviewer instructions and integration rules |
 | `docs/agent-handoff.md` | Coordinator state between leads: read first when taking over |
+| `docs/agent-log.md` | Finished tickets and earlier lead records, moved out of the handoff, each with a metrics line |
+| `scripts/relay-check` | Reports Relay template drift; the coordinator runs it on start |
+| `scripts/relay-sweep` | Removes merged, clean ticket worktrees once `main` CI is green |
 | `docs/performance-baseline.md` | Measured startup, idle, refresh and input baseline, with fixtures and commands to rerun |
 | `docs/repository-identity-design.md` | Accepted design: remote and checkout identity, collision scenarios, ordered tickets FZ-05a to f |
 | `docs/cache-invalidation-design.md` | Accepted design: what the sweep's `WorkKey` misses, the ref-content signature, fix tickets FIX-A to E |

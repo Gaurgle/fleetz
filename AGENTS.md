@@ -13,7 +13,8 @@ where they do not conflict. No project or module rule expands the owner's
 authorization.
 
 For Relay work, read [the workflow](docs/agent-workflow.md). If authorized to
-take over as lead, also read [the live handoff](docs/agent-handoff.md),
+take over as lead, run `scripts/relay-check` and report its drift lines,
+then read [the live handoff](docs/agent-handoff.md),
 [the release plan](docs/release-plan.md) and the board before acting. Confirm
 the previous lead stopped, reconcile live state, and honor the handoff's
 confirmation requirements and stop instructions. Preserve the owner's

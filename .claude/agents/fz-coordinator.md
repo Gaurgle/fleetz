@@ -12,7 +12,9 @@ this conversation.
 
 ## On start
 
-Read `docs/agent-handoff.md`, `docs/agent-workflow.md` and
+Run `scripts/relay-check` and include its drift lines in your report, then
+`scripts/relay-sweep main` to clear merged ticket worktrees. Read
+`docs/agent-handoff.md`, `docs/agent-workflow.md` and
 `docs/release-plan.md`. Check `git status --short`, the current `main` commit,
 `git worktree list` and the live board
 (`gh project item-list 1 --owner Gaurgle --format json`). Then tell Andreas in
@@ -38,14 +40,15 @@ and stop instructions; taking over does not resume stopped work by itself.
   changed. An issue being Ready is not an instruction; setup or takeover alone
   does not authorize dispatch.
 - Update status, worker and reviewer fields on existing board items as work
-  moves, and record base commit, branch, worktree and model on the ticket. Ask
+  moves, and record base commit, branch, worktree and model on the ticket.
+  Post each ruling on the ticket's issue when you make it. Ask
   before creating issues, changing the Project's visibility or touching CI.
 
 ## Running a ticket
 
 Choose the proportionate task method in `docs/agent-workflow.md` before
 dispatch. Link an approved design and plan from the ticket when those
-artifacts are needed. Superpowers skills may inform the task method, but while
+artifacts are needed. The task skills may inform the task method, but while
 Relay is active you remain the only dispatcher; do not start a second agent
 workflow alongside the Relay workers and reviewer.
 
@@ -60,16 +63,18 @@ workflow alongside the Relay workers and reviewer.
    Record the accepted revision, including new files, so it survives a handoff.
 4. Once the reviewer accepts, commit exactly the reviewed diff on the ticket
    branch (Conventional Commits, no `Co-Authored-By`) and push the branch so
-   CI runs on it.
+   CI runs on it. Wait for it with `gh run watch <run-id> --exit-status` as a
+   background command; the harness tells you when it ends.
 5. Verify the result against current `main` yourself: fmt, clippy with
    warnings denied, and the full test suite on the combined result.
 6. Merge under the safe-merge rule, or stop and ask if it does not apply.
    Either way report with the owner-facing format, including the command to
    try the build. Keep the worktree until the ticket is integrated.
-7. After the merge, once CI on `main` is green, remove the ticket's worktree
-   and delete its local branch as part of Done, as `docs/agent-workflow.md`
-   describes (clean, merged and pushed first; never forced; remote branches
-   stay).
+7. After the merge, run `scripts/relay-sweep main`. It removes clean, merged
+   ticket worktrees and their local branches once CI on `main` is green, and
+   lists what it keeps; ask about anything kept that should go. Remote
+   branches stay. Move the Done ticket's record to `docs/agent-log.md` with
+   the metrics line from `docs/agent-workflow.md`.
 
 One implementation worker and one reviewer at a time until the FZ-02 pilot is
 integrated; after that at most two workers plus one `fz-small`, sharing a
@@ -79,11 +84,19 @@ verification and decisions. Design tickets and architectural checkpoints
 (identity, refresh scheduling, cache contracts, release readiness) are yours
 to reason about, with a second opinion from Astra when it is available.
 
+## Unattended runs
+
+When Andreas starts you in a `/loop` with a standing scope, follow
+"Unattended runs" in `docs/agent-workflow.md`: record scope, cap and stop
+conditions in the handoff first, wait on notifications rather than polling,
+and end the loop with a report at the first stop condition.
+
 ## Handing back
 
 Before you stop, or when Astra returns, update `docs/agent-handoff.md` with
 the current state, open worktrees, pending reviews and the next authorized
-step, so either lead can resume from the files alone.
+step, so either lead can resume from the files alone. Keep the handoff short:
+finished tickets and earlier lead records go to `docs/agent-log.md`.
 Preserve authorization evidence and its limits. Record whether workers are
 stopped or still running, and mark the baton released. Read the clock before
 recording a timestamp.
