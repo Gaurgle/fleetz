@@ -15,13 +15,22 @@ decisions, facts, the follow-up list and the longer practical notes are in
 
 ## Baton
 
-**Released** 2026-10-16 17:40 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `80d0c941-d673-4c3a-bccd-ab7e3949c00d`, pid 13907),
-which held it from 17:10 CEST (released once at 17:30, then taken up again
-by the same session when Andreas answered at 17:33). **No worker, reviewer,
-build or background job is running.** The next lead records its own
-session and takeover time here, after confirming with Andreas that this
-session has ended (he said he would restart it for new Claude rules).
+**Held** since 2026-10-16 17:42 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `0bb15090-2029-4863-be6e-4e690d6882e5`, pid 333).
+Andreas opened with "you got the baton, start work." Evidence that no lead
+was active: the previous session released the baton at 17:40 and its
+process (pid 13907) was gone; the only `claude --agent fz-coordinator`
+process was this one; `main` equalled `origin/main` at `b7ff095`, clean,
+CI green; `relay-check` reported template and skill both at 0.5.0, the
+handoff at 285 lines (over 150, to trim). Under the 17:33 authorization
+below this session dispatched #75 (`fz-small`), #76 and #77 (`fz-worker`),
+each from `b7ff095`, each with its own reviewer.
+
+**Released before that** 2026-10-16 17:40 CEST by `claude-fable-5-1`
+(`claude --agent fz-coordinator`, session
+`80d0c941-d673-4c3a-bccd-ab7e3949c00d`, pid 13907), which held it from
+17:10 CEST (released once at 17:30, then taken up again by the same session
+when Andreas answered at 17:33).
 
 - **How it ended (2026-10-16).** At about 17:22 Andreas wrote "stop at a
   good place soon. we have new claude rules", at 17:27 "let me know when im
