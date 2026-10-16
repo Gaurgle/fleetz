@@ -159,6 +159,16 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-16
 
+#### #75, the WT badge takes the dirty colour (batch 2)
+
+| Ticket | Issue | Ticket commit | Merge | What landed |
+|---|---|---|---|---|
+| List row: the `WT` badge takes the dirty colour when a linked worktree is dirty (batch 2) | #75 | `b0254c8` | `c7e3395` | New pure `badges::worktree_color(repo)`: `counter_color(0, 0, 1)` when any `Worktree.dirty` is `Some(n)`, n > 0, else `colors::WORKTREE_CLR`; `badge_spans_marked` uses it for the `WT` span. Text, width and right-edge rule unchanged; `compact.rs` does not draw the badge. Two new tests, the first failing on the base; reviewer killed two mutants (span reverted; `None` counted as dirty). README clauses at lines 27 and 422. Coordinator ruling on the issue: colour, not count. Noted, not a defect: a repo behind with a dirty worktree draws the badge yellow beside a peach status token (Andreas may ask for another precedence). Merged under the standing "small look changes" instruction; look not yet seen by Andreas on `main`. Worker `fz-small` resolved `claude-sonnet-5-5` medium (84 s), reviewer `claude-opus-5-5` medium (72 s), accepted first round. Branch CI green; combined check on `main` plus the branch: fmt, clippy, 1087 tests; `main` CI green. Worktree and local branch removed |
+
+```text
+#75: review accepted first; fix cycles 0; owner decisions 0; worker 1 min; review 1 min; usage not read
+```
+
 #### #72, worktrees section in Info (batch 1 B)
 
 | Ticket | Issue | Ticket commit | Merge | What landed |

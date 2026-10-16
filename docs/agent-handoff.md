@@ -184,13 +184,14 @@ written into the repository.
 
 ## State of `main`
 
-`main` is at the merge of #72, `338024e`, equal to `origin/main` plus the
-docs commit that records this, 1085 tests passing and 1 ignored, CI green.
-On 2026-10-16 it gained #72 (the Info view's `worktrees` section, look
+`main` is at the merge of #75, `c7e3395`, equal to `origin/main` plus the
+docs commit that records this, 1087 tests passing and 1 ignored, CI green.
+On 2026-10-16 it gained #75 (the `WT` badge in the dirty colour, a look
+change merged under the standing instruction and not yet seen by Andreas
+on `main`), #72 (the Info view's `worktrees` section, look
 accepted), #73 (one `model::identity_key` for "same remote", a pure
 refactor), #74 (the `CLAUDE.md` Nerd Font sentence), #71 (the Info header's worktree count in
-lavender, a look change merged under the standing instruction and not yet
-seen by Andreas on `main`) and #70 (ssh fetches bounded at 10 s). The installed
+lavender, also not yet seen on `main`) and #70 (ssh fetches bounded at 10 s). The installed
 binary is the `main` of 2026-10-10 (`677e8cc`, version `0.5.1`); `main` is
 far past `v0.5.1` with a cache format change (FZ-09c), so the next release
 is at least `0.6.0`, prepared only when he asks. Local toolchain rustc
@@ -210,33 +211,58 @@ The worktrees of #72 (`worktrees-section`), #73 (`one-remote-key`) and #74
 
 ## In flight
 
-Nothing dispatched. Three tickets are Ready, authorized by the 17:33 entry
-and waiting only for a lead to dispatch them:
+Dispatched 2026-10-16 17:45 CEST under the 17:33 entry, each from
+`b7ff095` with its own reviewer. #75 is Done (merged `c7e3395`, swept, the
+record is in the log). Two remain:
 
-- **#75**, the dirty worktree colours the `WT` badge in the list row
-  (P1, M3; coordinator's colour-not-count ruling on the issue; a minor look
-  change, merges under the standing instruction). `fz-small` or
-  `fz-worker`; files `src/ui/badges.rs`, maybe `src/ui/compact.rs`,
-  `README.md`.
 - **#76**, refetch `Unreachable` and `TimedOut` repos once when the GitHub
-  poll recovers from `Offline` (fetch contract rule 6 amended; the wording
-  is in the body and binding). `fz-worker`; files
-  `docs/fetch-outcome-contract.md`, `src/main.rs` or `src/app.rs`.
-- **#77**, remove the inert `cache_ttl` key and the dead TTL read path
-  (config contract change; removes the two tests of the removed branch,
-  `cache_expired_returns_none` and the second `from_secs(0)` fixture, by
-  the owner's "do what you need"). `fz-worker`; files `src/config.rs`,
-  `src/cache.rs`, `src/github.rs`, `src/main.rs`, `README.md`.
+  poll recovers from `Offline`. Branch `feat/76-refetch-on-recovery`,
+  worktree `.claude/worktrees/issue-76`, worker `fz-worker`
+  (`claude-opus-5-5`) done: `recovery_refetch` beside
+  `apply_github_poll_at` in `src/main.rs`, rows added to the
+  `remotes_that_moved` batch, contract rule 6 and a dated amendment entry,
+  two new tests, 1087 tests, no existing test touched. Coordinator ruling
+  on the issue (18:08): `Refused` is a GitHub kind, so the untouched fetch
+  kinds are `Auth`, `NoRemote`, `Other`; applied by the worker. Revision
+  for review: uncommitted, diff sha256
+  `115f540b0838fc116999162eb5d4d35d90b600d2be41811b67b4e7b3e3277a72`.
+  **At Review**, `fz-reviewer` running.
+- **#77**, remove the inert `cache_ttl` key and the dead TTL read path.
+  Branch `cleanup/77-remove-cache-ttl`, worktree
+  `.claude/worktrees/issue-77`, worker `fz-worker` (`claude-opus-5-5`)
+  done after one stop-and-report. Coordinator rulings on the issue
+  (17:55), under the owner's "do what you need for cache_ttl": delete the
+  one precondition assertion of the expired state in
+  `startup_serves_an_expired_payload_rather_than_waiting_on_the_network`
+  (github.rs base line 2396, the one ruling beyond the ticket's list,
+  Andreas may override); TTL doc comments on tests reworded; `ApiCache::read`
+  kept only as a `#[cfg(test)]` wrapper over `read_stale` so three
+  assertions stay; the removed test is exactly `cache_expired_returns_none`,
+  `a_stale_read_reports_when_the_file_was_written` keeps its body. Two new
+  tests, 1086 tests. The worker also fixed README's comparison table row
+  (base line 381, "Disk cache with a TTL"), outside its named region but
+  made false by the change. **At Review**, `fz-reviewer` running.
 
-#76 and #77 both touch `src/main.rs` (#76 in `apply_github_poll`, #77 the
-two `KeyedCache::new` calls) and `src/github.rs` is #77's only: record the
-split by symbol in the assignment comments and merge one at a time.
+`src/main.rs` was split by symbol (#76 the poll code, #77 the two
+`KeyedCache::new` calls); README's `WT` sentences went with #75. Merge one
+at a time, combined check rerun against the new `main`.
 
 ## Next step, and the order after it
 
-1. **Dispatch #75, #76 and #77** (above), each from current `main`, with
-   its own reviewer; two `fz-worker` plus one `fz-small`.
-2. **Wave 4 of FZ-13** waits for Andreas's answers to the three questions
+1. **Finish #76 and #77** (above): review verdict, commit the accepted
+   diff, push, branch CI, combined check against current `main`, merge one
+   at a time, sweep, log.
+2. **Andreas's idea of 2026-10-16 (about 17:50), not yet an issue:** with
+   watch off, a failed launch poll leaves `⚠ github offline, as of 3h` in
+   the header indefinitely; the failure kind reads as present tense though
+   the attempt may be hours old and nothing retries. The coordinator
+   offered three options in chat (date the failure too, for example
+   `⚠ github offline 2h ago, as of 3h`, recommended; add "press r", which
+   fights the "a key sits beside what it changes" rule; retry slowly with
+   watch off, rejected because the eye means "not polling") and asked for
+   an OK to create an issue for the first. A freshness amendment and a look
+   change: his acceptance either way. No answer yet.
+3. **Wave 4 of FZ-13** waits for Andreas's answers to the three questions
    (given to him in chat on 2026-10-16; also in the first comment on #26):
    FZ-13m maximize and restore (the key, which panes, what restore returns
    to), FZ-13n hints that follow focus (whether the footer changes with the
