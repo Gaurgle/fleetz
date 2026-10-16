@@ -1,11 +1,11 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-16 17:30 CEST by `claude-fable-5-1` (`claude --agent
+Last written 2026-10-16 17:40 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `80d0c941-d673-4c3a-bccd-ab7e3949c00d`), when
-Andreas asked to stop at a good place ("we have new claude rules").
+Andreas asked to stop so he can restart the session with new Claude rules.
 **Nothing is running: no worker, no reviewer, no build, no background job.
-#73 and #74 are Done; #72 is still at Ready to integrate waiting for his
-look.** Read this file, the repository instructions, [agent-workflow.md](agent-workflow.md) and
+#72, #73 and #74 are Done today; #75, #76 and #77 are Ready and authorized,
+not dispatched.** Read this file, the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
 authoritative for status; this file says why things are where they are and
@@ -15,20 +15,24 @@ decisions, facts, the follow-up list and the longer practical notes are in
 
 ## Baton
 
-**Released** 2026-10-16 17:30 CEST by `claude-fable-5-1` (`claude --agent
+**Released** 2026-10-16 17:40 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `80d0c941-d673-4c3a-bccd-ab7e3949c00d`, pid 13907),
-which held it from 17:10 CEST. **No worker, reviewer, build or background
-job is running.** The next lead records its own session and takeover time
-here, after confirming with Andreas that this session has ended (he said he
-would restart it for new Claude rules).
+which held it from 17:10 CEST (released once at 17:30, then taken up again
+by the same session when Andreas answered at 17:33). **No worker, reviewer,
+build or background job is running.** The next lead records its own
+session and takeover time here, after confirming with Andreas that this
+session has ended (he said he would restart it for new Claude rules).
 
 - **How it ended (2026-10-16).** At about 17:22 Andreas wrote "stop at a
-  good place soon. we have new claude rules", and at about 17:27 "let me
-  know when im good to restart this session". #74 was already merged;
-  #73's review had been accepted and its branch pushed, so the coordinator
-  finished it: branch CI green, merged `4b8d13f`, `main` CI confirmed,
-  issue closed, worktree swept. Nothing was dispatched after his message.
-  Usage was not read.
+  good place soon. we have new claude rules", at 17:27 "let me know when im
+  good to restart this session", and at 17:33 the answers recorded under
+  "Authorized by the owner" plus "let me know when this is good and i can
+  restart this session". The coordinator finished what was in hand: #73
+  (merged `4b8d13f`) and #72 (look accepted, merged `338024e`, combined
+  checks 1085 tests, `main` CI green), both closed and swept; created #76
+  and #77 from his answers and set #75, #76, #77 Ready; gave him the wave
+  4 questions in chat. Nothing was dispatched after 17:22. Usage was not
+  read.
 - **Session summary.** Takeover 17:10; handoff shortened to the 0.4.0 shape
   (`a3bd0b5`); issues #73, #74, #75 created and #73, #74 dispatched under
   the 17:12 authorization below; both accepted at first review and merged.
@@ -51,6 +55,20 @@ lines. Earlier lead records: the log, "Earlier leads".
 Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it.
 
+- **2026-10-16, about 17:33.** After the baton had been released and the
+  coordinator had asked for #72's look, rule 6, the wave 4 questions and
+  `cache_ttl`, Andreas wrote: "72 is good. Rule 6 yes for refetch (is good,
+  yes?) give me fz-13 questions on 26 do w`hat you need for cache_ttl",
+  then "let me know when this is good and i can restart this session".
+  The coordinator reads it as: #72 accepted, merge it; the refetch-on-
+  recovery change to fetch contract rule 6 is approved and its ticket
+  (#76) may be created and run; `cache_ttl` is the coordinator's call, and
+  its ticket (#77, remove the key and the dead path, two tests of the
+  removed branch go with it) may be created and run; the wave 4 questions
+  are answered in chat, no decision yet. Because he is restarting the
+  session, #75, #76 and #77 were created and set Ready but **not
+  dispatched**; the next lead dispatches them under this entry without
+  asking again (two `fz-worker` plus one `fz-small`).
 - **2026-10-16, about 17:12.** After the takeover report (which listed: #72
   waits for his look; batch 2's three open decisions, rule 6 refetch "yes or
   no?", the dirty-worktree list row "OK to create the issue and dispatch
@@ -157,10 +175,11 @@ written into the repository.
 
 ## State of `main`
 
-`main` is at the merge of #73, `4b8d13f`, equal to `origin/main`, 1071
-tests passing and 1 ignored, CI green. On 2026-10-16 it gained #73 (one
-`model::identity_key` for "same remote", a pure refactor), #74 (the
-`CLAUDE.md` Nerd Font sentence), #71 (the Info header's worktree count in
+`main` is at the merge of #72, `338024e`, equal to `origin/main` plus the
+docs commit that records this, 1085 tests passing and 1 ignored, CI green.
+On 2026-10-16 it gained #72 (the Info view's `worktrees` section, look
+accepted), #73 (one `model::identity_key` for "same remote", a pure
+refactor), #74 (the `CLAUDE.md` Nerd Font sentence), #71 (the Info header's worktree count in
 lavender, a look change merged under the standing instruction and not yet
 seen by Andreas on `main`) and #70 (ssh fetches bounded at 10 s). The installed
 binary is the `main` of 2026-10-10 (`677e8cc`, version `0.5.1`); `main` is
@@ -173,58 +192,58 @@ is at least `0.6.0`, prepared only when he asks. Local toolchain rustc
 
 Under `.claude/worktrees/`, besides the main checkout:
 
-- **`worktrees-section`, branch `feat/72-worktrees-section`:** #72, clean,
-  committed `6fbacce` and pushed, CI green, Ready to integrate, waiting for
-  Andreas's look. Kept until the ticket is merged or withdrawn.
 - **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
   and `docs.yml`, reviewer verdict blocked on a repository setting. Parked by
   Andreas until the repository goes public.
 
-The worktrees of #73 (`one-remote-key`) and #74 (`claude-md-stale`) were
-removed by the sweep after their merges.
+The worktrees of #72 (`worktrees-section`), #73 (`one-remote-key`) and #74
+(`claude-md-stale`) were removed by the sweep after their merges.
 
 ## In flight
 
-Nothing. #73 and #74 are Done (records in the log, "Merged on
-2026-10-16"). #75 (the dirty worktree in the list row) exists in Backlog,
-P1, M3, with the coordinator's colour-not-count ruling on the issue; it is
-dispatched after #72 merges, under the 17:12 authorization.
+Nothing dispatched. Three tickets are Ready, authorized by the 17:33 entry
+and waiting only for a lead to dispatch them:
+
+- **#75**, the dirty worktree colours the `WT` badge in the list row
+  (P1, M3; coordinator's colour-not-count ruling on the issue; a minor look
+  change, merges under the standing instruction). `fz-small` or
+  `fz-worker`; files `src/ui/badges.rs`, maybe `src/ui/compact.rs`,
+  `README.md`.
+- **#76**, refetch `Unreachable` and `TimedOut` repos once when the GitHub
+  poll recovers from `Offline` (fetch contract rule 6 amended; the wording
+  is in the body and binding). `fz-worker`; files
+  `docs/fetch-outcome-contract.md`, `src/main.rs` or `src/app.rs`.
+- **#77**, remove the inert `cache_ttl` key and the dead TTL read path
+  (config contract change; removes the two tests of the removed branch,
+  `cache_expired_returns_none` and the second `from_secs(0)` fixture, by
+  the owner's "do what you need"). `fz-worker`; files `src/config.rs`,
+  `src/cache.rs`, `src/github.rs`, `src/main.rs`, `README.md`.
+
+#76 and #77 both touch `src/main.rs` (#76 in `apply_github_poll`, #77 the
+two `KeyedCache::new` calls) and `src/github.rs` is #77's only: record the
+split by symbol in the assignment comments and merge one at a time.
 
 ## Next step, and the order after it
 
-1. **#72, the worktrees section (Ready to integrate).** Spec accepted
-   ("yes, looks perfect"), worker `claude-opus-5-5` medium, two review
-   rounds (round 2 accepted revision `4661605`, saved diff sha1
-   `466160516547885a6998a00ad45bd8d661909d8b`), committed `6fbacce`,
-   pushed, branch CI green, coordinator's checks green, 1083 tests. Waits
-   for his look: `cargo run --release --manifest-path
-   ~/repos/fleetz/.claude/worktrees/worktrees-section/Cargo.toml`, select
-   `fleetz`, read the Info view's `worktrees` section. On acceptance: merge
-   `--no-ff` (all other safe-merge conditions hold), close #72 with the
-   merge sha, confirm CI on `main`, sweep. Changes go back through the
-   worker and a re-review. Rulings and review follow-ups are in the log.
-2. **Fillers:** #73 and #74 are Done. The `fz-small` slot is free; the next
-   filler candidates are in the log's "Follow-ups found and not ticketed",
-   each needing his OK for an issue.
-3. **After #72 merges:** #75, the dirty worktree marker in the list row
-   (issue exists; dispatch is authorized once #72 is in).
-4. **Batch 2, parked on his decisions:** refetch on network recovery
-   (changes fetch contract rule 6; "yes or no?" asked 2026-10-16, no
-   answer yet) and FZ-13 wave 4 (maximize and restore, hints follow focus;
-   questions on #26 since 2026-10-01).
-5. Then batches 3 and 4 of the "Dispatch order after M1" table in
-   [release-plan.md](release-plan.md).
+1. **Dispatch #75, #76 and #77** (above), each from current `main`, with
+   its own reviewer; two `fz-worker` plus one `fz-small`.
+2. **Wave 4 of FZ-13** waits for Andreas's answers to the three questions
+   (given to him in chat on 2026-10-16; also in the first comment on #26):
+   FZ-13m maximize and restore (the key, which panes, what restore returns
+   to), FZ-13n hints that follow focus (whether the footer changes with the
+   focused pane, against the "a key sits beside what it changes" rule),
+   FZ-13o economical folds (one row instead of three, folds remembered
+   between launches, or both).
+3. Then batches 3 and 4 of the "Dispatch order after M1" table in
+   [release-plan.md](release-plan.md); filler candidates are in the log's
+   "Follow-ups found and not ticketed", each needing his OK for an issue.
 
 ## Open with Andreas
 
-- #72's look (above).
-- Rule 6 refetch on recovery: yes or no.
-- **`cache_ttl` is dead config** (found by #74, confirmed by its reviewer):
-  `config.cache_ttl` reaches only `ApiCache::read`, whose one production
-  caller `github::serve_cached` falls back to `read_stale` on the same
-  file, so launch serves the same payload whatever the value; the poll and
-  `R` bypass the cache. README still documents it as a TTL. Remove the key
-  (a config contract change, his) or correct README's sentence.
+- The FZ-13 wave 4 answers (above).
+- #71's and #72's look on `main` whenever he next runs it
+  (`cargo run --release --manifest-path ~/repos/fleetz/Cargo.toml`); the
+  installed binary is still the `main` of 2026-10-10.
 - FZ-13 wave 4 questions on #26; FZ-13s #56 (he said not prioritized).
 - Follow-ups that may become issues (the log's "Follow-ups found and not
   ticketed"): the `o` shell mouse capture (offered 2026-10-09), the

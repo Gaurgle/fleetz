@@ -159,6 +159,16 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-16
 
+#### #72, worktrees section in Info (batch 1 B)
+
+| Ticket | Issue | Ticket commit | Merge | What landed |
+|---|---|---|---|---|
+| Worktrees section in Info (batch 1 B) | #72 | `6fbacce` | `338024e` | Spec `docs/superpowers/specs/2026-10-16-worktrees-section-design.md`, accepted by Andreas ("yes, looks perfect"). `Worktree` gains `detached`, `head`, `dirty`, `head_at`; `parse_worktree_output` keeps detached entries; `git::worktree_state` probes dirty count and last commit time per worktree, concurrently; Info draws a `worktrees` section (branch or `detached @ <sha>`, counters in the badge colours through the new counts-based `badges::counter_color` and `model::counters_text`, age, relative path) and loses the `other worktrees` section; Branches view unchanged. Coordinator rulings: detached worktrees count in the `WT` badge and header count; counters through the counts-based helpers. Two review rounds (round 1 blocker: a row wider than the pane wrapped and shifted the commit list; fixed by bounding the row with the ellipsis, plus a narrow-width test). Look accepted by Andreas 2026-10-16 ("72 is good"). Combined checks on the merged tree, which also carried #73 and #74: fmt, clippy, 1085 tests. Worker `claude-opus-5-5` medium, reviewer `claude-opus-5-5` medium. Review follow-ups are under "Facts later tickets need", Worktrees. Worktree and local branch removed |
+
+```text
+#72: review changes 1; fix cycles 1; owner decisions 2 (spec, look); worker not recorded (dispatched 16:12, Ready to integrate 16:35 the same day, two passes); review not recorded (two rounds inside that span); usage not read
+```
+
 #### #73, one key for "same remote" (filler)
 
 | Ticket | Issue | Ticket commit | Merge | What landed |
