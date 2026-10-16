@@ -164,6 +164,13 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
   already stopped, and no reviewer was running. Nothing was left at Ready to
   integrate and nothing was uncommitted in a ticket worktree.
 
+## Done on 2026-10-16
+
+| Ticket | Issue | Ticket commit | Merge | What landed |
+|---|---|---|---|---|
+| ssh fetch bound (batch 1 A) | #70 | `8a1a5c0` | `5af75ea` | `fetch` passes `-c core.sshCommand=ssh -o ConnectTimeout=10 -o BatchMode=yes` only when none of `GIT_SSH_COMMAND`, `GIT_SSH` (fleetz's environment, `var_os`, empty counts as set) or `core.sshCommand` (one `git config --get` per fetch, inside the same 30 s limit) is set; pure `fetch_ssh_command` decision, `fetch_cmd`, `prepared_fetch_cmd` in `src/git.rs`; `-c` not an env var so a user `GIT_SSH_COMMAND` outranks it. Measured by worker and reviewer against `ssh://git@10.255.255.1/x.git`: before 30.0 s `TimedOut` with an ssh child left running, after 10.0 s `Unreachable` with ssh's own line, no child. Seven new tests, 1069 total. Review accepted first time; follow-up noted: `a_fetch_in_a_repo_without_core_ssh_command_carries_the_ssh_options` reads the machine's git config (the known real-repo-tests follow-up). Worker `claude-opus-5-5` medium, reviewer `claude-opus-5-5` medium. CI green on `main`. Worktree and local branch removed |
+| Info header worktree colour (batch 1 C) | #71 | `f1e679a` | `b441de1` | The header's `N worktree(s)` entry in `local_extra` (`src/ui/detail.rs`) is drawn in `colors::WORKTREE_CLR`, the list badge's lavender, instead of `SUBTEXT`; comment rewritten (one colour per concept); new test `the_header_worktree_count_wears_the_badge_colour`. Merged under the standing "small look changes no longer wait" instruction. Worker `fz-small` resolved as `claude-sonnet-5-5` medium, reviewer `claude-opus-5-5` medium. Review accepted first time. CI green on `main`. Worktree and local branch removed |
+
 ## Done on 2026-10-10
 
 | Ticket | Issue | Ticket commit | Merge | What landed |
@@ -315,8 +322,12 @@ written into the repository.
 
 ## State of `main`
 
-`main` is at the merge of #69, `677e8cc`, plus docs commits, equal to
-`origin/main`, 1061 tests passing and 1 ignored. On 2026-10-10 it gained
+`main` is at the merge of #70, `5af75ea`, equal to `origin/main`, 1069
+tests passing and 1 ignored, CI green. On 2026-10-16 it gained #71 (the
+Info header's worktree count in lavender, a look change merged under the
+standing instruction and not yet seen by Andreas on `main`) and #70 (ssh
+fetches bounded at 10 s). The installed binary is still the `main` of
+2026-10-10 (`677e8cc`). Before that: on 2026-10-10 it gained
 #66 (the strip opens on today, total on the bottom border, look accepted)
 and #69 (archived repos filtered server-side). Since 2026-10-03 it had
 gained #68 (mouse capture reclaimed after a child process), FZ-09b (the
@@ -400,7 +411,8 @@ Each issue holds its evidence.
 ## Worktrees
 
 One exists besides the main checkout, under `.claude/worktrees/`. Every
-ticket worktree of a merged ticket (on 2026-10-10: `issue-66`, `issue-69`;
+ticket worktree of a merged ticket (on 2026-10-16: `ssh-fetch`,
+`info-wt-colour`; on 2026-10-10: `issue-66`, `issue-69`;
 on 2026-10-09: `mouse`, `fz-09b`, `fz-10b`, `fz-10c`, `fz-09d`) is removed
 with its local branch; remote branches stay on GitHub.
 
@@ -409,6 +421,21 @@ with its local branch; remote branches stay on GitHub.
   Andreas until the repository goes public.
 
 ## Next step, and the order after it
+
+**Next step (written 2026-10-16 16:05 CEST, session live):** batch 1's A
+(#70) and C (#71) are Done; nothing is dispatched or in a ticket worktree.
+B, the worktrees section (#72), waits for Andreas to accept its spec,
+`docs/superpowers/specs/2026-10-16-worktrees-section-design.md` (status
+"proposed"); when he does, complete #72's body from the spec, create its
+branch and worktree from current `main` and dispatch one `fz-worker` (allowed
+files `src/git.rs`, `src/model.rs`, `src/main.rs` near `linked_worktrees`,
+`src/ui/detail.rs`, `README.md`); it stops at Ready to integrate for his look.
+The order after that is the "Dispatch order after M1" table in
+[release-plan.md](release-plan.md): batch 2 needs his decisions (fetch rule
+6 for refetch on recovery; the FZ-13 wave 4 questions on #26) and the
+list-row half of the worktree work follows #72. The second worker slot and
+the `fz-small` slot are free; filler candidates are the follow-up list below,
+each needing his OK for an issue. The earlier text follows for the record.
 
 **Next step (written 2026-10-10 at the day's end):** nothing is dispatched,
 Ready or in a worktree. Every ticket Andreas has named is Done (#66, #69).
