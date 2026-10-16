@@ -1,8 +1,8 @@
 # Worktrees section in the Info view
 
 **Date:** 2026-10-16
-**Status:** proposed, waiting for the owner's acceptance (ticket B of batch 1,
-issue #72)
+**Status:** accepted by Andreas on 2026-10-16 ("yes, looks perfect"), ticket
+B of batch 1, issue #72
 
 ## Problem
 
