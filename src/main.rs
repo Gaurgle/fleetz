@@ -1745,7 +1745,7 @@ fn suspend_and_run(
 ) -> Result<(), String> {
     // Leave alternate screen
     disable_raw_mode().map_err(|e| e.to_string())?;
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen).map_err(|e| e.to_string())?;
+    release_terminal(terminal.backend_mut()).map_err(|e| e.to_string())?;
     terminal.show_cursor().map_err(|e| e.to_string())?;
 
     // Run the command
@@ -1765,7 +1765,7 @@ fn suspend_and_run_in_dir(
     dir: &str,
 ) -> Result<(), String> {
     disable_raw_mode().map_err(|e| e.to_string())?;
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen).map_err(|e| e.to_string())?;
+    release_terminal(terminal.backend_mut()).map_err(|e| e.to_string())?;
     terminal.show_cursor().map_err(|e| e.to_string())?;
 
     let expanded = shellexpand::tilde(dir);
@@ -1780,6 +1780,17 @@ fn suspend_and_run_in_dir(
     enable_raw_mode().map_err(|e| e.to_string())?;
     terminal.clear().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Hand the terminal to a child process: mouse capture off, then the
+/// alternate screen left.
+///
+/// The mirror of `reclaim_terminal`. Mouse reporting belongs to the terminal
+/// rather than to a screen (#68), so leaving the alternate screen alone left
+/// fleetz's capture on for the child, which then received mouse events it
+/// never asked for (#82).
+fn release_terminal(out: &mut impl io::Write) -> io::Result<()> {
+    crossterm::execute!(out, DisableMouseCapture, LeaveAlternateScreen)
 }
 
 /// Take the terminal back from a child process that ran in it.
@@ -3722,6 +3733,39 @@ mod tests {
             "reclaim wrote {:?}, without the mouse capture request {:?}",
             String::from_utf8_lossy(&written),
             String::from_utf8_lossy(&capture),
+        );
+    }
+
+    /// Handing the terminal to a child must switch mouse reporting off first,
+    /// or the child inherits fleetz's capture and its own mouse handling
+    /// receives events it did not ask for (#82). The capture-off request has
+    /// to precede leaving the screen, mirroring the reclaim order.
+    #[test]
+    fn releasing_the_terminal_switches_the_mouse_off_before_leaving_the_screen() {
+        let mut capture_off = Vec::new();
+        crossterm::execute!(capture_off, DisableMouseCapture).unwrap();
+        let mut leave = Vec::new();
+        crossterm::execute!(leave, LeaveAlternateScreen).unwrap();
+        let mut written = Vec::new();
+        release_terminal(&mut written).unwrap();
+        let position_of = |needle: &[u8]| {
+            written
+                .windows(needle.len())
+                .position(|window| window == needle)
+        };
+        let off_at = position_of(&capture_off);
+        let leave_at = position_of(&leave);
+        assert!(
+            off_at.is_some() && leave_at.is_some(),
+            "release wrote {:?}, missing the capture-off {:?} or the screen leave {:?}",
+            String::from_utf8_lossy(&written),
+            String::from_utf8_lossy(&capture_off),
+            String::from_utf8_lossy(&leave),
+        );
+        assert!(
+            off_at < leave_at,
+            "release wrote {:?}: the mouse must go off before the screen is left",
+            String::from_utf8_lossy(&written),
         );
     }
 
