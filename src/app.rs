@@ -2205,6 +2205,34 @@ impl App {
         }
     }
 
+    /// Advance the GitHub calendar to the local date, called on every tick
+    /// with the clock. The poll stamps the calendar's `today`, so without
+    /// this the strip drew yesterday as its last live square after midnight
+    /// until the next poll (#78). When the grid shifts by whole weeks, the
+    /// cursor and the scroll follow so they stay on the same dates. A view
+    /// pinned to the newest edge stays pinned, or the new Sunday's column
+    /// would open just off the right edge.
+    pub fn observe_day(&mut self, today: chrono::NaiveDate) {
+        let Some(calendar) = self.github_calendar.as_deref_mut() else {
+            return;
+        };
+        let before = calendar.start();
+        if !calendar.advance_to(today) {
+            return;
+        }
+        let weeks = ((calendar.start() - before).num_days() / 7) as usize;
+        if weeks > 0 {
+            self.contrib_cursor = self.contrib_cursor.map(|c| c.saturating_sub(7 * weeks));
+            let newest_edge =
+                crate::contributions::WEEKS.saturating_sub(self.contrib_visible_weeks.get().max(1));
+            let scroll = self.contrib_scroll.get();
+            if scroll < newest_edge {
+                self.contrib_scroll.set(scroll.saturating_sub(weeks));
+            }
+        }
+        self.needs_redraw = true;
+    }
+
     /// Which half of a manual `r` is running, or None when none is: first its
     /// local sweep, then the GitHub poll it started and the fetches that poll
     /// set off. The spinner and the lit `[r]` key both read this, so neither
@@ -4711,6 +4739,75 @@ mod tests {
         assert_eq!(app.focused_panel, FocusedPanel::Contributions);
         app.toggle_panel_focus_back();
         assert_eq!(app.focused_panel, FocusedPanel::RepoList);
+    }
+
+    /// #78: the tick advances the GitHub calendar to the local date. A
+    /// weekday leaves the cursor on its date, and a Sunday shifts the grid a
+    /// week, so the cursor moves seven slots back to stay on the same day.
+    #[test]
+    fn observe_day_keeps_the_cursor_on_its_date() {
+        use crate::contributions::{Calendar, Source};
+        let d = |s: &str| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+
+        let mut app = make_app(1);
+        // Scrolled back from the newest edge, so the scroll has to follow.
+        app.contrib_visible_weeks.set(20);
+        let tuesday = d("2026-08-18");
+        app.github_calendar = Some(Box::new(Calendar::new(tuesday, Source::Github)));
+        let old_today = app.github_calendar.as_ref().unwrap().today_slot();
+        app.contrib_cursor = Some(old_today);
+        app.contrib_scroll.set(40);
+        app.observe_day(tuesday + chrono::Duration::days(1));
+        assert_eq!(app.contrib_cursor, Some(old_today), "weekday: unchanged");
+        assert_eq!(app.contrib_scroll.get(), 40, "weekday: same weeks shown");
+        assert_eq!(
+            app.github_calendar.as_ref().unwrap().today_slot(),
+            old_today + 1
+        );
+
+        let saturday = d("2026-08-22");
+        app.github_calendar = Some(Box::new(Calendar::new(saturday, Source::Github)));
+        let old_today = app.github_calendar.as_ref().unwrap().today_slot();
+        app.contrib_cursor = Some(old_today);
+        app.observe_day(saturday + chrono::Duration::days(1));
+        assert_eq!(
+            app.contrib_cursor,
+            Some(old_today - 7),
+            "sunday: a week back"
+        );
+        assert_eq!(app.contrib_scroll.get(), 39, "sunday: same weeks shown");
+
+        app.contrib_cursor = Some(3);
+        app.contrib_scroll.set(0);
+        app.observe_day(saturday + chrono::Duration::days(8));
+        assert_eq!(app.contrib_cursor, Some(0), "clamped at the first slot");
+        assert_eq!(app.contrib_scroll.get(), 0);
+    }
+
+    #[test]
+    fn observe_day_without_a_github_calendar_changes_nothing() {
+        let mut app = make_app(1);
+        app.contrib_cursor = Some(12);
+        app.contrib_scroll.set(40);
+        app.observe_day(today() + chrono::Duration::days(1));
+        assert!(app.github_calendar.is_none());
+        assert_eq!(app.contrib_cursor, Some(12));
+        assert_eq!(app.contrib_scroll.get(), 40);
+    }
+
+    /// A strip showing the newest weeks keeps showing them across a Sunday:
+    /// shifting its scroll back with the grid would put the new day's column
+    /// just off the right edge.
+    #[test]
+    fn observe_day_keeps_a_strip_pinned_to_the_newest_week() {
+        use crate::contributions::{Calendar, Source, WEEKS};
+        let saturday = chrono::NaiveDate::from_ymd_opt(2026, 8, 22).unwrap();
+        let mut app = make_app(1);
+        app.github_calendar = Some(Box::new(Calendar::new(saturday, Source::Github)));
+        app.contrib_visible_weeks.set(20);
+        app.contrib_scroll.set(WEEKS - 20);
+        app.observe_day(saturday + chrono::Duration::days(1));
+        assert_eq!(app.contrib_scroll.get(), WEEKS - 20);
     }
 
     /// The grid reads as columns of weeks and rows of weekdays, so the keys
