@@ -1,4 +1,5 @@
-<!-- relay-template: 0.5.2; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
+<!-- relay-template: 0.6.0; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
+<!-- relay-board: owner=Gaurgle project=1 prefix=FZ -->
 # Agent workflow for the release effort
 
 This is a project-specific working agreement for the tickets in
@@ -7,6 +8,28 @@ external publication, dependencies or CI changes by itself. Commits, pushes and
 merges follow the safe-merge rule below.
 The [Fleetz public release Project](https://github.com/users/Gaurgle/projects/1)
 is authoritative for live status, priority, worker and reviewer assignment.
+
+## The board
+
+Every Relay board has the same shape, so tickets read the same in every
+project. The second line of this file names the board for
+`scripts/relay-board`.
+
+- Every ticket is a GitHub issue in this repo, never a draft item, so it has a
+  number, can carry a milestone and closes with `Closes #<n>`.
+- Every title starts with the ticket id: `FZ-<n>: <summary>`, bugs and
+  review follow-ups included. Take the number from `scripts/relay-board
+  next`, never from memory.
+- A letter suffix (`FZ-05a`) marks a planned split of one ticket. A follow-up
+  found later gets a new number and names the original as its parent issue.
+- Status: Backlog, Ready, In progress, Review, Ready to integrate, Done.
+- Fields: Priority (P0, P1, P2), Worker and Ticket reviewer (text: agent,
+  model and effort), and the built-in Milestone (the release plan's M0 to
+  M5). A ticket needs a priority and a milestone before it is Ready.
+
+The lead runs `scripts/relay-board check` on start. It fixes ids and fields on
+the tickets it creates and reports the rest; converting drafts and changing
+the board's fields or statuses are the owner's call.
 
 ## Lead ownership and carried authorization
 

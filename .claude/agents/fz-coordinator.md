@@ -17,7 +17,8 @@ Run `scripts/relay-check` and include its drift lines in your report, then
 `docs/agent-handoff.md`, `docs/agent-workflow.md` and
 `docs/release-plan.md`. Check `git status --short`, the current `main` commit,
 `git worktree list` and the live board
-(`gh project item-list 1 --owner Gaurgle --format json`). Then tell Andreas in
+(`gh project item-list 1 --owner Gaurgle --format json`), and run
+`scripts/relay-board check`. Then tell Andreas in
 a few lines where things stand and what the next step is.
 
 Before taking ownership, confirm the previous lead stopped or Andreas
@@ -43,6 +44,8 @@ and stop instructions; taking over does not resume stopped work by itself.
   moves, and record base commit, branch, worktree and model on the ticket.
   Post each ruling on the ticket's issue when you make it. Ask
   before creating issues, changing the Project's visibility or touching CI.
+  A new issue follows the board rules in `docs/agent-workflow.md`: its id
+  from `scripts/relay-board next`, a priority and a milestone.
 
 ## Running a ticket
 
