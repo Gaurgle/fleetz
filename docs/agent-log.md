@@ -200,6 +200,26 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-10-17
+
+- **#78 (FZ-13y), the GitHub contribution strip observes the local day
+  change.** Merged `84a06b7` at 17:03 CEST; ticket commit `ad9b538`
+  (reviewed diff `4ee4b569`), branch `fix/78-strip-day-change` from
+  `59f509e`. Reported by Andreas as "not adding a date square for the new
+  day", later confirmed by him to update once a poll ran; the GitHub
+  calendar's `today` was stamped at poll time and nothing re-read it. Now
+  `Calendar::advance_to` re-dates it in place on the tick
+  (`App::observe_day`): the new day appears empty, a Sunday shifts the
+  grid a column with every date keeping its count and level, the cursor
+  stays on its date, a strip at the newest edge stays pinned (coordinator
+  ruling over the literal scope text). Review 1 accepted with a surviving
+  mutant (no test caught a stale level on a new day); fix cycle 1 added
+  the assertions in the ticket's own tests; review 2 accepted. Branch CI
+  green; combined check on `3d55d73` 1097 tests; `main` CI green. Swept.
+  Follow-ups: the double cursor shift when a poll straddles a Sunday
+  midnight; the local strip's `repo.daily` across a Sunday.
+  `#78: review changes 1; fix cycles 1; owner decisions 0; worker 7; review 4; usage not read`
+
 ### Merged on 2026-10-16
 
 #### #77, remove the inert cache_ttl key (batch 2)
@@ -729,6 +749,35 @@ text come from the new counts-based helpers `badges::counter_color` and
   so he was asked. A signed-out `R` that behaves like a signed-out launch
   (O7: the newest saved copy) is a follow-up he did not ask for.
 
+### Questions of 2026-10-17 and the answers
+
+Given to Andreas in chat at about 16:50 after "give me all questions that
+needs to be answered"; his answers (verbatim in the handoff, "Authorized by
+the owner", 16:58) are in brackets.
+
+1. Ticket naming: retitle #70 to #79 under their epics and keep the FZ ids
+   going? [yes; done]
+2. #79 wording: accept the example now, or look at the branch build first;
+   and the "only past one poll interval" ruling? [branch build first; show
+   it always; form (a) `offline at 12:02, as of 11:02`]
+3. Batch 3: OK to start, and in what order? #67 has an issue; FZ-14, FZ-15,
+   FZ-16 need a spec each first. [yes, order the coordinator's]
+4. FZ-13m maximize and restore: which key, which panes, what restore
+   returns to? [the last saved config would be restored, if possible]
+5. FZ-13n hints that follow focus, against the "a key sits beside what it
+   changes" rule? [try it, yes]
+6. FZ-13o economical folds: one row, remembered folds, or both? [yes,
+   economical]
+7. The `o` shell mouse capture as an issue? [ok]
+8. One measure for width (ratatui's) as an issue? [ok]
+9. Ref query cost at 20,000 refs as an issue? [ok]
+10. The small review follow-ups: one issue each, an umbrella, or leave
+    them? [ok, coordinator's cut]
+11. #46: fix (edits an existing test) or close? [close, note it]
+12. #45 parked, #56 unprioritized, #61 unpromoted: still right? [yes]
+13. The #77 ruling (deleted precondition assertion) stands? [ok]
+14. Release scope proposal? [later]
+
 ### Decisions of 2026-10-03 that later tickets inherit
 
 - **A signed-out `R` fails and says so** (Andreas, "Merge as it is"): see
@@ -940,6 +989,27 @@ text come from the new counts-based helpers `badges::counter_color` and
   review:** mouse capture stays on while the `o` shell runs (junk mouse input
   in that shell; an issue was offered 2026-10-09, unanswered). **From #60's
   review:** the `start_account_rebuild` test.
+- **From #78 (2026-10-17):** a poll started before a Saturday-to-Sunday
+  midnight that lands after the tick advanced installs a Saturday-dated
+  calendar; the next tick advances it again and the cursor moves back
+  seven slots twice. The local strip's `repo.daily` is indexed by the slot
+  of the sweep that built it, so the local source across a Sunday with
+  watch off is a week off until the next sweep. `observe_day` acts only on
+  the GitHub calendar.
+- **FZ-02 regression with no teeth (#46, closed 2026-10-17 by Andreas:
+  "close it, but note it if something would break later on"):**
+  `a_failed_poll_mid_sweep_leaves_github_fields_and_lands_the_sweep` in
+  `src/main.rs` snapshots after the good poll, so it also passes on code
+  that lets a sweep overwrite GitHub-owned fields. If that rule breaks
+  later, this test will not say so; the other FZ-02 regression still
+  covers the first acceptance criterion.
+- **`scripts/relay-sweep` removes an unstarted ticket worktree** (found
+  2026-10-17): a clean worktree whose branch has no commits has its tip in
+  `origin/main`, so the sweep after #78's merge also removed #79's
+  worktree and branch, which were waiting on an owner answer. Nothing was
+  lost; the worktree was recreated on the new `main`. The sweeper should
+  keep a branch whose tip is the base of a worktree with no commits, or
+  the coordinator should not sweep while a ticket is parked at base.
 
 ### Practical notes (longer list)
 

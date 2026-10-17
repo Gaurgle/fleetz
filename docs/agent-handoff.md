@@ -39,6 +39,26 @@ leads".
 Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it.
 
+- **2026-10-17, about 16:58.** Answers to the coordinator's numbered list
+  (given in chat; the list is reproduced in the log, "Questions of
+  2026-10-17"): "1. yes" (retitle #70 to #79 under their epics and keep
+  the FZ ids going; done at 17:00: FZ-04a #70, FZ-13v #71, FZ-13w #72,
+  FZ-05h #73, FZ-13x #75, FZ-04b #76, FZ-09g #77, FZ-13y #78, FZ-03a #79;
+  #74 stays plain as a one-off); "2 i think look at thr branch build
+  first? always use "ago" even if 0 minutes", then a paste of option (a)
+  alone, then "yes" to the coordinator's reading: #79 takes form (a)
+  `⚠ github offline at 12:02, as of 11:02`, shown always with no
+  threshold, and stops at Ready to integrate for his look; "3. yes, you
+  decide order" (batch 3 may start: #67, FZ-14, FZ-15, FZ-16, order the
+  coordinator's); "4. the last saved config would be restored, if
+  possible." (FZ-13m restore target); "5. lets try it out, yes." (FZ-13n
+  hints follow focus); "6. yes, economical" (FZ-13o); "7-10. ok with me,
+  i trust." (issues may be created for the `o` shell mouse capture, one
+  measure for width, the ref query cost, and the small review follow-ups;
+  how to cut them is the coordinator's); "11. close it, but note it if
+  something would break later on." (#46 closed 17:03 with the note);
+  "12. yes" (#45 parked, #56 unprioritized, #61 unpromoted); "13. ok"
+  (the #77 ruling stands); "14. lets do this later." (release scope).
 - **2026-10-17, about 16:47.** "ok to create the header issue too", then
   "give me all questions that needs to be answered". The coordinator reads
   the first as create and run, like #78 ("too"): issue #79 created and
@@ -201,33 +221,23 @@ The worktrees of #72 (`worktrees-section`), #73 (`one-remote-key`) and #74
 
 ## In flight
 
-- **#78, the GitHub strip observes the local day change.** In Review since
-  2026-10-17 about 16:58 CEST; dispatched 16:48 under the 16:45 owner
-  entry. Base `59f509e`, branch `fix/78-strip-day-change`, worktree
-  `.claude/worktrees/issue-78`, worker `fz-worker` (`claude-opus-5-5`,
-  medium) finished: uncommitted diff in `src/contributions.rs`,
-  `src/app.rs`, `src/main.rs` (213 added lines, no untracked files, 1097
-  tests). One ruling posted on the issue (a strip at the newest edge stays
-  pinned on a Sunday shift) and two follow-ups for the log (the double
-  cursor shift when a poll straddles a Sunday midnight; the local strip's
-  `repo.daily` across a Sunday). Reviewer `fz-reviewer` running. Small look
-  change: merges under the safe-merge rule once accepted. A worker or
-  reviewer whose session died leaves no report on the issue; the diff stays
-  in the worktree.
-- **#79, the header dates the failed attempt.** Ready, blocked on wording,
-  since 2026-10-17 about 17:00 CEST. Dispatched 16:49 under the 16:47 owner
-  entry; the worker stopped without changing a file because the ticket's
-  examples used a relative age (`as of 3h`, from the contract's "wording
-  open" placeholder) where the shipped form is a clock time and
-  `swept_label` refuses relative ages by design. Options (a) `offline at
-  12:02, as of 11:02`, (b) `offline (tried 12:02), as of 11:02`, (c) a
-  relative age with a new formatter, are on the issue; the coordinator
-  recommends (a). After the answer: restate the acceptance strings in the
-  issue body in clock form, note that `README.md` lines 45 to 51 need the
-  example and that `github_freshness_segment(&freshness, now)` keeps its
-  signature (tests in `src/main.rs` call it), then re-dispatch from the
-  same worktree (`.claude/worktrees/issue-79`, branch
-  `feat/79-header-attempt-age`, base `59f509e`, clean).
+- **#79 (FZ-03a), the header dates the failed attempt.** Ready, stopped
+  at the existing-test rule, 2026-10-17 about 17:05 CEST. Form (a) shown
+  always (owner entry 16:58; the amendment comment on the issue replaces
+  the body's examples and criteria). The second worker pass found that
+  `GithubFreshness::failed` always sets `last_attempt`, so four existing
+  header tests in `src/ui/mod.rs` (lines 1873, 1890, 1950, 2001) would
+  show the stamp and need their expected strings changed; the stop
+  comment on the issue lists them and asks Andreas for (A) update the four
+  strings only, (B) make the stamp conditional, (C) other. The coordinator
+  recommends (A). On his answer: re-dispatch into the worktree
+  `.claude/worktrees/issue-79`, branch `feat/79-header-attempt-age`,
+  **base `84a06b7`** (recreated after the sweep removed the unstarted
+  worktree, see the log's follow-ups), allowed files plus `src/app.rs` for
+  the `last_attempt` doc comment only. Stops at Ready to integrate for
+  his look at the branch build.
+
+#78 is Done (merged `84a06b7`, record in the log).
 
 #75, #76 and #77 are Done; one owner-visible ruling on #77 (the deleted
 precondition assertion in
@@ -237,42 +247,45 @@ The records are in the log.
 
 ## Next step, and the order after it
 
-1. **Andreas's idea of 2026-10-16 (about 17:50), not yet an issue:** with
-   watch off, a failed launch poll leaves `⚠ github offline, as of 3h` in
-   the header indefinitely; the failure kind reads as present tense though
-   the attempt may be hours old and nothing retries. The coordinator
-   offered three options in chat (date the failure too, for example
-   `⚠ github offline 2h ago, as of 3h`, recommended; add "press r", which
-   fights the "a key sits beside what it changes" rule; retry slowly with
-   watch off, rejected because the eye means "not polling") and asked for
-   an OK to create an issue for the first. A freshness amendment and a look
-   change: his acceptance either way. No answer yet.
-2. **Wave 4 of FZ-13** waits for Andreas's answers to the three questions
-   (given to him in chat on 2026-10-16; also in the first comment on #26):
-   FZ-13m maximize and restore (the key, which panes, what restore returns
-   to), FZ-13n hints that follow focus (whether the footer changes with the
-   focused pane, against the "a key sits beside what it changes" rule),
-   FZ-13o economical folds (one row instead of three, folds remembered
-   between launches, or both).
-3. Then batches 3 and 4 of the "Dispatch order after M1" table in
-   [release-plan.md](release-plan.md); filler candidates are in the log's
-   "Follow-ups found and not ticketed", each needing his OK for an issue.
+All under the 2026-10-17 16:58 owner entry unless noted.
+
+1. **#79** on Andreas's (A)/(B)/(C) answer: re-dispatch, review, commit,
+   push, CI, combined check, then Ready to integrate for his look.
+2. **Batch 3, order the coordinator's:** #67 CI pane first (an issue
+   exists; it is design-heavy, so a spec under `docs/superpowers/specs/`
+   goes to Andreas before any worker), then FZ-14 attention view, FZ-15
+   changes since seen, FZ-16 handoffs, each spec first. Two `fz-worker`
+   slots plus one `fz-small`.
+3. **FZ-13 wave 4,** answers in hand: FZ-13m maximize and restore (restore
+   returns to the last saved layout if possible; the key and the panes are
+   the coordinator's to propose in the spec), FZ-13n hints that follow
+   focus (try it), FZ-13o economical folds (one row instead of three;
+   remembered folds ride with FZ-13m's saved layout). Issues to create
+   with the FZ-13 letters after `y`.
+4. **Follow-up issues** (7 to 10 of the list): the `o` shell mouse
+   capture, one measure for width, the ref query cost at 20,000 refs
+   (batch 4 material, measured), the small review follow-ups cut into
+   reviewable tickets (the fetch-outcome items as one; the settings-save
+   cursor reset as one; test sharpening as one `fz-small`). Fillers for a
+   free slot.
+5. Batch 4 (FZ-12, FZ-11, the ref query cost), each measured against the
+   FZ-01 baseline. Release scope: later, when Andreas asks.
 
 ## Open with Andreas
 
-- The FZ-13 wave 4 answers (above).
-- #71's and #72's look on `main` whenever he next runs it
+- #79: (A), (B) or (C) on the four existing tests (the stop comment on
+  the issue); then his look at the branch build.
+- The look of #71, #72, #75 and #78 on `main` whenever he next runs it
   (`cargo run --release --manifest-path ~/repos/fleetz/Cargo.toml`); the
   installed binary is still the `main` of 2026-10-10.
-- FZ-13 wave 4 questions on #26; FZ-13s #56 (he said not prioritized).
-- Follow-ups that may become issues (the log's "Follow-ups found and not
-  ticketed"): the `o` shell mouse capture (offered 2026-10-09), the
-  settings-save cursor reset, the `start_account_rebuild` test, and the
-  rest of the list.
 - Before the repository goes public: `docs/ideas.md` names one of his
   private repositories in an older note (told to him 2026-10-02).
-- Not blocking: #46 (edits an existing test); #45 parked; FZ-08 #21 not to
-  be started; #67 not authorized to start.
+- The two config changes of 2026-10-01 that are his to make (the stale
+  `autoMode.environment` block; the allow rules in
+  `.claude/settings.local.json`); reminded 2026-10-17, no answer yet.
+- Not blocking, confirmed 2026-10-17: #45 parked until public, #56 not
+  prioritized, #61 not promoted, FZ-08 #21 not to be started. Release
+  scope: later.
 
 ## Practical notes
 
