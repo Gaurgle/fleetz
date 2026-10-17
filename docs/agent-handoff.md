@@ -248,6 +248,14 @@ The worktrees of #72 (`worktrees-section`), #73 (`one-remote-key`) and #74
   integrate for his look at the branch build. The worktree holds the
   uncommitted diff; the sweep keeps it.
 
+- **#82 (FZ-16a), hand the terminal to a child with mouse capture off.**
+  In progress since 2026-10-17 17:25 CEST under the 16:58 owner entry
+  ("7-10. ok with me, i trust."; the `o` shell follow-up from #68). Base
+  `3c4dcf0`, branch `fix/82-release-mouse-capture`, worktree
+  `.claude/worktrees/issue-82`, `fz-small` (`sonnet`, medium), file
+  `src/main.rs` only. Then `fz-reviewer`, commit, push, CI, combined
+  check, merge (nothing on screen).
+
 #78 and #80 are Done (merged `84a06b7` and `3c4dcf0`, records in the log).
 
 #75, #76 and #77 are Done; one owner-visible ruling on #77 (the deleted
