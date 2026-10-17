@@ -115,18 +115,12 @@ can create or expand it.
   good. lets get started". Three slots are in force (two `fz-worker` plus
   one `fz-small`). A ticket that changes the screen stops at Ready to
   integrate for his look, except as "small look changes" below says.
-- **2026-10-10, 12:46 and 12:52.** "go with c": triage and dispatch #66,
-  one worker and one reviewer; "all looks good": the second existing-test
-  edit on #66 and the M1 checkpoint confirmed. Both Done.
-- **2026-10-03, about 18:00.** "good! all ok from me." to three open
-  questions (try FZ-13d, one test arm in FZ-13u, the standing instructions).
-- **2026-10-02.** "Retired, take over" about two older sessions; "Both
-  hold" to the standing instructions below.
 - **2026-10-01.** Commits, pushes and merges delegated to the coordinator
   under the safe-merge rule in [agent-workflow.md](agent-workflow.md).
 
-One-time releases on finished tickets (#60, #58, #48, FZ-13t, FZ-13u) are
-spent; their text is in the log, "Rulings and one-time releases".
+Spent entries (2026-10-02 to 2026-10-10) and the one-time releases on
+finished tickets are in the log, "Owner authority before 2026-10-16" and
+"Rulings and one-time releases".
 
 ## Authority and routing
 

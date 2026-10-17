@@ -679,6 +679,19 @@ to the Relay 0.4.0 shape (lead, authority, in flight, decisions, next step).
 The handoff points here. The "Follow-ups found and not ticketed" list is
 live: strike an entry here when its ticket lands.
 
+### Owner authority before 2026-10-16 (moved from the handoff 2026-10-17)
+
+Spent entries, verbatim as the handoff carried them; the dispatches they
+covered are Done.
+
+- **2026-10-10, 12:46 and 12:52.** "go with c": triage and dispatch #66,
+  one worker and one reviewer; "all looks good": the second existing-test
+  edit on #66 and the M1 checkpoint confirmed. Both Done.
+- **2026-10-03, about 18:00.** "good! all ok from me." to three open
+  questions (try FZ-13d, one test arm in FZ-13u, the standing instructions).
+- **2026-10-02.** "Retired, take over" about two older sessions; "Both
+  hold" to the standing instructions in the handoff.
+
 ### Rulings and one-time releases on finished tickets
 
 Owner releases here were given for single tickets that are Done; they do
@@ -1007,9 +1020,13 @@ the owner", 16:58) are in brackets.
   2026-10-17): a clean worktree whose branch has no commits has its tip in
   `origin/main`, so the sweep after #78's merge also removed #79's
   worktree and branch, which were waiting on an owner answer. Nothing was
-  lost; the worktree was recreated on the new `main`. The sweeper should
-  keep a branch whose tip is the base of a worktree with no commits, or
-  the coordinator should not sweep while a ticket is parked at base.
+  lost; the worktree was recreated on the new `main`. Andreas: "we cant
+  just delete things without knowing we are done with it." Fixed in
+  `d2adb8d`: the sweep now requires the branch tip to be the second parent
+  of a merge commit on `origin/main`, which only a `--no-ff` merged ticket
+  has; it reports an unstarted or squash-merged branch as kept. The Relay
+  template's copy of the script (the `relay` skill in `~/claude-config`,
+  0.5.2) has the same hole and is Andreas's to fix or to have fixed.
 
 ### Practical notes (longer list)
 
