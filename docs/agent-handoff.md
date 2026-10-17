@@ -201,24 +201,33 @@ The worktrees of #72 (`worktrees-section`), #73 (`one-remote-key`) and #74
 
 ## In flight
 
-- **#78, the GitHub strip observes the local day change.** In progress,
-  dispatched 2026-10-17 16:48 CEST under the 16:45 owner entry. Base
-  `59f509e`, branch `fix/78-strip-day-change`, worktree
-  `.claude/worktrees/issue-78`, `fz-worker` (`claude-opus-5-5`, medium).
-  Allowed files and the design are in the issue and its assignment comment.
-  Reviewer `fz-reviewer` after the worker reports. Small look change: merges
-  under the safe-merge rule once reviewed. If a lead takes over mid-ticket:
-  check the worktree for uncommitted changes and whether a worker report
-  was posted on the issue; a worker whose session died leaves its diff in
-  the worktree and no report.
-- **#79, the header dates the failed attempt.** In progress, dispatched
-  2026-10-17 16:49 CEST under the 16:47 owner entry, second worker slot.
-  Base `59f509e`, branch `feat/79-header-attempt-age`, worktree
-  `.claude/worktrees/issue-79`, `fz-worker` (`claude-opus-5-5`, medium).
-  Files `src/ui/mod.rs` and `docs/freshness-contract.md`; shares nothing
-  with #78. One coordinator ruling in the issue: the attempt age shows only
-  past one poll interval. Wording acceptance open with Andreas; stops at
-  Ready to integrate without it.
+- **#78, the GitHub strip observes the local day change.** In Review since
+  2026-10-17 about 16:58 CEST; dispatched 16:48 under the 16:45 owner
+  entry. Base `59f509e`, branch `fix/78-strip-day-change`, worktree
+  `.claude/worktrees/issue-78`, worker `fz-worker` (`claude-opus-5-5`,
+  medium) finished: uncommitted diff in `src/contributions.rs`,
+  `src/app.rs`, `src/main.rs` (213 added lines, no untracked files, 1097
+  tests). One ruling posted on the issue (a strip at the newest edge stays
+  pinned on a Sunday shift) and two follow-ups for the log (the double
+  cursor shift when a poll straddles a Sunday midnight; the local strip's
+  `repo.daily` across a Sunday). Reviewer `fz-reviewer` running. Small look
+  change: merges under the safe-merge rule once accepted. A worker or
+  reviewer whose session died leaves no report on the issue; the diff stays
+  in the worktree.
+- **#79, the header dates the failed attempt.** Ready, blocked on wording,
+  since 2026-10-17 about 17:00 CEST. Dispatched 16:49 under the 16:47 owner
+  entry; the worker stopped without changing a file because the ticket's
+  examples used a relative age (`as of 3h`, from the contract's "wording
+  open" placeholder) where the shipped form is a clock time and
+  `swept_label` refuses relative ages by design. Options (a) `offline at
+  12:02, as of 11:02`, (b) `offline (tried 12:02), as of 11:02`, (c) a
+  relative age with a new formatter, are on the issue; the coordinator
+  recommends (a). After the answer: restate the acceptance strings in the
+  issue body in clock form, note that `README.md` lines 45 to 51 need the
+  example and that `github_freshness_segment(&freshness, now)` keeps its
+  signature (tests in `src/main.rs` call it), then re-dispatch from the
+  same worktree (`.claude/worktrees/issue-79`, branch
+  `feat/79-header-attempt-age`, base `59f509e`, clean).
 
 #75, #76 and #77 are Done; one owner-visible ruling on #77 (the deleted
 precondition assertion in
