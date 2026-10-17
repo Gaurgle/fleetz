@@ -39,6 +39,13 @@ leads".
 Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it.
 
+- **2026-10-17, about 16:47.** "ok to create the header issue too", then
+  "give me all questions that needs to be answered". The coordinator reads
+  the first as create and run, like #78 ("too"): issue #79 created and
+  dispatched in the second worker slot. The header wording is still his:
+  #79 stops at Ready to integrate unless he accepts the example
+  (`⚠ github offline 2h ago, as of 3h`) in chat first. He may correct the
+  reading; nothing merges without the wording answer.
 - **2026-10-17, about 16:45.** Andreas reported the GitHub contribution
   strip not adding the new day's square across midnight, then "i was wrong,
   it did update" (a poll had run). The coordinator offered (1) leave it,
@@ -204,6 +211,14 @@ The worktrees of #72 (`worktrees-section`), #73 (`one-remote-key`) and #74
   check the worktree for uncommitted changes and whether a worker report
   was posted on the issue; a worker whose session died leaves its diff in
   the worktree and no report.
+- **#79, the header dates the failed attempt.** In progress, dispatched
+  2026-10-17 16:49 CEST under the 16:47 owner entry, second worker slot.
+  Base `59f509e`, branch `feat/79-header-attempt-age`, worktree
+  `.claude/worktrees/issue-79`, `fz-worker` (`claude-opus-5-5`, medium).
+  Files `src/ui/mod.rs` and `docs/freshness-contract.md`; shares nothing
+  with #78. One coordinator ruling in the issue: the attempt age shows only
+  past one poll interval. Wording acceptance open with Andreas; stops at
+  Ready to integrate without it.
 
 #75, #76 and #77 are Done; one owner-visible ruling on #77 (the deleted
 precondition assertion in
