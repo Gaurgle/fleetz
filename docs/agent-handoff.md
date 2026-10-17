@@ -39,6 +39,14 @@ leads".
 Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it.
 
+- **2026-10-17, about 16:45.** Andreas reported the GitHub contribution
+  strip not adding the new day's square across midnight, then "i was wrong,
+  it did update" (a poll had run). The coordinator offered (1) leave it,
+  (2) ticket it as a filler for a free slot, not ahead of batch 3, and asked
+  whether to create the issue. Andreas: "yeah, lets go with 2." The
+  coordinator reads it as: create the issue (#78) and run it in a free
+  slot; all slots were free, so it was dispatched at once. A small look
+  change under the 2026-10-02 standing instruction.
 - **2026-10-16, about 17:33.** After the baton had been released and the
   coordinator had asked for #72's look, rule 6, the wave 4 questions and
   `cache_ttl`, Andreas wrote: "72 is good. Rule 6 yes for refetch (is good,
@@ -186,13 +194,22 @@ The worktrees of #72 (`worktrees-section`), #73 (`one-remote-key`) and #74
 
 ## In flight
 
-Nothing in flight. #75, #76 and #77 are Done (see Baton). The dispatch was
-under the 17:33 owner entry, each from `b7ff095`, each with its own
-reviewer. One owner-visible ruling beyond the ticket text: #77 deletes the
-precondition assertion `assert!(cache.read().is_none())` in
-`startup_serves_an_expired_payload_rather_than_waiting_on_the_network`
-(under "do what you need for cache_ttl"); Andreas may override it. The
-records, including the rulings, are in the log.
+- **#78, the GitHub strip observes the local day change.** In progress,
+  dispatched 2026-10-17 16:48 CEST under the 16:45 owner entry. Base
+  `59f509e`, branch `fix/78-strip-day-change`, worktree
+  `.claude/worktrees/issue-78`, `fz-worker` (`claude-opus-5-5`, medium).
+  Allowed files and the design are in the issue and its assignment comment.
+  Reviewer `fz-reviewer` after the worker reports. Small look change: merges
+  under the safe-merge rule once reviewed. If a lead takes over mid-ticket:
+  check the worktree for uncommitted changes and whether a worker report
+  was posted on the issue; a worker whose session died leaves its diff in
+  the worktree and no report.
+
+#75, #76 and #77 are Done; one owner-visible ruling on #77 (the deleted
+precondition assertion in
+`startup_serves_an_expired_payload_rather_than_waiting_on_the_network`,
+under "do what you need for cache_ttl") stands unless Andreas overrides it.
+The records are in the log.
 
 ## Next step, and the order after it
 
