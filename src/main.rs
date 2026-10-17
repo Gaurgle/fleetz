@@ -867,6 +867,7 @@ async fn run_event_loop(
         match ev {
             AppEvent::Tick => {
                 app.on_tick();
+                app.observe_day(chrono::Local::now().date_naive());
                 // Drop a status message once it's outlived its TTL, so it
                 // fades on its own rather than sitting frozen until the next
                 // keypress.

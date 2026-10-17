@@ -212,6 +212,34 @@ impl Calendar {
         self.today_slot() + 1
     }
 
+    /// Move `today` forward to the local date, so the strip gains the new
+    /// day between polls (#78). Returns false, changing nothing, unless
+    /// `today` is later than the calendar's own.
+    ///
+    /// When `grid_start` moves, the grid shifts back by those whole weeks so
+    /// every date keeps its count and level; the oldest columns fall off.
+    /// The days that become live are empty until a poll fills them. A jump
+    /// wider than the grid keeps nothing, which is the same as a new empty
+    /// calendar on that date. Allocation-free: it runs on the tick.
+    pub fn advance_to(&mut self, today: NaiveDate) -> bool {
+        if today <= self.today {
+            return false;
+        }
+        let old_live = self.live();
+        let start = grid_start(today);
+        let shift = ((start - self.start).num_days() as usize).min(SLOTS);
+        self.counts.copy_within(shift.., 0);
+        self.counts[SLOTS - shift..].fill(0);
+        self.levels.copy_within(shift.., 0);
+        self.levels[SLOTS - shift..].fill(None);
+        self.start = start;
+        self.today = today;
+        let new_days = old_live.saturating_sub(shift)..self.live();
+        self.counts[new_days.clone()].fill(0);
+        self.levels[new_days].fill(None);
+        true
+    }
+
     pub fn add(&mut self, date: NaiveDate, count: u32) {
         if let Some(slot) = self.slot(date) {
             self.counts[slot] += count;
@@ -713,5 +741,102 @@ mod tests {
             rotation_tick(at(base + ROTATION_HOLD_SECS)),
             "the tick failed to advance at the hold boundary"
         );
+    }
+
+    /// #78: the poll stamps `today`, so after midnight the strip kept
+    /// drawing yesterday as its last live square until the next poll. A
+    /// weekday advance adds the new day empty and keeps every count.
+    #[test]
+    fn advancing_a_weekday_adds_the_new_day_empty() {
+        let today = d("2026-08-18"); // Tuesday
+        let mut cal = Calendar::new(today, Source::Github);
+        cal.set(today, 5);
+        cal.set_level(today, 2);
+        cal.set(today - Duration::days(1), 9);
+        cal.set_level(today - Duration::days(1), 4);
+        let old_slot = cal.today_slot();
+        let tomorrow = today + Duration::days(1);
+        // A stale shade on the future slot must not survive onto the new day.
+        cal.set_level(tomorrow, 2);
+
+        assert!(cal.advance_to(tomorrow));
+        assert_eq!(cal.today_slot(), old_slot + 1);
+        let slot = cal.slot(tomorrow).unwrap();
+        assert_eq!(cal.day_at(slot / 7, slot % 7), Some((tomorrow, 0)));
+        assert_eq!(at(&cal, tomorrow), 0);
+        let slot = cal.slot(today).unwrap();
+        assert_eq!(cal.day_at(slot / 7, slot % 7), Some((today, 5)));
+        assert_eq!(at(&cal, today), 2);
+        let yesterday = today - Duration::days(1);
+        let slot = cal.slot(yesterday).unwrap();
+        assert_eq!(cal.day_at(slot / 7, slot % 7), Some((yesterday, 9)));
+        assert_eq!(at(&cal, yesterday), 4);
+        assert_eq!(cal.source(), Source::Github);
+    }
+
+    #[test]
+    fn advancing_to_the_same_or_an_earlier_day_changes_nothing() {
+        let today = d("2026-08-18");
+        let mut cal = Calendar::new(today, Source::Github);
+        cal.set(today, 5);
+        cal.set_level(today, 2);
+        let (start, slot) = (cal.start(), cal.today_slot());
+        assert!(!cal.advance_to(today));
+        assert!(!cal.advance_to(today - Duration::days(1)));
+        assert_eq!((cal.start(), cal.today_slot()), (start, slot));
+        assert_eq!(cal.day_at(slot / 7, slot % 7), Some((today, 5)));
+        assert_eq!(at(&cal, today), 2);
+    }
+
+    /// Crossing into a Sunday moves `grid_start` a week, so the grid shifts
+    /// back one column and every date keeps its own count and level.
+    #[test]
+    fn advancing_into_a_sunday_shifts_the_grid_a_week() {
+        let today = d("2026-08-22"); // Saturday
+        let mut cal = Calendar::new(today, Source::Github);
+        let old_start = cal.start();
+        let marker = old_start + Duration::days(7);
+        cal.set(marker, 77);
+        cal.set_level(marker, 3);
+        cal.set(today, 6);
+        cal.set_level(today, 1);
+        // The old slot the new Sunday lands on after the shift: a shift that
+        // left it in place would draw last Sunday's shade on the new day.
+        let last_sunday = today - Duration::days(6);
+        let new_sunday_slot = (last_sunday - old_start).num_days() as usize;
+        cal.set(last_sunday, 8);
+        cal.set_level(last_sunday, 4);
+
+        let sunday = today + Duration::days(1);
+        assert!(cal.advance_to(sunday));
+        assert_eq!(cal.start(), old_start + Duration::days(7));
+        assert_eq!(cal.slot(marker), Some(0));
+        assert_eq!(cal.day_at(0, 0), Some((marker, 77)));
+        assert_eq!(cal.level_at(0, 0), 3);
+        let slot = cal.slot(today).unwrap();
+        assert_eq!(cal.day_at(slot / 7, slot % 7), Some((today, 6)));
+        assert_eq!(at(&cal, today), 1);
+        assert_eq!(cal.today_slot(), slot + 1);
+        let slot = cal.slot(sunday).unwrap();
+        assert_eq!(slot, new_sunday_slot);
+        assert_eq!(cal.day_at(slot / 7, slot % 7), Some((sunday, 0)));
+        assert_eq!(at(&cal, sunday), 0);
+        assert_eq!(at(&cal, last_sunday), 4, "last Sunday moved with its level");
+        assert_eq!(cal.total(), 77 + 6 + 8);
+    }
+
+    /// A jump wider than the grid keeps nothing: the calendar starts empty
+    /// on the new date and the next poll refills it.
+    #[test]
+    fn advancing_past_the_whole_grid_starts_empty() {
+        let today = d("2026-08-18");
+        let mut cal = Calendar::new(today, Source::Github);
+        cal.set(today, 5);
+        let later = today + Duration::days(SLOTS as i64 + 30);
+        assert!(cal.advance_to(later));
+        assert_eq!(cal.start(), grid_start(later));
+        assert_eq!(cal.slot(later), Some(cal.today_slot()));
+        assert_eq!(cal.total(), 0);
+        assert_eq!(cal.source(), Source::Github);
     }
 }
