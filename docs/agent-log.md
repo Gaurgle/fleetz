@@ -16,6 +16,49 @@ instead; a note marks each place.
 Lead records older than the most recent session, newest first, as they stood
 in the handoff's "Baton" section.
 
+**Released** 2026-10-16 about 18:40 CEST by `claude-fable-5-1` (`claude
+--agent fz-coordinator`, session `0bb15090-2029-4863-be6e-4e690d6882e5`),
+which held it from 17:42 CEST. Andreas opened with "you got the baton, start
+work." and at about 18:30 wrote "you can start closing up the current
+tickets, dont start any new today. then let me know, im going out".
+No worker, reviewer, build or background job was running at the release.
+
+- **Closed on 2026-10-16.** #75 (`c7e3395`), #76 (`5dad29a`), #77 (`57b885c`),
+  all merged with `--no-ff`, each with its branch CI green and a combined
+  check on `main` (1089 after #76; 1090 after #77), `main` CI green, all three
+  worktrees and branches swept, all three issues closed, board Done.
+  Records and metrics are under "Finished tickets".
+
+**Released** 2026-10-16 17:40 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `80d0c941-d673-4c3a-bccd-ab7e3949c00d`, pid 13907),
+which held it from 17:10 CEST (released once at 17:30, then taken up again
+by the same session when Andreas answered at 17:33).
+
+- **How it ended (2026-10-16).** At about 17:22 Andreas wrote "stop at a
+  good place soon. we have new claude rules", at 17:27 "let me know when im
+  good to restart this session", and at 17:33 the answers recorded under
+  the handoff's "Authorized by the owner" plus "let me know when this is
+  good and i can restart this session". The coordinator finished what was
+  in hand: #73 (merged `4b8d13f`) and #72 (look accepted, merged `338024e`,
+  combined checks 1085 tests, `main` CI green), both closed and swept;
+  created #76 and #77 from his answers and set #75, #76, #77 Ready; gave
+  him the wave 4 questions in chat. Nothing was dispatched after 17:22.
+  Usage was not read.
+- **Session summary.** Takeover 17:10; handoff shortened to the 0.4.0 shape
+  (`a3bd0b5`); issues #73, #74, #75 created and #73, #74 dispatched under
+  the 17:12 authorization; both accepted at first review and merged. One
+  coordinator slip: the times in the coordinator's comments on #73 (17:50)
+  and #74 (18:00, 18:15 in the record) were written from memory; the clock
+  read 17:20 to 17:25. An attempt to edit them was refused by the
+  permission check; the closing comment on #73 says so.
+- **How it took the baton** (17:10 CEST). Andreas opened with "update Relay.
+  continue the work! start with giving me a quick status". Evidence that no
+  lead was active: the previous session released the baton at 16:35 and its
+  process (pid 72479) was gone; the only `claude --agent fz-coordinator`
+  process was this one; `main` equalled `origin/main` at `9e34da3`, clean,
+  CI green; `relay-check` reported the template and skill both at 0.4.0
+  with one drift line, the handoff at 649 lines.
+
 **Released** 2026-10-16 16:35 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `29766f98-d471-41a5-998a-292c8326b5f7`), which held
 it from 15:21 CEST. No worker, reviewer, build or background job was

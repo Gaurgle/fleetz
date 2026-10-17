@@ -1,11 +1,10 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-16 17:40 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `80d0c941-d673-4c3a-bccd-ab7e3949c00d`), when
-Andreas asked to stop so he can restart the session with new Claude rules.
-**Nothing is running: no worker, no reviewer, no build, no background job.
-#72, #73 and #74 are Done today; #75, #76 and #77 are Ready and authorized,
-not dispatched.** Read this file, the repository instructions, [agent-workflow.md](agent-workflow.md) and
+Last written 2026-10-17 16:38 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `d63c4af4-55f8-4f4f-ab06-d156d9582c03`, pid 12225)
+on takeover. **Nothing is running: no worker, no reviewer, no build, no
+background job. Nothing is in flight; the next tickets need Andreas's
+answers or his OK for issues before dispatch.** Read this file, the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
 authoritative for status; this file says why things are where they are and
@@ -15,59 +14,25 @@ decisions, facts, the follow-up list and the longer practical notes are in
 
 ## Baton
 
-**Released** 2026-10-16 about 18:40 CEST by `claude-fable-5-1` (`claude
---agent fz-coordinator`, session `0bb15090-2029-4863-be6e-4e690d6882e5`),
-which held it from 17:42 CEST. Andreas opened with "you got the baton, start
-work." and at about 18:30 wrote "you can start closing up the current
-tickets, dont start any new today. then let me know, im going out".
-**No worker, reviewer, build or background job is running.** Nothing is
-dispatched; no new ticket starts today. Next lead records its own session and
-takeover time here after confirming with Andreas.
+**Held** since 2026-10-17 16:38 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `d63c4af4-55f8-4f4f-ab06-d156d9582c03`, pid 12225).
+Andreas opened with "continue work". Evidence that no lead was active: the
+previous session released the baton on 2026-10-16 at about 18:40 and no
+other `claude --agent fz-coordinator` process existed; `main` equalled
+`origin/main` at `c41602f`, clean, CI green (`ci` run `38931350486` on
+`57b885c`, the `docs` run on `c41602f`); `relay-check` reported the template
+and skill both at 0.5.2, up to date, the handoff at 299 lines; the sweep
+kept only `issue-45`; the board showed nothing In progress, in Review or at
+Ready to integrate except the parked #45. **No worker, reviewer, build or
+background job is running.** Nothing was dispatched on takeover: every next
+ticket waits on an owner answer or an OK for an issue (see "Next step").
 
-- **Closed on 2026-10-16.** #75 (`c7e3395`), #76 (`5dad29a`), #77 (`57b885c`),
-  all merged with `--no-ff`, each with its branch CI green and a combined
-  check on `main` (1089 after #76; 1090 after #77), `main` CI green, all three
-  worktrees and branches swept, all three issues closed, board Done.
-  Records and metrics are in the log.
 - **Look not yet seen on `main`:** #75 (the `WT` badge in the dirty colour),
   #71 and #72 (Info header and worktrees section). Run
   `cargo run --release --manifest-path ~/repos/fleetz/Cargo.toml`.
-- **Earlier session in this record:** the 17:40 release by `claude-fable-5-1`
-  (`claude --agent fz-coordinator`, session
-  `80d0c941-d673-4c3a-bccd-ab7e3949c00d`, pid 13907), which held it from
-  17:10 CEST (released once at 17:30, then taken up again by the same session
-  when Andreas answered at 17:33).
-(`claude --agent fz-coordinator`, session
-`80d0c941-d673-4c3a-bccd-ab7e3949c00d`, pid 13907), which held it from
-17:10 CEST (released once at 17:30, then taken up again by the same session
-when Andreas answered at 17:33).
 
-- **How it ended (2026-10-16).** At about 17:22 Andreas wrote "stop at a
-  good place soon. we have new claude rules", at 17:27 "let me know when im
-  good to restart this session", and at 17:33 the answers recorded under
-  "Authorized by the owner" plus "let me know when this is good and i can
-  restart this session". The coordinator finished what was in hand: #73
-  (merged `4b8d13f`) and #72 (look accepted, merged `338024e`, combined
-  checks 1085 tests, `main` CI green), both closed and swept; created #76
-  and #77 from his answers and set #75, #76, #77 Ready; gave him the wave
-  4 questions in chat. Nothing was dispatched after 17:22. Usage was not
-  read.
-- **Session summary.** Takeover 17:10; handoff shortened to the 0.4.0 shape
-  (`a3bd0b5`); issues #73, #74, #75 created and #73, #74 dispatched under
-  the 17:12 authorization below; both accepted at first review and merged.
-  One coordinator slip: the times in the coordinator's comments on #73
-  (17:50) and #74 (18:00, 18:15 in the record) were written from memory;
-  the clock read 17:20 to 17:25. An attempt to edit them was refused by the
-  permission check; the closing comment on #73 says so.
-
-**Held before that** from 17:10 CEST by the same session. Andreas opened
-with "update Relay. continue the work! start with giving me a quick
-status". Evidence that no lead was active: the previous session released
-the baton at 16:35 and its process (pid 72479) was gone; the only
-`claude --agent fz-coordinator` process was this one; `main` equalled
-`origin/main` at `9e34da3`, clean, CI green; `relay-check` reported the
-template and skill both at 0.4.0 with one drift line, the handoff at 649
-lines. Earlier lead records: the log, "Earlier leads".
+Earlier lead records, including both 2026-10-16 sessions: the log, "Earlier
+leads".
 
 ## Authorized by the owner
 
@@ -241,7 +206,7 @@ records, including the rulings, are in the log.
    watch off, rejected because the eye means "not polling") and asked for
    an OK to create an issue for the first. A freshness amendment and a look
    change: his acceptance either way. No answer yet.
-3. **Wave 4 of FZ-13** waits for Andreas's answers to the three questions
+2. **Wave 4 of FZ-13** waits for Andreas's answers to the three questions
    (given to him in chat on 2026-10-16; also in the first comment on #26):
    FZ-13m maximize and restore (the key, which panes, what restore returns
    to), FZ-13n hints that follow focus (whether the footer changes with the
