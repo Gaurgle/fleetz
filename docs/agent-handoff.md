@@ -231,28 +231,24 @@ The worktrees of #72 (`worktrees-section`), #73 (`one-remote-key`) and #74
   the `last_attempt` doc comment only. Stops at Ready to integrate for
   his look at the branch build.
 
-- **#80 (FZ-13o), one-row folds.** In progress since 2026-10-17 17:08
-  CEST under the 16:58 owner entry ("yes, economical"). Base `84a06b7`,
-  branch `feat/80-one-row-folds`, worktree `.claude/worktrees/issue-80`,
-  `fz-worker` (`claude-opus-5-5`, medium). Worker report 1 at about
-  17:20: done but red on one unnamed assertion in the owner-approved test
-  `a_folded_pane_keeps_only_its_frame` (the `╭` top corner); coordinator
-  ruling on the issue: covered by the same authorization, change it to
-  `─`. Worker is applying that (fix cycle 1); then `fz-reviewer`, then
-  commit, push, CI, combined check and merge (small look change). Three
-  assertions in that one existing test are the only existing-test edits.
 - **#81 (FZ-13n), footer hints follow focus.** In progress since 17:08
   under the 16:58 owner entry ("lets try it out, yes."). Base `84a06b7`,
   branch `feat/81-focus-hints`, worktree `.claude/worktrees/issue-81`,
-  `fz-worker` (`claude-opus-5-5`, medium). Worker done (revision
-  `d8ef6e7c`, 1104 tests, no existing test touched) but the ticket's
-  degradation order leaves the segment invisible below about 143 to 217
-  columns. Asked Andreas (chat and the issue): (1) try as is, (2) invert
-  the order so the segment keeps its words and the global row goes bare
-  first (changes one existing footer test, his), (3) drop it. Review
-  waits for the answer. Stops at Ready to integrate for his look.
+  `fz-worker` (`claude-opus-5-5`, medium). Andreas chose "81: invert the
+  order" (about 17:15): the segment keeps its words and the global row
+  goes bare first; the five-step order is in the decision comment on the
+  issue. Worker revision `686f7e92` implements it (1102 passed, 2
+  failed) with the one authorized existing-test edit; two more existing
+  footer tests encode the old order and fail: `the_hints_end_at_the_right_
+  edge_beside_a_glyph_summary` (run it at 220 columns) and
+  `the_footer_drops_descriptions_before_the_summary` (start the walk at
+  260). Asked Andreas for those two edits (chat and the stop comment on
+  the issue). On his yes: the worker makes exactly those two changes,
+  then `fz-reviewer`, commit, push, CI, combined check, Ready to
+  integrate for his look at the branch build. The worktree holds the
+  uncommitted diff; the sweep keeps it.
 
-#78 is Done (merged `84a06b7`, record in the log).
+#78 and #80 are Done (merged `84a06b7` and `3c4dcf0`, records in the log).
 
 #75, #76 and #77 are Done; one owner-visible ruling on #77 (the deleted
 precondition assertion in

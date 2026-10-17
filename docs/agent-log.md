@@ -202,6 +202,26 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-17
 
+- **#80 (FZ-13o), a folded pane is one row, its title.** Merged `3c4dcf0`
+  at 17:24 CEST; ticket commit `918fa91` (reviewed diff `585cfa7e`), branch
+  `feat/80-one-row-folds` from `84a06b7`. Andreas's "yes, economical" to
+  the wave 4 question; the coordinator read it as one row instead of
+  three, remembered folds deferred to FZ-13m. `FOLDED_HEIGHT` 3 to 1;
+  `render_folded` draws a `Borders::TOP` rule and renders `panel_title`
+  over it at `x + 1` so the tag stays where `fold_tag_at` looks (the
+  worker's mechanical deviation, accepted). Three assertions in
+  `a_folded_pane_keeps_only_its_frame` changed under his answer, one of
+  them (`╭`) by a coordinator ruling that it was the same kind as the two
+  named. Review accepted first time with probes of every fold and focus
+  combination and terminal heights 3 to 19. Branch CI green; combined
+  check on `fc9574e` 1100 tests; `main` CI green. Swept. Follow-ups:
+  `src/app.rs` comments still say "empty frame"; a pane narrower than
+  about 17 columns lets the title cover the right-hand rule cell.
+  Clock slip: the coordinator's comments on #80 and #81 timed "about
+  17:35" and "about 17:40" were written ahead of the clock (it read about
+  17:15 to 17:20).
+  `#80: review accepted first; fix cycles 1; owner decisions 1; worker 6; review 3; usage not read`
+
 - **#78 (FZ-13y), the GitHub contribution strip observes the local day
   change.** Merged `84a06b7` at 17:03 CEST; ticket commit `ad9b538`
   (reviewed diff `4ee4b569`), branch `fix/78-strip-day-change` from
