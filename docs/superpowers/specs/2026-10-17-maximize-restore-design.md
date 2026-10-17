@@ -1,5 +1,11 @@
 # Maximize and restore a pane (FZ-13m)
 
+**Status: dropped.** Andreas on 2026-10-17, about 17:30: "i just dont know
+if this feature is something ive requested?" and then "we dont need a focus
+mode". It was never his request: it entered the plan on 2026-10-01 from the
+ideas backlog ("pane maximize" in M3's scope line) and the FZ-13 split on
+#26 put it in wave 4. Kept as a record of what was considered; no ticket.
+
 Design note, 2026-10-17, by the coordinator (`claude-fable-5-1`) for Andreas's
 acceptance before a ticket is written. Parent: FZ-13 (#26), wave 4. His
 answer of 2026-10-17 to "what restore returns to": "the last saved config

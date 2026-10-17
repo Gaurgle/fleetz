@@ -240,7 +240,7 @@ not needed to keep building.
 | Batch | Tickets | Why here |
 |---|---|---|
 | 1 (running) | #70 ssh fetch bound; #72 worktrees section in Info (spec first); #71 Info header worktree colour | The one daily reliability bug, and the owner's two UI ideas |
-| 2 | Refetch on network recovery (changes fetch rule 6, owner decision); dirty worktree in the list row (after #72); FZ-13 wave 4 (maximize/restore, hints follow focus) after the owner answers its questions | Reliability and look, each needing one decision |
+| 2 | Refetch on network recovery (changes fetch rule 6, owner decision); dirty worktree in the list row (after #72); FZ-13 wave 4 (hints follow focus #81, economical folds #80; maximize/restore dropped by the owner on 2026-10-17, "we dont need a focus mode") | Reliability and look, each needing one decision |
 | 3 | #67 CI pane, FZ-14 attention view, FZ-15 changes since seen, FZ-16 worktree overlay | The daily-use features |
 | 4 | FZ-12 progressive load, FZ-11 scheduler, the ref query cost at 20,000 refs | Optimizations, each measured against the FZ-01 baseline before and after |
 | filler | One key for "same remote", stale `CLAUDE.md` lines, help wording, test sharpening (the handoff's follow-up list) | `fz-small` whenever its slot is free |

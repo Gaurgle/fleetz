@@ -16,6 +16,19 @@ instead; a note marks each place.
 Lead records older than the most recent session, newest first, as they stood
 in the handoff's "Baton" section.
 
+**Takeover evidence of the 2026-10-17 session** (`claude-fable-5-1`,
+`claude --agent fz-coordinator`, session
+`d63c4af4-55f8-4f4f-ab06-d156d9582c03`, pid 12225, held 16:38 to 17:35
+CEST; its release record is in the handoff until the next lead moves it).
+Andreas opened with "continue work". No lead was active: the previous
+session released the baton on 2026-10-16 at about 18:40 and no other
+`claude --agent fz-coordinator` process existed; `main` equalled
+`origin/main` at `c41602f`, clean, CI green (`ci` run `38931350486` on
+`57b885c`); `relay-check` reported template and skill at 0.5.2, up to
+date, the handoff at 299 lines; the sweep kept only `issue-45`; the board
+showed nothing In progress, in Review or at Ready to integrate except the
+parked #45.
+
 **Released** 2026-10-16 about 18:40 CEST by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session `0bb15090-2029-4863-be6e-4e690d6882e5`),
 which held it from 17:42 CEST. Andreas opened with "you got the baton, start
@@ -202,6 +215,17 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-17
 
+- **#82 (FZ-16a), hand the terminal to a child with mouse capture off.**
+  Merged `94bec02` at 17:33 CEST; ticket commit `92ef12c` (reviewed diff
+  `26a2be28`), branch `fix/82-release-mouse-capture` from `3c4dcf0`. The
+  `o` shell follow-up from #68's review (2026-10-09), approved under
+  "7-10. ok with me, i trust." `release_terminal` writes
+  `DisableMouseCapture, LeaveAlternateScreen`, the mirror of
+  `reclaim_terminal`; both suspend paths call it; one test asserts the
+  order. `fz-small` on `sonnet`, one pass; review accepted first time with
+  two mutants killed. Branch CI green; combined check 1101 tests; `main`
+  CI green. Swept.
+  `#82: review accepted first; fix cycles 0; owner decisions 0; worker 1; review 1; usage not read`
 - **#80 (FZ-13o), a folded pane is one row, its title.** Merged `3c4dcf0`
   at 17:24 CEST; ticket commit `918fa91` (reviewed diff `585cfa7e`), branch
   `feat/80-one-row-folds` from `84a06b7`. Andreas's "yes, economical" to

@@ -1,10 +1,11 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-17 16:38 CEST by `claude-fable-5-1` (`claude --agent
+Last written 2026-10-17 17:35 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `d63c4af4-55f8-4f4f-ab06-d156d9582c03`, pid 12225)
-on takeover. **Nothing is running: no worker, no reviewer, no build, no
-background job. Nothing is in flight; the next tickets need Andreas's
-answers or his OK for issues before dispatch.** Read this file, the repository instructions, [agent-workflow.md](agent-workflow.md) and
+at the stop Andreas asked for. **Nothing is running: no worker, no
+reviewer, no build, no background job. #78, #80 and #82 are Done today;
+#81 and #79 are parked, each waiting on one owner answer (see "In
+flight"); nothing new starts today.** Read this file, the repository instructions, [agent-workflow.md](agent-workflow.md) and
 [release-plan.md](release-plan.md) before acting. GitHub (the issues and the
 [release Project](https://github.com/users/Gaurgle/projects/1)) is
 authoritative for status; this file says why things are where they are and
@@ -14,25 +15,33 @@ decisions, facts, the follow-up list and the longer practical notes are in
 
 ## Baton
 
-**Held** since 2026-10-17 16:38 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `d63c4af4-55f8-4f4f-ab06-d156d9582c03`, pid 12225).
-Andreas opened with "continue work". Evidence that no lead was active: the
-previous session released the baton on 2026-10-16 at about 18:40 and no
-other `claude --agent fz-coordinator` process existed; `main` equalled
-`origin/main` at `c41602f`, clean, CI green (`ci` run `38931350486` on
-`57b885c`, the `docs` run on `c41602f`); `relay-check` reported the template
-and skill both at 0.5.2, up to date, the handoff at 299 lines; the sweep
-kept only `issue-45`; the board showed nothing In progress, in Review or at
-Ready to integrate except the parked #45. **No worker, reviewer, build or
-background job is running.** Nothing was dispatched on takeover: every next
-ticket waits on an owner answer or an OK for an issue (see "Next step").
+**Released** 2026-10-17 17:35 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `d63c4af4-55f8-4f4f-ab06-d156d9582c03`, pid 12225),
+which held it from 16:38 CEST. Andreas at about 17:32: "you can start
+looking for a place to finish up for today. finsih the started tickets".
+**No worker, reviewer, build or background job is running.** The started
+tickets: #82 finished (Done); #81 and #79 could not be finished without an
+owner answer each and are parked with their state recorded under "In
+flight". Nothing new starts today. Next lead records its own session and
+takeover time here after confirming with Andreas.
 
+- **How the day ran.** Takeover 16:38 (Andreas: "continue work"). #78
+  (FZ-13y, reported by him at 16:40 and ticketed under "lets go with 2"),
+  #80 (FZ-13o) and #82 (FZ-16a) Done, each one worker and one reviewer,
+  one fix cycle in total (#78, test coverage). #79 created and twice
+  stopped by its worker at the existing-test rule; #81 implemented twice
+  (the second time under his "invert the order") and stopped at two
+  existing tests. He answered the fourteen-question list at 16:58
+  (recorded under "Authorized by the owner"), dropped FZ-13m ("we dont
+  need a focus mode"), and had `scripts/relay-sweep` fixed after it
+  removed #79's parked worktree (`d2adb8d`). The handoff was trimmed
+  twice; #70 to #79 were retitled under their epics. Usage was not read.
 - **Look not yet seen on `main`:** #75 (the `WT` badge in the dirty colour),
-  #71 and #72 (Info header and worktrees section). Run
-  `cargo run --release --manifest-path ~/repos/fleetz/Cargo.toml`.
+  #71 and #72 (Info header and worktrees section), #80 (one-row folds).
+  Run `cargo run --release --manifest-path ~/repos/fleetz/Cargo.toml`.
 
 Earlier lead records, including both 2026-10-16 sessions: the log, "Earlier
-leads".
+leads". Takeover evidence of this session is there too.
 
 ## Authorized by the owner
 
@@ -248,15 +257,12 @@ The worktrees of #72 (`worktrees-section`), #73 (`one-remote-key`) and #74
   integrate for his look at the branch build. The worktree holds the
   uncommitted diff; the sweep keeps it.
 
-- **#82 (FZ-16a), hand the terminal to a child with mouse capture off.**
-  In progress since 2026-10-17 17:25 CEST under the 16:58 owner entry
-  ("7-10. ok with me, i trust."; the `o` shell follow-up from #68). Base
-  `3c4dcf0`, branch `fix/82-release-mouse-capture`, worktree
-  `.claude/worktrees/issue-82`, `fz-small` (`sonnet`, medium), file
-  `src/main.rs` only. Then `fz-reviewer`, commit, push, CI, combined
-  check, merge (nothing on screen).
+Both parked tickets resume under the 16:58 owner entry once he answers;
+no new authorization is needed, only the answer. A lead that resumes one
+re-reads the issue's last two comments first.
 
-#78 and #80 are Done (merged `84a06b7` and `3c4dcf0`, records in the log).
+#78, #80 and #82 are Done (merged `84a06b7`, `3c4dcf0`, `94bec02`; records
+in the log).
 
 #75, #76 and #77 are Done; one owner-visible ruling on #77 (the deleted
 precondition assertion in
@@ -266,35 +272,41 @@ The records are in the log.
 
 ## Next step, and the order after it
 
-All under the 2026-10-17 16:58 owner entry unless noted.
+All under the 2026-10-17 16:58 owner entry unless noted. Nothing starts
+until Andreas opens the next session; "finish the started tickets" of
+17:32 covers #81 and #79 only.
 
-1. **#79** on Andreas's (A)/(B)/(C) answer: re-dispatch, review, commit,
-   push, CI, combined check, then Ready to integrate for his look.
-2. **Batch 3, order the coordinator's:** #67 CI pane first (an issue
-   exists; it is design-heavy, so a spec under `docs/superpowers/specs/`
-   goes to Andreas before any worker), then FZ-14 attention view, FZ-15
-   changes since seen, FZ-16 handoffs, each spec first. Two `fz-worker`
-   slots plus one `fz-small`.
-3. **FZ-13 wave 4,** answers in hand: FZ-13m maximize and restore (restore
-   returns to the last saved layout if possible; the key and the panes are
-   the coordinator's to propose in the spec), FZ-13n hints that follow
-   focus (try it), FZ-13o economical folds (one row instead of three;
-   remembered folds ride with FZ-13m's saved layout). Issues to create
-   with the FZ-13 letters after `y`.
-4. **Follow-up issues** (7 to 10 of the list): the `o` shell mouse
-   capture, one measure for width, the ref query cost at 20,000 refs
-   (batch 4 material, measured), the small review follow-ups cut into
-   reviewable tickets (the fetch-outcome items as one; the settings-save
-   cursor reset as one; test sharpening as one `fz-small`). Fillers for a
-   free slot.
+1. **#81** on his yes/no for the two existing footer tests: the worker
+   (or a fresh `fz-worker` from the worktree's diff) makes exactly those
+   two edits, then `fz-reviewer`, commit, push, CI, combined check, Ready
+   to integrate for his look at the branch build.
+2. **#79** on his (A)/(B)/(C): re-dispatch into the clean worktree, review,
+   commit, push, CI, combined check, Ready to integrate for his look.
+3. **Batch 3, order the coordinator's:** #67 CI pane first (an issue
+   exists; design-heavy, so a spec under `docs/superpowers/specs/` goes to
+   Andreas before any worker; its own body says the FZ-13 pane work lands
+   first, which it now has), then FZ-14 attention view, FZ-15 changes
+   since seen, FZ-16 handoffs, each spec first. Two `fz-worker` slots plus
+   one `fz-small`. Remembered folds (deferred from FZ-13o to FZ-13m) have
+   no home now that FZ-13m is dropped; ask him if he wants them at all.
+4. **Follow-up issues** (7 to 10 of the list, approved): one measure for
+   width, the ref query cost at 20,000 refs (batch 4 material, measured),
+   the small review follow-ups cut into reviewable tickets (the
+   fetch-outcome items as one; the settings-save cursor reset as one; test
+   sharpening as one `fz-small`). Fillers for a free slot. The `o` shell
+   one is Done (#82).
 5. Batch 4 (FZ-12, FZ-11, the ref query cost), each measured against the
    FZ-01 baseline. Release scope: later, when Andreas asks.
 
 ## Open with Andreas
 
+- #81: yes or no to the two existing footer test edits (the stop comment
+  on the issue); then his look at the branch build.
 - #79: (A), (B) or (C) on the four existing tests (the stop comment on
   the issue); then his look at the branch build.
-- The look of #71, #72, #75 and #78 on `main` whenever he next runs it
+- The Relay template's copy of `relay-sweep` (the `relay` skill in
+  `~/claude-config`) has the hole fixed here in `d2adb8d`; his repo.
+- The look of #71, #72, #75, #78 and #80 on `main` whenever he next runs it
   (`cargo run --release --manifest-path ~/repos/fleetz/Cargo.toml`); the
   installed binary is still the `main` of 2026-10-10.
 - Before the repository goes public: `docs/ideas.md` names one of his
