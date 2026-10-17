@@ -728,6 +728,29 @@ live: strike an entry here when its ticket lands.
 Spent entries, verbatim as the handoff carried them; the dispatches they
 covered are Done.
 
+- **2026-10-16, about 17:33.** After the baton had been released and the
+  coordinator had asked for #72's look, rule 6, the wave 4 questions and
+  `cache_ttl`, Andreas wrote: "72 is good. Rule 6 yes for refetch (is good,
+  yes?) give me fz-13 questions on 26 do w`hat you need for cache_ttl",
+  then "let me know when this is good and i can restart this session".
+  The coordinator read it as: #72 accepted, merge it; the refetch-on-
+  recovery change to fetch contract rule 6 approved and its ticket (#76)
+  may be created and run; `cache_ttl` the coordinator's call, and its
+  ticket (#77, remove the key and the dead path, two tests of the removed
+  branch go with it) may be created and run; the wave 4 questions answered
+  in chat, no decision yet. #75, #76 and #77 were created and set Ready,
+  dispatched by the next lead under this entry.
+- **2026-10-16, about 17:12.** After the takeover report (which listed: #72
+  waits for his look; batch 2's three open decisions, rule 6 refetch "yes or
+  no?", the dirty-worktree list row "OK to create the issue and dispatch
+  once #72 is merged?", the FZ-13 wave 4 questions; the two filler issues
+  "OK to create them?"; and "trim the handoff ... then dispatch whatever
+  you answer above") Andreas wrote: "sounds good. off you go". The
+  coordinator read it as: trim and commit the handoff; the three offered
+  issues may be created (dirty worktree in the list row, one key for "same
+  remote", the stale `CLAUDE.md` lines) and the two fillers dispatched in
+  the free slots; the list-row ticket after #72 merges. Not an answer to
+  rule 6 or the wave 4 questions, and not a look at #72.
 - **2026-10-10, 12:46 and 12:52.** "go with c": triage and dispatch #66,
   one worker and one reviewer; "all looks good": the second existing-test
   edit on #66 and the M1 checkpoint confirmed. Both Done.

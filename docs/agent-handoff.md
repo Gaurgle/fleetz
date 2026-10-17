@@ -83,32 +83,8 @@ can create or expand it.
   coordinator reads it as: create the issue (#78) and run it in a free
   slot; all slots were free, so it was dispatched at once. A small look
   change under the 2026-10-02 standing instruction.
-- **2026-10-16, about 17:33.** After the baton had been released and the
-  coordinator had asked for #72's look, rule 6, the wave 4 questions and
-  `cache_ttl`, Andreas wrote: "72 is good. Rule 6 yes for refetch (is good,
-  yes?) give me fz-13 questions on 26 do w`hat you need for cache_ttl",
-  then "let me know when this is good and i can restart this session".
-  The coordinator reads it as: #72 accepted, merge it; the refetch-on-
-  recovery change to fetch contract rule 6 is approved and its ticket
-  (#76) may be created and run; `cache_ttl` is the coordinator's call, and
-  its ticket (#77, remove the key and the dead path, two tests of the
-  removed branch go with it) may be created and run; the wave 4 questions
-  are answered in chat, no decision yet. Because he is restarting the
-  session, #75, #76 and #77 were created and set Ready but **not
-  dispatched**; the next lead dispatches them under this entry without
-  asking again (two `fz-worker` plus one `fz-small`).
-- **2026-10-16, about 17:12.** After the takeover report (which listed: #72
-  waits for his look; batch 2's three open decisions, rule 6 refetch "yes or
-  no?", the dirty-worktree list row "OK to create the issue and dispatch
-  once #72 is merged?", the FZ-13 wave 4 questions; the two filler issues
-  "OK to create them?"; and "trim the handoff ... then dispatch whatever
-  you answer above") Andreas wrote: "sounds good. off you go". The
-  coordinator reads it as: trim and commit the handoff; the three offered
-  issues may be created (dirty worktree in the list row, one key for "same
-  remote", the stale `CLAUDE.md` lines) and the two fillers dispatched now
-  in the free slots; the list-row ticket after #72 merges. It is not an
-  answer to rule 6 or the wave 4 questions, which stay parked, and not a
-  look at #72, which stays at Ready to integrate.
+- **2026-10-16, about 17:33 and 17:12.** Spent: they covered #72 to #77,
+  all Done. Verbatim in the log, "Owner authority before 2026-10-16".
 - **2026-10-16, about 15:40 and 15:48.** "i think all tickets should be
   completed, but prioritize. polish on polish on polish can be deferred, or
   pickued up in parallel when it fits. But the release is not in a hurry at
