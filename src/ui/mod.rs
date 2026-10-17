@@ -434,9 +434,10 @@ pub enum Divider {
     Horizontal,
 }
 
-/// Rows a folded pane keeps: its whole frame around one empty row, so it
-/// still reads as a pane (and shows focus) with its content collapsed.
-pub const FOLDED_HEIGHT: u16 = 3;
+/// Rows a folded pane keeps: its title row alone, a rule carrying the tag,
+/// so it still reads as a pane (and shows focus) with its content collapsed.
+/// A full frame spent two more rows on a blank line and a bottom border.
+pub const FOLDED_HEIGHT: u16 = 1;
 
 /// How far from a divider a click still counts as grabbing it. One column
 /// either side: the gap itself is a single cell, which is too small a target
@@ -785,20 +786,25 @@ fn panel_tag(num: u8) -> String {
     format!(" [{num}] ")
 }
 
-/// A folded pane: its full frame and title around no content. It keeps
-/// focus styling, since folding the focused pane leaves it focused.
+/// A folded pane: its title on a top rule, with no corners, sides or bottom.
+/// The title sits where an open pane's does, so `fold_tag_at` finds the tag
+/// either way. It keeps focus styling, since folding the focused pane leaves
+/// it focused.
 pub fn render_folded(frame: &mut Frame, area: Rect, num: u8, label: &str, focused: bool) {
     let border_color = if focused {
         colors::LAVENDER
     } else {
         colors::SURFACE
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let rule = Block::default()
+        .borders(Borders::TOP)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
-        .title_top(panel_title(num, label, focused));
-    frame.render_widget(block, area);
+        .border_style(Style::default().fg(border_color));
+    frame.render_widget(rule, area);
+    // A block with no left side starts its title in the first column; an
+    // open pane's corner pushes it one in, which is where the tag is clicked.
+    let title = Rect::new(area.x + 1, area.y, area.width.saturating_sub(1), 1).intersection(area);
+    frame.render_widget(panel_title(num, label, focused), title);
 }
 
 /// A numbered panel title for a bordered pane, like `[1] repos`. The number
@@ -2511,10 +2517,106 @@ mod tests {
         assert!(column_of(&buffer, strip.y, "contributions").is_some());
         for r in [inspector, strip] {
             let bottom = r.y + r.height - 1;
-            assert_eq!(buffer[(r.x, r.y)].symbol(), "╭", "top frame");
-            assert_eq!(buffer[(r.x, bottom)].symbol(), "╰", "bottom frame");
-            assert_eq!(buffer[(r.x + 2, r.y + 1)].symbol(), " ", "no content");
+            assert_eq!(buffer[(r.x, r.y)].symbol(), "─", "top frame");
+            assert_eq!(bottom, r.y, "the title row is the whole pane");
+            assert!(!r.contains(Position::new(r.x + 2, r.y + 1)), "no content");
         }
+    }
+
+    /// A folded pane is its title row alone: each fold hands the panes above
+    /// the two rows a three-row frame spent on a blank row and a bottom
+    /// border.
+    #[test]
+    fn a_folded_pane_is_one_row_and_the_detail_pane_gets_the_rest() {
+        let area = Rect::new(0, 0, 120, 44);
+        let mut app = layout_app();
+        app.view = View::Detail;
+        app.contributions = crate::app::ContributionsMode::Github;
+        let open = panel_rects(area, &app);
+        app.inspector_folded = true;
+        app.contributions_folded = true;
+        let folded = panel_rects(area, &app);
+
+        let inspector = folded.inspector.expect("folded inspector laid out");
+        let strip = folded.contributions.expect("folded strip laid out");
+        assert_eq!(inspector.height, 1, "the inspector folds to its title row");
+        assert_eq!(strip.height, 1, "the strip folds to its title row");
+
+        let open_inspector = open.inspector.expect("open inspector").height;
+        let open_strip = open.contributions.expect("open strip").height;
+        assert_eq!(
+            folded.detail.unwrap().height,
+            open.detail.unwrap().height + (open_inspector - 1) + (open_strip - 1),
+            "every row a fold gives up goes to the detail pane"
+        );
+    }
+
+    /// The one row is a rule with the pane's tag on it, no corners, in the
+    /// pane's focus styling, and the tag is still where a click folds it.
+    #[test]
+    fn a_folded_row_is_a_rule_carrying_its_tag_in_focus_colors() {
+        let (rects, buffer) = rendered(|a| {
+            a.inspector_folded = true;
+            a.contributions_folded = true;
+            a.focused_panel = FocusedPanel::Inspector;
+        });
+        for (rect, panel, tag, tag_color, rule_color) in [
+            (
+                rects.inspector,
+                FocusedPanel::Inspector,
+                "[3]",
+                colors::LAVENDER,
+                colors::LAVENDER,
+            ),
+            (
+                rects.contributions,
+                FocusedPanel::Contributions,
+                "[4]",
+                colors::OVERLAY,
+                colors::SURFACE,
+            ),
+        ] {
+            let r = rect.unwrap_or_else(|| panic!("{tag} pane not laid out"));
+            let right = r.x + r.width - 1;
+            for x in [r.x, right] {
+                assert_eq!(buffer[(x, r.y)].symbol(), "─", "{tag}: no corner");
+                assert_eq!(buffer[(x, r.y)].fg, rule_color, "{tag}: rule color");
+            }
+            let x = column_of(&buffer, r.y, tag).unwrap_or_else(|| panic!("{tag} not drawn"));
+            assert_eq!(buffer[(x, r.y)].fg, tag_color, "{tag}: tag color");
+            assert_eq!(
+                rects.fold_tag_at(x, r.y),
+                Some(panel),
+                "{tag}: click target"
+            );
+        }
+    }
+
+    /// Below a folded inspector's one row there is no frame left: the next
+    /// row is the gap above the strip, and the strip's title follows it.
+    #[test]
+    fn the_row_below_a_folded_inspector_belongs_to_the_next_pane() {
+        let (rects, buffer) = rendered(|a| {
+            a.inspector_folded = true;
+            a.contributions_folded = true;
+        });
+        let inspector = rects.inspector.expect("folded inspector laid out");
+        let strip = rects.contributions.expect("folded strip laid out");
+        let below = inspector.y + inspector.height;
+        assert_eq!(below, inspector.y + 1, "the fold is the title row alone");
+        assert_ne!(
+            rects.at(inspector.x + 2, below),
+            Some(FocusedPanel::Inspector)
+        );
+        for x in [
+            inspector.x,
+            inspector.x + 2,
+            inspector.x + inspector.width - 1,
+        ] {
+            assert_eq!(buffer[(x, below)].symbol(), " ", "no frame below at {x}");
+        }
+        assert_eq!(strip.y, below + 1, "the strip follows the one-row gap");
+        assert!(column_of(&buffer, strip.y, "contributions").is_some());
     }
 
     /// A folded inspector has nothing to resize, and its top row is its tag.
