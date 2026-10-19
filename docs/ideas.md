@@ -417,6 +417,55 @@ Four smaller faults sat underneath:
 
 ---
 
+## Group the repo list by owner
+
+**Problem.** Inside each section the list is ordered by push recency
+(`sort_by_activity`), which is right for "what moved", but with repos spread
+over a personal account and several orgs it interleaves owners. "What is
+happening in this org" has no view.
+
+Asked for as three sorts (owner, name, recency). Recency is already the
+default. Name adds little: the `/` filter already finds a repo by name with a
+ranked match, and A to Z order is worse than recency for scanning. Owner earns
+its place, but as grouping rather than sorting.
+
+### Shape
+
+- Owner subheaders inside each section, recency inside each owner. The
+  section split (github activity, local changes, also active,
+  `app.rs::section_rank`) stays the outer key.
+- A cycle key toggles grouped and flat; a `,` row (`SETTING_FIELDS`) persists
+  it to `config.toml` like every other row.
+- A free-text query still overrides both with the one ranked list, keyed off
+  `App::has_text_query()` as today.
+- Owner order within a section: by each owner's most recent push, so the
+  liveliest org leads, which keeps the recency reading at the group level.
+
+### The invariant it must keep
+
+`App::visible_repos` order must match the order `render_repo_list` draws. The
+grouping key has to be one function both call, the way `section_rank` is, and
+a subheader is not a row the cursor can land on. The existing test
+(`visible_repos_are_grouped_in_display_order`) is the model for the new one.
+
+### Rejected
+
+- **Flat alphabetical by owner.** Breaks push order apart for no gain; the
+  grouping keeps it.
+- **A name sort.** Duplicates what the filter does better.
+- **A recency sort mode.** It is the default already.
+
+### Open questions
+
+- A local-only row with no origin has no owner: its own `(local)` group, or
+  left ungrouped at the end of its section?
+- Does a section with a single owner draw its subheader at all? Leaning no:
+  a header over every row of one group is noise.
+- Collapsible owner groups? Probably later; it is a second state on top of
+  this one.
+
+---
+
 ## Inspector and right-column layout
 
 **Status: shipped.** Proportional sizing, the deduplicated geometry,
@@ -801,6 +850,57 @@ custom keys are the user's own and need no reminder there.
 
 ---
 
+## Which check failed: the CI lamp's breakdown
+
+**Problem.** The lamp says the default branch is red; it does not say which
+check. The poll reads `statusCheckRollup { state }` and `checkSuites(first: 1)`
+on `defaultBranchRef` (`github.rs`, the `repo_fields` block), which names one
+workflow and none of its runs' conclusions. Finding the failing check is `O`
+and a browser.
+
+This is a narrower case of the next section's enrich-on-select, and the
+narrowing matters: the lamp belongs to the repo, not to a PR, so it needs no PR
+cursor and can ship first.
+
+### Shape
+
+- One narrow query for the selected repo, on selection dwell:
+  `defaultBranchRef { target { ... on Commit { statusCheckRollup { state
+  contexts(first: N) { nodes { ... on CheckRun { name conclusion status
+  detailsUrl } ... on StatusContext { context state targetUrl } } } } } } }`.
+  `CheckRun` and `StatusContext` both appear in real fleets (Actions versus
+  older status integrations), so both arms are needed.
+- Fired only when the lamp is `Failed` or `Pending`. A green lamp has nothing
+  to explain, so most selections cost no call.
+- Cached in memory by repo and head commit oid; a new push is a new key, so
+  staleness corrects itself. `R` drops it with everything else.
+- Rendered in the inspector as one line per check, failures first, in
+  `badges::status_color` (one color ladder per concept), with `O` on a check
+  opening its details URL.
+- Under a known rate limit it sends nothing, like `r` and `R` (FZ-10b).
+
+### Rejected
+
+- **`contexts` in the batch query.** A nested `first:` connection, so it
+  multiplies across every repo on every poll for data nobody is looking at.
+  The 26-point org fallback (CLAUDE.md, "GraphQL bills the `first:` you ask
+  for") is exactly this mistake.
+- **Fetching on every lamp state.** Green is the common case and carries no
+  question.
+- **`gh run view` per selection.** A second transport for the same API; same
+  reasoning as the next section's rejection of `gh pr view`.
+
+### Open questions
+
+- Measure the query's cost with `rateLimit { cost nodeCount }` before
+  choosing N; a monorepo can carry dozens of checks.
+- Does a `Pending` lamp re-fetch while the cursor stays on it, at the poll's
+  15s floor, or once per dwell? Once per dwell is the safe start.
+- Should the failing check's name ride into the CI completion notification
+  (below) once both exist?
+
+---
+
 ## Enrich-on-select: real PR detail in the inspector
 
 **Problem.** The batch GraphQL query fetches five PRs per repo with the fields
@@ -854,6 +954,26 @@ itself: batch for the fleet, target for the thing under the cursor.
 - How much of gh-dash's tab carousel (overview / activity / commits / checks /
   files) is worth having? Checks and files earn their place for a dashboard;
   full comment threads may be the browser's job after all.
+
+### Build order and the rendered body
+
+Agreed 2026-10-19 as the follow-on to the lamp breakdown (previous section),
+in this order:
+
+1. **The PR cursor**, which nothing selects yet. It also unlocks `O` on a PR
+   and custom commands.
+2. **Per-PR checks and files** through the lazy query above.
+3. **The PR body as rendered markdown**, as gh-dash shows it. Last because it
+   is the costly one:
+   - it needs a markdown renderer, a new dependency (house rules: ask first);
+   - long bodies need a scroll or a truncation rule, and the inspector is
+     commit-oriented today;
+   - `body` on the batch query is a free field by the rate limit, but rejected
+     there anyway: it bloats every poll and the disk cache with prose for PRs
+     nobody opened. It belongs in the lazy query.
+
+Whether a rendered body earns its place over `O` is worth asking again once 1
+and 2 are in use.
 
 ---
 
