@@ -1729,6 +1729,65 @@ impl GithubBackoff {
     }
 }
 
+/// The per-checkout hold after fetches that timed out (FZ-34, #83; amendment
+/// 2 of `docs/fetch-outcome-contract.md`). A repo too large to fetch within
+/// `git::FETCH_TIMEOUT` used to start the same download on every sweep and
+/// leave a temp pack behind each time.
+///
+/// Keyed by the row's path, as the fetch facts are. After the `n`th
+/// consecutive `TimedOut` fetch the path is held for
+/// `backoff_secs(n + 1, interval_secs, 1.0)` seconds from that timeout: two
+/// intervals, then four, doubling up to `BACKOFF_CAP_SECS`, with no jitter
+/// (one clone has nothing to desynchronise from). Only the automatic fetches
+/// honour it (the watch sweep, the poll's moved remotes, the recovery
+/// refetch); `f` and `F` fetch as before and their outcome counts like any.
+/// A success clears the path; `r` and `R` clear every path. Any other failure
+/// kind fails fast, costs nothing, and leaves the count as it was.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FetchBackoff {
+    /// Consecutive timeouts and when the last one landed, per path.
+    timeouts: std::collections::HashMap<String, (u32, DateTime<Local>)>,
+}
+
+impl FetchBackoff {
+    /// A fetch for `path` finished at `at`. A timeout older than the one
+    /// already counted (a load's fetch landing after a sweep's) is ignored,
+    /// so one timeout is never counted twice.
+    pub fn record(&mut self, path: &str, outcome: &crate::git::FetchOutcome, at: DateTime<Local>) {
+        use crate::git::{FetchFailureKind, FetchOutcome};
+        match outcome {
+            FetchOutcome::Succeeded => {
+                self.timeouts.remove(path);
+            }
+            FetchOutcome::Failed(f) if f.kind == FetchFailureKind::TimedOut => {
+                let entry = self.timeouts.entry(path.to_string()).or_insert((0, at));
+                if entry.0 == 0 || at > entry.1 {
+                    *entry = (entry.0.saturating_add(1), at);
+                }
+            }
+            FetchOutcome::Failed(_) | FetchOutcome::NotAttempted => {}
+        }
+    }
+
+    /// Whether an automatic fetch of `path` must wait at `now`.
+    pub fn holds(&self, path: &str, now: DateTime<Local>, interval_secs: i64) -> bool {
+        self.timeouts.get(path).is_some_and(|&(n, at)| {
+            now < at + chrono::Duration::seconds(backoff_secs(n + 1, interval_secs, 1.0))
+        })
+    }
+
+    /// A manual `r` or `R`: every path may fetch again.
+    pub fn clear(&mut self) {
+        self.timeouts.clear();
+    }
+
+    /// The consecutive timeouts counted for `path`.
+    #[cfg(test)]
+    pub fn timeouts(&self, path: &str) -> u32 {
+        self.timeouts.get(path).map_or(0, |&(n, _)| n)
+    }
+}
+
 /// What a batch of fetches someone asked for came to, once the last landed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchReport {
@@ -2008,6 +2067,15 @@ pub struct App {
     pub api_budget: ApiBudget,
     /// The retry ladder and not-before beside `github_freshness`'s clock.
     pub github_backoff: GithubBackoff,
+    /// Paths the automatic fetches skip after a timeout (`FetchBackoff`).
+    pub fetch_backoff: FetchBackoff,
+    /// Paths with a fetch running, and when it was claimed: one fetch per
+    /// repo at a time (FZ-34, R5). Every fetch selection, automatic or
+    /// manual, skips a path listed here and only sweeps it
+    /// (`App::claim_fetch`). Two fetches of one repo each wrote their own
+    /// temp pack. Only fetches a sweep starts are listed; a launch or `R`
+    /// load runs its fetches itself.
+    pub fetches_in_flight: std::collections::HashMap<String, std::time::Instant>,
     /// The configured GitHub poll interval in seconds, floored, and what one
     /// poll costs in points (`github::poll_cost` of `repo_limit`). Copied from
     /// `Config` at startup, as `contrib_author` is, because the header judges
@@ -2170,6 +2238,8 @@ impl App {
             github_freshness: GithubFreshness::default(),
             api_budget: ApiBudget::default(),
             github_backoff: GithubBackoff::default(),
+            fetch_backoff: FetchBackoff::default(),
+            fetches_in_flight: std::collections::HashMap::new(),
             github_poll_secs: crate::config::Config::default().github_poll_interval as i64,
             github_poll_cost: crate::github::poll_cost(crate::config::Config::default().repo_limit),
             jitter: Box::new(ClockJitter::new()),
@@ -2277,6 +2347,45 @@ impl App {
         if finished && self.refresh_fetches.remove(path) && self.refresh_fetches.is_empty() {
             self.refresh_fetches_started = None;
         }
+    }
+
+    /// Whether an automatic fetch (watch sweep, moved remote, recovery
+    /// refetch) skips `path` at `now`: a recent timeout holds it, measured in
+    /// watch intervals (`FetchBackoff`).
+    pub fn fetch_held(&self, path: &str, now: DateTime<Local>) -> bool {
+        self.fetch_backoff
+            .holds(path, now, self.refresh_interval as i64)
+    }
+
+    /// Claim `path` for a fetch starting at `now`. False when a fetch of it is
+    /// already running: the caller sweeps the repo without fetching, and the
+    /// running fetch's outcome is the one that lands (R5).
+    pub fn claim_fetch(&mut self, path: &str, now: std::time::Instant) -> bool {
+        if self.fetches_in_flight.contains_key(path) {
+            return false;
+        }
+        self.fetches_in_flight.insert(path.to_string(), now);
+        true
+    }
+
+    /// A sweep's result for `path` landed. Only one that fetched ends the
+    /// claim: a sweep that skipped the fetch reports `NotAttempted` while the
+    /// claimed fetch is still running.
+    pub fn fetch_landed(&mut self, path: &str, fetch: &crate::git::FetchOutcome) {
+        if *fetch != crate::git::FetchOutcome::NotAttempted {
+            self.fetches_in_flight.remove(path);
+        }
+    }
+
+    /// Drop claims older than `limit` at `now`, the safety net for a fetch
+    /// whose result never landed (`SWEEP_STUCK_AFTER`).
+    pub fn expire_fetches_in_flight(
+        &mut self,
+        limit: std::time::Duration,
+        now: std::time::Instant,
+    ) {
+        self.fetches_in_flight
+            .retain(|_, started| now.saturating_duration_since(*started) <= limit);
     }
 
     /// Give up on refresh fetches that have outlived `limit`, and on a fetch
@@ -6303,5 +6412,129 @@ mod tests {
         assert_eq!(fresh.0, Icons::Nerd);
         assert_eq!(fresh.1.0, nerd_org);
         assert!(fresh.1.1.chars().all(is_private_use), "{:?}", fresh.1.1);
+    }
+    fn timed_out() -> crate::git::FetchOutcome {
+        crate::git::FetchOutcome::Failed(crate::git::FetchFailure {
+            kind: crate::git::FetchFailureKind::TimedOut,
+            detail: None,
+        })
+    }
+
+    /// FZ-34 (#83), R3: after the nth consecutive timeout a path is held for
+    /// `backoff_secs(n + 1)` from that timeout: two intervals, then four,
+    /// doubling up to the cap.
+    #[test]
+    fn consecutive_fetch_timeouts_hold_two_intervals_then_four_up_to_the_cap() {
+        let t0 = Local::now();
+        let s = chrono::Duration::seconds;
+        let mut b = FetchBackoff::default();
+        assert!(!b.holds("~/r", t0, 60), "nothing recorded holds nothing");
+        b.record("~/r", &timed_out(), t0);
+        assert_eq!(b.timeouts("~/r"), 1);
+        assert!(b.holds("~/r", t0 + s(119), 60));
+        assert!(!b.holds("~/r", t0 + s(120), 60));
+        let t1 = t0 + s(120);
+        b.record("~/r", &timed_out(), t1);
+        assert_eq!(b.timeouts("~/r"), 2);
+        assert!(b.holds("~/r", t1 + s(239), 60));
+        assert!(!b.holds("~/r", t1 + s(240), 60));
+        for i in 1..10 {
+            b.record("~/r", &timed_out(), t1 + s(i));
+        }
+        let last = t1 + s(9);
+        assert!(b.holds("~/r", last + s(BACKOFF_CAP_SECS - 1), 60));
+        assert!(!b.holds("~/r", last + s(BACKOFF_CAP_SECS), 60));
+        assert!(!b.holds("~/other", t0, 60), "a hold is per path");
+    }
+
+    /// A timeout older than the one already counted (a load's fetch landing
+    /// after a sweep's) is not counted again.
+    #[test]
+    fn an_older_timeout_is_not_counted_twice() {
+        let t0 = Local::now();
+        let mut b = FetchBackoff::default();
+        b.record("~/r", &timed_out(), t0);
+        b.record("~/r", &timed_out(), t0);
+        b.record("~/r", &timed_out(), t0 - chrono::Duration::seconds(5));
+        assert_eq!(b.timeouts("~/r"), 1);
+    }
+
+    /// Only a success or a manual refresh lifts the hold; another failure
+    /// kind neither holds a path nor resets the count.
+    #[test]
+    fn a_success_or_a_clear_lifts_the_hold_and_other_failures_do_not() {
+        use crate::git::{FetchFailure, FetchFailureKind, FetchOutcome};
+        let t0 = Local::now();
+        let mut b = FetchBackoff::default();
+        let unreachable = FetchOutcome::Failed(FetchFailure {
+            kind: FetchFailureKind::Unreachable,
+            detail: None,
+        });
+        b.record("~/u", &unreachable, t0);
+        assert!(!b.holds("~/u", t0, 60));
+
+        b.record("~/r", &timed_out(), t0);
+        b.record("~/r", &unreachable, t0 + chrono::Duration::seconds(1));
+        b.record("~/r", &FetchOutcome::NotAttempted, t0);
+        assert_eq!(b.timeouts("~/r"), 1);
+        assert!(b.holds("~/r", t0 + chrono::Duration::seconds(1), 60));
+
+        b.record("~/r", &FetchOutcome::Succeeded, t0);
+        assert!(!b.holds("~/r", t0, 60));
+        assert_eq!(b.timeouts("~/r"), 0);
+
+        b.record("~/r", &timed_out(), t0);
+        b.clear();
+        assert!(!b.holds("~/r", t0, 60));
+    }
+
+    /// FZ-34, R5: a running fetch is not started twice. Landing it ends the
+    /// claim; a sweep that only rebuilt the repo does not.
+    #[test]
+    fn a_running_fetch_is_claimed_once_until_it_lands() {
+        let mut app = make_app(1);
+        let t0 = std::time::Instant::now();
+        assert!(app.claim_fetch("~/repos/repo-0", t0));
+        assert!(
+            !app.claim_fetch("~/repos/repo-0", t0),
+            "a second fetch started"
+        );
+        assert!(app.claim_fetch("~/repos/other", t0), "a claim is per path");
+        app.fetch_landed("~/repos/repo-0", &crate::git::FetchOutcome::NotAttempted);
+        assert!(
+            !app.claim_fetch("~/repos/repo-0", t0),
+            "a sweep without a fetch ended the claim"
+        );
+        app.fetch_landed("~/repos/repo-0", &timed_out());
+        assert!(app.claim_fetch("~/repos/repo-0", t0));
+        app.fetch_landed("~/repos/repo-0", &crate::git::FetchOutcome::Succeeded);
+        assert!(app.claim_fetch("~/repos/repo-0", t0));
+    }
+
+    /// FZ-34, R5: a claim whose result never landed expires after the limit.
+    #[test]
+    fn a_fetch_claim_expires_after_the_stuck_limit() {
+        let mut app = make_app(1);
+        let t0 = std::time::Instant::now();
+        let limit = std::time::Duration::from_secs(180);
+        assert!(app.claim_fetch("~/repos/repo-0", t0));
+        app.expire_fetches_in_flight(limit, t0 + limit);
+        assert!(
+            !app.claim_fetch("~/repos/repo-0", t0),
+            "expired at the limit"
+        );
+        app.expire_fetches_in_flight(limit, t0 + limit + std::time::Duration::from_secs(1));
+        assert!(app.claim_fetch("~/repos/repo-0", t0));
+    }
+
+    /// The app measures the hold in its watch interval.
+    #[test]
+    fn the_app_holds_a_timed_out_path_in_watch_intervals() {
+        let mut app = make_app(1);
+        app.refresh_interval = 30;
+        let t0 = Local::now();
+        app.fetch_backoff.record("~/repos/repo-0", &timed_out(), t0);
+        assert!(app.fetch_held("~/repos/repo-0", t0 + chrono::Duration::seconds(59)));
+        assert!(!app.fetch_held("~/repos/repo-0", t0 + chrono::Duration::seconds(60)));
     }
 }

@@ -696,6 +696,13 @@ fn apply_load_result_saving_to(
     match result {
         Ok(lr) => {
             app.load_error = None;
+            // A fetch the load ran (launch, `R`) counts toward the timeout
+            // hold like a sweep's: only such a row has an attempt.
+            for repo in &lr.repos {
+                if let (Some(path), Some(at)) = (repo.path.as_deref(), repo.fetch.last_attempt) {
+                    app.fetch_backoff.record(path, &repo.fetch.outcome, at);
+                }
+            }
             app.repos = carry_fetch_facts(&app.repos, lr.repos);
             // Every row now comes from one dataset, so none is "not in" it
             // (design 4.7): a launch, `R`, a window apply, a rebuild from
@@ -897,6 +904,7 @@ async fn run_event_loop(
                     app.sweep_started = None;
                 }
                 app.expire_refresh_fetches(SWEEP_STUCK_AFTER);
+                app.expire_fetches_in_flight(SWEEP_STUCK_AFTER, std::time::Instant::now());
                 if app.watch_mode && !app.loading && app.sweep_started.is_none() {
                     // A missing timestamp means "due now", so watch can never
                     // silently die the way a Some-only guard could.
@@ -1207,7 +1215,7 @@ async fn handle_branch_input(
                     if deleted > 0
                         && let Some(idx) = app.selected_repo_index()
                     {
-                        start_single_sweep(app, tx, idx, false, args.author.clone());
+                        start_single_sweep(app, tx, idx, false, false, args.author.clone());
                     }
                 }
                 app.overlay = Overlay::None;
@@ -1248,7 +1256,7 @@ async fn handle_branch_input(
                             // Rebuild in the background: the new HEAD changes
                             // ahead/behind, the branch list, and the history.
                             if let Some(idx) = app.selected_repo_index() {
-                                start_single_sweep(app, tx, idx, false, args.author.clone());
+                                start_single_sweep(app, tx, idx, false, false, args.author.clone());
                             }
                         }
                         Err(e) => app.set_status(format!("Switch failed: {e}"), true),
@@ -1583,16 +1591,7 @@ async fn handle_normal_input(
         // accurate, without merging anything into the working tree. Actual
         // pull/merge is left to lazygit (Enter) on purpose -- fetching is
         // safe and non-destructive, merging is not.
-        KeyCode::Char('f') => {
-            if let Some(repo) = app.selected_repo().cloned()
-                && repo.path.is_some()
-                && let Some(idx) = app.selected_repo_index()
-            {
-                app.set_status(format!("\u{27f3} Fetching {}…", repo.name), false);
-                start_single_sweep(app, tx, idx, true, args.author.clone());
-                app.manual_fetches.expect(repo.path.clone());
-            }
-        }
+        KeyCode::Char('f') => fetch_key(app, tx, args.author.clone()),
         KeyCode::Char('F') => {
             app.set_status("\u{27f3} Fetching all…".to_string(), false);
             start_sweep(app, tx, true, args.author.clone(), true);
@@ -1879,6 +1878,8 @@ fn repo_moved(before: &RepoStatus, after: &RepoStatus) -> bool {
 /// contract). Any finished fetch settles a refresh waiting on it.
 fn apply_repo_updated(app: &mut App, path: &str, status: RepoStatus, fetch: git::FetchOutcome) {
     app.settle_refresh_fetch(path, &fetch);
+    app.fetch_landed(path, &fetch);
+    app.fetch_backoff.record(path, &fetch, chrono::Local::now());
     let mut name = None;
     if let Some(repo) = app
         .repos
@@ -2018,8 +2019,15 @@ fn apply_github_poll_at(
                     moved.push(idx);
                 }
             }
+            // A row held after a timeout waits out its hold (FZ-34).
+            moved.retain(|&idx| {
+                app.repos[idx]
+                    .path
+                    .as_deref()
+                    .is_none_or(|path| !app.fetch_held(path, now))
+            });
             for &idx in &moved {
-                start_single_sweep(app, tx, idx, true, author.clone());
+                start_single_sweep(app, tx, idx, true, true, author.clone());
             }
             // A manual `r` keeps spinning until these land.
             let fetched_paths: Vec<String> = moved
@@ -2260,6 +2268,8 @@ fn reload_key(
     repo_dir: &Path,
     now: chrono::DateTime<chrono::Local>,
 ) {
+    // A manual reload lifts every timeout hold (FZ-34).
+    app.fetch_backoff.clear();
     match reload_action(app, config, now) {
         ReloadAction::AlreadyRunning => app.set_status(REFRESH_RUNNING.to_string(), false),
         ReloadAction::ResumesOnly(until) => app.set_status(limited_status(until), false),
@@ -2293,6 +2303,8 @@ fn refresh_key(
     config: &config::Config,
     now: chrono::DateTime<chrono::Local>,
 ) {
+    // A manual refresh lifts every timeout hold (FZ-34).
+    app.fetch_backoff.clear();
     let limited = github_limit_until(app, config, now);
     match limited {
         Some(until) => app.set_status(limited_status(until), false),
@@ -2541,8 +2553,77 @@ fn start_sweep(
         app.manual_fetches
             .expect(targets.iter().map(|t| t.display_path.clone()));
     }
+    let no_fetch = fetch_skips(app, &targets, do_fetch, !manual);
     let probe = contrib_probe(app);
-    spawn_sweep(tx.clone(), targets, do_fetch, author, true, probe);
+    spawn_sweep(
+        tx.clone(),
+        targets,
+        do_fetch,
+        &no_fetch,
+        author,
+        true,
+        probe,
+    );
+}
+
+/// The targets an automatic sweep rebuilds without fetching at `now`: those
+/// a recent fetch timeout holds (`App::fetch_held`, FZ-34).
+fn held_fetch_paths(
+    app: &App,
+    targets: &[SweepTarget],
+    now: chrono::DateTime<chrono::Local>,
+) -> std::collections::HashSet<String> {
+    targets
+        .iter()
+        .filter(|t| app.fetch_held(&t.display_path, now))
+        .map(|t| t.display_path.clone())
+        .collect()
+}
+
+/// `f`: fetch the selected repo. Manual, so a timeout hold does not stop it
+/// (FZ-34); a fetch of it already running does.
+fn fetch_key(
+    app: &mut App,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    author: Option<String>,
+) {
+    if let Some(repo) = app.selected_repo().cloned()
+        && repo.path.is_some()
+        && let Some(idx) = app.selected_repo_index()
+    {
+        app.set_status(format!("\u{27f3} Fetching {}…", repo.name), false);
+        start_single_sweep(app, tx, idx, true, false, author);
+        app.manual_fetches.expect(repo.path.clone());
+    }
+}
+
+/// The targets a sweep rebuilds without fetching, claiming the rest for a
+/// fetch (FZ-34). Every fetching sweep skips a path whose fetch is still
+/// running (R5); an `automatic` one (the watch timer, a moved remote, the
+/// recovery refetch) also skips a path held after a timeout (R3), where `f`
+/// and `F` fetch it as asked. A sweep that does not fetch claims nothing.
+fn fetch_skips(
+    app: &mut App,
+    targets: &[SweepTarget],
+    do_fetch: bool,
+    automatic: bool,
+) -> std::collections::HashSet<String> {
+    if !do_fetch {
+        return std::collections::HashSet::new();
+    }
+    let mut skips = if automatic {
+        held_fetch_paths(app, targets, chrono::Local::now())
+    } else {
+        std::collections::HashSet::new()
+    };
+    let started = std::time::Instant::now();
+    for target in targets {
+        if !skips.contains(&target.display_path) && !app.claim_fetch(&target.display_path, started)
+        {
+            skips.insert(target.display_path.clone());
+        }
+    }
+    skips
 }
 
 /// Sweep a single repo (the `f` fetch and the refresh after a branch switch
@@ -2550,20 +2631,23 @@ fn start_sweep(
 /// Does not take the sweep lock: it is one repo, and it must work while a
 /// full sweep is running.
 fn start_single_sweep(
-    app: &App,
+    app: &mut App,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     index: usize,
     do_fetch: bool,
+    automatic: bool,
     author: Option<String>,
 ) {
     let targets = sweep_targets(app, Some(index));
     if targets.is_empty() {
         return;
     }
+    let no_fetch = fetch_skips(app, &targets, do_fetch, automatic);
     spawn_sweep(
         tx.clone(),
         targets,
         do_fetch,
+        &no_fetch,
         author,
         false,
         contrib_probe(app),
@@ -2571,20 +2655,29 @@ fn start_single_sweep(
 }
 
 /// The shared sweep body: fetch (capped) then rebuild (capped), streaming
-/// each repo back as it lands so the list updates progressively.
+/// each repo back as it lands so the list updates progressively. A target
+/// whose display path is in `no_fetch` is rebuilt without a fetch.
 fn spawn_sweep(
     tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
     targets: Vec<SweepTarget>,
     do_fetch: bool,
+    no_fetch: &std::collections::HashSet<String>,
     author: Option<String>,
     report_done: bool,
     probe: Option<ContribProbe>,
 ) {
+    let targets: Vec<(SweepTarget, bool)> = targets
+        .into_iter()
+        .map(|t| {
+            let fetch = do_fetch && !no_fetch.contains(&t.display_path);
+            (t, fetch)
+        })
+        .collect();
     tokio::spawn(async move {
         let probe_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
         let fetch_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(FETCH_CONCURRENCY));
         let mut set = tokio::task::JoinSet::new();
-        for target in targets {
+        for (target, do_fetch) in targets {
             let probe_sem = probe_sem.clone();
             let fetch_sem = fetch_sem.clone();
             let tx = tx.clone();
@@ -5090,6 +5183,253 @@ mod tests {
         let carried = carry_fetch_facts(&app.repos, reloaded);
         assert_eq!(carried[0].fetch, model::FetchFacts::default());
         assert_eq!(carried[1].fetch, app.repos[1].fetch);
+    }
+
+    /// FZ-34 (#83), criterion 3: the watch sweep rebuilds a row held after
+    /// a timeout without fetching it, and fetches it again once the hold
+    /// (two intervals after the first timeout) has passed or a fetch
+    /// succeeded. Other failure kinds hold nothing.
+    #[test]
+    fn the_watch_sweep_skips_the_fetch_of_a_row_that_timed_out() {
+        let mut app = fleet_app(3);
+        app.refresh_interval = 60;
+        land(&mut app, 0, fetch_failed(git::FetchFailureKind::TimedOut));
+        land(
+            &mut app,
+            1,
+            fetch_failed(git::FetchFailureKind::Unreachable),
+        );
+        let now = chrono::Local::now();
+        let targets = sweep_targets(&app, None);
+        assert_eq!(
+            held_fetch_paths(&app, &targets, now),
+            ["~/repos/repo-0".to_string()].into(),
+        );
+        assert!(
+            held_fetch_paths(&app, &targets, now + chrono::Duration::seconds(121)).is_empty(),
+            "still held after two intervals"
+        );
+        assert_eq!(
+            app.repos[0].fetch.failure().map(|f| f.kind),
+            Some(git::FetchFailureKind::TimedOut),
+            "the row stopped showing its timeout"
+        );
+        // The automatic selection skips the held row and claims no fetch for
+        // it; a manual one fetches it.
+        let automatic = fetch_skips(&mut app, &targets, true, true);
+        assert!(automatic.contains("~/repos/repo-0"), "{automatic:?}");
+        assert!(!app.fetches_in_flight.contains_key("~/repos/repo-0"));
+        assert!(app.fetches_in_flight.contains_key("~/repos/repo-1"));
+        app.fetches_in_flight.clear();
+        let manual = fetch_skips(&mut app, &targets, true, false);
+        assert!(!manual.contains("~/repos/repo-0"), "{manual:?}");
+        assert!(app.fetches_in_flight.contains_key("~/repos/repo-0"));
+        land(&mut app, 0, git::FetchOutcome::Succeeded);
+        assert!(held_fetch_paths(&app, &targets, now).is_empty());
+    }
+
+    /// FZ-34 (#83), R5: a fetching sweep claims each path it fetches, and
+    /// the next selection, manual or automatic, sweeps a path whose fetch is
+    /// still running without fetching it again. The landed outcome ends the
+    /// claim; a sweep that did not fetch claims nothing.
+    #[test]
+    fn a_running_fetch_is_skipped_by_the_next_selection_until_it_lands() {
+        let mut app = fleet_app(2);
+        let targets = sweep_targets(&app, None);
+        assert!(fetch_skips(&mut app, &targets, false, true).is_empty());
+        assert!(
+            app.fetches_in_flight.is_empty(),
+            "a sweep without fetch claimed"
+        );
+        assert!(fetch_skips(&mut app, &targets, true, true).is_empty());
+        let both: std::collections::HashSet<String> =
+            ["~/repos/repo-0".to_string(), "~/repos/repo-1".to_string()].into();
+        assert_eq!(fetch_skips(&mut app, &targets, true, false), both, "manual");
+        assert_eq!(
+            fetch_skips(&mut app, &targets, true, true),
+            both,
+            "automatic"
+        );
+        // A sweep that only rebuilt repo-0 lands first; its fetch still runs.
+        land(&mut app, 0, git::FetchOutcome::NotAttempted);
+        assert_eq!(fetch_skips(&mut app, &targets, true, false), both);
+        land(&mut app, 0, git::FetchOutcome::Succeeded);
+        assert_eq!(
+            fetch_skips(&mut app, &targets, true, false),
+            ["~/repos/repo-1".to_string()].into()
+        );
+    }
+
+    /// An app whose rows sit at paths that do not exist, so a sweep spawned
+    /// from a test touches nothing on disk.
+    fn missing_paths_app(n: usize, tag: &str) -> App {
+        let repos = (0..n)
+            .map(|i| {
+                let mut r = test_repo();
+                r.name = format!("repo-{i}");
+                r.path = Some(
+                    std::env::temp_dir()
+                        .join(format!("fleetz-83-{tag}-no-such-dir"))
+                        .join(format!("repo-{i}"))
+                        .display()
+                        .to_string(),
+                );
+                r
+            })
+            .collect();
+        App::new(repos, "h".to_string(), 120, 44)
+    }
+
+    fn timed_out_at(app: &mut App, i: usize) -> String {
+        let path = app.repos[i].path.clone().unwrap();
+        let status = app.repos[i].clone();
+        apply_repo_updated(
+            app,
+            &path,
+            status,
+            fetch_failed(git::FetchFailureKind::TimedOut),
+        );
+        path
+    }
+
+    /// FZ-34 (#83), criterion 3 through `start_sweep`: the watch timer's
+    /// sweep fetches every row but the one held after a timeout.
+    #[tokio::test]
+    async fn the_watch_timer_sweep_claims_no_fetch_for_a_held_row() {
+        let mut app = missing_paths_app(3, "watch");
+        let held = timed_out_at(&mut app, 1);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        start_sweep(&mut app, &tx, true, None, false);
+        assert!(
+            !app.fetches_in_flight.contains_key(&held),
+            "held row fetched"
+        );
+        for i in [0, 2] {
+            let path = app.repos[i].path.clone().unwrap();
+            assert!(
+                app.fetches_in_flight.contains_key(&path),
+                "row {i} not fetched"
+            );
+        }
+    }
+
+    /// FZ-34 (#83): `f` is manual, so it fetches a row held after a timeout.
+    #[tokio::test]
+    async fn f_fetches_a_row_held_after_a_timeout() {
+        let mut app = missing_paths_app(1, "fkey");
+        let held = timed_out_at(&mut app, 0);
+        assert!(app.fetch_held(&held, chrono::Local::now()));
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        fetch_key(&mut app, &tx, None);
+        assert!(
+            app.fetches_in_flight.contains_key(&held),
+            "f skipped the held row"
+        );
+    }
+
+    /// FZ-34 (#83): a timeout from a fetch a load ran (launch, `R`) holds the
+    /// row like a sweep's.
+    #[test]
+    fn a_load_that_timed_out_holds_the_row() {
+        let mut app = fleet_app(1);
+        let path = app.repos[0].path.clone().unwrap();
+        let now = chrono::Local::now();
+        let mut repo = app.repos[0].clone();
+        repo.fetch
+            .record(&fetch_failed(git::FetchFailureKind::TimedOut), now);
+        apply_load_result(
+            &mut app,
+            &config::Config::default(),
+            Ok(Box::new(LoadResult {
+                kind: LoadKind::Reload,
+                repos: vec![repo],
+                header: "h".to_string(),
+                dataset: Some(Vec::new()),
+                github_calendar: None,
+                source: app::DatasetSource::Local,
+                ambiguity: None,
+                meta: None,
+            })),
+        );
+        assert!(
+            app.fetch_held(&path, now),
+            "the load's timeout held nothing"
+        );
+    }
+
+    /// FZ-34 (#83): the poll's batch (moved remotes and the recovery
+    /// refetch) leaves out a row held after a timeout.
+    #[tokio::test]
+    async fn a_recovering_poll_skips_a_row_held_after_a_timeout() {
+        let path = std::env::temp_dir()
+            .join("fleetz-83-no-such-dir")
+            .join("repo")
+            .display()
+            .to_string();
+        let mut repo = test_repo();
+        repo.path = Some(path.clone());
+        let mut app = App::new(vec![repo], "h".to_string(), 120, 44);
+        let status = app.repos[0].clone();
+        apply_repo_updated(
+            &mut app,
+            &path,
+            status,
+            fetch_failed(git::FetchFailureKind::TimedOut),
+        );
+        poll_with(
+            &mut app,
+            Err(github::FetchError {
+                failure: github::Failure::new(github::FailureKind::Offline, "no route"),
+                fallback: None,
+                meta: Default::default(),
+            }),
+        );
+        app.refresh_awaits_poll = true;
+        poll_with(
+            &mut app,
+            Ok(Box::new(github::GithubFetch {
+                repos: Vec::new(),
+                calendar: None,
+                has_pr_counts: true,
+                origin: github::Origin::Network,
+                meta: Default::default(),
+            })),
+        );
+        assert!(
+            app.refresh_fetches.is_empty(),
+            "the recovery refetch fetched a held row"
+        );
+    }
+
+    /// FZ-34 (#83): a manual `r` or `R` lifts every timeout hold.
+    #[test]
+    fn r_and_shift_r_lift_the_timeout_holds() {
+        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
+        let budget = reading("A", 2, at(17, 23, 6), at(17, 0, 0));
+        land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
+        let timed_out = fetch_failed(git::FetchFailureKind::TimedOut);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let args = Args::parse_from(["fleetz"]);
+
+        app.fetch_backoff.record("~/a", &timed_out, at(17, 9, 0));
+        assert!(app.fetch_held("~/a", at(17, 10, 0)));
+        // Under a known limit `r` sends nothing, so no runtime is needed.
+        refresh_key(&mut app, &tx, &args, &config, at(17, 10, 0));
+        assert!(!app.fetch_held("~/a", at(17, 10, 0)), "r kept the hold");
+
+        app.fetch_backoff.record("~/a", &timed_out, at(17, 9, 30));
+        assert!(app.fetch_held("~/a", at(17, 10, 0)));
+        // A load already running: `R` starts nothing new.
+        app.loading = true;
+        reload_key(
+            &mut app,
+            &tx,
+            &args,
+            &config,
+            Path::new("/nonexistent"),
+            at(17, 10, 0),
+        );
+        assert!(!app.fetch_held("~/a", at(17, 10, 0)), "R kept the hold");
     }
 
     #[test]
