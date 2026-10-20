@@ -215,6 +215,48 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-20
 
+- **#87 (FZ-37), copy a commit hash with `y` or a click in pane 2.**
+  Merged `5921633` at 13:54 CEST; ticket commit `ee88b34` (reviewed diff
+  `afade15a` plus new `src/clipboard.rs` `858317b6`), branch
+  `feat/87-yank-hash` from `ecab6c4`. Andreas's feature of 13:05 ("y for
+  yank", "click to copy"). `y` copies `inspected_hash` with the status
+  `copied <hash>` / `nothing to copy` / `copy failed: <reason>`; a left
+  click in the detail pane moves the cursor to the row and copies the
+  hash when on its columns, from a hit map the renderer fills
+  (`DetailHits::measure` in `render_detail_pane`, `line_rows` the one
+  wrap arithmetic) that records the hash as drawn. `src/clipboard.rs`:
+  `pbcopy`, `wl-copy`, `xclip`, `xsel` on PATH, 2 s bound, OSC 52
+  fallback, own base64. Help row `y`; the `/` help row reworded to fit
+  80x24 (small look change, named to Andreas). Review 1 accepted with
+  follow-ups; fix cycle 1 recorded the drawn hash and entry index in the
+  hit map (red-first: the old path copied the neighbour); review 2
+  accepted, mutations M1, M2, M4, M7 caught. Open follow-ups: the `y`
+  arm and mouse wiring are untestable through the real-terminal
+  handlers; in the one-burst window the cursor may land on a neighbour
+  while the copy is right. Branch CI green; combined check with FZ-35a
+  1155 tests; `main` CI green. Swept.
+  `#87: review accepted first (follow-ups fixed); fix cycles 1; owner decisions 0; worker 43; review 9; usage read (worker 139k, reviewer 95k subagent tokens)`
+- **#84 (FZ-35a), progress-aware fetch: inactivity limit and received
+  size.** Merged `b55228e` at 13:40 CEST; ticket commit `7b89648`
+  (reviewed diff `cfc5549e`), branch `feat/84-fetch-progress` from
+  `ecab6c4`. Spec section A of
+  `docs/superpowers/specs/2026-10-20-fetch-progress-and-cap-design.md`,
+  approved by Andreas at 12:05. `--progress` replaces `--quiet`; stderr
+  is read as the fetch runs (`FetchStderr`, `parse_fetch_progress`);
+  `FETCH_STALL_LIMIT` 30 s restarts on every progress line, the
+  server's `remote:` phases included (ruling 1), so a moving fetch
+  finishes and a silent one gets FZ-34's cleanup as `TimedOut`;
+  `AppEvent::FetchProgress` throttled to two a second lands on
+  `FetchFacts::progress` and the row shows `fetching 312 MB` in the
+  failure-marker slot (small look change, ruling 3); `FetchClaims`
+  (shared `Arc<Mutex>`, ruling 2) claims at the permit with a token,
+  the launch fetches included. Five `#[cfg(test)]` wrappers keep the
+  existing tests untouched (ruling 4; ask Andreas whether those tests
+  may be retargeted). One worker pass, review accepted first time with
+  seven mutation classes caught; one finding (manual tally expiry from
+  the batch start) became FZ-35b criterion 7. Branch CI green; combined
+  check 1138 tests; `main` CI green. Swept.
+  `#84: review accepted first; fix cycles 0; owner decisions 0; worker 23; review 9; usage read (worker 263k, reviewer 152k subagent tokens)`
 - **#45 (FZ-26), run the CI gates on pull requests.** Merged `27bc09b` at
   13:14 CEST; ticket commit `c696b7e` (reviewed diff `deaa6694`), branch
   `ci/45-pull-request-trigger` from `ecab6c4`. Parked since 2026-10-01

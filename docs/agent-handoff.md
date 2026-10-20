@@ -46,7 +46,16 @@ otherwise.
   `main` does not yet carry; re-prepare the bump when the current scope
   is stable and present the commands again. Notes are produced by
   `release.yml` through the fixed `scripts/release-notes.sh` (#86).
-- **In flight at 13:15 (under the 13:05 scope):**
+- **Update 13:57:** #86, #45, #84 and #87 are Done (merged `ca2aeb6`,
+  `27bc09b`, `b55228e`, `5921633`; all swept; records in the log).
+  `main` is `5921633`, CI green, 1155 tests. **#85 FZ-35b** In progress since 13:30: `fz-worker`
+  (`claude-opus-5-5`, medium), base `b55228e`, branch
+  `feat/85-fetch-cap`, worktree `.claude/worktrees/issue-85`; criterion
+  7 (manual tally timed from the last sign of life) added from the #84
+  review. Open question to Andreas: a pane 1 wheel-coalescing ticket
+  (his "one row per event" is already what the code does; several
+  events per notch come from the terminal).
+- **In flight at 13:15 (under the 13:05 scope), superseded above:**
   - **#86 FZ-36** (release notes skip coordination commits) and **#45
     FZ-26** (CI gates on pull requests): both accepted, committed
     (`0b9824a`, `c696b7e`), pushed, branch CI green, Ready to

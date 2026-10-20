@@ -98,9 +98,10 @@ question on `f` ("are you sure you want to fetch this big ass repo?"); see
   hold and records the new `diskUsage` baseline. `F` (fetch all), launch,
   the watch sweep, the moved-remote batch and the recovery refetch all keep
   the cap: nothing but a deliberate per-row key pulls a big one.
-- **Contract.** Amendment 3 in the fetch outcome contract: the `TooBig`
-  kind, the two labels, the baseline in the facts, and the rule that the
-  backoff skips it.
+- **Contract.** Amendment 4 in the fetch outcome contract (FZ-35a's is
+  3): the `TooBig` kind, the two labels, the baseline in the facts, the
+  rule that the backoff skips it, and the manual tally timed from the
+  last sign of life (criterion 7, from the FZ-35a review).
 
 ### What the user sees, in order
 
