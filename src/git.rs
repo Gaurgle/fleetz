@@ -8,12 +8,15 @@ use tokio::process::Command;
 /// credential prompt can never wedge a sweep. kill_on_drop reaps the child.
 const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// The ceiling for `git fetch` alone (FZ-34, #83). A large but progressing
-/// download needs longer than `GIT_TIMEOUT`: one of 1.1 GB never finished in
-/// 30 s and restarted every sweep. Still under `SWEEP_STUCK_AFTER` (180 s in
-/// `main.rs`), so a sweep waiting on it is not given up on first. An
-/// unreachable ssh host still fails in 10 s (`FETCH_SSH_COMMAND`).
-pub(crate) const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// How long `git fetch` may go without a progress update before it is
+/// killed (FZ-35a, #84). An inactivity limit, not a wall clock: the clock
+/// restarts on every update, so a large download that is still moving is
+/// never cut and its bytes are never wasted (a pack cannot be resumed),
+/// while one that has gone quiet is cut sooner than FZ-34's 120 s ceiling
+/// cut it. Under `SWEEP_STUCK_AFTER` (180 s in `main.rs`), which measures a
+/// fetch's claim from its last update too. An unreachable ssh host still
+/// fails in 10 s (`FETCH_SSH_COMMAND`).
+pub(crate) const FETCH_STALL_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Build a hardened git command: no optional locks (polling must not take
 /// index.lock and fight editors), no terminal prompts (a fetch that wants
@@ -332,7 +335,7 @@ pub async fn work_key_from(
 /// git's stderr under the C locale `git_cmd` sets (`classify_fetch_error`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchFailureKind {
-    /// No answer within `GIT_TIMEOUT`.
+    /// No progress for `FETCH_STALL_LIMIT`.
     TimedOut,
     /// Credentials wanted or refused. Prompts are disabled, so a remote that
     /// asks for a password fails here instead of hanging.
@@ -372,10 +375,174 @@ enum FetchRun {
     Exited(std::process::Output),
 }
 
-const FETCH_ARGS: &[&str] = &["fetch", "--quiet", "--prune"];
+/// `--progress` rather than `--quiet` (FZ-35a): git reports progress only to
+/// a terminal unless asked, and `--quiet` turns off `index-pack`'s
+/// `Receiving objects` even with `--progress` (git 2.50, run). What `--quiet`
+/// used to keep off stderr is dropped from the kept text instead
+/// (`quiet_would_hide`).
+const FETCH_ARGS: &[&str] = &["fetch", "--progress", "--prune"];
 
 /// The longest git error line kept as a failure's detail.
 const FETCH_DETAIL_MAX: usize = 160;
+
+/// Which part of a fetch a progress update is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchPhase {
+    /// The server building the pack (`remote: Counting objects`,
+    /// `remote: Compressing objects`, ...): no bytes yet.
+    Remote,
+    /// The pack arriving: `Receiving objects`, or `Unpacking objects` for a
+    /// fetch small enough to be unpacked loose.
+    Receiving,
+    /// `Resolving deltas` after the pack has arrived.
+    Resolving,
+}
+
+/// One progress update of a running fetch, read from git's stderr.
+/// `objects_total` is 0 when git gave only a count (`Enumerating objects:
+/// 1234`). `bytes` is what has been received so far: git prints it on the
+/// `Receiving objects` lines only, so later updates carry the last value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FetchProgress {
+    pub phase: FetchPhase,
+    pub objects_done: u64,
+    pub objects_total: u64,
+    pub bytes: u64,
+}
+
+/// One `\r`- or `\n`-separated piece of git's stderr read as a progress
+/// update, or `None` when it is anything else. The shapes, as git prints them
+/// under `LC_ALL=C`, with padding and an optional `, done.`:
+///
+/// - `Receiving objects:  45% (123/273), 1.23 MiB | 1.20 MiB/s`
+/// - `Resolving deltas:  12% (3/25)`
+/// - `remote: Compressing objects: 100% (302/302)`, `remote: Enumerating
+///   objects: 302`
+///
+/// Sizes are in `bytes`, `KiB`, `MiB` or `GiB` (also `B`). A local title git
+/// prints for no fetch phase is not progress, and neither is a line whose
+/// title does not start upper case (`remote: fatal: ...`), so an error line
+/// is never swallowed.
+pub fn parse_fetch_progress(segment: &str) -> Option<FetchProgress> {
+    let line = segment.trim();
+    let (remote, line) = match line.strip_prefix("remote:") {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, line),
+    };
+    let (title, rest) = line.split_once(": ")?;
+    if !title.starts_with(|c: char| c.is_ascii_uppercase())
+        || !title.chars().all(|c| c.is_ascii_alphabetic() || c == ' ')
+    {
+        return None;
+    }
+    let phase = match (remote, title) {
+        (true, _) => FetchPhase::Remote,
+        (false, "Receiving objects" | "Unpacking objects") => FetchPhase::Receiving,
+        (false, "Resolving deltas") => FetchPhase::Resolving,
+        (false, _) => return None,
+    };
+    let rest = rest.trim_start();
+    let rest = rest.strip_suffix(", done.").unwrap_or(rest).trim_end();
+    let (objects_done, objects_total, bytes) = match rest.split_once('%') {
+        Some((percent, after)) => {
+            percent.trim().parse::<u32>().ok()?;
+            let counts = after.trim_start().strip_prefix('(')?;
+            let (counts, tail) = counts.split_once(')')?;
+            let (done, total) = counts.split_once('/')?;
+            // `, 1.23 MiB | 1.20 MiB/s` on a receiving line; anything else
+            // after the counts (`, completed with 76 local objects.`) has
+            // no size.
+            let bytes = tail
+                .trim()
+                .strip_prefix(',')
+                .and_then(|sized| sized.split('|').next())
+                .and_then(|size| parse_size(size.trim()))
+                .unwrap_or(0);
+            (done.parse().ok()?, total.parse().ok()?, bytes)
+        }
+        None => (rest.parse().ok()?, 0, 0),
+    };
+    Some(FetchProgress {
+        phase,
+        objects_done,
+        objects_total,
+        bytes,
+    })
+}
+
+/// `596.79 KiB` as bytes. git's units are binary (`strbuf_humanise_bytes`).
+fn parse_size(text: &str) -> Option<u64> {
+    let (number, unit) = text.split_once(' ')?;
+    let scale: f64 = match unit {
+        "B" | "byte" | "bytes" => 1.0,
+        "KiB" => 1024.0,
+        "MiB" => 1024.0 * 1024.0,
+        "GiB" => 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    let number: f64 = number.parse().ok()?;
+    (number >= 0.0).then(|| (number * scale).round() as u64)
+}
+
+/// Whether `--quiet`, which the fetch used to run with, would have kept this
+/// stderr piece off the screen: a progress update, the server's `Total`
+/// summary, and the `From <url>` header and ref update lines git prints for
+/// a fetch that is not quiet. `classify_fetch_error` and `first_error_line`
+/// read what is left, so they see what they saw before FZ-35a.
+fn quiet_would_hide(segment: &str) -> bool {
+    let ref_update = |s: &str| {
+        let b = s.as_bytes();
+        b.len() > 3 && b[0] == b' ' && b" +-t*!=".contains(&b[1]) && b[2] == b' '
+    };
+    parse_fetch_progress(segment).is_some()
+        || segment.trim_start().starts_with("remote: Total ")
+        || segment.starts_with("From ")
+        || ref_update(segment)
+}
+
+/// git's stderr as it streams in: split on `\r` and `\n`, progress updates
+/// handed out as they complete, everything else kept for classification.
+#[derive(Debug, Default)]
+struct FetchStderr {
+    partial: Vec<u8>,
+    kept: Vec<u8>,
+    bytes: u64,
+}
+
+impl FetchStderr {
+    /// Take in a chunk; returns the progress updates it completed.
+    fn feed(&mut self, chunk: &[u8]) -> Vec<FetchProgress> {
+        let mut updates = Vec::new();
+        for &b in chunk {
+            if b == b'\r' || b == b'\n' {
+                updates.extend(self.end_segment());
+            } else {
+                self.partial.push(b);
+            }
+        }
+        updates
+    }
+
+    /// The pipe closed: the last piece, if it had no line end.
+    fn finish(&mut self) -> Option<FetchProgress> {
+        self.end_segment()
+    }
+
+    fn end_segment(&mut self) -> Option<FetchProgress> {
+        let segment = std::mem::take(&mut self.partial);
+        let text = String::from_utf8_lossy(&segment);
+        if let Some(mut progress) = parse_fetch_progress(&text) {
+            self.bytes = self.bytes.max(progress.bytes);
+            progress.bytes = self.bytes;
+            return Some(progress);
+        }
+        if !text.trim().is_empty() && !quiet_would_hide(&text) {
+            self.kept.extend_from_slice(&segment);
+            self.kept.push(b'\n');
+        }
+        None
+    }
+}
 
 /// Run `git fetch` on a repo. Prunes deleted remote branches so
 /// remote_only_branches does not accumulate stale entries.
@@ -383,8 +550,18 @@ const FETCH_DETAIL_MAX: usize = 160;
 /// Its own path rather than `run_git`, which every other caller keeps: a
 /// fetch is the one probe whose failure the user has to be told about, and
 /// `run_git` cannot say why one failed.
+#[cfg(test)]
 pub async fn fetch(repo_path: &Path) -> FetchOutcome {
-    fetch_within(repo_path, FETCH_TIMEOUT).await
+    fetch_reporting(repo_path, |_| {}).await
+}
+
+/// `fetch`, handing each progress update to `on_progress` as git prints it,
+/// under `FETCH_STALL_LIMIT`.
+pub async fn fetch_reporting(
+    repo_path: &Path,
+    on_progress: impl FnMut(FetchProgress),
+) -> FetchOutcome {
+    fetch_watched(repo_path, FETCH_STALL_LIMIT, on_progress).await
 }
 
 /// The ssh command a fetch hands git when the user chose none. ssh's own TCP
@@ -392,8 +569,8 @@ pub async fn fetch(repo_path: &Path) -> FetchOutcome {
 /// unreachable host ended as `TimedOut` after the whole limit; with a 10 s
 /// connect timeout it fails sooner, with ssh's reason. `BatchMode` stops ssh
 /// prompting on the TUI's terminal (a passphrase, an unknown host key), which
-/// `GIT_TERMINAL_PROMPT=0` does not cover. A slow but reachable remote still
-/// has the full `FETCH_TIMEOUT`.
+/// `GIT_TERMINAL_PROMPT=0` does not cover. A slow but reachable remote is
+/// held only to `FETCH_STALL_LIMIT`.
 const FETCH_SSH_COMMAND: &str = "ssh -o ConnectTimeout=10 -o BatchMode=yes";
 
 /// Whether a fetch adds `FETCH_SSH_COMMAND`: only when the user has set none
@@ -561,15 +738,104 @@ impl Drop for FetchGroup {
 /// removing temp files anyway.
 const GROUP_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Run the fetch in its own process group within `limit`.
+/// `fetch_watched` with no one listening to its progress.
+#[cfg(test)]
+async fn fetch_within(repo_path: &Path, limit: std::time::Duration) -> FetchOutcome {
+    fetch_watched(repo_path, limit, |_| {}).await
+}
+
+/// How a watched fetch ended, before its group is dealt with.
+enum Watched {
+    Exited(std::process::Output),
+    Stalled,
+    WaitFailed,
+}
+
+/// The next chunk of a pipe, `None` at its end, on an error, or when there
+/// is no pipe. An `async fn` so `select!` builds it for a closed pipe
+/// without touching the pipe.
+async fn read_chunk(pipe: &mut Option<tokio::process::ChildStderr>) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let pipe = pipe.as_mut()?;
+    let mut buf = vec![0u8; 4096];
+    match pipe.read(&mut buf).await {
+        Ok(0) | Err(_) => None,
+        Ok(n) => {
+            buf.truncate(n);
+            Some(buf)
+        }
+    }
+}
+
+/// Wait for the fetch while reading both pipes, so a chatty fetch never
+/// blocks on a full stderr pipe, and hand each progress update to
+/// `on_progress`. `Stalled` when `stall_limit` passes with no update; the
+/// clock starts when the child does and restarts on every update.
+async fn watch_fetch(
+    child: &mut tokio::process::Child,
+    stdout: Option<tokio::process::ChildStdout>,
+    mut stderr: Option<tokio::process::ChildStderr>,
+    stall_limit: std::time::Duration,
+    on_progress: &mut impl FnMut(FetchProgress),
+) -> Watched {
+    let wait = child.wait();
+    tokio::pin!(wait);
+    let stdout = read_pipe(stdout);
+    tokio::pin!(stdout);
+    let deadline = tokio::time::sleep(stall_limit);
+    tokio::pin!(deadline);
+    let mut log = FetchStderr::default();
+    let (mut status, mut out) = (None, None);
+    while status.is_none() || out.is_none() || stderr.is_some() {
+        tokio::select! {
+            exited = &mut wait, if status.is_none() => match exited {
+                Ok(exited) => status = Some(exited),
+                Err(_) => return Watched::WaitFailed,
+            },
+            read = &mut stdout, if out.is_none() => out = Some(read),
+            chunk = read_chunk(&mut stderr), if stderr.is_some() => {
+                let updates = match chunk {
+                    Some(chunk) => log.feed(&chunk),
+                    None => {
+                        stderr = None;
+                        log.finish().into_iter().collect()
+                    }
+                };
+                for update in updates {
+                    deadline
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + stall_limit);
+                    on_progress(update);
+                }
+            },
+            () = &mut deadline => return Watched::Stalled,
+        }
+    }
+    match (status, out) {
+        (Some(status), Some(stdout)) => Watched::Exited(std::process::Output {
+            status,
+            stdout,
+            stderr: log.kept,
+        }),
+        _ => Watched::WaitFailed,
+    }
+}
+
+/// Run the fetch in its own process group, cut when it goes `stall_limit`
+/// without a progress update, handing each update to `on_progress`.
 ///
-/// On a timeout the group is killed and reaped, and the temp pack files
+/// On a stall the group is killed and reaped, and the temp pack files
 /// (`temp_pack_names`) that were not in the pack directory before the fetch
-/// started are removed (`remove_new_temp_packs`). A fetch that exits by
+/// started are removed (`remove_new_temp_packs`): FZ-34's handling of a
+/// timeout, and the outcome is `TimedOut` as it was. A fetch that exits by
 /// itself removes nothing: git cleans up after its own exit. A cancelled
 /// fetch (the guard dropped mid-run) kills the group and removes them
 /// without waiting (`FetchGroup`'s `Drop`).
-async fn fetch_within(repo_path: &Path, limit: std::time::Duration) -> FetchOutcome {
+async fn fetch_watched(
+    repo_path: &Path,
+    stall_limit: std::time::Duration,
+    mut on_progress: impl FnMut(FetchProgress),
+) -> FetchOutcome {
     let snapshot = repo_dirs(repo_path).map(|d| {
         let before = temp_pack_names(&d.common_dir);
         (d.common_dir, before)
@@ -588,26 +854,25 @@ async fn fetch_within(repo_path: &Path, limit: std::time::Duration) -> FetchOutc
         pgid,
         snapshot,
     };
-    let attempt = async {
-        let (status, stdout, stderr) =
-            tokio::join!(group.child.wait(), read_pipe(stdout), read_pipe(stderr));
-        status.map(|status| std::process::Output {
-            status,
-            stdout,
-            stderr,
-        })
-    };
-    let run = match tokio::time::timeout(limit, attempt).await {
-        Err(_) => {
+    let watched = watch_fetch(
+        &mut group.child,
+        stdout,
+        stderr,
+        stall_limit,
+        &mut on_progress,
+    )
+    .await;
+    let run = match watched {
+        Watched::Stalled => {
             group.kill_and_reap().await;
             group.remove_temp_packs();
             FetchRun::TimedOut
         }
-        Ok(Err(_)) => {
+        Watched::WaitFailed => {
             group.kill_and_reap().await;
             FetchRun::NotStarted
         }
-        Ok(Ok(output)) => {
+        Watched::Exited(output) => {
             // Reaped: the group id may be reused from here on, and whatever
             // the leader left running is no longer ours to kill.
             group.pgid = None;
@@ -3667,6 +3932,113 @@ mod real_repo_tests {
         std::fs::remove_dir_all(&upstream).ok();
     }
 
+    /// An upload-pack hook that writes `lines` progress-shaped lines to
+    /// stderr, one every 300 ms, the way git's `Receiving objects` updates
+    /// arrive (`\r`-separated, growing bytes), then runs `tail`. git prints
+    /// its own progress only when asked, so the hook's lines stand in for it.
+    fn progress_hook(lines: u32, tail: &str) -> String {
+        format!(
+            "i=1; while [ $i -le {lines} ]; do \
+             printf 'Receiving objects: %d%% (%d/{lines}), %d.00 MiB | 1.00 MiB/s\\r' \
+             $((i * 100 / {lines})) $i $i >&2; sleep 0.3; i=$((i + 1)); done; {tail}"
+        )
+    }
+
+    /// FZ-35a (#84), criterion 2: a fetch that keeps reporting progress is
+    /// never cut, however long it runs. Here it runs about 2.7 s under a
+    /// 1 s stall limit, the small-scale version of a large pack outliving
+    /// the old 120 s wall clock, and finishes.
+    #[tokio::test]
+    async fn a_fetch_that_keeps_reporting_progress_outlives_the_stall_limit() {
+        let (upstream, dir) = fetched_clone("fetchslow");
+        sh(
+            &upstream,
+            &["git", "commit", "-q", "--allow-empty", "-m", "two"],
+        );
+        let hook = progress_hook(9, "git upload-pack");
+        sh(
+            &dir,
+            &["git", "config", "remote.origin.uploadpack", hook.as_str()],
+        );
+        let start = std::time::Instant::now();
+        let mut seen = Vec::new();
+        let outcome =
+            fetch_watched(&dir, std::time::Duration::from_secs(1), |p| seen.push(p)).await;
+        assert_eq!(
+            outcome,
+            FetchOutcome::Succeeded,
+            "after {:?}",
+            start.elapsed()
+        );
+        assert!(
+            start.elapsed() > std::time::Duration::from_secs(2),
+            "the hook did not run past the limit: {:?}",
+            start.elapsed()
+        );
+        let last = seen
+            .iter()
+            .rev()
+            .find(|p| p.phase == FetchPhase::Receiving)
+            .expect("the hook's progress reached the callback");
+        assert_eq!(last.bytes, 9 * 1024 * 1024);
+        assert_eq!(seen.first().map(|p| p.bytes), Some(1024 * 1024));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// FZ-35a (#84), criterion 2: a fetch whose progress stops is cut one
+    /// stall limit after its last update, not one limit after it started,
+    /// and is cleaned up exactly as FZ-34 cleans a timed-out fetch: its
+    /// process group dead, its own temp packs gone, an earlier one kept.
+    #[tokio::test]
+    async fn a_fetch_whose_progress_stops_is_cut_at_the_stall_limit() {
+        let (upstream, dir) = fetched_clone("fetchstall");
+        let pack_dir = repo_dirs(&dir).unwrap().common_dir.join("objects/pack");
+        std::fs::write(pack_dir.join("tmp_pack_before"), b"theirs").unwrap();
+        let pid_file = dir.join("hook.pid");
+        let tail = format!(
+            "sleep 600 </dev/null >/dev/null 2>&1 & echo $! > '{pid}'; \
+             : > '{pack}/tmp_pack_hook'; : > '{pack}/tmp_idx_hook'; : > '{pack}/tmp_rev_hook'; \
+             cat >/dev/null; :",
+            pid = pid_file.display(),
+            pack = pack_dir.display(),
+        );
+        // Five updates, the last about 1.5 s in, then silence.
+        let hook = progress_hook(5, &tail);
+        sh(
+            &dir,
+            &["git", "config", "remote.origin.uploadpack", hook.as_str()],
+        );
+        let start = std::time::Instant::now();
+        let outcome = fetch_watched(&dir, std::time::Duration::from_secs(1), |_| {}).await;
+        let took = start.elapsed();
+        assert_eq!(
+            outcome,
+            FetchOutcome::Failed(FetchFailure {
+                kind: FetchFailureKind::TimedOut,
+                detail: None,
+            })
+        );
+        assert!(
+            took > std::time::Duration::from_millis(2200),
+            "cut before the last update was a limit old: {took:?}"
+        );
+        assert!(
+            took < std::time::Duration::from_secs(20),
+            "never cut: {took:?}"
+        );
+        let pid = std::fs::read_to_string(&pid_file).expect("the hook ran");
+        let pid = pid.trim();
+        let survived = alive_after(pid, std::time::Duration::from_secs(3));
+        if survived {
+            let _ = StdCommand::new("kill").args(["-9", pid]).status();
+        }
+        assert!(!survived, "the stalled fetch's grandchild {pid} survived");
+        assert_eq!(temp_packs(&dir), ["tmp_pack_before"]);
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
     // --- #70: ssh gets a connect timeout and batch mode, unless the user
     // chose their own ssh ---
 
@@ -4410,5 +4782,197 @@ mod fetch_outcome_tests {
         ] {
             assert_eq!(redact_userinfo(url), want, "{url}");
         }
+    }
+
+    // --- FZ-35a (#84): reading `git fetch --progress` ---
+
+    /// Pieces of one real `git fetch --progress --prune` transcript (git
+    /// 2.50.1, `LC_ALL=C`, a local remote), separators and padding as git
+    /// wrote them.
+    const PROGRESS_TRANSCRIPT: &str = "remote: Enumerating objects: 198, done.        \n\
+        remote: Counting objects:   0% (1/198)        \r\
+        remote: Counting objects: 100% (198/198), done.        \n\
+        remote: Compressing objects: 100% (122/122), done.        \n\
+        Receiving objects:   0% (1/122)\r\
+        Receiving objects:  71% (87/122)\r\
+        remote: Total 122 (delta 76), reused 0 (delta 0), pack-reused 0 (from 0)        \n\
+        Receiving objects:  72% (88/122)\r\
+        Receiving objects: 100% (122/122), 175.81 KiB | 87.90 MiB/s, done.\n\
+        Resolving deltas:   0% (0/76)\r\
+        Resolving deltas: 100% (76/76), completed with 76 local objects.\n\
+        From /tmp/gtest/up\n   425ca9a..bc60d00  main       -> origin/main\n";
+
+    fn progress(phase: FetchPhase, done: u64, total: u64, bytes: u64) -> FetchProgress {
+        FetchProgress {
+            phase,
+            objects_done: done,
+            objects_total: total,
+            bytes,
+        }
+    }
+
+    #[test]
+    fn a_receiving_line_gives_objects_and_bytes() {
+        assert_eq!(
+            parse_fetch_progress("Receiving objects:  45% (123/273), 1.23 MiB | 1.20 MiB/s"),
+            Some(progress(
+                FetchPhase::Receiving,
+                123,
+                273,
+                (1.23_f64 * 1024.0 * 1024.0).round() as u64
+            ))
+        );
+        // The final summary, `, done.` and all.
+        assert_eq!(
+            parse_fetch_progress(
+                "Receiving objects: 100% (122/122), 175.81 KiB | 87.90 MiB/s, done."
+            ),
+            Some(progress(
+                FetchPhase::Receiving,
+                122,
+                122,
+                (175.81_f64 * 1024.0).round() as u64
+            ))
+        );
+        // Before git has a rate to show, no size.
+        assert_eq!(
+            parse_fetch_progress("Receiving objects:   0% (1/122)"),
+            Some(progress(FetchPhase::Receiving, 1, 122, 0))
+        );
+    }
+
+    #[test]
+    fn every_size_unit_is_read() {
+        for (size, bytes) in [
+            ("312 bytes", 312),
+            ("1 byte", 1),
+            ("7 B", 7),
+            ("2.00 KiB", 2048),
+            ("312.00 MiB", 312 * 1024 * 1024),
+            ("1.50 GiB", 3 * 512 * 1024 * 1024),
+        ] {
+            let line = format!("Receiving objects:  50% (5/10), {size} | 1.00 MiB/s");
+            assert_eq!(
+                parse_fetch_progress(&line).map(|p| p.bytes),
+                Some(bytes),
+                "{line}"
+            );
+        }
+        // An unknown unit is no size, not a wrong one.
+        assert_eq!(
+            parse_fetch_progress("Receiving objects:  50% (5/10), 2 PiB | 1 PiB/s")
+                .map(|p| p.bytes),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn resolving_and_server_side_lines_are_progress() {
+        assert_eq!(
+            parse_fetch_progress("Resolving deltas:  12% (3/25)"),
+            Some(progress(FetchPhase::Resolving, 3, 25, 0))
+        );
+        assert_eq!(
+            parse_fetch_progress(
+                "Resolving deltas: 100% (76/76), completed with 76 local objects."
+            ),
+            Some(progress(FetchPhase::Resolving, 76, 76, 0))
+        );
+        assert_eq!(
+            parse_fetch_progress("remote: Compressing objects:  45% (55/122)        "),
+            Some(progress(FetchPhase::Remote, 55, 122, 0))
+        );
+        assert_eq!(
+            parse_fetch_progress("remote: Enumerating objects: 198, done.        "),
+            Some(progress(FetchPhase::Remote, 198, 0, 0))
+        );
+    }
+
+    #[test]
+    fn error_lines_are_not_progress() {
+        for line in [
+            "fatal: '/x/no-such-remote' does not appear to be a git repository",
+            "fatal: Could not read from remote repository.",
+            "ssh: connect to host github.com port 22: Operation timed out",
+            "remote: error: 403 forbidden",
+            "remote: fatal: 12",
+            "remote: Total 122 (delta 76), reused 0 (delta 0), pack-reused 0 (from 0)",
+            "Checking connectivity: 100% (3/3)",
+            "From /tmp/up",
+            "",
+        ] {
+            assert_eq!(parse_fetch_progress(line), None, "{line:?}");
+        }
+    }
+
+    /// The stream as the watcher reads it: split on `\r` and `\n` whatever
+    /// the chunking, every update handed out, bytes carried through the
+    /// phases after receiving, and nothing kept for a fetch that worked.
+    #[test]
+    fn a_progress_transcript_streams_updates_and_keeps_nothing() {
+        let mut log = FetchStderr::default();
+        let mut updates = Vec::new();
+        for chunk in PROGRESS_TRANSCRIPT.as_bytes().chunks(7) {
+            updates.extend(log.feed(chunk));
+        }
+        updates.extend(log.finish());
+        assert_eq!(updates.len(), 10, "{updates:#?}");
+        let received = (175.81_f64 * 1024.0).round() as u64;
+        assert_eq!(
+            updates[8],
+            progress(FetchPhase::Resolving, 0, 76, received),
+            "resolving carries the received bytes"
+        );
+        assert_eq!(updates[4], progress(FetchPhase::Receiving, 1, 122, 0));
+        assert_eq!(String::from_utf8_lossy(&log.kept), "");
+    }
+
+    /// Criterion 1: what is left for `classify_fetch_error` and
+    /// `first_error_line` is what `--quiet` left them, so a failure reads as
+    /// it did before progress was asked for.
+    #[test]
+    fn a_failing_transcript_keeps_its_error_lines_for_classification() {
+        let failing = "remote: Enumerating objects: 3, done.        \n\
+            Receiving objects:  33% (1/3)\r\
+            ssh: connect to host example.com port 22: Operation timed out\r\n\
+            fatal: Could not read from remote repository.\n\
+            \n\
+            Please make sure you have the correct access rights\n\
+            and the repository exists.\n";
+        let mut log = FetchStderr::default();
+        let updates = log.feed(failing.as_bytes());
+        assert_eq!(updates.len(), 2);
+        assert_eq!(log.finish(), None);
+        let kept = String::from_utf8_lossy(&log.kept).into_owned();
+        assert_eq!(
+            kept,
+            "ssh: connect to host example.com port 22: Operation timed out\n\
+             fatal: Could not read from remote repository.\n\
+             Please make sure you have the correct access rights\n\
+             and the repository exists.\n"
+        );
+        assert_eq!(classify_fetch_error(&kept), FetchFailureKind::Unreachable);
+        assert_eq!(
+            first_error_line(&kept).as_deref(),
+            Some("ssh: connect to host example.com port 22: Operation timed out")
+        );
+    }
+
+    /// A last piece with no line end is still read when the pipe closes.
+    #[test]
+    fn the_last_piece_is_read_at_the_end_of_the_pipe() {
+        let mut log = FetchStderr::default();
+        assert!(
+            log.feed(b"Receiving objects:  50% (1/2), 3.00 KiB | 1 KiB/s")
+                .is_empty()
+        );
+        assert_eq!(
+            log.finish(),
+            Some(progress(FetchPhase::Receiving, 1, 2, 3072))
+        );
+        let mut log = FetchStderr::default();
+        assert!(log.feed(b"fatal: no").is_empty());
+        assert_eq!(log.finish(), None);
+        assert_eq!(String::from_utf8_lossy(&log.kept), "fatal: no\n");
     }
 }

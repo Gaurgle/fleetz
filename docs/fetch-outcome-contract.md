@@ -166,3 +166,29 @@ userinfo never appearing in the detail.
    fetching it again. The landed outcome ends the entry, as does the
    `SWEEP_STUCK_AFTER` expiry. A launch or `R` load runs its fetches itself
    and does not take part.
+3. **2026-10-20, a progress-aware limit and the claim at permit** (FZ-35a,
+   [#84](https://github.com/Gaurgle/fleetz/issues/84), the spec
+   `docs/superpowers/specs/2026-10-20-fetch-progress-and-cap-design.md`
+   section A, approved by Andreas). Amends amendment 2. The fetch runs with
+   `--progress` instead of `--quiet` and its stderr is read while it runs:
+   each `\r`- or `\n`-separated update (`Receiving objects`, `Resolving
+   deltas`, the server's `remote:` phases) is a `git::FetchProgress`; what
+   `--quiet` used to keep off stderr is dropped, and the rest is what rule
+   8's classification and detail read, as before. `FETCH_TIMEOUT` is gone:
+   `FETCH_STALL_LIMIT` (30 s) restarts on every update, so a fetch still
+   moving is never killed, and one silent for 30 s is killed and cleaned as
+   amendment 2 kills a timeout, with the same `TimedOut` kind and the same
+   backoff. The ssh connect timeout stays. While a fetch runs, the received
+   size goes to its row at most twice a second (`AppEvent::FetchProgress`,
+   held on the row's facts as `FetchFacts::progress`, in memory only) and
+   the row reads `fetching 312 MB` in the place of the failure marker of
+   rule 5 once bytes have arrived; the fetch's landing clears it. The
+   one-fetch-per-checkout entry of R5 becomes a claim with a token
+   (`app::FetchClaims`): reserved when a sweep is scheduled, taken when the
+   fetch's permit is granted (a reservation that expired while queued is
+   taken again if the path is free, and the fetch does not run if a newer
+   claim holds it), kept alive by each update, and ended only by its own
+   landing, so a late landing cannot end a newer claim. `SWEEP_STUCK_AFTER`
+   counts from the last sign of life. A launch or `R` load now claims its
+   fetches too and skips a path a sweep is fetching; its fetches report no
+   progress to the rows.

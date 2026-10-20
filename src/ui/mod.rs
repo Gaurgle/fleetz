@@ -130,6 +130,23 @@ pub fn fetch_marker(facts: &crate::model::FetchFacts) -> Option<String> {
     Some(format!("⚠ {}", fetch_failure_short(failure.kind)))
 }
 
+/// The row's words for a fetch running now, once bytes have arrived:
+/// `fetching 312 MB` (FZ-35a). None before the first byte, and once the
+/// fetch has landed. Sizes are git's binary units, named as people say them.
+pub fn fetch_progress_label(facts: &crate::model::FetchFacts) -> Option<String> {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    const GIB: u64 = 1024 * MIB;
+    let bytes = facts.progress?.bytes;
+    let size = match bytes {
+        0 => return None,
+        b if b < MIB => format!("{} KB", b.div_ceil(KIB)),
+        b if b < GIB => format!("{} MB", b / MIB),
+        b => format!("{:.1} GB", b as f64 / GIB as f64),
+    };
+    Some(format!("fetching {size}"))
+}
+
 /// The detail pane's fetch line: that the last fetch failed, why, and when
 /// the remote refs behind `behind` and `ahead` are from. Written the way the
 /// header writes stale GitHub data (`as of 14:02`, `age unknown`). None
@@ -1829,6 +1846,36 @@ mod tests {
         ok.record(&crate::git::FetchOutcome::Succeeded, now);
         assert_eq!(fetch_failure_line(&ok, now), None);
         assert_eq!(fetch_marker(&ok), None);
+    }
+
+    /// FZ-35a (#84): the received size in the unit a person would say it,
+    /// and nothing before the first byte.
+    #[test]
+    fn a_running_fetch_is_labelled_with_its_received_size() {
+        let label = |bytes: Option<u64>| {
+            let facts = crate::model::FetchFacts {
+                progress: bytes.map(|bytes| crate::git::FetchProgress {
+                    phase: crate::git::FetchPhase::Receiving,
+                    objects_done: 1,
+                    objects_total: 2,
+                    bytes,
+                }),
+                ..Default::default()
+            };
+            fetch_progress_label(&facts)
+        };
+        assert_eq!(label(None), None);
+        assert_eq!(label(Some(0)), None);
+        assert_eq!(label(Some(1)).as_deref(), Some("fetching 1 KB"));
+        assert_eq!(label(Some(700 * 1024)).as_deref(), Some("fetching 700 KB"));
+        assert_eq!(
+            label(Some(312 * 1024 * 1024)).as_deref(),
+            Some("fetching 312 MB")
+        );
+        assert_eq!(
+            label(Some(3 * 1024 * 1024 * 1024 / 2)).as_deref(),
+            Some("fetching 1.5 GB")
+        );
     }
 
     /// Every kind has its own short word and phrase.

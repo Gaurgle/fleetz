@@ -127,6 +127,17 @@ pub enum AppEvent {
         /// How the `git fetch` before this rebuild ended, or `NotAttempted`
         /// when the sweep did not fetch. Requested is not successful.
         fetch: git::FetchOutcome,
+        /// The token of the fetch claim this sweep held for the path
+        /// (`app::FetchClaims`), `None` when it fetched nothing. Its landing
+        /// ends that claim and no other.
+        claim: Option<u64>,
+    },
+    /// A fetch on the row at `path` made progress (FZ-35a). Sent from the
+    /// fetch task at most twice a second per fetch (`ProgressThrottle`) and
+    /// always before that fetch's `RepoUpdated`, which clears it.
+    FetchProgress {
+        path: String,
+        progress: git::FetchProgress,
     },
     /// A background poll's answer. `attempt` is the id it was started with
     /// (`GithubFreshness::begin_attempt`), so an answer that arrives after a
@@ -455,6 +466,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         initial_window,
         LoadKind::Initial,
         false,
+        &app.fetches_in_flight,
     );
 
     let result = run_event_loop(&mut terminal, &mut app, &args, &config, &repo_dir, tx, rx).await;
@@ -511,6 +523,7 @@ fn apply_groups(repos: &mut [RepoStatus], config: &config::Config) {
 /// keeps painting and accepting keys throughout. `bypass_cache` is what makes
 /// `R` see a just-pushed repo. Not for window applies: those are a pure
 /// re-filter and go through `spawn_window_apply`.
+#[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 fn spawn_load(
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     args: &Args,
@@ -519,6 +532,7 @@ fn spawn_load(
     window: Option<time::TimeWindow>,
     kind: LoadKind,
     bypass_cache: bool,
+    fetch_claims: &app::FetchClaims,
 ) {
     debug_assert!(
         !matches!(kind, LoadKind::WindowApply(_) | LoadKind::FromMemory),
@@ -528,22 +542,31 @@ fn spawn_load(
     let args = args.clone();
     let config = config.clone();
     let repo_dir = repo_dir.to_path_buf();
+    let fetch_claims = fetch_claims.clone();
     tokio::spawn(async move {
         let mode = args.mode();
-        let result = load_repos(&args, &config, &repo_dir, &mode, window, bypass_cache)
-            .await
-            .map(|(repos, notes, dataset, calendar, source, meta)| {
-                Box::new(LoadResult {
-                    kind,
-                    repos,
-                    header: notes.header,
-                    dataset: Some(dataset),
-                    github_calendar: calendar,
-                    source,
-                    ambiguity: notes.ambiguity,
-                    meta,
-                })
-            });
+        let result = load_repos(
+            &args,
+            &config,
+            &repo_dir,
+            &mode,
+            window,
+            bypass_cache,
+            &fetch_claims,
+        )
+        .await
+        .map(|(repos, notes, dataset, calendar, source, meta)| {
+            Box::new(LoadResult {
+                kind,
+                repos,
+                header: notes.header,
+                dataset: Some(dataset),
+                github_calendar: calendar,
+                source,
+                ambiguity: notes.ambiguity,
+                meta,
+            })
+        });
         let _ = tx.send(AppEvent::Loaded(result));
     });
 }
@@ -566,6 +589,7 @@ fn spawn_window_apply(
     let args = args.clone();
     let config = config.clone();
     let repo_dir = repo_dir.to_path_buf();
+    let fetch_claims = app.fetches_in_flight.clone();
     tokio::spawn(async move {
         let cutoff = w.cutoff(config.work_start, config.work_end);
         let header = w.label(config.work_start, config.work_end);
@@ -579,6 +603,7 @@ fn spawn_window_apply(
             &repo_dir,
             false,
             Some(&tx),
+            &fetch_claims,
         )
         .await
         .map(|(repos, notes)| Box::new(window_apply_result(w, repos, notes)))
@@ -606,6 +631,7 @@ fn spawn_memory_rebuild(
     let args = args.clone();
     let config = config.clone();
     let repo_dir = repo_dir.to_path_buf();
+    let fetch_claims = app.fetches_in_flight.clone();
     tokio::spawn(async move {
         let mode = args.mode();
         let result = match resolve_cutoff(window, &mode, &config) {
@@ -619,6 +645,7 @@ fn spawn_memory_rebuild(
                 &repo_dir,
                 git_fetch,
                 None,
+                &fetch_claims,
             )
             .await
             .map(|(repos, notes)| Box::new(memory_rebuild_result(repos, notes)))
@@ -969,7 +996,11 @@ async fn run_event_loop(
                 path,
                 status,
                 fetch,
-            } => apply_repo_updated(app, &path, *status, fetch),
+                claim,
+            } => land_repo_update(app, &path, *status, fetch, claim),
+            AppEvent::FetchProgress { path, progress } => {
+                app.apply_fetch_progress(&path, progress);
+            }
             AppEvent::Github { attempt, result } => {
                 apply_github_poll(app, attempt, result, &tx, &args.author);
                 start_account_rebuild(app, &tx, args, config, repo_dir);
@@ -1876,9 +1907,23 @@ fn repo_moved(before: &RepoStatus, after: &RepoStatus) -> bool {
 /// `fetch` facts: only a sweep that fetched changes them, and a failure keeps
 /// every local field and the remote refs it had (rules 2 and 4 of the fetch
 /// contract). Any finished fetch settles a refresh waiting on it.
+#[cfg(test)]
 fn apply_repo_updated(app: &mut App, path: &str, status: RepoStatus, fetch: git::FetchOutcome) {
+    land_repo_update(app, path, status, fetch, None);
+}
+
+/// `apply_repo_updated` for the sweep that held fetch claim `claim`: its
+/// landing ends that claim only (`App::fetch_landed_under`), so a sweep
+/// whose claim expired cannot end a newer one on the same path.
+fn land_repo_update(
+    app: &mut App,
+    path: &str,
+    status: RepoStatus,
+    fetch: git::FetchOutcome,
+    claim: Option<u64>,
+) {
     app.settle_refresh_fetch(path, &fetch);
-    app.fetch_landed(path, &fetch);
+    app.fetch_landed_under(path, &fetch, claim);
     app.fetch_backoff.record(path, &fetch, chrono::Local::now());
     let mut name = None;
     if let Some(repo) = app
@@ -2289,6 +2334,7 @@ fn reload_key(
                 app.window,
                 LoadKind::Reload,
                 true,
+                &app.fetches_in_flight,
             );
         }
     }
@@ -2563,6 +2609,7 @@ fn start_sweep(
         author,
         true,
         probe,
+        &app.fetches_in_flight,
     );
 }
 
@@ -2651,12 +2698,69 @@ fn start_single_sweep(
         author,
         false,
         contrib_probe(app),
+        &app.fetches_in_flight,
     );
+}
+
+/// At most one `AppEvent::FetchProgress` per `PROGRESS_EVENT_GAP` per fetch:
+/// git prints an update on every percent and every second, more than a row
+/// can show.
+const PROGRESS_EVENT_GAP: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Decides which of one fetch's progress updates go to the app.
+#[derive(Debug, Default)]
+struct ProgressThrottle {
+    last_sent: Option<std::time::Instant>,
+}
+
+impl ProgressThrottle {
+    /// Whether an update at `now` may be sent; it is counted as sent if so.
+    fn admit(&mut self, now: std::time::Instant) -> bool {
+        let due = self
+            .last_sent
+            .is_none_or(|last| now.saturating_duration_since(last) >= PROGRESS_EVENT_GAP);
+        if due {
+            self.last_sent = Some(now);
+        }
+        due
+    }
+}
+
+/// Run one fetch under its claim (`app::FetchClaims`): taken at the moment
+/// the caller's fetch permit was granted, before git starts, and kept alive
+/// by each progress update. `NotAttempted` without running git when a newer
+/// claim holds the path. With `tx`, progress goes to the row, throttled.
+async fn fetch_under_claim(
+    claims: &app::FetchClaims,
+    display_path: &str,
+    fs_path: &Path,
+    token: u64,
+    tx: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+) -> git::FetchOutcome {
+    if !claims.start(display_path, token, std::time::Instant::now()) {
+        return git::FetchOutcome::NotAttempted;
+    }
+    let mut throttle = ProgressThrottle::default();
+    git::fetch_reporting(fs_path, |progress| {
+        let now = std::time::Instant::now();
+        claims.touch(display_path, token, now);
+        if let Some(tx) = tx
+            && throttle.admit(now)
+        {
+            let _ = tx.send(AppEvent::FetchProgress {
+                path: display_path.to_string(),
+                progress,
+            });
+        }
+    })
+    .await
 }
 
 /// The shared sweep body: fetch (capped) then rebuild (capped), streaming
 /// each repo back as it lands so the list updates progressively. A target
-/// whose display path is in `no_fetch` is rebuilt without a fetch.
+/// whose display path is in `no_fetch` is rebuilt without a fetch; every
+/// other one fetches under the claim `fetch_skips` reserved for it.
+#[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 fn spawn_sweep(
     tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
     targets: Vec<SweepTarget>,
@@ -2665,30 +2769,46 @@ fn spawn_sweep(
     author: Option<String>,
     report_done: bool,
     probe: Option<ContribProbe>,
+    claims: &app::FetchClaims,
 ) {
-    let targets: Vec<(SweepTarget, bool)> = targets
+    let targets: Vec<(SweepTarget, Option<u64>)> = targets
         .into_iter()
         .map(|t| {
             let fetch = do_fetch && !no_fetch.contains(&t.display_path);
-            (t, fetch)
+            let claim = if fetch {
+                claims.token(&t.display_path)
+            } else {
+                None
+            };
+            (t, claim)
         })
         .collect();
+    let claims = claims.clone();
     tokio::spawn(async move {
         let probe_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(probe_concurrency()));
         let fetch_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(FETCH_CONCURRENCY));
         let mut set = tokio::task::JoinSet::new();
-        for (target, do_fetch) in targets {
+        for (target, claim) in targets {
             let probe_sem = probe_sem.clone();
             let fetch_sem = fetch_sem.clone();
             let tx = tx.clone();
             let author = author.clone();
             let probe = probe.clone();
+            let claims = claims.clone();
             set.spawn(async move {
-                let fetch = if do_fetch {
-                    let _permit = fetch_sem.acquire().await;
-                    git::fetch(&target.fs_path).await
-                } else {
-                    git::FetchOutcome::NotAttempted
+                let fetch = match claim {
+                    Some(token) => {
+                        let _permit = fetch_sem.acquire().await;
+                        fetch_under_claim(
+                            &claims,
+                            &target.display_path,
+                            &target.fs_path,
+                            token,
+                            Some(&tx),
+                        )
+                        .await
+                    }
+                    None => git::FetchOutcome::NotAttempted,
                 };
                 let _permit = probe_sem.acquire().await;
                 let status = rebuild_repo_status(&target, author.as_deref(), probe.as_ref()).await;
@@ -2696,6 +2816,7 @@ fn spawn_sweep(
                     path: target.display_path.clone(),
                     status: Box::new(status),
                     fetch,
+                    claim,
                 });
             });
         }
@@ -2870,6 +2991,7 @@ async fn load_repos(
     mode: &Mode,
     window: Option<time::TimeWindow>,
     bypass_cache: bool,
+    fetch_claims: &app::FetchClaims,
 ) -> Result<
     (
         Vec<RepoStatus>,
@@ -2978,6 +3100,7 @@ async fn load_repos(
         repo_dir,
         true,
         None,
+        fetch_claims,
     )
     .await?;
 
@@ -3232,6 +3355,7 @@ async fn assemble_view(
     repo_dir: &Path,
     git_fetch: bool,
     progress: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+    fetch_claims: &app::FetchClaims,
 ) -> Result<(Vec<RepoStatus>, ViewNotes), String> {
     // Local scan roots: the primary repo_dir plus any configured extra dirs
     // (e.g. ~/.dotfiles) -- the fleetz equivalent of repoz's EXTRA_DIRS. Used
@@ -3242,7 +3366,7 @@ async fn assemble_view(
     scan_roots.extend(config.resolved_extra_dirs());
     let home = dirs::home_dir().unwrap_or_default();
 
-    let (repos, mut notes) = assemble_view_in(
+    let (repos, mut notes) = assemble_view_with(
         dataset,
         cutoff,
         header,
@@ -3252,6 +3376,7 @@ async fn assemble_view(
         &scan_roots,
         git_fetch,
         progress,
+        fetch_claims,
     )
     .await?;
     notes.header = with_coverage_note(notes.header, coverage, cutoff, config.repo_limit);
@@ -3280,7 +3405,9 @@ fn with_coverage_note(
 /// temp home and temp roots instead of the real `$HOME`.
 ///
 /// `_config` is unread since the coverage note moved to `assemble_view`
-/// (FZ-09b), and kept so the seam's existing callers stand unchanged.
+/// (FZ-09b), and kept so the seam's existing callers stand unchanged. The
+/// fetches run here under a claim table of their own.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 async fn assemble_view_in(
     dataset: &[github::GithubRepo],
@@ -3292,6 +3419,38 @@ async fn assemble_view_in(
     scan_roots: &[PathBuf],
     git_fetch: bool,
     progress: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+) -> Result<(Vec<RepoStatus>, ViewNotes), String> {
+    assemble_view_with(
+        dataset,
+        cutoff,
+        header,
+        args,
+        _config,
+        home,
+        scan_roots,
+        git_fetch,
+        progress,
+        &app::FetchClaims::default(),
+    )
+    .await
+}
+
+/// The body of `assemble_view` (see `assemble_view_in`, its test seam). Each
+/// fetch it runs takes its claim in `fetch_claims` when its permit is
+/// granted and gives it back when it ends (FZ-35a); a path a sweep is
+/// fetching already is not fetched again, and its row records no fetch.
+#[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
+async fn assemble_view_with(
+    dataset: &[github::GithubRepo],
+    cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    header: String,
+    args: &Args,
+    _config: &config::Config,
+    home: &Path,
+    scan_roots: &[PathBuf],
+    git_fetch: bool,
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+    fetch_claims: &app::FetchClaims,
 ) -> Result<(Vec<RepoStatus>, ViewNotes), String> {
     // Apply --before filter
     let before_cutoff = match &args.before {
@@ -3368,9 +3527,15 @@ async fn assemble_view_in(
         let mut set = tokio::task::JoinSet::new();
         for path in stale {
             let sem = sem.clone();
+            let claims = fetch_claims.clone();
             set.spawn(async move {
                 let _permit = sem.acquire().await;
-                let outcome = git::fetch(&path).await;
+                let key = tilde_display(&path);
+                let Some(token) = claims.reserve(&key, std::time::Instant::now()) else {
+                    return (path, git::FetchOutcome::NotAttempted);
+                };
+                let outcome = fetch_under_claim(&claims, &key, &path, token, None).await;
+                claims.release(&key, Some(token));
                 (path, outcome)
             });
         }
@@ -5325,6 +5490,223 @@ mod tests {
             app.fetches_in_flight.contains_key(&held),
             "f skipped the held row"
         );
+    }
+
+    /// FZ-35a (#84), criterion 3: at most one progress event per half
+    /// second per fetch, the first at once.
+    #[test]
+    fn progress_events_are_throttled_to_two_a_second() {
+        let mut throttle = ProgressThrottle::default();
+        let t0 = std::time::Instant::now();
+        let ms = std::time::Duration::from_millis;
+        assert!(throttle.admit(t0));
+        assert!(!throttle.admit(t0 + ms(1)));
+        assert!(!throttle.admit(t0 + ms(499)));
+        assert!(throttle.admit(t0 + ms(500)));
+        assert!(!throttle.admit(t0 + ms(900)));
+        assert!(throttle.admit(t0 + ms(1000)));
+        // Two fetches throttle apart.
+        let mut other = ProgressThrottle::default();
+        assert!(other.admit(t0 + ms(1001)));
+    }
+
+    /// FZ-35a (#84), criterion 4: a sweep's fetch does not run when, by the
+    /// time its permit is granted, a newer claim holds the path, and runs
+    /// (taking the claim back) when the path is free. The path does not
+    /// exist, so a fetch that ran fails rather than doing nothing.
+    #[tokio::test]
+    async fn a_fetch_runs_only_under_its_own_claim_at_the_permit() {
+        let claims = app::FetchClaims::default();
+        let missing = std::env::temp_dir().join("fleetz-84-no-such-dir");
+        let t0 = std::time::Instant::now();
+        let old = claims.reserve("~/r", t0).unwrap();
+        claims.expire(
+            std::time::Duration::ZERO,
+            t0 + std::time::Duration::from_secs(1),
+        );
+        let newer = claims.reserve("~/r", t0).unwrap();
+        assert_eq!(
+            fetch_under_claim(&claims, "~/r", &missing, old, None).await,
+            git::FetchOutcome::NotAttempted
+        );
+        assert_eq!(claims.token("~/r"), Some(newer));
+        claims.release("~/r", Some(newer));
+        assert!(matches!(
+            fetch_under_claim(&claims, "~/r", &missing, old, None).await,
+            git::FetchOutcome::Failed(_)
+        ));
+        assert_eq!(
+            claims.token("~/r"),
+            Some(old),
+            "the fetch ran without its claim"
+        );
+    }
+
+    /// FZ-35a (#84), criterion 4: a sweep's landing ends only the claim it
+    /// held, and clears the row's progress.
+    #[test]
+    fn a_landing_from_an_expired_sweep_leaves_the_newer_claim() {
+        let mut app = fleet_app(1);
+        let path = app.repos[0].path.clone().unwrap();
+        let status = app.repos[0].clone();
+        let t0 = std::time::Instant::now();
+        assert!(app.claim_fetch(&path, t0));
+        let old = app.fetches_in_flight.token(&path);
+        app.expire_fetches_in_flight(SWEEP_STUCK_AFTER, t0 + SWEEP_STUCK_AFTER * 2);
+        assert!(app.claim_fetch(&path, t0 + SWEEP_STUCK_AFTER * 2));
+        let newer = app.fetches_in_flight.token(&path);
+        app.apply_fetch_progress(
+            &path,
+            git::FetchProgress {
+                phase: git::FetchPhase::Receiving,
+                objects_done: 1,
+                objects_total: 2,
+                bytes: 1,
+            },
+        );
+        land_repo_update(
+            &mut app,
+            &path,
+            status.clone(),
+            git::FetchOutcome::Succeeded,
+            old,
+        );
+        assert_eq!(app.fetches_in_flight.token(&path), newer);
+        assert_eq!(app.repos[0].fetch.progress, None, "landing kept progress");
+        land_repo_update(&mut app, &path, status, git::FetchOutcome::Succeeded, newer);
+        assert!(!app.fetches_in_flight.contains_key(&path));
+    }
+
+    /// FZ-35a (#84), criteria 3 and 4 through a real sweep: the fetch's
+    /// progress reaches the app as `FetchProgress` events, throttled, all
+    /// before the `RepoUpdated` that lands it with the claim's token. The
+    /// clone's upload-pack hook prints the progress, standing in for git's.
+    #[tokio::test]
+    async fn a_sweep_streams_its_fetch_progress_before_it_lands() {
+        let scratch = wt_scratch("sweep_progress");
+        let upstream = scratch.join("up");
+        id_repo(&upstream, None, false);
+        let clone = scratch.join("down");
+        wt_sh(
+            &scratch,
+            &[
+                "git",
+                "clone",
+                "-q",
+                upstream.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
+        wt_sh(
+            &upstream,
+            &["git", "commit", "-q", "--allow-empty", "-m", "two"],
+        );
+        let hook = "i=1; while [ $i -le 5 ]; do \
+             printf 'Receiving objects: %d%% (%d/5), %d.00 MiB | 1.00 MiB/s\\r' \
+             $((i * 20)) $i $i >&2; sleep 0.3; i=$((i + 1)); done; git upload-pack";
+        wt_sh(&clone, &["git", "config", "remote.origin.uploadpack", hook]);
+        let mut row = test_repo();
+        row.path = Some(clone.display().to_string());
+        let mut app = App::new(vec![row], "h".to_string(), 120, 44);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let start = std::time::Instant::now();
+        start_single_sweep(&mut app, &tx, 0, true, false, None);
+        let path = clone.display().to_string();
+        let token = app.fetches_in_flight.token(&path).expect("claimed");
+        let mut progress = Vec::new();
+        let (fetch, claim) = loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(20), rx.recv()).await {
+                Ok(Some(AppEvent::FetchProgress {
+                    path: p,
+                    progress: update,
+                })) => {
+                    assert_eq!(p, path);
+                    progress.push(update);
+                }
+                Ok(Some(AppEvent::RepoUpdated { fetch, claim, .. })) => break (fetch, claim),
+                Ok(Some(_)) => {}
+                other => panic!("the sweep never landed: {}", other.is_ok()),
+            }
+        };
+        let took = start.elapsed();
+        assert_eq!(fetch, git::FetchOutcome::Succeeded);
+        assert_eq!(claim, Some(token));
+        assert!(
+            progress.iter().any(|p| p.bytes >= 1024 * 1024),
+            "{progress:?}"
+        );
+        // Five hook updates and git's own lines, at most two a second.
+        let allowed = 1 + (took.as_millis() / PROGRESS_EVENT_GAP.as_millis()) as usize;
+        assert!(
+            !progress.is_empty() && progress.len() <= allowed,
+            "{} events in {took:?}",
+            progress.len()
+        );
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// FZ-35a (#84), criterion 4: the load path claims its fetches. A clone
+    /// whose path a sweep is fetching is not fetched again by the load (its
+    /// row records no fetch, the sweep's claim stays); a free one is fetched
+    /// under a claim given back when it ends. The clone has no remote, so
+    /// git's fetch has nothing to do and nothing leaves the disk.
+    #[tokio::test]
+    async fn the_load_fetches_under_a_claim_and_skips_a_claimed_path() {
+        let home = wt_scratch("load_claim");
+        let root = home.join("R");
+        let repo = root.join("svc");
+        id_repo(&repo, None, false);
+        let dataset = [id_entry(
+            Some("x"),
+            "svc",
+            0,
+            model::CiStatus::Unknown,
+            0,
+            model::RepoKind::Unknown,
+        )];
+        async fn assemble(
+            dataset: &[github::GithubRepo],
+            home: &Path,
+            root: &Path,
+            claims: &app::FetchClaims,
+        ) -> Vec<RepoStatus> {
+            let args = Args::parse_from(["fleetz"]);
+            let config = config::Config::default();
+            let (repos, _) = assemble_view_with(
+                dataset,
+                None,
+                String::new(),
+                &args,
+                &config,
+                home,
+                &[root.to_path_buf()],
+                true,
+                None,
+                claims,
+            )
+            .await
+            .expect("assembly");
+            repos
+        }
+        let key = tilde_display(&repo);
+
+        let claims = app::FetchClaims::default();
+        let sweeping = claims.reserve(&key, std::time::Instant::now()).unwrap();
+        let repos = assemble(&dataset, &home, &root, &claims).await;
+        let row = row_at(&repos, &repo);
+        assert_eq!(row.fetch.last_attempt, None, "fetched a claimed path");
+        assert_eq!(claims.token(&key), Some(sweeping));
+
+        let claims = app::FetchClaims::default();
+        let repos = assemble(&dataset, &home, &root, &claims).await;
+        let row = row_at(&repos, &repo);
+        assert!(
+            row.fetch.last_attempt.is_some(),
+            "the free path was not fetched"
+        );
+        assert_eq!(row.fetch.outcome, git::FetchOutcome::Succeeded);
+        assert!(claims.is_empty(), "the load kept its claim");
+        std::fs::remove_dir_all(&home).ok();
     }
 
     /// FZ-34 (#83): a timeout from a fetch a load ran (launch, `R`) holds the

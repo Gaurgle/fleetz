@@ -152,6 +152,12 @@ pub struct FetchFacts {
     /// When a fetch last finished, however it ended.
     pub last_attempt: Option<DateTime<chrono::Local>>,
     pub outcome: crate::git::FetchOutcome,
+    /// The latest progress of a fetch running now (FZ-35a), `None` when none
+    /// is or it has not reported yet. On the facts rather than beside them
+    /// because the row's badges read the facts and nothing else of the
+    /// fetch, and because `carried_into` then keeps it across a reload that
+    /// lands mid-fetch. In memory only; cleared when the fetch lands.
+    pub progress: Option<crate::git::FetchProgress>,
 }
 
 impl FetchFacts {
@@ -164,7 +170,8 @@ impl FetchFacts {
     }
 
     /// A fetch for this checkout finished. Only a success advances
-    /// `last_success` (rule 3); `NotAttempted` changes nothing (rule 2).
+    /// `last_success` (rule 3); `NotAttempted` changes nothing (rule 2), not
+    /// even the progress of a fetch still running. A finished one ends it.
     pub fn record(&mut self, outcome: &crate::git::FetchOutcome, now: DateTime<chrono::Local>) {
         use crate::git::FetchOutcome;
         match outcome {
@@ -174,6 +181,7 @@ impl FetchFacts {
         }
         self.last_attempt = Some(now);
         self.outcome = outcome.clone();
+        self.progress = None;
     }
 
     /// The failure, while the last fetch failed. Behind and ahead are then
