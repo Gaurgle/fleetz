@@ -15,7 +15,7 @@ decisions, facts, the follow-up list and the longer practical notes are in
 
 ## Baton
 
-**Held** since 2026-10-20 11:26 CEST by `claude-fable-5-1` (`claude --agent
+**Held since** 2026-10-20 11:26 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `08f5d4fe-31ad-4813-8535-0abfc0844250`). Takeover
 evidence: the 2026-10-17 record below says released with nothing running;
 on start no ticket worktree existed under `.claude/worktrees/` (the
@@ -300,30 +300,34 @@ The records are in the log.
 
 ## Next step, and the order after it
 
-All under the 2026-10-17 16:58 owner entry unless noted. Nothing starts
-until Andreas opens the next session; "finish the started tickets" of
-17:32 covers #81 and #79 only.
+Items 1 and 2 under the 2026-10-20 entries, the rest under the 2026-10-17
+16:58 owner entry unless noted.
 
-1. **#81** on his yes/no for the two existing footer tests: the worker
-   (or a fresh `fz-worker` from the worktree's diff) makes exactly those
-   two edits, then `fz-reviewer`, commit, push, CI, combined check, Ready
-   to integrate for his look at the branch build.
-2. **#79** on his (A)/(B)/(C): re-dispatch into the clean worktree, review,
-   commit, push, CI, combined check, Ready to integrate for his look.
-3. **Batch 3, order the coordinator's:** #67 CI pane first (an issue
+1. **FZ-35a (#84)** on his word to run it: branch
+   `feat/84-fetch-progress`, worktree `.claude/worktrees/issue-84`, base
+   current `main`, `fz-worker` then `fz-reviewer`, commit, push, CI,
+   combined check, merge under the safe-merge rule (the `fetching N MB`
+   row text is a small look change under the 2026-10-02 instruction).
+2. **FZ-35b (#85)** after FZ-35a lands, on the same word if he gives it
+   for both: the config key and the two row labels are approved in the
+   spec; merges under the safe-merge rule.
+3. **#81 and #79**, both without a worktree now (the diffs were lost, see
+   "Baton"): each needs his answer (the stop comments on the issues) and
+   a fresh worker from a new worktree; Ready to integrate for his look.
+4. **Batch 3, order the coordinator's:** #67 CI pane first (an issue
    exists; design-heavy, so a spec under `docs/superpowers/specs/` goes to
    Andreas before any worker; its own body says the FZ-13 pane work lands
    first, which it now has), then FZ-14 attention view, FZ-15 changes
    since seen, FZ-16 handoffs, each spec first. Two `fz-worker` slots plus
    one `fz-small`. Remembered folds (deferred from FZ-13o to FZ-13m) have
    no home now that FZ-13m is dropped; ask him if he wants them at all.
-4. **Follow-up issues** (7 to 10 of the list, approved): one measure for
+5. **Follow-up issues** (7 to 10 of the list, approved): one measure for
    width, the ref query cost at 20,000 refs (batch 4 material, measured),
    the small review follow-ups cut into reviewable tickets (the
    fetch-outcome items as one; the settings-save cursor reset as one; test
    sharpening as one `fz-small`). Fillers for a free slot. The `o` shell
    one is Done (#82).
-5. Batch 4 (FZ-12, FZ-11, the ref query cost), each measured against the
+6. Batch 4 (FZ-12, FZ-11, the ref query cost), each measured against the
    FZ-01 baseline. Release scope: later, when Andreas asks.
 
 ## Open with Andreas
