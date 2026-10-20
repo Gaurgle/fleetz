@@ -213,6 +213,31 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-10-20
+
+- **#83 (FZ-34), timed-out fetch leaks child processes and temp packs.**
+  Merged `dda9105` at 12:22 CEST; ticket commit `196a542` (reviewed diff
+  `1f997cf7`), branch `fix/83-fetch-timeout-leaks` from `edfe449`. P0
+  created by Andreas after a 22 GB disk fill (185 `tmp_pack_*` files
+  from one repo); dispatched on "needs to be taken care of asap".
+  Rulings R1 to R5 on the issue: the fetch runs in its own process
+  group, SIGKILLed with its descendants on timeout and on drop, then the
+  temp packs it created (`tmp_pack_`, `tmp_idx_`, `tmp_rev_`) are
+  removed; fetch gets `FETCH_TIMEOUT` 120 s, every other git call keeps
+  30 s; `App.fetch_backoff` holds a timed-out repo for two intervals,
+  then four, doubling to the cap, cleared by a success or `r`/`R`;
+  `App.fetches_in_flight` allows one fetch per repo at a time for every
+  sweep-started fetch (load fetches inside `assemble_view` stay
+  unclaimed, accepted; claim-at-permit and the no-token claim are FZ-35a
+  material). `libc` added for `kill(2)` under Andreas's "lets go with
+  libc" (already in the lock through tokio). Amendment 2 in
+  `docs/fetch-outcome-contract.md`. `fz-worker` on `claude-opus-5-5`:
+  two passes (R5 and `libc` added after the first) and one fix cycle;
+  review 1 changes requested (the watch sweep's hold unpinned, found by
+  mutation), review 2 accepted with eight mutations each caught. Branch
+  CI green; combined check 1117 tests; `main` CI green. Swept.
+  `#83: review changes 1; fix cycles 1; owner decisions 1; worker 28; review 12; usage read (worker 163k, reviewer 110k subagent tokens)`
+
 ### Merged on 2026-10-17
 
 - **#82 (FZ-16a), hand the terminal to a child with mouse capture off.**

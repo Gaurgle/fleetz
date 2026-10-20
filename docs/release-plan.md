@@ -239,6 +239,7 @@ not needed to keep building.
 
 | Batch | Tickets | Why here |
 |---|---|---|
+| 0 (2026-10-20) | #83 FZ-34 fetch timeout leaks (Done); then FZ-35a #84 progress-aware fetch and FZ-35b #85 the `fetch_max_mb` cap, spec approved, each on the owner's word | A P0 disk fill and its design follow-up, ahead of everything below |
 | 1 (running) | #70 ssh fetch bound; #72 worktrees section in Info (spec first); #71 Info header worktree colour | The one daily reliability bug, and the owner's two UI ideas |
 | 2 | Refetch on network recovery (changes fetch rule 6, owner decision); dirty worktree in the list row (after #72); FZ-13 wave 4 (hints follow focus #81, economical folds #80; maximize/restore dropped by the owner on 2026-10-17, "we dont need a focus mode") | Reliability and look, each needing one decision |
 | 3 | #67 CI pane, FZ-14 attention view, FZ-15 changes since seen, FZ-16 worktree overlay | The daily-use features |

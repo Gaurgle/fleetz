@@ -145,7 +145,7 @@ credentials.
 
 ## Decisions
 
-Approved by Andreas 2026-10-20 about 13:15 CEST ("no safety question, F
+Approved by Andreas 2026-10-20 at about 12:05 CEST ("no safety question, F
 keeps the cap, 200 is fine"):
 
 1. **No safety question on `f`.** The held row's label is the warning and
