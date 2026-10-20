@@ -15,7 +15,55 @@ decisions, facts, the follow-up list and the longer practical notes are in
 
 ## Baton
 
-**Released** 2026-10-17 17:35 CEST by `claude-fable-5-1` (`claude --agent
+**Held** since 2026-10-20 11:26 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `08f5d4fe-31ad-4813-8535-0abfc0844250`). Takeover
+evidence: the 2026-10-17 record below says released with nothing running;
+on start no ticket worktree existed under `.claude/worktrees/` (the
+directory was gone), no local or remote branch of #79, #81 or #45 exists,
+`main` is `edfe449` (docs commits only since 17 October), `relay-check`
+up to date, board check clean. Andreas opened the session with FZ-34 (#83),
+a P0 he created: "needs to be taken care of asap". That is the only ticket
+dispatched this session; #81, #79 and batch 3 stay parked until he says
+otherwise.
+
+- **FZ-34 (#83) In progress** since 11:30: base `edfe449`, branch
+  `fix/83-fetch-timeout-leaks`, worktree `.claude/worktrees/issue-83`,
+  `fz-worker` (`claude-opus-5-5`, medium). Rulings R1 to R4 are the first
+  comment on the issue. Andreas approved `libc` as a direct dependency
+  at about 11:40 ("ok, well lets go with libc option then?"), relayed
+  to the worker and recorded on the issue. First worker pass returned
+  12:00 (criteria 1 to 6 met, 1110 passed, no existing test touched,
+  `libc` not yet added). Ruling R5 (one fetch per repo at a time, a
+  per-path in-flight guard, the third comment on the issue) was added at
+  11:55 after Andreas asked whether the poll duplicates a running fetch;
+  second pass returned 12:18: `libc` in (Cargo.lock gains one line),
+  R5 for every sweep-started fetch, 1113 passed, no existing test
+  touched. Load fetches inside `assemble_view` stay unclaimed (scope
+  ruling, fourth comment on the issue; FZ-35 material with the
+  claim-at-permit note). **Review** since 12:22: `fz-reviewer`
+  (`claude-opus-5-5`, medium) on the uncommitted worktree diff, 7 files,
+  `git diff HEAD` sha256
+  `431a2676263c686fd0de5a406bda5e2ade06501e5ae303fa87d3ba16e4912fea`.
+  Review 1 at 12:45: changes requested, one test-only blocker (the
+  watch sweep's hold unpinned) plus pins and two small cleanups; the
+  worker finished fix cycle 1 at 13:05 (all seven items, 1117 passed,
+  no base test touched). **Re-review** since 13:08 on `git diff HEAD`
+  sha256 `1f997cf71e4db2cfffb0b0498e574f21ed111082af1a08fc1c8f7de4a856178a`
+  (7 files, 959 insertions, 23 deletions). FZ-35a #84 and FZ-35b #85
+  created 12:35 under his "1. yes" (P1, M1, Backlog); the spec is
+  `docs/superpowers/specs/2026-10-20-fetch-progress-and-cap-design.md`
+  (`d80aaf2`), awaiting his approval and his answers to its three open
+  points (safety question on `f`, `F` keeps the cap, 200 MB default).
+  Next on acceptance: `fz-reviewer`, commit, push, CI, combined
+  check, merge under the safe-merge rule (no screen change, so no owner
+  look is needed).
+- **Lost state to tell Andreas:** the worktrees of #81 (its uncommitted
+  implementation, revision `686f7e92` in the worker's report) and #45 (the
+  uncommitted `ci.yml` and `docs.yml`) are gone from disk and were never
+  pushed. Both tickets need a fresh worker if resumed. The board still
+  shows #81 In progress, #79 Ready and #45 Ready to integrate.
+
+Previous record: **released** 2026-10-17 17:35 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `d63c4af4-55f8-4f4f-ab06-d156d9582c03`, pid 12225),
 which held it from 16:38 CEST. Andreas at about 17:32: "you can start
 looking for a place to finish up for today. finsih the started tickets".
@@ -47,6 +95,20 @@ leads". Takeover evidence of this session is there too.
 
 Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it.
+
+- **2026-10-20, about 13:15.** "no safety question, F keeps the cap, 200
+  is fine": the FZ-35 spec is approved with its three points closed
+  (recorded in the spec's "Decisions" and on #84 and #85, both Ready).
+  Creation and the spec were his "1. yes" of about 12:30 ("Create FZ-35
+  (a and b) as P1 in M1, spec first?"), "200mb is good" and "yes apply it
+  everywhere" (the cap on every automatic fetch, launch included). Not
+  yet given: the word to run FZ-35a; it follows FZ-34's integration.
+- **2026-10-20, about 11:40.** "ok, well lets go with libc option then?":
+  `libc` approved as a direct dependency for FZ-34 (#83).
+- **2026-10-20, about 11:20.** Session opened with: "i added a priority 0
+  ticket that needs to be taken care of asap; Ticket: FZ-34 (#83)". Read
+  as dispatch of #83 now, one worker and one reviewer, merge under the
+  safe-merge rule (no screen change). Nothing else is authorized by it.
 
 - **2026-10-17, about 16:58.** Answers to the coordinator's numbered list
   (given in chat; the list is reproduced in the log, "Questions of

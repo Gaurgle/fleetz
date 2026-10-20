@@ -143,15 +143,16 @@ reports `TooBig`; `f` bypasses and `F` does not; the backoff ignores
 `TooBig`; the config default, `0`, and a bad value. All local, no
 credentials.
 
-## Open with Andreas
+## Decisions
 
-1. **A safety question on `f`?** The spec says no (the row label is the
-   warning). If he wants one, it is a small confirm overlay in the FZ-13
-   style, one more key, listed here before it is built.
-2. **`F` keeps the cap.** Proposed above; the alternative is that `F`
-   means "everything, however big", which can pull several big repos at
-   once.
-3. **The default 200 MB** is his answer; the spec records it.
+Approved by Andreas 2026-10-20 about 13:15 CEST ("no safety question, F
+keeps the cap, 200 is fine"):
 
-Approval of this spec accepts the design. #84 and #85 move to Ready on it;
-dispatch still waits for his word, with FZ-34 integrated first.
+1. **No safety question on `f`.** The held row's label is the warning and
+   `f` on it is the answer.
+2. **`F` keeps the cap**, as do launch, the watch sweep, the moved-remote
+   batch and the recovery refetch. Only a per-row `f` fetches uncapped.
+3. **`fetch_max_mb` defaults to 200.**
+
+#84 and #85 are Ready on this approval; dispatch waits for his word, with
+FZ-34 integrated first.
