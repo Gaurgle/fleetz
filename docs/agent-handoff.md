@@ -1,120 +1,47 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-17 17:35 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `d63c4af4-55f8-4f4f-ab06-d156d9582c03`, pid 12225)
-at the stop Andreas asked for. **Nothing is running: no worker, no
-reviewer, no build, no background job. #78, #80 and #82 are Done today;
-#81 and #79 are parked, each waiting on one owner answer (see "In
-flight"); nothing new starts today.** Read this file, the repository instructions, [agent-workflow.md](agent-workflow.md) and
-[release-plan.md](release-plan.md) before acting. GitHub (the issues and the
-[release Project](https://github.com/users/Gaurgle/projects/1)) is
-authoritative for status; this file says why things are where they are and
-what to do next. Finished tickets, earlier leads, spent rulings, inherited
-decisions, facts, the follow-up list and the longer practical notes are in
-[agent-log.md](agent-log.md).
+Last written 2026-10-20 14:40 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `08f5d4fe-31ad-4813-8535-0abfc0844250`) at the
+close Andreas asked for ("the last tweak on fleetz for today, so when
+that's done. finish eligible and running tickets, and close for today").
+**Nothing is running: no worker, no reviewer, no build, no background
+job.** Read this file, the repository instructions,
+[agent-workflow.md](agent-workflow.md) and
+[release-plan.md](release-plan.md) before acting. GitHub (the issues and
+the [release Project](https://github.com/users/Gaurgle/projects/1)) is
+authoritative for status; this file says why things are where they are
+and what to do next. Finished tickets, earlier leads, spent rulings,
+inherited decisions, facts, the follow-up list and the longer practical
+notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Held since** 2026-10-20 11:26 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `08f5d4fe-31ad-4813-8535-0abfc0844250`). Takeover
-evidence: the 2026-10-17 record below says released with nothing running;
-on start no ticket worktree existed under `.claude/worktrees/` (the
-directory was gone), no local or remote branch of #79, #81 or #45 exists,
-`main` is `edfe449` (docs commits only since 17 October), `relay-check`
-up to date, board check clean. Andreas opened the session with FZ-34 (#83),
-a P0 he created: "needs to be taken care of asap". That is the only ticket
-dispatched this session; #81, #79 and batch 3 stay parked until he says
-otherwise.
+**Released** 2026-10-20 14:40 CEST by `claude-fable-5-1` (session
+`08f5d4fe-31ad-4813-8535-0abfc0844250`), which held it from 11:26 CEST.
+Six tickets went Done today (#83 FZ-34, #86 FZ-36, #45 FZ-26, #84 FZ-35a,
+#87 FZ-37, #85 FZ-35b; records in the log, "Merged on 2026-10-20"); the
+day's lead record is in the log, "Earlier leads". Next lead records its
+own session and takeover time here after confirming with Andreas.
 
-- **FZ-34 (#83) Done**, merged `dda9105` at 12:22 CEST, `main` CI green,
-  worktree and local branch swept; the record is in the log ("Merged on
-  2026-10-20"). Nothing is running.
-- **Clock slip, corrected here.** The coordinator's "about HH:MM" stamps
-  in its comments on #83, #84 and #85 ran up to 80 minutes ahead of the
-  wall clock (the same slip the log notes for 2026-10-17). The true
-  times, from git and GitHub: rulings 11:28, `libc` decision 11:33, R5
-  11:45, R5 scope 11:49, #84 and #85 created 11:52, spec committed 11:54,
-  review 1 11:59, spec approved 12:09, ticket commit 12:12, review 2
-  12:16, merge 12:22. A correction comment is on #83.
-- **Release 0.6.0: prepared at 12:30, reverted at 13:20.** The bump was
-  prepared uncommitted while he decided; at 13:20 he said "remember to
-  bump versions in a regulated and logical way", so the working-tree
-  bump was reverted and the rule written into `CLAUDE.md`
-  ("Versioning": one bump commit, the last before the tag, class decided
-  from everything since the previous tag). The installed binary
-  (`fleetz 0.6.0`, built 12:45 from the working tree) reports a version
-  `main` does not yet carry; re-prepare the bump when the current scope
-  is stable and present the commands again. Notes are produced by
-  `release.yml` through the fixed `scripts/release-notes.sh` (#86).
-- **Update 14:30:** #86, #45, #84, #87 and #85 are merged (`ca2aeb6`,
-  `27bc09b`, `b55228e`, `5921633`, `8414319`; the first four swept and
-  Done, #85 awaiting `main` CI, then sweep and Done; records in the
-  log). `main` is `8414319`, 1179 tests. **#88 FZ-38** (pane 1 icons)
-  In progress since 14:25: `fz-worker` (`claude-opus-5-5`, medium),
-  base `8414319`, branch `feat/88-pane1-icons`, worktree
-  `.claude/worktrees/issue-88`; stops at Ready to integrate for his
-  glyph pick on the branch build (temporary cycle key). After it: the
-  stable report, the 0.6.0 bump and the commands.
-- **Earlier state, superseded:** **#85 FZ-35b** In progress since 13:30: `fz-worker`
-  (`claude-opus-5-5`, medium), base `b55228e`, branch
-  `feat/85-fetch-cap`, worktree `.claude/worktrees/issue-85`; criterion
-  7 (manual tally timed from the last sign of life) added from the #84
-  review. Open question to Andreas: a pane 1 wheel-coalescing ticket
-  (his "one row per event" is already what the code does; several
-  events per notch come from the terminal).
-- **In flight at 13:15 (under the 13:05 scope), superseded above:**
-  - **#86 FZ-36** (release notes skip coordination commits) and **#45
-    FZ-26** (CI gates on pull requests): both accepted, committed
-    (`0b9824a`, `c696b7e`), pushed, branch CI green, Ready to
-    integrate; the combined check with both merged on `main` is running;
-    merge FZ-36 first, then #45, each with CI on `main` watched.
-  - **#84 FZ-35a** In progress since 13:08: `fz-worker`
-    (`claude-opus-5-5`, medium), base `ecab6c4`, branch
-    `feat/84-fetch-progress`, worktree `.claude/worktrees/issue-84`.
-    Brief carries the #83 reviewer follow-ups (claim at permit, claim
-    token, load fetches claimed).
-  - **#87 FZ-37** In progress since 13:12: `fz-worker`
-    (`claude-opus-5-5`, medium), base `ecab6c4`, branch
-    `feat/87-yank-hash`, worktree `.claude/worktrees/issue-87`. Shares
-    `src/main.rs` and `src/app.rs` with #84 by region (key and mouse
-    handling, clipboard, help, README versus fetch, sweep, events);
-    merges one at a time with the combined check rerun.
-  - **#85 FZ-35b** Ready, starts when #84 lands.
-- **#79** Ready and **#81** Ready, both waiting on his answers; no
-  worktrees.
-- **Lost state to tell Andreas:** the worktrees of #81 (its uncommitted
-  implementation, revision `686f7e92` in the worker's report) and #45 (the
-  uncommitted `ci.yml` and `docs.yml`) are gone from disk and were never
-  pushed. Both tickets need a fresh worker if resumed. The board still
-  shows #81 In progress, #79 Ready and #45 Ready to integrate.
-
-Previous record: **released** 2026-10-17 17:35 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `d63c4af4-55f8-4f4f-ab06-d156d9582c03`, pid 12225),
-which held it from 16:38 CEST. Andreas at about 17:32: "you can start
-looking for a place to finish up for today. finsih the started tickets".
-**No worker, reviewer, build or background job is running.** The started
-tickets: #82 finished (Done); #81 and #79 could not be finished without an
-owner answer each and are parked with their state recorded under "In
-flight". Nothing new starts today. Next lead records its own session and
-takeover time here after confirming with Andreas.
-
-- **How the day ran.** Takeover 16:38 (Andreas: "continue work"). #78
-  (FZ-13y, reported by him at 16:40 and ticketed under "lets go with 2"),
-  #80 (FZ-13o) and #82 (FZ-16a) Done, each one worker and one reviewer,
-  one fix cycle in total (#78, test coverage). #79 created and twice
-  stopped by its worker at the existing-test rule; #81 implemented twice
-  (the second time under his "invert the order") and stopped at two
-  existing tests. He answered the fourteen-question list at 16:58
-  (recorded under "Authorized by the owner"), dropped FZ-13m ("we dont
-  need a focus mode"), and had `scripts/relay-sweep` fixed after it
-  removed #79's parked worktree (`d2adb8d`). The handoff was trimmed
-  twice; #70 to #79 were retitled under their epics. Usage was not read.
-- **Look not yet seen on `main`:** #75 (the `WT` badge in the dirty colour),
-  #71 and #72 (Info header and worktrees section), #80 (one-row folds).
-  Run `cargo run --release --manifest-path ~/repos/fleetz/Cargo.toml`.
-
-Earlier lead records, including both 2026-10-16 sessions: the log, "Earlier
-leads". Takeover evidence of this session is there too.
+- **Clock slip.** The coordinator's "about HH:MM" stamps in today's
+  issue comments ran up to 80 minutes ahead of the wall clock. True times
+  are in the log's lead record and the commit dates; a correction comment
+  is on #83. Read the clock before every stamp.
+- **Installed binary:** `fleetz` on PATH is today's `main` (`8414319`
+  code, installed 14:36 under his "only install the working version
+  instead"); it reports `0.5.1` because the 0.6.0 bump is not committed
+  (see "Next step").
+- **#88 FZ-38 parked** (his "skip the glyphs"): the worktree
+  `.claude/worktrees/issue-88` keeps the uncommitted implementation with
+  the temporary `I` cycle key on `feat/88-pane1-icons` (base `8414319`),
+  nothing pushed; both worktree candidates (U+EC7D, U+EC7E) are missing
+  from his Nerd Fonts (codicons end at U+EC1E; `fc-query` evidence on
+  the issue). Resuming needs new worktree candidates checked with
+  `fc-query` first, then his pick, then the hard-wiring. Removing the
+  worktree is his call.
+- **#79** Ready and **#81** Ready, both waiting on his answers (their
+  stop comments); their worktrees were lost before this session and
+  each needs a fresh worker.
 
 ## Authorized by the owner
 
@@ -128,7 +55,22 @@ can create or expand it.
   (a and b) as P1 in M1, spec first?"), "200mb is good" and "yes apply it
   everywhere" (the cap on every automatic fetch, launch included). Not
   yet given: the word to run FZ-35a; it follows FZ-34's integration.
-- **2026-10-20, about 14:25.** "can we add nerdfont icons for the error
+- **2026-10-20, about 14:30.** "lets go with a": the six Nerd-mode
+  assertions in `src/ui/badges.rs` named in the FZ-38 stop comment may
+  go through the glyph-choice functions; nothing else in existing tests
+  changes. Recorded on #88; worker resumed.
+- **2026-10-20, about 14:25 (clock read 14:24).** "you may ship it and
+  install it when this is done" and "should be the last tweak on fleetz
+  for today, so when that's done. finish eligible and running tickets,
+  and close for today". Read as: FZ-38 (#88) merges under the safe-merge
+  rule once he has picked the glyphs on the branch build and the review
+  accepts, then the coordinator runs `cargo install --path` (a second
+  one-time release of that rule today); no new ticket after it; then the
+  hand-back with the 0.6.0 commands. "Ship it" grants no tag or release
+  (house rule); the tag commands are presented. FZ-38 is stopped on the
+  existing-test question (its stop comment, options (a)/(b)); his answer
+  is needed before anything else can happen today.
+- **2026-10-20, about 14:15 (clock).** "can we add nerdfont icons for the error
   messages in the pane 1 list? like this [U+F1616] for connection error
   [U+EBFB] for general error or this [U+E654] and for worktrees: [U+EC7D]
   or [U+EC7E] etc". Read, under the 13:05 "lets do some more tickets", as
@@ -308,122 +250,93 @@ written into the repository.
 
 ## State of `main`
 
-`main` is at the merge of #77, `57b885c`, 1090 tests passing and 1 ignored,
-CI green. On 2026-10-16 it gained #76 (refetch on recovery, a contract
-amendment), #77 (`cache_ttl` removed), #75 (the `WT` badge in the dirty colour, a look
-change merged under the standing instruction and not yet seen by Andreas
-on `main`), #72 (the Info view's `worktrees` section, look
-accepted), #73 (one `model::identity_key` for "same remote", a pure
-refactor), #74 (the `CLAUDE.md` Nerd Font sentence), #71 (the Info header's worktree count in
-lavender, also not yet seen on `main`) and #70 (ssh fetches bounded at 10 s). The installed
-binary is the `main` of 2026-10-10 (`677e8cc`, version `0.5.1`); `main` is
-far past `v0.5.1` with a cache format change (FZ-09c), so the next release
-is at least `0.6.0`, prepared only when he asks. Local toolchain rustc
-1.99.0, same as CI's. To look at `main` without installing:
-`cargo run --release --manifest-path ~/repos/fleetz/Cargo.toml`.
+`main` is at `8414319` (the merge of #85) plus docs commits, 1179 tests
+passing and 1 ignored, CI green. Today it gained #83 (the fetch runs in
+its own process group, temp packs cleaned, `FETCH_TIMEOUT`, the timeout
+backoff and one fetch per repo), #86 (release notes skip coordination
+commits), #45 (CI gates on pull requests, in effect once public), #84
+(progress-aware fetch: stall limit instead of a wall clock, `fetching N
+MB` on the row, claims at the permit with a token), #87 (`y` and click
+copy a commit hash; the `/` help row reworded to fit) and #85
+(`fetch_max_mb` = 200, `diskUsage` pre-check, `TooBig` cut, `f` override,
+hold labels in PEACH). Look changes merged today under the 2026-10-02
+instruction, for him to object to if he wants: the `fetching N MB` and
+hold labels in the marker slot, and the reworded `/` help row. `libc` is
+a direct dependency since #83 (approved). Local toolchain rustc 1.99.0,
+same as CI's.
 
 ## Worktrees
 
-Under `.claude/worktrees/`, besides the main checkout:
-
-- **`issue-45`, branch `ci/45-pull-request-trigger`:** uncommitted `ci.yml`
-  and `docs.yml`, reviewer verdict blocked on a repository setting. Parked by
-  Andreas until the repository goes public.
-
-The worktrees of #72 (`worktrees-section`), #73 (`one-remote-key`) and #74
-(`claude-md-stale`) were removed by the sweep after their merges.
+Under `.claude/worktrees/`, besides the main checkout: only `issue-88`
+(FZ-38, parked, uncommitted, see "Baton"). The sweep keeps it.
 
 ## In flight
 
-- **#79 (FZ-03a), the header dates the failed attempt.** Ready, stopped
-  at the existing-test rule, 2026-10-17 about 17:05 CEST. Form (a) shown
-  always (owner entry 16:58; the amendment comment on the issue replaces
-  the body's examples and criteria). The second worker pass found that
-  `GithubFreshness::failed` always sets `last_attempt`, so four existing
-  header tests in `src/ui/mod.rs` (lines 1873, 1890, 1950, 2001) would
-  show the stamp and need their expected strings changed; the stop
-  comment on the issue lists them and asks Andreas for (A) update the four
-  strings only, (B) make the stamp conditional, (C) other. The coordinator
-  recommends (A). On his answer: re-dispatch into the worktree
-  `.claude/worktrees/issue-79`, branch `feat/79-header-attempt-age`,
-  **base `84a06b7`** (recreated after the sweep removed the unstarted
-  worktree, see the log's follow-ups), allowed files plus `src/app.rs` for
-  the `last_attempt` doc comment only. Stops at Ready to integrate for
-  his look at the branch build.
-
-- **#81 (FZ-13n), footer hints follow focus.** In progress since 17:08
-  under the 16:58 owner entry ("lets try it out, yes."). Base `84a06b7`,
-  branch `feat/81-focus-hints`, worktree `.claude/worktrees/issue-81`,
-  `fz-worker` (`claude-opus-5-5`, medium). Andreas chose "81: invert the
-  order" (about 17:15): the segment keeps its words and the global row
-  goes bare first; the five-step order is in the decision comment on the
-  issue. Worker revision `686f7e92` implements it (1102 passed, 2
-  failed) with the one authorized existing-test edit; two more existing
-  footer tests encode the old order and fail: `the_hints_end_at_the_right_
-  edge_beside_a_glyph_summary` (run it at 220 columns) and
-  `the_footer_drops_descriptions_before_the_summary` (start the walk at
-  260). Asked Andreas for those two edits (chat and the stop comment on
-  the issue). On his yes: the worker makes exactly those two changes,
-  then `fz-reviewer`, commit, push, CI, combined check, Ready to
-  integrate for his look at the branch build. The worktree holds the
-  uncommitted diff; the sweep keeps it.
-
-Both parked tickets resume under the 16:58 owner entry once he answers;
-no new authorization is needed, only the answer. A lead that resumes one
-re-reads the issue's last two comments first.
-
-#78, #80 and #82 are Done (merged `84a06b7`, `3c4dcf0`, `94bec02`; records
-in the log).
-
-#75, #76 and #77 are Done; one owner-visible ruling on #77 (the deleted
-precondition assertion in
-`startup_serves_an_expired_payload_rather_than_waiting_on_the_network`,
-under "do what you need for cache_ttl") stands unless Andreas overrides it.
-The records are in the log.
+Nothing. #79 and #81 are Ready and wait on his answers (their stop
+comments on the issues; #79 the four header tests (A)/(B)/(C), #81 the
+two footer tests yes/no); both need a fresh worker from a new worktree
+when resumed. #88 is parked.
 
 ## Next step, and the order after it
 
-Items 1 and 2 under the 2026-10-20 entries, the rest under the 2026-10-17
-16:58 owner entry unless noted.
+Nothing starts until Andreas opens the next session; today closed on his
+"close for today". The items below need the named answer or word.
 
-1. **FZ-35a (#84)** on his word to run it: branch
-   `feat/84-fetch-progress`, worktree `.claude/worktrees/issue-84`, base
-   current `main`, `fz-worker` then `fz-reviewer`, commit, push, CI,
-   combined check, merge under the safe-merge rule (the `fetching N MB`
-   row text is a small look change under the 2026-10-02 instruction).
-2. **FZ-35b (#85)** after FZ-35a lands, on the same word if he gives it
-   for both: the config key and the two row labels are approved in the
-   spec; merges under the safe-merge rule.
-3. **#81 and #79**, both without a worktree now (the diffs were lost, see
-   "Baton"): each needs his answer (the stop comments on the issues) and
-   a fresh worker from a new worktree; Ready to integrate for his look.
-4. **Batch 3, order the coordinator's:** #67 CI pane first (an issue
+1. **Release 0.6.0** when he says so: the class is still minor (features
+   since `v0.5.1`, a cache format change). The bump is one commit, the
+   last before the tag: set `version = "0.6.0"` in `Cargo.toml`, run
+   `cargo check` so `Cargo.lock` follows, run fmt, clippy and the suite,
+   then present `git add Cargo.toml Cargo.lock`, the `chore(release):
+   bump version to 0.6.0` commit, `git push origin main`, `git tag
+   v0.6.0`, `git push origin v0.6.0`, and `cargo install --path`; the tag
+   and the install are his unless he releases them again for the
+   session. `release.yml` writes the notes with the fixed script.
+2. **#88 FZ-38** if he wants it after all: new worktree-glyph candidates
+   verified with `fc-query` against his fonts, his pick on the branch
+   build, hard-wiring, review, merge (Ready to integrate for his look).
+3. **#81 and #79** on his answers, each with a fresh worker.
+4. **Follow-ups found today, not ticketed** (ask before creating): a pane
+   1 wheel ticket that coalesces several terminal events per notch into
+   one row (the code already moves one row per event; he reported
+   jumps); retargeting the existing tests so the nine `#[cfg(test)]`
+   seams from FZ-35a and FZ-35b can go (an assertion edit, his call);
+   a terminal-free core for the `y` and mouse handlers so their wiring
+   is testable (#87 review); `fetch over N MB` naming the bytes at the
+   cut rather than the cap; the two weakened negative guards in Nerd mode
+   (`badges.rs` line 649, `ui/mod.rs` line 2171) if FZ-38 lands;
+   `core.quotePath=false` in `scripts/release-notes.sh`.
+5. **Batch 3, order the coordinator's:** #67 CI pane first (an issue
    exists; design-heavy, so a spec under `docs/superpowers/specs/` goes to
    Andreas before any worker; its own body says the FZ-13 pane work lands
    first, which it now has), then FZ-14 attention view, FZ-15 changes
    since seen, FZ-16 handoffs, each spec first. Two `fz-worker` slots plus
    one `fz-small`. Remembered folds (deferred from FZ-13o to FZ-13m) have
    no home now that FZ-13m is dropped; ask him if he wants them at all.
-5. **Follow-up issues** (7 to 10 of the list, approved): one measure for
+6. **Follow-up issues** (7 to 10 of the list, approved): one measure for
    width, the ref query cost at 20,000 refs (batch 4 material, measured),
    the small review follow-ups cut into reviewable tickets (the
    fetch-outcome items as one; the settings-save cursor reset as one; test
    sharpening as one `fz-small`). Fillers for a free slot. The `o` shell
    one is Done (#82).
-6. Batch 4 (FZ-12, FZ-11, the ref query cost), each measured against the
+7. Batch 4 (FZ-12, FZ-11, the ref query cost), each measured against the
    FZ-01 baseline. Release scope: later, when Andreas asks.
 
 ## Open with Andreas
 
+- The 0.6.0 tag: the bump and the commands are prepared on his word
+  ("Next step" 1).
+- Whether the parked #88 worktree stays or goes, and whether he wants
+  FZ-38 resumed with font-checked worktree glyphs.
 - #81: yes or no to the two existing footer test edits (the stop comment
   on the issue); then his look at the branch build.
 - #79: (A), (B) or (C) on the four existing tests (the stop comment on
   the issue); then his look at the branch build.
+- The pane 1 wheel: his terminal delivers several events per notch; a
+  coalescing ticket needs his yes ("Next step" 4).
+- The look changes merged today, now installed: the `fetching N MB` and
+  hold labels, the `y` status line, the reworded `/` help row.
 - The Relay template's copy of `relay-sweep` (the `relay` skill in
   `~/claude-config`) has the hole fixed here in `d2adb8d`; his repo.
-- The look of #71, #72, #75, #78 and #80 on `main` whenever he next runs it
-  (`cargo run --release --manifest-path ~/repos/fleetz/Cargo.toml`); the
-  installed binary is still the `main` of 2026-10-10.
 - Before the repository goes public: `docs/ideas.md` names one of his
   private repositories in an older note (told to him 2026-10-02).
 - The two config changes of 2026-10-01 that are his to make (the stale

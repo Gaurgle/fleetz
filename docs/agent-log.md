@@ -16,10 +16,60 @@ instead; a note marks each place.
 Lead records older than the most recent session, newest first, as they stood
 in the handoff's "Baton" section.
 
+**The 2026-10-20 session** (`claude-fable-5-1`, `claude --agent
+fz-coordinator`, session `08f5d4fe-31ad-4813-8535-0abfc0844250`, held
+11:26 to 14:40 CEST). Takeover evidence: the 2026-10-17 record said
+released with nothing running; no `.claude/worktrees/` directory and no
+local or remote branch of #79, #81 or #45 existed (their uncommitted
+work was lost before the session); `main` was `edfe449`, clean, equal to
+`origin/main`; `relay-check` up to date at 0.6.0; board check clean.
+Andreas opened with the P0 FZ-34 (#83): "needs to be taken care of asap".
+How the day ran (true times from git and GitHub; the coordinator's
+"about HH:MM" comment stamps ran up to 80 minutes ahead, corrected on
+#83): #83 dispatched 11:28, `libc` approved 11:33, R5 (one fetch per
+repo) 11:45 after his question whether the poll duplicates a running
+fetch, review 1 11:59 (changes requested, one test-only blocker),
+review 2 12:16 accepted, merged `dda9105` 12:22. FZ-35 spec written
+(`d80aaf2` 11:54) and approved 12:09 ("no safety question, F keeps the
+cap, 200 is fine"); #84 and #85 created 11:52. "bump the version
+perhaps?" 12:30: 0.6.0 prepared, then reverted at about 13:20 under
+"remember to bump versions in a regulated and logical way" and the rule
+written into `CLAUDE.md`. "do it, you can install it as well" 12:38:
+#86 created and merged `ca2aeb6` 13:10, `fleetz 0.6.0` installed from
+the working tree 12:45. "integrate fz-26 too but dont start any more"
+12:48: #45 redone and merged `27bc09b` 13:14; #81 moved to Ready.
+"lets do some more tickets then, and get back to me when we are stable
+again" 13:05: #87 created 12:43, #84 merged `b55228e` 13:40 (accepted
+first time), #87 merged `5921633` 13:54 (one fix cycle), #85 merged
+`8414319` 14:19 (one fix cycle, B1 a real tally defect found by the
+reviewer). "can we add nerdfont icons" 14:19: #88 created, built with a
+cycle key, stopped at the existing-test rule, resumed under "lets go
+with a", then parked at 14:35 ("skip the glyphs") when the branch build
+drew tofu: both worktree candidates are outside his fonts' codicons
+range (`fc-query`). Installed `main` (`8414319` code, reports `0.5.1`)
+at 14:36 under "only install the working version instead". Closed on
+"finish eligible and running tickets, and close for today". Six tickets
+Done, 1090 to 1179 tests, no CI failure, one orphan `sleep 600` from a
+mutation run seen and gone. Usage read per ticket (subagent tokens in
+the metrics lines).
+
 **Takeover evidence of the 2026-10-17 session** (`claude-fable-5-1`,
 `claude --agent fz-coordinator`, session
 `d63c4af4-55f8-4f4f-ab06-d156d9582c03`, pid 12225, held 16:38 to 17:35
-CEST; its release record is in the handoff until the next lead moves it).
+CEST). Its release record, moved here 2026-10-20: released 17:35 CEST at
+the stop Andreas asked for at about 17:32 ("you can start looking for a
+place to finish up for today. finsih the started tickets"); nothing
+running; #82 finished (Done), #81 and #79 parked on one owner answer
+each. How the day ran: takeover 16:38 ("continue work"); #78 (FZ-13y,
+"lets go with 2"), #80 (FZ-13o) and #82 (FZ-16a) Done, each one worker
+and one reviewer, one fix cycle in total (#78); #79 created and twice
+stopped at the existing-test rule; #81 implemented twice (the second
+under "invert the order") and stopped at two existing tests; the
+fourteen-question list answered at 16:58; FZ-13m dropped ("we dont need
+a focus mode"); `scripts/relay-sweep` fixed after it removed #79's parked
+worktree (`d2adb8d`); #70 to #79 retitled under their epics; usage not
+read. Looks not yet seen on `main` then: #75, #71, #72, #80 (since
+installed on 2026-10-20).
 Andreas opened with "continue work". No lead was active: the previous
 session released the baton on 2026-10-16 at about 18:40 and no other
 `claude --agent fz-coordinator` process existed; `main` equalled
