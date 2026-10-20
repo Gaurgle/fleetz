@@ -9,8 +9,25 @@ prev="${2:-$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)}"
 range="${prev:+$prev..}$tag"
 repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 
+# Coordination records are committed straight to main and would swamp the notes.
+coordination_only() {
+  local path seen=0
+  while IFS= read -r path; do
+    seen=1
+    case "$path" in
+      docs/agent-handoff.md|docs/agent-log.md|docs/agent-workflow.md|docs/release-plan.md) ;;
+      docs/superpowers/*|.claude/*) ;;
+      *) return 1 ;;
+    esac
+  done < <(git diff-tree --no-commit-id --name-only -r "$1")
+  [ "$seen" -eq 1 ]
+}
+
 # Each commit as "<type>\t<subject without prefix>\t<hash>".
 commits="$(git log --no-merges --format='%s%x09%h' "$range" \
+  | while IFS= read -r line; do
+      coordination_only "${line##*$'\t'}" || printf '%s\n' "$line"
+    done \
   | awk -F'\t' '{
       type = "other"; subj = $1
       if (match($1, /^[a-z]+(\([^)]*\))?!?:[ ]*/)) {
