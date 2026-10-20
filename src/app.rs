@@ -1731,8 +1731,9 @@ impl GithubBackoff {
 
 /// The per-checkout hold after fetches that timed out (FZ-34, #83; amendment
 /// 2 of `docs/fetch-outcome-contract.md`). A repo too large to fetch within
-/// `git::FETCH_TIMEOUT` used to start the same download on every sweep and
-/// leave a temp pack behind each time.
+/// FZ-34's wall clock used to start the same download on every sweep and
+/// leave a temp pack behind each time; since FZ-35a a timeout is a fetch
+/// that stalled for `git::FETCH_STALL_LIMIT`.
 ///
 /// Keyed by the row's path, as the fetch facts are. After the `n`th
 /// consecutive `TimedOut` fetch the path is held for
@@ -1785,6 +1786,134 @@ impl FetchBackoff {
     #[cfg(test)]
     pub fn timeouts(&self, path: &str) -> u32 {
         self.timeouts.get(path).map_or(0, |&(n, _)| n)
+    }
+}
+
+/// One fetch's hold on its path: which claim it is, and when it last showed
+/// life (claimed, granted its permit, or reported progress).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FetchClaim {
+    token: u64,
+    at: std::time::Instant,
+}
+
+#[derive(Debug, Default)]
+struct ClaimTable {
+    next_token: u64,
+    claims: std::collections::HashMap<String, FetchClaim>,
+}
+
+/// The paths with a fetch running or queued, one fetch per checkout at a
+/// time (FZ-34 R5, FZ-35a). Shared between `App` and the fetch tasks, so a
+/// fetch can take its claim at the moment it may start.
+///
+/// The life of a claim:
+///
+/// - **Reserved when the sweep is scheduled** (`reserve`, through
+///   `App::claim_fetch`), so the next selection already sweeps the path
+///   without fetching it while the fetch waits for a permit.
+/// - **Taken when the fetch permit is granted** (`start`), in the fetch task,
+///   before git runs. This restamps the claim, so time spent queued behind
+///   `FETCH_CONCURRENCY` other fetches never counts toward its expiry. A
+///   reservation that expired while queued is taken again if the path is
+///   free; if a newer claim holds it, this fetch does not run at all. The
+///   load path (`assemble_view`) takes its claims here too, with no
+///   reservation, since it schedules and starts in one place.
+/// - **Kept alive by every progress update** (`touch`).
+/// - **Ended by its own landing** (`release` with its token): a late landing
+///   from a claim that expired cannot end a newer claim on the same path.
+/// - **Expired** after `SWEEP_STUCK_AFTER` without a sign of life, the
+///   safety net for a result that never lands (`expire`).
+///
+/// Each claim carries a token from a counter, never reused. Cloning shares
+/// the table.
+#[derive(Debug, Clone, Default)]
+pub struct FetchClaims {
+    table: std::sync::Arc<std::sync::Mutex<ClaimTable>>,
+}
+
+impl FetchClaims {
+    fn table(&self) -> std::sync::MutexGuard<'_, ClaimTable> {
+        // A panic while holding the lock leaves the table consistent: every
+        // operation is a single map edit.
+        self.table
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Reserve `path` at `now`, or `None` when another claim holds it.
+    pub fn reserve(&self, path: &str, now: std::time::Instant) -> Option<u64> {
+        let mut table = self.table();
+        if table.claims.contains_key(path) {
+            return None;
+        }
+        table.next_token += 1;
+        let token = table.next_token;
+        table
+            .claims
+            .insert(path.to_string(), FetchClaim { token, at: now });
+        Some(token)
+    }
+
+    /// The fetch holding `token` was granted its permit at `now`: true when
+    /// it may run. Its own claim is restamped; a free path is claimed again
+    /// under the same token; a path another claim holds is refused.
+    pub fn start(&self, path: &str, token: u64, now: std::time::Instant) -> bool {
+        let mut table = self.table();
+        match table.claims.get_mut(path) {
+            Some(claim) if claim.token == token => claim.at = now,
+            Some(_) => return false,
+            None => {
+                table
+                    .claims
+                    .insert(path.to_string(), FetchClaim { token, at: now });
+            }
+        }
+        true
+    }
+
+    /// A progress update from the fetch holding `token`.
+    pub fn touch(&self, path: &str, token: u64, now: std::time::Instant) {
+        if let Some(claim) = self.table().claims.get_mut(path)
+            && claim.token == token
+        {
+            claim.at = now;
+        }
+    }
+
+    /// End the claim on `path`: only the one holding `token`, or whichever
+    /// holds it when `token` is `None`.
+    pub fn release(&self, path: &str, token: Option<u64>) {
+        let mut table = self.table();
+        if token.is_none_or(|t| table.claims.get(path).is_some_and(|c| c.token == t)) {
+            table.claims.remove(path);
+        }
+    }
+
+    /// The token of the claim on `path`.
+    pub fn token(&self, path: &str) -> Option<u64> {
+        self.table().claims.get(path).map(|c| c.token)
+    }
+
+    /// Drop claims with no sign of life for longer than `limit` at `now`.
+    pub fn expire(&self, limit: std::time::Duration, now: std::time::Instant) {
+        self.table()
+            .claims
+            .retain(|_, claim| now.saturating_duration_since(claim.at) <= limit);
+    }
+
+    pub fn contains_key(&self, path: &str) -> bool {
+        self.table().claims.contains_key(path)
+    }
+
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.table().claims.is_empty()
+    }
+
+    #[cfg(test)]
+    pub fn clear(&self) {
+        self.table().claims.clear();
     }
 }
 
@@ -2069,13 +2198,13 @@ pub struct App {
     pub github_backoff: GithubBackoff,
     /// Paths the automatic fetches skip after a timeout (`FetchBackoff`).
     pub fetch_backoff: FetchBackoff,
-    /// Paths with a fetch running, and when it was claimed: one fetch per
-    /// repo at a time (FZ-34, R5). Every fetch selection, automatic or
-    /// manual, skips a path listed here and only sweeps it
-    /// (`App::claim_fetch`). Two fetches of one repo each wrote their own
-    /// temp pack. Only fetches a sweep starts are listed; a launch or `R`
-    /// load runs its fetches itself.
-    pub fetches_in_flight: std::collections::HashMap<String, std::time::Instant>,
+    /// Paths with a fetch running or queued: one fetch per repo at a time
+    /// (FZ-34, R5). Every fetch selection, automatic or manual, skips a path
+    /// listed here and only sweeps it (`App::claim_fetch`). Two fetches of
+    /// one repo each wrote their own temp pack. Sweeps reserve here and the
+    /// fetch tasks take the claim at their permit; a launch or `R` load
+    /// claims its fetches here too (`FetchClaims`, FZ-35a).
+    pub fetches_in_flight: FetchClaims,
     /// The configured GitHub poll interval in seconds, floored, and what one
     /// poll costs in points (`github::poll_cost` of `repo_limit`). Copied from
     /// `Config` at startup, as `contrib_author` is, because the header judges
@@ -2239,7 +2368,7 @@ impl App {
             api_budget: ApiBudget::default(),
             github_backoff: GithubBackoff::default(),
             fetch_backoff: FetchBackoff::default(),
-            fetches_in_flight: std::collections::HashMap::new(),
+            fetches_in_flight: FetchClaims::default(),
             github_poll_secs: crate::config::Config::default().github_poll_interval as i64,
             github_poll_cost: crate::github::poll_cost(crate::config::Config::default().repo_limit),
             jitter: Box::new(ClockJitter::new()),
@@ -2361,31 +2490,65 @@ impl App {
     /// already running: the caller sweeps the repo without fetching, and the
     /// running fetch's outcome is the one that lands (R5).
     pub fn claim_fetch(&mut self, path: &str, now: std::time::Instant) -> bool {
-        if self.fetches_in_flight.contains_key(path) {
-            return false;
-        }
-        self.fetches_in_flight.insert(path.to_string(), now);
-        true
+        self.fetches_in_flight.reserve(path, now).is_some()
     }
 
     /// A sweep's result for `path` landed. Only one that fetched ends the
     /// claim: a sweep that skipped the fetch reports `NotAttempted` while the
     /// claimed fetch is still running.
+    #[cfg(test)]
     pub fn fetch_landed(&mut self, path: &str, fetch: &crate::git::FetchOutcome) {
+        self.fetch_landed_under(path, fetch, None);
+    }
+
+    /// `fetch_landed` for the fetch that held `claim`: it ends that claim
+    /// only, so a landing that outlived its claim leaves a newer one alone
+    /// (`FetchClaims::release`). `None` ends whichever claim holds the path.
+    pub fn fetch_landed_under(
+        &mut self,
+        path: &str,
+        fetch: &crate::git::FetchOutcome,
+        claim: Option<u64>,
+    ) {
         if *fetch != crate::git::FetchOutcome::NotAttempted {
-            self.fetches_in_flight.remove(path);
+            self.fetches_in_flight.release(path, claim);
         }
     }
 
-    /// Drop claims older than `limit` at `now`, the safety net for a fetch
-    /// whose result never landed (`SWEEP_STUCK_AFTER`).
+    /// Drop claims with no sign of life for longer than `limit` at `now`, the
+    /// safety net for a fetch whose result never landed
+    /// (`SWEEP_STUCK_AFTER`). A row whose claim went this way stops showing
+    /// the fetch's progress: nothing will land to clear it.
     pub fn expire_fetches_in_flight(
         &mut self,
         limit: std::time::Duration,
         now: std::time::Instant,
     ) {
-        self.fetches_in_flight
-            .retain(|_, started| now.saturating_duration_since(*started) <= limit);
+        self.fetches_in_flight.expire(limit, now);
+        for repo in &mut self.repos {
+            if repo.fetch.progress.is_some()
+                && !repo
+                    .path
+                    .as_deref()
+                    .is_some_and(|p| self.fetches_in_flight.contains_key(p))
+            {
+                repo.fetch.progress = None;
+                self.needs_redraw = true;
+            }
+        }
+    }
+
+    /// A progress update for the fetch running on `path`: drawn on its row
+    /// (`ui::fetch_marker`) until the fetch lands (`FetchFacts::record`).
+    pub fn apply_fetch_progress(&mut self, path: &str, progress: crate::git::FetchProgress) {
+        if let Some(repo) = self
+            .repos
+            .iter_mut()
+            .find(|r| r.path.as_deref() == Some(path))
+        {
+            repo.fetch.progress = Some(progress);
+            self.needs_redraw = true;
+        }
     }
 
     /// Give up on refresh fetches that have outlived `limit`, and on a fetch
@@ -6525,6 +6688,139 @@ mod tests {
         );
         app.expire_fetches_in_flight(limit, t0 + limit + std::time::Duration::from_secs(1));
         assert!(app.claim_fetch("~/repos/repo-0", t0));
+    }
+
+    /// FZ-35a (#84), criterion 4: a fetch that waited in the queue past the
+    /// stuck limit keeps its claim once its permit is granted, because the
+    /// claim is timed from the permit, and progress keeps it alive after.
+    #[test]
+    fn a_claim_is_timed_from_its_permit_and_kept_alive_by_progress() {
+        let claims = FetchClaims::default();
+        let t0 = std::time::Instant::now();
+        let limit = std::time::Duration::from_secs(180);
+        let token = claims.reserve("~/r", t0).expect("free");
+        // Queued 170 s, then granted its permit.
+        assert!(claims.start("~/r", token, t0 + std::time::Duration::from_secs(170)));
+        claims.expire(limit, t0 + std::time::Duration::from_secs(200));
+        assert!(claims.contains_key("~/r"), "expired while it ran");
+        // Running 160 s more, reporting progress.
+        claims.touch("~/r", token, t0 + std::time::Duration::from_secs(330));
+        claims.expire(limit, t0 + std::time::Duration::from_secs(400));
+        assert!(claims.contains_key("~/r"), "expired while it progressed");
+        // Silent past the limit: the safety net still frees it.
+        claims.expire(limit, t0 + std::time::Duration::from_secs(511));
+        assert!(!claims.contains_key("~/r"));
+    }
+
+    /// FZ-35a (#84), criterion 4: a queued fetch whose reservation expired
+    /// takes the path again at its permit when it is free, and does not run
+    /// when a newer claim holds it, so one repo never has two fetches.
+    #[test]
+    fn a_permit_takes_a_free_path_and_refuses_a_held_one() {
+        let claims = FetchClaims::default();
+        let t0 = std::time::Instant::now();
+        let limit = std::time::Duration::from_secs(180);
+        let old = claims.reserve("~/r", t0).unwrap();
+        claims.expire(limit, t0 + std::time::Duration::from_secs(181));
+        assert!(!claims.contains_key("~/r"));
+        assert!(claims.start("~/r", old, t0 + std::time::Duration::from_secs(182)));
+        assert_eq!(claims.token("~/r"), Some(old));
+
+        let claims = FetchClaims::default();
+        let old = claims.reserve("~/r", t0).unwrap();
+        claims.expire(limit, t0 + std::time::Duration::from_secs(181));
+        let newer = claims
+            .reserve("~/r", t0 + std::time::Duration::from_secs(182))
+            .unwrap();
+        assert_ne!(old, newer, "a token is never reused");
+        assert!(!claims.start("~/r", old, t0 + std::time::Duration::from_secs(183)));
+        assert!(claims.start("~/r", newer, t0 + std::time::Duration::from_secs(183)));
+        // The refused fetch's progress, had it any, would not touch it.
+        claims.touch("~/r", old, t0 + std::time::Duration::from_secs(400));
+        claims.expire(limit, t0 + std::time::Duration::from_secs(364));
+        assert!(!claims.contains_key("~/r"));
+    }
+
+    /// FZ-35a (#84), the #83 reviewer's follow-up: a late landing from a
+    /// claim that expired does not end the newer claim on the same path; the
+    /// newer fetch's own landing does.
+    #[test]
+    fn a_late_landing_does_not_end_a_newer_claim() {
+        let mut app = make_app(1);
+        let t0 = std::time::Instant::now();
+        let limit = std::time::Duration::from_secs(180);
+        assert!(app.claim_fetch("~/repos/repo-0", t0));
+        let old = app.fetches_in_flight.token("~/repos/repo-0").unwrap();
+        app.expire_fetches_in_flight(limit, t0 + std::time::Duration::from_secs(181));
+        assert!(app.claim_fetch("~/repos/repo-0", t0 + std::time::Duration::from_secs(182)));
+        let newer = app.fetches_in_flight.token("~/repos/repo-0").unwrap();
+        app.fetch_landed_under("~/repos/repo-0", &timed_out(), Some(old));
+        assert!(
+            app.fetches_in_flight.contains_key("~/repos/repo-0"),
+            "the late landing ended the newer claim"
+        );
+        app.fetch_landed_under(
+            "~/repos/repo-0",
+            &crate::git::FetchOutcome::NotAttempted,
+            Some(newer),
+        );
+        assert!(app.fetches_in_flight.contains_key("~/repos/repo-0"));
+        app.fetch_landed_under(
+            "~/repos/repo-0",
+            &crate::git::FetchOutcome::Succeeded,
+            Some(newer),
+        );
+        assert!(!app.fetches_in_flight.contains_key("~/repos/repo-0"));
+    }
+
+    fn receiving(bytes: u64) -> crate::git::FetchProgress {
+        crate::git::FetchProgress {
+            phase: crate::git::FetchPhase::Receiving,
+            objects_done: 1,
+            objects_total: 2,
+            bytes,
+        }
+    }
+
+    /// FZ-35a (#84), criterion 3: progress lands on the row's fetch facts
+    /// and goes when the fetch lands; a sweep that did not fetch leaves it.
+    #[test]
+    fn progress_is_on_the_row_until_the_fetch_lands() {
+        let mut app = make_app(2);
+        let path = app.repos[0].path.clone().unwrap();
+        app.needs_redraw = false;
+        app.apply_fetch_progress(&path, receiving(5));
+        assert_eq!(app.repos[0].fetch.progress, Some(receiving(5)));
+        assert_eq!(app.repos[1].fetch.progress, None);
+        assert!(app.needs_redraw);
+        app.apply_fetch_progress("~/no/such/row", receiving(9));
+        let now = Local::now();
+        app.repos[0]
+            .fetch
+            .record(&crate::git::FetchOutcome::NotAttempted, now);
+        assert_eq!(app.repos[0].fetch.progress, Some(receiving(5)));
+        app.repos[0].fetch.record(&timed_out(), now);
+        assert_eq!(app.repos[0].fetch.progress, None);
+    }
+
+    /// FZ-35a (#84): a row whose fetch claim expired, with nothing left to
+    /// land, stops showing progress; a row still claimed keeps it.
+    #[test]
+    fn an_expired_claim_takes_its_progress_off_the_row() {
+        let mut app = make_app(2);
+        let t0 = std::time::Instant::now();
+        let limit = std::time::Duration::from_secs(180);
+        let (a, b) = (
+            app.repos[0].path.clone().unwrap(),
+            app.repos[1].path.clone().unwrap(),
+        );
+        assert!(app.claim_fetch(&a, t0));
+        assert!(app.claim_fetch(&b, t0 + std::time::Duration::from_secs(100)));
+        app.apply_fetch_progress(&a, receiving(5));
+        app.apply_fetch_progress(&b, receiving(7));
+        app.expire_fetches_in_flight(limit, t0 + std::time::Duration::from_secs(181));
+        assert_eq!(app.repos[0].fetch.progress, None);
+        assert_eq!(app.repos[1].fetch.progress, Some(receiving(7)));
     }
 
     /// The app measures the hold in its watch interval.

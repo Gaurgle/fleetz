@@ -129,15 +129,18 @@ remote URL in the repo pane is drawn without credentials too (all userinfo,
 user and password, except for ssh remotes, whose login name stays and only a
 password goes).
 
-A fetch gets two minutes. One that runs out is stopped together with every
-process it started (`ssh`, `index-pack`), and the half-written
-`tmp_pack_*` files it left in the repo's pack directory are removed. Such a
-repo is then left out of the automatic fetches (the watch sweep, a push GitHub
-reports, the refetch after an outage) for two watch intervals, then four after
-a second timeout in a row, doubling up to ten minutes. `f` and `F` fetch it
-regardless; a fetch that works, or `r` or `R`, lifts the wait.
-A repo is never fetched twice at once: while its fetch runs, a sweep, a
-poll, `f` or `F` refreshes its local state and lets that fetch finish.
+A fetch runs as long as git keeps reporting progress, however big it is; while
+it runs, the row says how much has arrived, `fetching 312 MB`. One that reports
+nothing for 30 seconds is stopped together with every process it started
+(`ssh`, `index-pack`), and the half-written `tmp_pack_*` files it left in the
+repo's pack directory are removed. Such a repo is then left out of the
+automatic fetches (the watch sweep, a push GitHub reports, the refetch after
+an outage) for two watch intervals, then four after a second timeout in a row,
+doubling up to ten minutes. `f` and `F` fetch it regardless; a fetch that
+works, or `r` or `R`, lifts the wait.
+A repo is never fetched twice at once: while its fetch runs or waits its turn,
+a sweep, a poll, `f`, `F`, launch or `R` refreshes its local state and lets
+that fetch finish.
 
 ## Install
 

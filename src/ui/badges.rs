@@ -327,10 +327,16 @@ pub fn badge_spans_marked(
         ));
     }
 
-    // The last fetch failed, so behind and ahead are counted against old
-    // remote refs. Beside the status it qualifies, and left of it so the
-    // status keeps the right edge.
-    if let Some(marker) = crate::ui::fetch_marker(&repo.fetch) {
+    // A fetch is running and has bytes in: how many (FZ-35a). It says more
+    // than an earlier failure's marker, which the fetch's landing replaces.
+    // Otherwise, the last fetch failed, so behind and ahead are counted
+    // against old remote refs. Beside the status it qualifies, and left of
+    // it so the status keeps the right edge.
+    if let Some(label) = crate::ui::fetch_progress_label(&repo.fetch) {
+        let label = format!("{label} ");
+        width += label.chars().count();
+        spans.push(Span::styled(label, Style::default().fg(colors::SUBTEXT)));
+    } else if let Some(marker) = crate::ui::fetch_marker(&repo.fetch) {
         let marker = format!("{marker} ");
         width += marker.chars().count();
         spans.push(Span::styled(marker, Style::default().fg(colors::PEACH)));
@@ -437,6 +443,36 @@ mod tests {
             Some(status_color(&r)),
             "status keeps its colour"
         );
+    }
+
+    fn receiving(bytes: u64) -> crate::git::FetchProgress {
+        crate::git::FetchProgress {
+            phase: crate::git::FetchPhase::Receiving,
+            objects_done: 1,
+            objects_total: 2,
+            bytes,
+        }
+    }
+
+    /// FZ-35a (#84), criterion 3: a running fetch with bytes in says how
+    /// many, in the fetch marker's place, over an earlier failure's marker;
+    /// before the first byte, and once it lands, the row is as it was.
+    #[test]
+    fn a_running_fetch_shows_its_received_size_on_the_row() {
+        let mut behind = repo("behind");
+        behind.behind = 3;
+        let mut r = with_failed_fetch(behind, crate::git::FetchFailureKind::TimedOut);
+        r.fetch.progress = Some(receiving(0));
+        assert_eq!(rendered(&r).0, "⚠ timeout 3↓");
+        r.fetch.progress = Some(receiving(312 * 1024 * 1024 + 5));
+        let (text, width) = rendered(&r);
+        assert_eq!(text, "fetching 312 MB 3↓");
+        assert_eq!(width, text.chars().count(), "width matches what is drawn");
+        let (spans, _) = badge_spans(&r, false);
+        assert_eq!(spans[0].style.fg, Some(colors::SUBTEXT));
+        r.fetch
+            .record(&crate::git::FetchOutcome::Succeeded, chrono::Local::now());
+        assert_eq!(rendered(&r).0, "3↓");
     }
 
     /// Nothing extra on the row while fetches work.
