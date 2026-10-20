@@ -158,6 +158,38 @@ pub struct FetchFacts {
     /// fetch, and because `carried_into` then keeps it across a reload that
     /// lands mid-fetch. In memory only; cleared when the fetch lands.
     pub progress: Option<crate::git::FetchProgress>,
+    /// GitHub's `diskUsage` (kB) for this checkout's remote when a fetch of
+    /// it last succeeded in this session (FZ-35b), the baseline the
+    /// pre-check measures growth from. `None` is unknown. In memory only.
+    pub disk_baseline: Option<u64>,
+    /// How much the remote grew past the cap since `disk_baseline`, in
+    /// bytes, while the pre-check holds the repo (`assess_growth`). Every
+    /// automatic fetch and `F` skip it until `f` or a success.
+    pub grown: Option<u64>,
+}
+
+/// The growth in bytes from `baseline_kb` to `current_kb`, when it is more
+/// than `cap_bytes`. GitHub's `diskUsage` is in kilobytes.
+fn growth_over_cap(
+    baseline_kb: Option<u64>,
+    current_kb: Option<u64>,
+    cap_bytes: Option<u64>,
+) -> Option<u64> {
+    let cap = cap_bytes?;
+    let growth = current_kb?.checked_sub(baseline_kb?)?.saturating_mul(1024);
+    (growth > cap).then_some(growth)
+}
+
+/// Why a repo's automatic fetches wait for `f` (FZ-35b), with the size the
+/// row names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizeHold {
+    /// GitHub's `diskUsage` grew by this many bytes, more than the cap,
+    /// since the last successful fetch: `fetch ~N MB, press f`.
+    Grown(u64),
+    /// A fetch was cut at the cap after receiving this many bytes
+    /// (`FetchFailureKind::TooBig`): `fetch over N MB, press f`.
+    OverCap(u64),
 }
 
 impl FetchFacts {
@@ -176,7 +208,10 @@ impl FetchFacts {
         use crate::git::FetchOutcome;
         match outcome {
             FetchOutcome::NotAttempted => return,
-            FetchOutcome::Succeeded => self.last_success = Some(now),
+            FetchOutcome::Succeeded => {
+                self.last_success = Some(now);
+                self.grown = None;
+            }
             FetchOutcome::Failed(_) => {}
         }
         self.last_attempt = Some(now);
@@ -191,6 +226,27 @@ impl FetchFacts {
             crate::git::FetchOutcome::Failed(failure) => Some(failure),
             _ => None,
         }
+    }
+
+    /// The pre-check (FZ-35b): hold the repo when GitHub's `diskUsage` now
+    /// (`current_kb`) exceeds `disk_baseline` by more than `cap_bytes`.
+    /// A missing current value, an unknown baseline, an unchanged or
+    /// shrunken size, or no cap decide nothing, and lift an earlier hold of
+    /// this kind: the in-fetch cap still bounds the fetch.
+    pub fn assess_growth(&mut self, current_kb: Option<u64>, cap_bytes: Option<u64>) {
+        self.grown = growth_over_cap(self.disk_baseline, current_kb, cap_bytes);
+    }
+
+    /// Whether automatic fetches and `F` skip this repo, and the size to
+    /// name. A fetch cut at the cap is the hold the row saw happen, so it is
+    /// named over a growth GitHub reports.
+    pub fn size_hold(&self) -> Option<SizeHold> {
+        if let Some(failure) = self.failure()
+            && failure.kind == crate::git::FetchFailureKind::TooBig
+        {
+            return Some(SizeHold::OverCap(failure.received_bytes().unwrap_or(0)));
+        }
+        self.grown.map(SizeHold::Grown)
     }
 
     /// Carry what this session learned about fetching across a load that
@@ -214,6 +270,9 @@ impl FetchFacts {
             && newer(at, kept.last_attempt)
         {
             kept.record(&crate::git::FetchOutcome::Succeeded, at);
+            // The size baseline of that success: the load's own fetch knows
+            // it, a `git fetch` run in a terminal does not.
+            kept.disk_baseline = loaded.disk_baseline;
         }
         // Only when newer than what the session already has: an `R` whose
         // fetch finished before a sweep's fetch of the same repo landed must
@@ -222,6 +281,9 @@ impl FetchFacts {
             && newer(at, kept.last_attempt)
         {
             kept.record(&loaded.outcome, at);
+            if loaded.outcome == crate::git::FetchOutcome::Succeeded {
+                kept.disk_baseline = loaded.disk_baseline;
+            }
         }
         kept
     }
@@ -693,6 +755,9 @@ impl RepoStatus {
             repo_kind,
             // Filled at load (`assemble_view`); the poll has never rewritten it.
             owner: _,
+            // Read by the fetch cap's pre-check from the dataset
+            // (`main.rs::assess_size_holds`) onto the fetch facts, never here.
+            disk_usage: _,
         } = gh;
         self.pr_count = *pr_count;
         self.prs = prs.clone();
@@ -1396,5 +1461,78 @@ mod tests {
         let carried = session.carried_into(&loaded);
         assert_eq!(carried.failure(), None);
         assert_eq!(carried.last_success, Some(at(11)));
+    }
+
+    // --- FZ-35b: the size hold ---
+
+    const MIB: u64 = 1024 * 1024;
+
+    fn with_baseline(kb: Option<u64>) -> FetchFacts {
+        FetchFacts {
+            disk_baseline: kb,
+            ..FetchFacts::default()
+        }
+    }
+
+    /// Criterion 2: growth past the cap holds the repo and names the growth.
+    #[test]
+    fn a_disk_usage_grown_past_the_cap_holds_the_repo() {
+        let mut facts = with_baseline(Some(1_000));
+        facts.assess_growth(Some(1_000 + 300 * 1024), Some(200 * MIB));
+        assert_eq!(facts.size_hold(), Some(SizeHold::Grown(300 * MIB)));
+    }
+
+    /// Growth up to the cap, an unchanged and a shrunken size decide nothing.
+    #[test]
+    fn a_disk_usage_within_the_cap_unchanged_or_shrunken_holds_nothing() {
+        for current in [1_000 + 200 * 1024, 1_000, 10] {
+            let mut facts = with_baseline(Some(1_000));
+            facts.assess_growth(Some(current), Some(200 * MIB));
+            assert_eq!(facts.size_hold(), None, "current {current} kB");
+        }
+    }
+
+    /// A missing current value, an unknown baseline or no cap decide nothing,
+    /// and lift an earlier hold of this kind.
+    #[test]
+    fn a_missing_disk_usage_baseline_or_cap_holds_nothing() {
+        let mut facts = with_baseline(Some(1_000));
+        facts.assess_growth(Some(900_000), Some(MIB));
+        assert!(facts.size_hold().is_some());
+        facts.assess_growth(None, Some(MIB));
+        assert_eq!(facts.size_hold(), None, "missing current value");
+        let mut unknown = with_baseline(None);
+        unknown.assess_growth(Some(900_000), Some(MIB));
+        assert_eq!(unknown.size_hold(), None, "unknown baseline");
+        let mut uncapped = with_baseline(Some(1_000));
+        uncapped.assess_growth(Some(900_000), None);
+        assert_eq!(uncapped.size_hold(), None, "fetch_max_mb = 0");
+    }
+
+    /// Criterion 3: a fetch cut at the cap holds the repo until a success,
+    /// whatever GitHub says about growth.
+    #[test]
+    fn a_fetch_cut_at_the_cap_holds_until_a_success() {
+        let mut facts = with_baseline(Some(1_000));
+        facts.assess_growth(Some(900_000), Some(MIB));
+        facts.record(
+            &crate::git::FetchOutcome::Failed(crate::git::FetchFailure::too_big(2 * MIB)),
+            at(10),
+        );
+        assert_eq!(facts.size_hold(), Some(SizeHold::OverCap(2 * MIB)));
+        facts.record(&crate::git::FetchOutcome::Succeeded, at(11));
+        assert_eq!(facts.size_hold(), None);
+    }
+
+    /// Criterion 4: an `R` whose own fetch succeeded hands its baseline to
+    /// the row it replaces; one that fetched nothing keeps the row's.
+    #[test]
+    fn a_load_carries_the_baseline_of_its_own_successful_fetch() {
+        let session = with_baseline(Some(1_000));
+        let mut loaded = with_baseline(Some(5_000));
+        loaded.record(&crate::git::FetchOutcome::Succeeded, at(10));
+        assert_eq!(session.carried_into(&loaded).disk_baseline, Some(5_000));
+        let untouched = FetchFacts::from_disk(None);
+        assert_eq!(session.carried_into(&untouched).disk_baseline, Some(1_000));
     }
 }

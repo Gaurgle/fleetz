@@ -242,8 +242,8 @@ in the header instead.
 | `e` | Open repo in `$EDITOR` |
 | `o` | Open shell in repo dir |
 | `O` | Open PR in browser |
-| `f` | Fetch selected repo (updates ahead/behind, no merge). A failure is marked on the repo and named in the status line |
-| `F` | Fetch all repos. If any fail, the status line says how many |
+| `f` | Fetch selected repo (updates ahead/behind, no merge), with no size cap: how you pull a repo marked `fetch ~N MB, press f` or `fetch over N MB, press f` (see `fetch_max_mb`). The row shows `fetching N MB` while it runs. A failure is marked on the repo and named in the status line |
+| `F` | Fetch all repos, each capped at `fetch_max_mb`; a repo held for its size is skipped until `f`. If any fail, the status line says how many |
 | `b` / `s` | Branches overlay: preview + switch (`Enter`), clean up merged (`space` to mark, `d` to delete) |
 | `t` | Time window: pick how far back to show activity (slot / hours / days / weeks / months / years) |
 | `g` | Cycle group filter |
@@ -333,6 +333,15 @@ watch = true
 # GitHub poll below already notices when a remote moves and fetches just that
 # repo, so the blanket sweep is a backstop rather than the main path.
 refresh_interval = 60
+
+# The most any fetch you did not ask for by name may download, in MB: launch,
+# `R`, the watch sweep, the targeted fetch after a push, and `F`. A repo
+# GitHub says grew by more since its last fetch is not fetched, and a fetch
+# that passes it is stopped (what it got so far is discarded: a fetch cannot
+# resume). Either way its row reads `fetch ~N MB, press f` or `fetch over N
+# MB, press f`, and `f` on it fetches it in full. 0 means no cap. Anything
+# but a whole number from 0 up keeps 200.
+fetch_max_mb = 200
 
 # Seconds between GitHub re-polls while watching. One GraphQL call covers
 # every repo, so this is the cheap way to learn what changed: it keeps CI

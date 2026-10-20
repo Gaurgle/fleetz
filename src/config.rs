@@ -78,6 +78,28 @@ pub struct Config {
     /// The key keeps its name from the intro wave it used to also switch.
     #[serde(default = "default_intro")]
     pub intro: bool,
+    /// The most an automatic fetch may download, in MB (FZ-35b): launch, the
+    /// watch sweep, a moved remote, the recovery refetch and `F`. A fetch
+    /// past it is cut and its row waits for `f`, which fetches uncapped. `0`
+    /// is no cap. Anything but a whole number from 0 up keeps the default.
+    #[serde(
+        default = "default_fetch_max_mb",
+        deserialize_with = "lenient_fetch_max_mb"
+    )]
+    pub fetch_max_mb: u64,
+}
+
+fn default_fetch_max_mb() -> u64 {
+    200
+}
+
+/// `fetch_max_mb` as written, or the default for a value that is not a whole
+/// number from 0 up, so a typo there does not throw away the whole file.
+fn lenient_fetch_max_mb<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    Ok(match toml::Value::deserialize(d)? {
+        toml::Value::Integer(mb) => u64::try_from(mb).unwrap_or_else(|_| default_fetch_max_mb()),
+        _ => default_fetch_max_mb(),
+    })
 }
 
 fn default_watch() -> bool {
@@ -121,6 +143,7 @@ impl Default for Config {
             repo_list_pct: default_repo_list_pct(),
             inspector_pct: default_inspector_pct(),
             intro: default_intro(),
+            fetch_max_mb: default_fetch_max_mb(),
         }
     }
 }
@@ -222,6 +245,12 @@ impl Config {
     pub fn resolved_repo_dir(&self) -> PathBuf {
         let expanded = shellexpand::tilde(&self.repo_dir);
         PathBuf::from(expanded.as_ref())
+    }
+
+    /// The automatic-fetch cap in bytes (MiB, git's unit), `None` when
+    /// `fetch_max_mb` is 0.
+    pub fn fetch_cap_bytes(&self) -> Option<u64> {
+        (self.fetch_max_mb > 0).then(|| self.fetch_max_mb.saturating_mul(1024 * 1024))
     }
 
     /// Extra scan directories with `~` expanded, dropping any that don't
@@ -386,6 +415,31 @@ mod tests {
         assert_eq!(resolved, vec![dir.clone()]);
 
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// FZ-35b, criterion 1: 200 MB unless set, `0` is no cap.
+    #[test]
+    fn fetch_max_mb_defaults_to_200_and_zero_means_no_cap() {
+        let c = Config::default();
+        assert_eq!(c.fetch_max_mb, 200);
+        assert_eq!(c.fetch_cap_bytes(), Some(200 * 1024 * 1024));
+        let unset: Config = toml::from_str("repo_limit = 70").unwrap();
+        assert_eq!(unset.fetch_max_mb, 200);
+        let set: Config = toml::from_str("fetch_max_mb = 50").unwrap();
+        assert_eq!(set.fetch_cap_bytes(), Some(50 * 1024 * 1024));
+        let off: Config = toml::from_str("fetch_max_mb = 0").unwrap();
+        assert_eq!(off.fetch_cap_bytes(), None);
+    }
+
+    /// A bad value keeps the default and the rest of the file.
+    #[test]
+    fn a_bad_fetch_max_mb_keeps_the_default_and_the_other_keys() {
+        for bad in ["-5", "\"big\"", "1.5", "true"] {
+            let c: Config = toml::from_str(&format!("fetch_max_mb = {bad}\nrepo_limit = 70"))
+                .unwrap_or_else(|e| panic!("{bad} broke the file: {e}"));
+            assert_eq!(c.fetch_max_mb, 200, "{bad}");
+            assert_eq!(c.repo_limit, 70, "{bad}");
+        }
     }
 
     #[test]

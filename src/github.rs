@@ -18,6 +18,10 @@ pub struct GithubRepo {
     /// The owner's login (`Gaurgle`, or an org name). `repo_kind` says which
     /// *kind* of owner it is; this says who.
     pub owner: Option<String>,
+    /// GitHub's `diskUsage`, in kilobytes: what the fetch cap's pre-check
+    /// measures growth by (FZ-35b). Updated lazily on GitHub's side. `None`
+    /// in a payload cached before the field was asked for.
+    pub disk_usage: Option<u64>,
 }
 
 impl GithubRepo {
@@ -484,6 +488,10 @@ struct RepoNode {
     owner: Option<OwnerNode>,
     pull_requests: Option<PrConnectionNode>,
     default_branch_ref: Option<DefaultBranchRef>,
+    /// Absent from a payload cached before FZ-35b asked for it, which
+    /// parses unchanged: no cache format change.
+    #[serde(default)]
+    disk_usage: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -658,9 +666,14 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate, rotation: i64) -> Stri
       }"#;
     // The repo fields are identical for both sources, so they are built once
     // and interpolated twice.
+    //
+    // `diskUsage` feeds the fetch cap's pre-check (FZ-35b, #85). Free, as a
+    // scalar with no `first:` should be: measured on 2026-10-20 at
+    // `repo_limit` 50 the poll priced cost 3 / nodeCount 1030 with and
+    // without it.
     let repo_fields = format!(
         r#"nodes {{
-      name, pushedAt, isPrivate
+      name, pushedAt, isPrivate, diskUsage
       owner {{ __typename, login }}
       {pr_field}
       defaultBranchRef {{
@@ -1388,6 +1401,7 @@ fn parse_repos(nodes: Vec<RepoNode>) -> Vec<GithubRepo> {
                 ci_duration,
                 repo_kind,
                 owner,
+                disk_usage: node.disk_usage,
             })
         })
         .collect()
@@ -1634,6 +1648,7 @@ mod tests {
             owner: None,
             pull_requests: None,
             default_branch_ref: None,
+            disk_usage: None,
         }
     }
 
@@ -1654,6 +1669,7 @@ mod tests {
             ci_duration: None,
             repo_kind: RepoKind::Unknown,
             owner: None,
+            disk_usage: None,
         }
     }
 
@@ -1680,6 +1696,7 @@ mod tests {
                 nodes: None,
             }),
             default_branch_ref: None,
+            disk_usage: None,
         }];
         let repos = parse_repos(nodes);
         assert_eq!(repos[0].pr_count, 3);
@@ -1745,6 +1762,7 @@ mod tests {
             }),
             pull_requests: None,
             default_branch_ref: None,
+            disk_usage: None,
         }];
         let repos = parse_repos(nodes);
         assert_eq!(repos[0].repo_kind, RepoKind::Org);
@@ -1762,6 +1780,7 @@ mod tests {
             }),
             pull_requests: None,
             default_branch_ref: None,
+            disk_usage: None,
         }];
         let repos = parse_repos(nodes);
         assert_eq!(repos[0].repo_kind, RepoKind::Private);
@@ -1779,6 +1798,7 @@ mod tests {
             }),
             pull_requests: None,
             default_branch_ref: None,
+            disk_usage: None,
         }];
         let repos = parse_repos(nodes);
         assert_eq!(repos[0].repo_kind, RepoKind::Public);
@@ -1796,6 +1816,7 @@ mod tests {
             }),
             pull_requests: None,
             default_branch_ref: None,
+            disk_usage: None,
         }];
         let repos = parse_repos(nodes);
         assert_eq!(repos[0].owner.as_deref(), Some("acme"));
@@ -2150,6 +2171,32 @@ mod tests {
         let fetch = parse_cached(Some(quiet.to_string()), today).unwrap();
         assert!(fetch.has_pr_counts, "zero PRs is an answer, not an absence");
         assert_eq!(fetch.repos[0].pr_count, 0);
+    }
+
+    /// FZ-35b: a payload cached before `diskUsage` was asked for parses as it
+    /// did, with the size unknown; a new one carries it.
+    #[test]
+    fn a_cached_payload_without_disk_usage_still_parses() {
+        let today = day("2026-10-20");
+        let old = r#"{"data":{"viewer":{"repositories":{"nodes":[
+            {"name":"a","pushedAt":"2026-10-01T00:00:00Z","pullRequests":{"totalCount":1}}
+        ]}}}}"#;
+        let fetch = parse_cached(Some(old.to_string()), today).unwrap();
+        assert_eq!(fetch.repos.len(), 1);
+        assert_eq!(fetch.repos[0].pr_count, 1);
+        assert_eq!(fetch.repos[0].disk_usage, None);
+        let new = r#"{"data":{"viewer":{"repositories":{"nodes":[
+            {"name":"a","pushedAt":"2026-10-01T00:00:00Z","diskUsage":4288485}
+        ]}}}}"#;
+        let fetch = parse_cached(Some(new.to_string()), today).unwrap();
+        assert_eq!(fetch.repos[0].disk_usage, Some(4_288_485));
+    }
+
+    /// The poll asks for the size on both repo sources.
+    #[test]
+    fn the_query_asks_for_disk_usage_on_both_sources() {
+        let q = build_query(50, day("2026-10-20"), 0);
+        assert_eq!(q.matches("diskUsage").count(), 2);
     }
 
     /// An empty fleet carries no evidence either way. Reading that as stale
