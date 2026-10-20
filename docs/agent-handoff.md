@@ -55,6 +55,12 @@ can create or expand it.
   (a and b) as P1 in M1, spec first?"), "200mb is good" and "yes apply it
   everywhere" (the cap on every automatic fetch, launch included). Not
   yet given: the word to run FZ-35a; it follows FZ-34's integration.
+- **2026-10-20, about 14:40.** "tag it, and ship it", after the close
+  report presented the 0.6.0 commands. Read as a one-time, explicit
+  release of the tag rule by the owner: the coordinator makes the bump
+  commit (the last before the tag), pushes, tags `v0.6.0`, pushes the
+  tag (which runs `release.yml`), and installs the tagged build. Not a
+  standing permission; tags stay his after this.
 - **2026-10-20, about 14:30.** "lets go with a": the six Nerd-mode
   assertions in `src/ui/badges.rs` named in the FZ-38 stop comment may
   go through the glyph-choice functions; nothing else in existing tests
@@ -282,15 +288,12 @@ when resumed. #88 is parked.
 Nothing starts until Andreas opens the next session; today closed on his
 "close for today". The items below need the named answer or word.
 
-1. **Release 0.6.0** when he says so: the class is still minor (features
-   since `v0.5.1`, a cache format change). The bump is one commit, the
-   last before the tag: set `version = "0.6.0"` in `Cargo.toml`, run
-   `cargo check` so `Cargo.lock` follows, run fmt, clippy and the suite,
-   then present `git add Cargo.toml Cargo.lock`, the `chore(release):
-   bump version to 0.6.0` commit, `git push origin main`, `git tag
-   v0.6.0`, `git push origin v0.6.0`, and `cargo install --path`; the tag
-   and the install are his unless he releases them again for the
-   session. `release.yml` writes the notes with the fixed script.
+1. **Release 0.6.0: done on his "tag it, and ship it" (14:40).** Bump
+   commit `192a838` at 14:43 (fmt, clippy, 1179 tests on the bumped
+   tree), pushed; tag `v0.6.0` pushed; `release.yml` run 39424548876
+   (checks the tag against `Cargo.toml`, runs the gates, writes the notes
+   with the fixed script). The next release is `0.7.0` for a feature or
+   `0.6.1` for fixes only, bump last before the tag, on his word.
 2. **#88 FZ-38** if he wants it after all: new worktree-glyph candidates
    verified with `fc-query` against his fonts, his pick on the branch
    build, hard-wiring, review, merge (Ready to integrate for his look).
