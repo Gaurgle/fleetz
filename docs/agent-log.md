@@ -215,6 +215,30 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-20
 
+- **#85 (FZ-35b), cap automatic fetches at `fetch_max_mb`, hold big ones
+  for `f`.** Merged `8414319` at 14:19 CEST; ticket commit `4410cdc`
+  (reviewed diff `1a8b2947`), branch `feat/85-fetch-cap` from `b55228e`.
+  Spec section B, approved 12:05 ("no safety question, F keeps the cap,
+  200 is fine"). `fetch_max_mb` (default 200, `0` off, lenient parse);
+  `diskUsage` in the poll (measured free: cost 3, nodeCount 1030 with
+  and without), `#[serde(default)]` so old caches parse; the pre-check
+  holds a repo grown past the cap since its last successful fetch
+  (`FetchFacts::disk_baseline`, derived `grown` recomputed by
+  `assess_size_holds` on every poll and load apply); the in-fetch cap
+  cuts an automatic or `F` fetch past the cap with FZ-34's cleanup as
+  `FetchFailureKind::TooBig`; `FetchAsk { Automatic, All, One }` and
+  `plan_sweep_fetch` carry the cap, `f` runs uncapped and lifts the hold
+  on success; row labels `fetch ~N MB, press f` and `fetch over N MB,
+  press f` in PEACH (small look change); criterion 7 from the #84 review
+  (manual tally timed from the last sign of life). Review 1 changes
+  requested (B1: `F` with a held row lost its failure report, reproduced
+  by probe; B2 contract sentence; F1 cap unpinned); fix cycle 1 red-first
+  on B1; review 2 accepted with the mutations caught. Existing tests
+  touched under the standing exception only (`disk_usage: None` at
+  twelve sites). Follow-ups: nine test-only seams across FZ-35a and b;
+  `fetch over N MB` names the bytes at the cut. Branch CI green; combined
+  check 1179 tests; `main` CI green. Swept.
+  `#85: review changes 1; fix cycles 1; owner decisions 0; worker 22; review 11; usage read (worker 293k, reviewer 128k subagent tokens)`
 - **#87 (FZ-37), copy a commit hash with `y` or a click in pane 2.**
   Merged `5921633` at 13:54 CEST; ticket commit `ee88b34` (reviewed diff
   `afade15a` plus new `src/clipboard.rs` `858317b6`), branch

@@ -46,9 +46,16 @@ otherwise.
   `main` does not yet carry; re-prepare the bump when the current scope
   is stable and present the commands again. Notes are produced by
   `release.yml` through the fixed `scripts/release-notes.sh` (#86).
-- **Update 13:57:** #86, #45, #84 and #87 are Done (merged `ca2aeb6`,
-  `27bc09b`, `b55228e`, `5921633`; all swept; records in the log).
-  `main` is `5921633`, CI green, 1155 tests. **#85 FZ-35b** In progress since 13:30: `fz-worker`
+- **Update 14:30:** #86, #45, #84, #87 and #85 are merged (`ca2aeb6`,
+  `27bc09b`, `b55228e`, `5921633`, `8414319`; the first four swept and
+  Done, #85 awaiting `main` CI, then sweep and Done; records in the
+  log). `main` is `8414319`, 1179 tests. **#88 FZ-38** (pane 1 icons)
+  In progress since 14:25: `fz-worker` (`claude-opus-5-5`, medium),
+  base `8414319`, branch `feat/88-pane1-icons`, worktree
+  `.claude/worktrees/issue-88`; stops at Ready to integrate for his
+  glyph pick on the branch build (temporary cycle key). After it: the
+  stable report, the 0.6.0 bump and the commands.
+- **Earlier state, superseded:** **#85 FZ-35b** In progress since 13:30: `fz-worker`
   (`claude-opus-5-5`, medium), base `b55228e`, branch
   `feat/85-fetch-cap`, worktree `.claude/worktrees/issue-85`; criterion
   7 (manual tally timed from the last sign of life) added from the #84
@@ -121,6 +128,14 @@ can create or expand it.
   (a and b) as P1 in M1, spec first?"), "200mb is good" and "yes apply it
   everywhere" (the cap on every automatic fetch, launch included). Not
   yet given: the word to run FZ-35a; it follows FZ-34's integration.
+- **2026-10-20, about 14:25.** "can we add nerdfont icons for the error
+  messages in the pane 1 list? like this [U+F1616] for connection error
+  [U+EBFB] for general error or this [U+E654] and for worktrees: [U+EC7D]
+  or [U+EC7E] etc". Read, under the 13:05 "lets do some more tickets", as
+  create and run: FZ-38 (#88) created at 14:28, P1, M3, Ready; dispatch
+  after FZ-35b merges (same badge code). It stops at Ready to integrate
+  for his pick of the glyphs on the branch build (a temporary cycle key,
+  as the coordinator's memory note on comparing visual options says).
 - **2026-10-20, about 13:20.** "remember to bump versions in a regulated
   and logical way": the versioning rule now in `CLAUDE.md` ("Working
   conventions", "Versioning") is the coordinator's reading of it, applied
