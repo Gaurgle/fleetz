@@ -548,6 +548,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     let repo = match app.selected_repo() {
         Some(r) => r,
         None => {
+            *app.detail_hits.borrow_mut() = DetailHits::default();
             let empty = Paragraph::new("No repos to display")
                 .style(Style::default().fg(colors::OVERLAY))
                 .block(panel.title_top(crate::ui::panel_title(2, "detail", focused)));
@@ -1212,6 +1213,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // tops come down by the same amount the selection did -- and only when the
     // header was actually split off.
     let shed = if pin_header { pinned } else { 0 };
+    let body_tops: Vec<Option<usize>> = block_tops.iter().map(|t| t.checked_sub(shed)).collect();
     *app.detail_row_tops.borrow_mut() = block_tops
         .into_iter()
         .map(|t| t.saturating_sub(shed) as u16)
@@ -1247,10 +1249,149 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         mark_cursor_row(&mut lines, app.graph_cursor, area.width as usize);
     }
 
+    *app.detail_hits.borrow_mut() = DetailHits::measure(
+        &lines,
+        &body_tops,
+        |entry| app.entry_hash(entry),
+        area,
+        scroll,
+        view == HistoryView::Graph,
+    );
+
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
+}
+
+/// Where the detail pane's scrolling body drew its rows on the last frame,
+/// and which columns of each entry's row hold its hash. Built from the lines
+/// the paragraph is handed, with the row arithmetic the scroll already uses
+/// (`line_rows`), so a click is resolved against what is on screen rather
+/// than against a second copy of the layout.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct DetailHits {
+    /// The scrolling body on screen, below any pinned header.
+    pub body: Rect,
+    /// Rows scrolled off the top of `body`.
+    pub scroll: u16,
+    /// First wrapped row of each body line, then the total row count.
+    pub line_starts: Vec<u16>,
+    /// Each selectable entry, in list order: the body line it starts on and
+    /// the columns of that line's first row its hash occupies.
+    pub entries: Vec<EntryHit>,
+    /// Every line is a cursor stop (the graph's row cursor), not just an
+    /// entry's.
+    pub row_cursor: bool,
+}
+
+/// One selectable entry of the detail pane's body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryHit {
+    /// The entry's index in the view's list, as the cursor counts it.
+    pub entry: usize,
+    pub line: usize,
+    /// The hash as drawn, when it is drawn whole on the line's first row.
+    /// Kept so a click copies what was on screen, even if the list changed
+    /// between the paint and the click.
+    pub hash: Option<String>,
+    /// Start and end (exclusive) column of `hash` within the body.
+    pub hash_cols: Option<(u16, u16)>,
+}
+
+/// What a click in the detail pane's body landed on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailClick {
+    /// The body line clicked, which is the graph's cursor unit.
+    pub line: u16,
+    /// The index of the entry that line starts, if any.
+    pub entry: Option<usize>,
+    /// The hash drawn under the click, when the click fell on one.
+    pub hash: Option<String>,
+}
+
+impl DetailHits {
+    fn measure<'a>(
+        lines: &[Line],
+        tops: &[Option<usize>],
+        hash_of: impl Fn(usize) -> Option<&'a str>,
+        body: Rect,
+        scroll: u16,
+        row_cursor: bool,
+    ) -> Self {
+        let mut line_starts = Vec::with_capacity(lines.len() + 1);
+        let mut row = 0usize;
+        for line in lines {
+            line_starts.push(row.min(u16::MAX as usize) as u16);
+            row += line_rows(line, body.width);
+        }
+        line_starts.push(row.min(u16::MAX as usize) as u16);
+
+        let entries = tops
+            .iter()
+            .enumerate()
+            .filter_map(|(entry, top)| {
+                let line = (*top)?;
+                let text: String = lines
+                    .get(line)?
+                    .spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect();
+                let drawn = hash_of(entry).filter(|h| !h.is_empty()).and_then(|h| {
+                    let at = text.find(h)?;
+                    let start = text[..at].chars().count();
+                    let end = start + h.chars().count();
+                    (end <= body.width as usize).then_some((h, (start as u16, end as u16)))
+                });
+                Some(EntryHit {
+                    entry,
+                    line,
+                    hash: drawn.map(|(h, _)| h.to_string()),
+                    hash_cols: drawn.map(|(_, cols)| cols),
+                })
+            })
+            .collect();
+
+        Self {
+            body,
+            scroll,
+            line_starts,
+            entries,
+            row_cursor,
+        }
+    }
+
+    /// The row and entry under screen cell (`col`, `row`), or `None` outside
+    /// the body, below the last line, or on a line that is no cursor stop.
+    pub fn at(&self, col: u16, row: u16) -> Option<DetailClick> {
+        let b = self.body;
+        if col < b.x || col >= b.x + b.width || row < b.y || row >= b.y + b.height {
+            return None;
+        }
+        let body_row = row - b.y + self.scroll;
+        let x = col - b.x;
+        let line = self
+            .line_starts
+            .windows(2)
+            .position(|w| w[0] <= body_row && body_row < w[1])?;
+        let hit = self.entries.iter().find(|e| e.line == line);
+        if hit.is_none() && !self.row_cursor {
+            return None;
+        }
+        let hash = hit
+            .filter(|e| {
+                e.hash_cols.is_some_and(|(start, end)| {
+                    body_row == self.line_starts[line] && start <= x && x < end
+                })
+            })
+            .and_then(|e| e.hash.clone());
+        Some(DetailClick {
+            line: line as u16,
+            entry: hit.map(|e| e.entry),
+            hash,
+        })
+    }
 }
 
 /// Put the caret and the selection wash on one row of the graph, clamped to
@@ -1539,13 +1680,16 @@ fn bring_into_view(block: (u16, u16), scroll: u16, height: u16) -> u16 {
 /// `Paragraph` wraps long lines, so a raw line count under-counts. Guards a
 /// zero width so a degenerate pane can't divide by zero.
 fn wrapped_row_count(lines: &[Line], width: u16) -> u16 {
-    let w = width.max(1) as usize;
-    let mut rows = 0usize;
-    for line in lines {
-        let len: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
-        rows += if len == 0 { 1 } else { len.div_ceil(w) };
-    }
+    let rows: usize = lines.iter().map(|line| line_rows(line, width)).sum();
     rows.min(u16::MAX as usize) as u16
+}
+
+/// Rows one line takes in a wrapping paragraph `width` columns wide: the
+/// arithmetic `wrapped_row_count` and the click map share.
+fn line_rows(line: &Line, width: u16) -> usize {
+    let w = width.max(1) as usize;
+    let len: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+    if len == 0 { 1 } else { len.div_ceil(w) }
 }
 
 /// Colorize a `git log --graph` ASCII prefix by character column ("lane"),
@@ -6424,5 +6568,31 @@ mod tests {
         let (text, lamp) = detail_of(&app);
         assert!(!text.contains(EARLIER_REFRESH_NOTE), "{text}");
         assert_eq!(lamp, colors::PEACH);
+    }
+
+    /// FZ-37 review: a hit carries the entry's own list index and the hash
+    /// as drawn, so a top shed into the pinned header cannot shift the index
+    /// and a later list change cannot change what a click copies.
+    #[test]
+    fn a_hit_carries_the_drawn_hash_and_the_entry_index() {
+        let lines = vec![
+            Line::from("  aaa1111 first"),
+            Line::from("  bbb2222 second"),
+        ];
+        // Entry 0 sat in the pinned header, so it has no body line.
+        let tops = [None, Some(0), Some(1)];
+        let hash_of = |i: usize| ["zzz9999", "aaa1111", "bbb2222"].get(i).copied();
+        let body = Rect::new(10, 5, 40, 10);
+        let hits = DetailHits::measure(&lines, &tops, hash_of, body, 0, false);
+
+        let on_hash = hits.at(12, 6).expect("a row");
+        assert_eq!(on_hash.entry, Some(2));
+        assert_eq!(on_hash.hash.as_deref(), Some("bbb2222"));
+        assert_eq!(on_hash.line, 1);
+
+        let off_hash = hits.at(12 + 8, 6).expect("a row");
+        assert_eq!((off_hash.entry, off_hash.hash), (Some(2), None));
+
+        assert_eq!(hits.at(12, 7), None, "below the last line");
     }
 }
