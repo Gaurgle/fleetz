@@ -36,14 +36,36 @@ otherwise.
   11:45, R5 scope 11:49, #84 and #85 created 11:52, spec committed 11:54,
   review 1 11:59, spec approved 12:09, ticket commit 12:12, review 2
   12:16, merge 12:22. A correction comment is on #83.
-- **FZ-35a (#84) and FZ-35b (#85) Ready**, spec approved (its
-  "Decisions" section). Not dispatched: Andreas has not given the word
-  to run them; asked at about 12:10. On his yes: FZ-35a first (branch
-  `feat/84-fetch-progress`, worktree `.claude/worktrees/issue-84`, base
-  current `main`), FZ-35b after it lands. Reviewer follow-ups from #83
-  that belong to FZ-35a: claim at permit, a claim token, the unclaimed
-  load fetches, and the temp packs left by a cancel inside the 2 s group
-  wait.
+- **Release 0.6.0: prepared at 12:30, reverted at 13:20.** The bump was
+  prepared uncommitted while he decided; at 13:20 he said "remember to
+  bump versions in a regulated and logical way", so the working-tree
+  bump was reverted and the rule written into `CLAUDE.md`
+  ("Versioning": one bump commit, the last before the tag, class decided
+  from everything since the previous tag). The installed binary
+  (`fleetz 0.6.0`, built 12:45 from the working tree) reports a version
+  `main` does not yet carry; re-prepare the bump when the current scope
+  is stable and present the commands again. Notes are produced by
+  `release.yml` through the fixed `scripts/release-notes.sh` (#86).
+- **In flight at 13:15 (under the 13:05 scope):**
+  - **#86 FZ-36** (release notes skip coordination commits) and **#45
+    FZ-26** (CI gates on pull requests): both accepted, committed
+    (`0b9824a`, `c696b7e`), pushed, branch CI green, Ready to
+    integrate; the combined check with both merged on `main` is running;
+    merge FZ-36 first, then #45, each with CI on `main` watched.
+  - **#84 FZ-35a** In progress since 13:08: `fz-worker`
+    (`claude-opus-5-5`, medium), base `ecab6c4`, branch
+    `feat/84-fetch-progress`, worktree `.claude/worktrees/issue-84`.
+    Brief carries the #83 reviewer follow-ups (claim at permit, claim
+    token, load fetches claimed).
+  - **#87 FZ-37** In progress since 13:12: `fz-worker`
+    (`claude-opus-5-5`, medium), base `ecab6c4`, branch
+    `feat/87-yank-hash`, worktree `.claude/worktrees/issue-87`. Shares
+    `src/main.rs` and `src/app.rs` with #84 by region (key and mouse
+    handling, clipboard, help, README versus fetch, sweep, events);
+    merges one at a time with the combined check rerun.
+  - **#85 FZ-35b** Ready, starts when #84 lands.
+- **#79** Ready and **#81** Ready, both waiting on his answers; no
+  worktrees.
 - **Lost state to tell Andreas:** the worktrees of #81 (its uncommitted
   implementation, revision `686f7e92` in the worker's report) and #45 (the
   uncommitted `ci.yml` and `docs.yml`) are gone from disk and were never
@@ -90,9 +112,46 @@ can create or expand it.
   (a and b) as P1 in M1, spec first?"), "200mb is good" and "yes apply it
   everywhere" (the cap on every automatic fetch, launch included). Not
   yet given: the word to run FZ-35a; it follows FZ-34's integration.
+- **2026-10-20, about 13:20.** "remember to bump versions in a regulated
+  and logical way": the versioning rule now in `CLAUDE.md` ("Working
+  conventions", "Versioning") is the coordinator's reading of it, applied
+  as the default until he corrects it; the loose 0.6.0 bump was reverted.
+- **2026-10-20, about 13:05.** "feature: hash's should be copyble easily
+  from all pane 2 which shows a commit hash. click to copy, and or
+  something when 'standing' on a commit (y for yank?)" and "ok. so lets
+  do some more tickets then, and get back to me when we are stable
+  again". Read as a standing scope replacing the 12:48 "dont start any
+  more": create and run the copy-hash ticket (FZ-37 #87, rulings in its
+  body), run FZ-35a (#84) and then FZ-35b (#85); cap: these three; stop
+  and report when every started ticket is merged and nothing is in
+  flight, or at the first safe-merge failure, two-cycle blocker or usage
+  limit. `y` and click are his own interaction choice, so FZ-37 merges
+  under the safe-merge rule with the status wording as a small look
+  change; he can override. Slots: #84 and #87 in the two worker slots,
+  #85 after #84 lands.
+- **2026-10-20, about 12:48.** "why is fz-13n still in progress?
+  integrate fz-26 too but dont start any more. let me know if fleetz
+  really is in a state of usefulness right now. are the fetching bug
+  fixed?" Read as: #81 moved to Ready (no work exists for it; comment on
+  the issue); #45 (FZ-26) approved to merge now as a CI change, redone
+  from scratch since its worktree was lost (`fz-small` then
+  `fz-reviewer`, base `ecab6c4`, branch `ci/45-pull-request-trigger`,
+  worktree `.claude/worktrees/issue-45`; ruling on criterion 1 on the
+  issue); **no further dispatch after #86 and #45**, FZ-35a included.
+  Install done: `fleetz 0.6.0` from the working tree at about 12:45.
+- **2026-10-20, about 12:40.** "do it, you can install it as well", to
+  the coordinator's option (b) on the release notes (skip coordination
+  `docs:` commits before tagging) with the 0.6.0 commands presented. Read
+  as: do the script change (issue #86 FZ-36 created for it, since every
+  commit traces to a ticket; `fz-small` dispatched in
+  `.claude/worktrees/issue-86`, branch
+  `chore/86-release-notes-skip-coordination`, base `ecab6c4`), and a
+  one-time release of the `cargo install` rule for this build: the
+  coordinator ran `cargo install --path ~/repos/fleetz` from the working
+  tree with the uncommitted 0.6.0 bump. The bump commit, push and tag
+  stay his; not read as a commit or tag instruction.
 - **2026-10-20, about 12:25.** "let me know when all is done so i can
-  install": he installs himself once told; the coordinator never runs
-  `cargo install`.
+  install": he installs himself once told.
 - **2026-10-20, about 11:32.** "ok, well lets go with libc option then?":
   `libc` approved as a direct dependency for FZ-34 (#83).
 - **2026-10-20, about 11:20.** Session opened with: "i added a priority 0

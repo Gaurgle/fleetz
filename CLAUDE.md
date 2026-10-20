@@ -98,6 +98,14 @@ everything else is unbuilt, and its line references drift.
   notes, run the release checks, and present commands for Andreas. The
   `release.yml` workflow publishes when he pushes the version tag. Never
   recommend releasing a dirty tree or a red build.
+- **Versioning:** `main` keeps the last released version until a release
+  is cut; the bump is one commit, the last before the tag, never per
+  ticket and never left uncommitted. While the major is 0: a new feature,
+  key, config key, cache format or contract change makes the next release
+  a minor (`0.X.0`); fixes and docs alone make it a patch (`0.x.Y`). The
+  class is decided from everything since the previous tag, so a prepared
+  bump stays valid as long as later work fits its class; `1.0.0` is the
+  public release (M5).
 - Tests live beside the code in `#[cfg(test)] mod tests`, not in `tests/`.
 - Every behavior change lands with a test that would have caught the old
   behavior; many existing tests name the regression they guard. Match that.

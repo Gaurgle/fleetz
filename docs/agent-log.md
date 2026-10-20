@@ -215,6 +215,35 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-20
 
+- **#45 (FZ-26), run the CI gates on pull requests.** Merged `27bc09b` at
+  13:14 CEST; ticket commit `c696b7e` (reviewed diff `deaa6694`), branch
+  `ci/45-pull-request-trigger` from `ecab6c4`. Parked since 2026-10-01
+  until the repository went public; Andreas on 2026-10-20: "integrate
+  fz-26 too". The 2026-10-01 worktree was lost, so `fz-small` (`sonnet`)
+  redid the reviewed design: `pull_request` trigger with the same path
+  filters in `ci.yml` and `docs.yml`, the job skipped when the head is in
+  this repository, `permissions: contents: read` in `ci.yml`, no
+  `pull_request_target`, `release.yml` untouched. Ruling: the fork
+  criterion is verified when the repository is public; merged as
+  preparation. Review accepted first time (YAML parsed with ruby; no
+  actionlint on the machine). Branch CI green; combined check with #86
+  1117 tests; `main` CI green. Swept.
+  `#45: review accepted first; fix cycles 0; owner decisions 1; worker 1; review 2; usage read (worker 22k, reviewer 27k subagent tokens)`
+- **#86 (FZ-36), release notes skip coordination-only commits.** Merged
+  `ca2aeb6` at 13:10 CEST; ticket commit `0b9824a` (reviewed diff
+  `90a0a23f`), branch `chore/86-release-notes-skip-coordination` from
+  `ecab6c4`. Created under Andreas's "do it" to the coordinator's option
+  (b) while preparing 0.6.0: the notes listed 143 handoff and log
+  commits beside 19 features. `coordination_only <hash>` drops a commit
+  whose every path is one of the four coordination files or under
+  `docs/superpowers/` or `.claude/`; 198 bullets to 92, Docs 143 to 37,
+  every other section byte-identical (the reviewer classified all 198
+  hashes). Ruling: the ticket's "well under 80" was an estimate; 92 is
+  accepted. `fz-small` (`sonnet`), one pass; review accepted first time
+  with scratch-clone edge cases (spaces, `.bak`, empty commit, rename).
+  Follow-up noted, not done: `core.quotePath=false` for non-ASCII paths.
+  Branch CI green; combined check 1117 tests; `main` CI green. Swept.
+  `#86: review accepted first; fix cycles 0; owner decisions 1; worker 1; review 3; usage read (worker 23k, reviewer 32k subagent tokens)`
 - **#83 (FZ-34), timed-out fetch leaks child processes and temp packs.**
   Merged `dda9105` at 12:22 CEST; ticket commit `196a542` (reviewed diff
   `1f997cf7`), branch `fix/83-fetch-timeout-leaks` from `edfe449`. P0
