@@ -1,6 +1,7 @@
 mod app;
 mod cache;
 mod cli;
+mod clipboard;
 mod config;
 mod contributions;
 mod discovery;
@@ -1065,7 +1066,8 @@ async fn handle_key(
 /// Weeks one wheel notch moves the contribution grid.
 const CONTRIB_SCROLL_WEEKS: i32 = 3;
 
-/// Mouse: left-click focuses the panel under the cursor; the scroll wheel
+/// Mouse: left-click focuses the panel under the cursor (in pane 2 it also
+/// moves the cursor to the clicked row, and copies a clicked hash); the scroll wheel
 /// scrolls whichever panel the cursor is over, regardless of which panel has
 /// keyboard focus. Ignored while an overlay or the search input is up.
 fn handle_mouse_input(
@@ -1151,6 +1153,12 @@ fn handle_mouse_input(
             if panel == FocusedPanel::Contributions {
                 app.contrib_drag = Some(m.column);
             }
+            // A click on a row of pane 2 moves its cursor there, and one on
+            // the row's hash copies it as `y` does. Resolved against the map
+            // the last frame recorded of what it drew (FZ-37).
+            if panel == FocusedPanel::Detail {
+                click_detail(app, m.column, m.row, clipboard::copy);
+            }
         }
         // Scroll the panel under the cursor without changing focus.
         //
@@ -1182,6 +1190,20 @@ fn handle_mouse_input(
             FocusedPanel::Contributions => {}
         },
         _ => {}
+    }
+}
+
+/// A left click at (`col`, `row`) inside the detail pane: move its cursor to
+/// the row under it, and copy through `copy` when the click is on the hash.
+fn click_detail(app: &mut App, col: u16, row: u16, copy: impl FnOnce(&str) -> Result<(), String>) {
+    let Some(click) = app.detail_hits.borrow().at(col, row) else {
+        return;
+    };
+    app.click_detail(&click);
+    // The hash recorded at paint time, not `inspected_hash` read now: the
+    // list can change between the paint and the click.
+    if let Some(hash) = &click.hash {
+        app.copy_hash(hash, copy);
     }
 }
 
@@ -1585,6 +1607,7 @@ async fn handle_normal_input(
             _ => app.scroll_detail(-10),
         },
         KeyCode::Char('v') => app.toggle_view(),
+        KeyCode::Char('y') => app.yank_with(clipboard::copy),
         KeyCode::Char('?') => app.toggle_help(),
         KeyCode::Char('/') => app.start_search(),
         // Fetch (not pull): update remote-tracking refs so ahead/behind is
@@ -10023,5 +10046,264 @@ mod tests {
         let legacy = gh("fleetz", "2026-01-01T00:00:00Z");
         assert!(!names_remote(Some("gaurgle"), "fleetz", &legacy));
         assert!(names_remote(None, "Fleetz", &legacy));
+    }
+
+    // FZ-37: `y` and a click in pane 2 copy a commit hash.
+
+    const YANK_HASHES: [&str; 3] = ["aaa1111", "bbb2222", "ccc3333"];
+
+    /// A repo whose every view lists the three `YANK_HASHES` commits, plus
+    /// `extra` more, newest first.
+    fn yank_repo(extra: usize) -> RepoStatus {
+        let mut repo = test_repo();
+        repo.path = Some("/tmp/yank".to_string());
+        let hashes: Vec<String> = YANK_HASHES
+            .iter()
+            .map(|h| h.to_string())
+            .chain((0..extra).map(|i| format!("{:07x}", 0xd000000 + i)))
+            .collect();
+        repo.graph = hashes
+            .iter()
+            .map(|h| model::GraphLine {
+                lanes: vec![graph::commit_cell()],
+                hash: h.clone(),
+                is_merge: false,
+                refs: vec![],
+                author: "Gaurgle".to_string(),
+                message: format!("subject of {h}"),
+            })
+            .collect();
+        repo.reflog = hashes
+            .iter()
+            .map(|h| model::ReflogEntry {
+                hash: h.clone(),
+                action: "commit:".to_string(),
+                description: format!("subject of {h}"),
+            })
+            .collect();
+        repo.graph_expanded = hashes
+            .iter()
+            .flat_map(|h| {
+                [
+                    format!("* commit {h}"),
+                    "| Author: Gaurgle <g@example.com>".to_string(),
+                    "|".to_string(),
+                    format!("|     subject of {h}"),
+                ]
+            })
+            .collect();
+        repo
+    }
+
+    fn yank_app(view: app::HistoryView, extra: usize) -> App {
+        let mut app = App::new(vec![yank_repo(extra)], "h".to_string(), 120, 40);
+        app.view = app::View::Detail;
+        app.history_view = view;
+        app
+    }
+
+    /// Draw a frame, as the event loop does before any click can arrive.
+    fn yank_frame(app: &App) -> ratatui::buffer::Buffer {
+        use ratatui::backend::TestBackend;
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| ui::render(f, app)).unwrap();
+        term.backend().buffer().clone()
+    }
+
+    /// The first cell of `needle` inside the detail pane, read off the
+    /// screen rather than out of the hit map under test.
+    fn on_screen(buf: &ratatui::buffer::Buffer, app: &App, needle: &str) -> (u16, u16) {
+        let pane = ui::panel_rects(buf.area, app).detail.expect("detail pane");
+        (pane.top()..pane.bottom())
+            .find_map(|y| {
+                let row: String = (pane.left()..pane.right())
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect();
+                row.find(needle)
+                    .map(|byte| (pane.left() + row[..byte].chars().count() as u16, y))
+            })
+            .unwrap_or_else(|| panic!("`{needle}` is not drawn in pane 2"))
+    }
+
+    fn yank_status(app: &App) -> Option<(String, bool)> {
+        app.status_message
+            .as_ref()
+            .map(|m| (m.text.clone(), m.is_error))
+    }
+
+    #[test]
+    fn yank_copies_the_inspected_hash() {
+        let mut app = yank_app(app::HistoryView::Commits, 0);
+        app.set_detail_selected(1);
+        let mut copied = Vec::new();
+        app.yank_with(|h| {
+            copied.push(h.to_string());
+            Ok(())
+        });
+        assert_eq!(copied, ["bbb2222"]);
+        assert_eq!(
+            yank_status(&app),
+            Some(("copied bbb2222".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn yank_follows_the_active_view() {
+        let mut app = yank_app(app::HistoryView::Reflog, 0);
+        app.set_detail_selected(2);
+        let mut copied = String::new();
+        app.yank_with(|h| {
+            copied = h.to_string();
+            Ok(())
+        });
+        assert_eq!(copied, "ccc3333");
+    }
+
+    #[test]
+    fn yank_with_nothing_inspected_copies_nothing() {
+        let mut app = App::new(vec![test_repo()], "h".to_string(), 120, 40);
+        let mut called = false;
+        app.yank_with(|_| {
+            called = true;
+            Ok(())
+        });
+        assert!(!called, "the clipboard was asked to copy nothing");
+        assert_eq!(
+            yank_status(&app),
+            Some(("nothing to copy".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn a_failed_copy_names_the_reason() {
+        let mut app = yank_app(app::HistoryView::Commits, 0);
+        app.yank_with(|_| Err("pbcopy timed out".to_string()));
+        assert_eq!(
+            yank_status(&app),
+            Some(("copy failed: pbcopy timed out".to_string(), true))
+        );
+    }
+
+    /// Click on `needle` in pane 2, offset `dx` columns from its first cell,
+    /// and return what was copied.
+    fn click_at(app: &mut App, needle: &str, dx: u16) -> Vec<String> {
+        let buf = yank_frame(app);
+        let (x, y) = on_screen(&buf, app, needle);
+        let (x, y) = (x + dx, y);
+        assert_eq!(
+            ui::panel_rects(buf.area, app).at(x, y),
+            Some(FocusedPanel::Detail)
+        );
+        let mut copied = Vec::new();
+        click_detail(app, x, y, |h| {
+            copied.push(h.to_string());
+            Ok(())
+        });
+        copied
+    }
+
+    #[test]
+    fn a_click_on_a_hash_moves_the_cursor_and_copies_it() {
+        for view in [
+            app::HistoryView::Info,
+            app::HistoryView::Commits,
+            app::HistoryView::Reflog,
+            app::HistoryView::Graph,
+        ] {
+            for dx in [0, 6] {
+                let mut app = yank_app(view, 0);
+                let copied = click_at(&mut app, "bbb2222", dx);
+                assert_eq!(copied, ["bbb2222"], "{view:?} at +{dx}");
+                assert_eq!(app.inspected_hash(), Some("bbb2222"), "{view:?}");
+                assert_eq!(
+                    yank_status(&app),
+                    Some(("copied bbb2222".to_string(), false)),
+                    "{view:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_click_on_the_row_off_the_hash_only_moves_the_cursor() {
+        for view in [
+            app::HistoryView::Info,
+            app::HistoryView::Commits,
+            app::HistoryView::Reflog,
+        ] {
+            let mut app = yank_app(view, 0);
+            // The column just past the hash, and the subject further along.
+            for (needle, dx) in [("bbb2222", 7), ("subject of ccc3333", 3)] {
+                let copied = click_at(&mut app, needle, dx);
+                assert!(copied.is_empty(), "{view:?} {needle}: copied {copied:?}");
+                assert_eq!(app.status_message.as_ref().map(|m| m.text.as_str()), None);
+            }
+            assert_eq!(app.inspected_hash(), Some("ccc3333"), "{view:?}");
+        }
+        // The graph's cursor is a row: a click on a block's message line
+        // moves the cursor into that block and copies nothing.
+        let mut app = yank_app(app::HistoryView::Graph, 0);
+        let copied = click_at(&mut app, "subject of ccc3333", 0);
+        assert!(copied.is_empty());
+        assert_eq!(app.inspected_hash(), Some("ccc3333"));
+    }
+
+    #[test]
+    fn a_click_outside_any_row_does_nothing() {
+        let mut app = yank_app(app::HistoryView::Commits, 0);
+        app.set_detail_selected(1);
+        let buf = yank_frame(&app);
+        let pane = ui::panel_rects(buf.area, &app).detail.unwrap();
+        let (_, last) = on_screen(&buf, &app, "ccc3333");
+        let (x, header) = on_screen(&buf, &app, "/tmp/yank");
+        let mut copied = Vec::new();
+        // Below the last row, in the pinned header, and on the border.
+        for (cx, cy) in [(x, last + 2), (x, header), (pane.left(), last)] {
+            click_detail(&mut app, cx, cy, |h| {
+                copied.push(h.to_string());
+                Ok(())
+            });
+        }
+        assert!(copied.is_empty(), "copied {copied:?}");
+        assert_eq!(app.inspected_hash(), Some("bbb2222"), "the cursor moved");
+        assert!(app.status_message.is_none());
+    }
+
+    /// The map is read in body rows, so a scrolled list resolves to the row
+    /// drawn under the pointer, not to the row that many lines from the top.
+    #[test]
+    fn a_click_on_a_scrolled_list_lands_on_the_drawn_row() {
+        let mut app = yank_app(app::HistoryView::Commits, 60);
+        app.set_detail_selected(50);
+        yank_frame(&app);
+        assert!(app.detail_scroll() > 0, "the list did not scroll");
+        let target = format!("{:07x}", 0xd000000 + 49);
+        let copied = click_at(&mut app, &target, 0);
+        assert_eq!(copied, std::slice::from_ref(&target));
+        assert_eq!(app.inspected_hash(), Some(target.as_str()));
+    }
+
+    /// FZ-37 review: a click copies the hash that was on screen, even when
+    /// the list changed between the paint and the click (a `RepoUpdated`
+    /// landing in between).
+    #[test]
+    fn a_click_copies_the_painted_hash_after_the_list_changes() {
+        let mut app = yank_app(app::HistoryView::Commits, 0);
+        let buf = yank_frame(&app);
+        let (x, y) = on_screen(&buf, &app, "bbb2222");
+        // A new commit lands on top: index 1 now names `aaa1111`.
+        let mut newer = app.repos[0].graph[0].clone();
+        newer.hash = "fff0000".to_string();
+        app.repos[0].graph.insert(0, newer);
+        let mut copied = Vec::new();
+        click_detail(&mut app, x, y, |h| {
+            copied.push(h.to_string());
+            Ok(())
+        });
+        assert_eq!(copied, ["bbb2222"]);
+        assert_eq!(
+            yank_status(&app),
+            Some(("copied bbb2222".to_string(), false))
+        );
     }
 }

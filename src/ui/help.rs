@@ -123,8 +123,7 @@ const GROUPS: [Group; 6] = [
                 desc: &[
                     "search, or filter by tag:",
                     "#dirty #behind #ahead #ci",
-                    "#prs #stash",
-                    "Enter keeps it, Esc clears",
+                    "#prs #stash; Enter keeps",
                 ],
             },
             Row {
@@ -159,6 +158,10 @@ const GROUPS: [Group; 6] = [
             Row {
                 key: "O",
                 desc: &["first PR in the browser"],
+            },
+            Row {
+                key: "y",
+                desc: &["copy hash (or click it)"],
             },
             Row {
                 key: "b s",

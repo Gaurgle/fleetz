@@ -1937,6 +1937,10 @@ pub struct App {
     /// the renderer reporting a measurement back, not state the input layer
     /// owns. Only the active view is drawn, so only its rows are held.
     pub detail_row_tops: std::cell::RefCell<Vec<u16>>,
+    /// Where the detail pane's last frame drew its rows and their hashes, so
+    /// a click resolves against what is on screen (FZ-37). Recorded by the
+    /// renderer for the reason `detail_row_tops` is.
+    pub detail_hits: std::cell::RefCell<crate::ui::detail::DetailHits>,
     /// Body row the graph view highlights. The graph's cursor is a *row*, not
     /// a commit: its blocks run twenty rows and more, so a commit-granular
     /// cursor could only jump a whole block at a time and left the highlight
@@ -2203,6 +2207,7 @@ impl App {
             detail_max_scroll: std::cell::Cell::new(0),
             follow_selection: std::cell::Cell::new(false),
             detail_row_tops: std::cell::RefCell::new(Vec::new()),
+            detail_hits: std::cell::RefCell::new(Default::default()),
             graph_cursor: 0,
             detail_view_height: std::cell::Cell::new(0),
             inspector_max_scroll: std::cell::Cell::new(0),
@@ -2773,7 +2778,6 @@ impl App {
     /// them, `reflog` the HEAD movements. Which is why this returns a hash
     /// rather than an index -- an index into one means nothing in another.
     pub fn inspected_hash(&self) -> Option<&str> {
-        let repo = self.selected_repo()?;
         // Clamped, not bounds-checked: the index survives a repo change and a
         // view switch, so it can outlive the list it was chosen against. A
         // stale one resolves to the last row rather than to nothing, which is
@@ -2781,6 +2785,13 @@ impl App {
         let i = self
             .detail_selected()
             .min(self.selected_commit_count().saturating_sub(1));
+        self.entry_hash(i)
+    }
+
+    /// The hash entry `i` of the active history view names, the one
+    /// `inspected_hash` returns when the cursor is on it.
+    pub fn entry_hash(&self, i: usize) -> Option<&str> {
+        let repo = self.selected_repo()?;
         let graph_nth = |n: usize| repo.graph.get(n).map(|g| g.hash.as_str());
         match self.history_view {
             HistoryView::Info | HistoryView::Commits | HistoryView::Graph => graph_nth(i),
@@ -2811,6 +2822,41 @@ impl App {
         let repo = self.selected_repo()?;
         let hash = self.inspected_hash()?;
         repo.commits.iter().find(|c| c.hash == hash)
+    }
+
+    /// `y`: copy the inspected commit's hash through `copy` and say so on the
+    /// status line. `copy` is the clipboard, passed in so a test can stand in
+    /// for it.
+    pub fn yank_with(&mut self, copy: impl FnOnce(&str) -> Result<(), String>) {
+        let Some(hash) = self.inspected_hash().map(str::to_string) else {
+            self.set_status("nothing to copy".to_string(), false);
+            return;
+        };
+        self.copy_hash(&hash, copy);
+    }
+
+    /// Copy `hash` through `copy` and say so on the status line, in the
+    /// words `y` uses. A click passes the hash it saw drawn.
+    pub fn copy_hash(&mut self, hash: &str, copy: impl FnOnce(&str) -> Result<(), String>) {
+        match copy(hash) {
+            Ok(()) => self.set_status(format!("copied {hash}"), false),
+            Err(reason) => self.set_status(format!("copy failed: {reason}"), true),
+        }
+    }
+
+    /// A left click the detail pane's hit map resolved: move the cursor to
+    /// the clicked row the way `j`/`k` would. The graph's cursor is a row, so
+    /// any row of it is a stop; the other views move only onto an entry.
+    pub fn click_detail(&mut self, click: &crate::ui::detail::DetailClick) {
+        if self.history_view == HistoryView::Graph {
+            self.graph_cursor = click.line;
+            self.keep_graph_cursor_in_view();
+            self.sync_graph_selection();
+        } else if let Some(entry) = click.entry {
+            self.set_detail_selected(entry);
+            self.inspector_scroll = 0;
+        }
+        self.needs_redraw = true;
     }
 
     /// Scroll the inspector by `delta` lines, clamped to the content the last
