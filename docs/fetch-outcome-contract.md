@@ -142,3 +142,27 @@ userinfo never appearing in the detail.
    batch's. Of the fetch kinds in [State](#state), `Auth`, `NoRemote` and
    `Other` (a git error) are not refetched. No fetch backoff, no new config key, and `r`, `f`,
    `F`, the watch sweep and `stale_remotes` are unchanged.
+2. **2026-10-20, rule 6: a backoff after timeouts** (FZ-34,
+   [#83](https://github.com/Gaurgle/fleetz/issues/83), coordinator ruling R3
+   under the owner's P0 instruction). A repo whose fetch never finished
+   within the limit started the same download on every sweep and left a
+   temp pack each time (185 of them, 22 GB, in one clone). Now, per checkout
+   path, after the `n`th consecutive `TimedOut` fetch every automatic fetch
+   (the watch sweep, a moved remote, the recovery refetch of amendment 1)
+   skips the repo for `backoff_secs(n + 1, refresh_interval, 1.0)` seconds
+   from that timeout: two watch intervals, then four, doubling up to
+   `BACKOFF_CAP_SECS` (`app::FetchBackoff`). A successful fetch clears the
+   path, `r` and `R` clear every path, and `f` and `F` fetch as before. Only
+   `TimedOut` counts; the other kinds fail fast and leave the count alone.
+   A timeout from a launch or `R` fetch counts too. The row keeps its
+   `TimedOut` mark as rule 5 says, and the hold lives in memory only. With
+   it, `git::fetch` has its own limit, `FETCH_TIMEOUT` (120 s, R4; every
+   other git call keeps `GIT_TIMEOUT`, 30 s), runs in its own process group
+   that a timeout kills whole (R1), and removes the temp packs the timed-out
+   fetch created (R2).
+   Ruling R5 (same day) adds one fetch per checkout at a time: `App`
+   lists the paths a sweep is fetching (`App::fetches_in_flight`), and
+   every sweep selection, automatic or `f`/`F`, sweeps such a path without
+   fetching it again. The landed outcome ends the entry, as does the
+   `SWEEP_STUCK_AFTER` expiry. A launch or `R` load runs its fetches itself
+   and does not take part.

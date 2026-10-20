@@ -8,6 +8,13 @@ use tokio::process::Command;
 /// credential prompt can never wedge a sweep. kill_on_drop reaps the child.
 const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// The ceiling for `git fetch` alone (FZ-34, #83). A large but progressing
+/// download needs longer than `GIT_TIMEOUT`: one of 1.1 GB never finished in
+/// 30 s and restarted every sweep. Still under `SWEEP_STUCK_AFTER` (180 s in
+/// `main.rs`), so a sweep waiting on it is not given up on first. An
+/// unreachable ssh host still fails in 10 s (`FETCH_SSH_COMMAND`).
+pub(crate) const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Build a hardened git command: no optional locks (polling must not take
 /// index.lock and fight editors), no terminal prompts (a fetch that wants
 /// credentials fails instead of hanging), C locale (parsers match English
@@ -377,7 +384,7 @@ const FETCH_DETAIL_MAX: usize = 160;
 /// fetch is the one probe whose failure the user has to be told about, and
 /// `run_git` cannot say why one failed.
 pub async fn fetch(repo_path: &Path) -> FetchOutcome {
-    fetch_within(repo_path, GIT_TIMEOUT).await
+    fetch_within(repo_path, FETCH_TIMEOUT).await
 }
 
 /// The ssh command a fetch hands git when the user chose none. ssh's own TCP
@@ -386,7 +393,7 @@ pub async fn fetch(repo_path: &Path) -> FetchOutcome {
 /// connect timeout it fails sooner, with ssh's reason. `BatchMode` stops ssh
 /// prompting on the TUI's terminal (a passphrase, an unknown host key), which
 /// `GIT_TERMINAL_PROMPT=0` does not cover. A slow but reachable remote still
-/// has the full `GIT_TIMEOUT`.
+/// has the full `FETCH_TIMEOUT`.
 const FETCH_SSH_COMMAND: &str = "ssh -o ConnectTimeout=10 -o BatchMode=yes";
 
 /// Whether a fetch adds `FETCH_SSH_COMMAND`: only when the user has set none
@@ -442,14 +449,188 @@ async fn prepared_fetch_cmd(repo_path: &Path) -> Command {
     fetch_cmd(repo_path, ssh_command)
 }
 
+/// The names of the temp files an interrupted fetch leaves in
+/// `<common_dir>/objects/pack`: `tmp_pack_*` (index-pack's pack being
+/// written), `tmp_idx_*` (its index) and `tmp_rev_*` (its reverse index).
+/// Empty when the directory cannot be read.
+fn temp_pack_names(common_dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(common_dir.join("objects").join("pack")) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| {
+            ["tmp_pack_", "tmp_idx_", "tmp_rev_"]
+                .iter()
+                .any(|p| n.starts_with(p))
+        })
+        .collect()
+}
+
+/// Send `sig` to every process in the group `pgid`; true when the call
+/// reached at least one. The one place that signals a group.
+fn signal_process_group(pgid: u32, sig: i32) -> bool {
+    // A pgid of 0 or 1 would address our own group or every process we may
+    // signal: never.
+    match i32::try_from(pgid) {
+        // SAFETY: `kill` takes two integers and touches no memory of ours; a
+        // negative pid addresses the group.
+        Ok(pgid) if pgid > 1 => unsafe { libc::kill(-pgid, sig) == 0 },
+        _ => false,
+    }
+}
+
+/// SIGKILL the whole group. A group already gone is the outcome wanted.
+fn kill_process_group(pgid: u32) {
+    signal_process_group(pgid, libc::SIGKILL);
+}
+
+/// Whether any process of group `pgid` still exists (signal 0 only checks).
+fn process_group_alive(pgid: u32) -> bool {
+    signal_process_group(pgid, 0)
+}
+
+/// Read a child's pipe to its end; empty when there is none.
+async fn read_pipe(pipe: Option<impl tokio::io::AsyncRead + Unpin>) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    if let Some(mut pipe) = pipe {
+        let _ = pipe.read_to_end(&mut buf).await;
+    }
+    buf
+}
+
+/// A running fetch, spawned as the leader of its own process group, so the
+/// `git-remote-https`, `ssh`, `index-pack` and `upload-pack` it starts can be
+/// killed with it. `kill_on_drop` alone killed only the `git` pid and left
+/// the rest running, orphaned (#83). Dropping the guard before the fetch was
+/// reaped (the sweep task cancelled, fleetz quitting) SIGKILLs the group and
+/// removes the temp packs it created; `kill_on_drop` stays as the last resort
+/// for the leader, which tokio then reaps.
+struct FetchGroup {
+    child: tokio::process::Child,
+    pgid: Option<u32>,
+    /// The common dir and the temp pack names in it before the fetch
+    /// started, for `remove_new_temp_packs`. `None` when the dir is unknown.
+    snapshot: Option<(std::path::PathBuf, Vec<String>)>,
+}
+
+impl FetchGroup {
+    /// Kill the whole group and reap the leader. The group is killed before
+    /// the leader is reaped, so its id cannot have been reused yet.
+    async fn kill_and_reap(&mut self) {
+        if let Some(pgid) = self.pgid.take() {
+            kill_process_group(pgid);
+            let _ = self.child.wait().await;
+            // Orphans are reaped by init, not by us: wait briefly until the
+            // group is gone, so the temp files are not removed under a
+            // process still writing them. Bounded, since a process stuck in
+            // the kernel (a dead network mount) cannot be waited out.
+            let start = std::time::Instant::now();
+            while process_group_alive(pgid) && start.elapsed() < GROUP_EXIT_WAIT {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        } else {
+            let _ = self.child.kill().await;
+        }
+    }
+
+    /// Remove the temp packs this fetch created (`remove_new_temp_packs`).
+    fn remove_temp_packs(&self) {
+        if let Some((dir, before)) = &self.snapshot {
+            remove_new_temp_packs(dir, before);
+        }
+    }
+}
+
+impl Drop for FetchGroup {
+    /// A fetch dropped mid-run. Best effort and never blocking: the group
+    /// gets SIGKILL and the new temp packs are removed at once, without
+    /// waiting for the group to die (`Drop` cannot await). A file a dying
+    /// process still holds open is unlinked all the same and its space goes
+    /// when the process does.
+    fn drop(&mut self) {
+        if let Some(pgid) = self.pgid {
+            kill_process_group(pgid);
+            self.remove_temp_packs();
+        }
+    }
+}
+
+/// How long a timed-out fetch waits for its killed group to disappear before
+/// removing temp files anyway.
+const GROUP_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Run the fetch in its own process group within `limit`.
+///
+/// On a timeout the group is killed and reaped, and the temp pack files
+/// (`temp_pack_names`) that were not in the pack directory before the fetch
+/// started are removed (`remove_new_temp_packs`). A fetch that exits by
+/// itself removes nothing: git cleans up after its own exit. A cancelled
+/// fetch (the guard dropped mid-run) kills the group and removes them
+/// without waiting (`FetchGroup`'s `Drop`).
 async fn fetch_within(repo_path: &Path, limit: std::time::Duration) -> FetchOutcome {
-    let attempt = async { prepared_fetch_cmd(repo_path).await.output().await };
+    let snapshot = repo_dirs(repo_path).map(|d| {
+        let before = temp_pack_names(&d.common_dir);
+        (d.common_dir, before)
+    });
+    let mut cmd = prepared_fetch_cmd(repo_path).await;
+    cmd.process_group(0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let Ok(mut child) = cmd.spawn() else {
+        return fetch_outcome(FetchRun::NotStarted);
+    };
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+    let pgid = child.id();
+    let mut group = FetchGroup {
+        child,
+        pgid,
+        snapshot,
+    };
+    let attempt = async {
+        let (status, stdout, stderr) =
+            tokio::join!(group.child.wait(), read_pipe(stdout), read_pipe(stderr));
+        status.map(|status| std::process::Output {
+            status,
+            stdout,
+            stderr,
+        })
+    };
     let run = match tokio::time::timeout(limit, attempt).await {
-        Err(_) => FetchRun::TimedOut,
-        Ok(Err(_)) => FetchRun::NotStarted,
-        Ok(Ok(output)) => FetchRun::Exited(output),
+        Err(_) => {
+            group.kill_and_reap().await;
+            group.remove_temp_packs();
+            FetchRun::TimedOut
+        }
+        Ok(Err(_)) => {
+            group.kill_and_reap().await;
+            FetchRun::NotStarted
+        }
+        Ok(Ok(output)) => {
+            // Reaped: the group id may be reused from here on, and whatever
+            // the leader left running is no longer ours to kill.
+            group.pgid = None;
+            FetchRun::Exited(output)
+        }
     };
     fetch_outcome(run)
+}
+
+/// Remove the temp packs in `common_dir` that are not in `before`, the names
+/// taken before a timed-out fetch started, once its group is dead.
+///
+/// Accepted race (#83, R2): a `git fetch` the user started in a terminal
+/// while ours ran also writes a new temp pack there, which this removes too;
+/// that one fetch of theirs fails and is rerun. Nothing that was there
+/// before ours started is touched, and no pack git references is.
+fn remove_new_temp_packs(common_dir: &Path, before: &[String]) {
+    let pack_dir = common_dir.join("objects").join("pack");
+    for name in temp_pack_names(common_dir) {
+        if !before.contains(&name) {
+            let _ = std::fs::remove_file(pack_dir.join(name));
+        }
+    }
 }
 
 fn fetch_outcome(run: FetchRun) -> FetchOutcome {
@@ -3336,6 +3517,152 @@ mod real_repo_tests {
                 detail: None,
             })
         );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// Whether a pid still names a live process, waiting up to `bound` for
+    /// it to go: a killed orphan is reaped by init, not by us, so it can
+    /// linger as a zombie for a moment.
+    fn alive_after(pid: &str, bound: std::time::Duration) -> bool {
+        let gone = || {
+            let out = StdCommand::new("ps")
+                .args(["-o", "stat=", "-p", pid])
+                .output()
+                .expect("ps runs");
+            let stat = String::from_utf8_lossy(&out.stdout);
+            !out.status.success() || stat.trim().is_empty() || stat.trim().starts_with('Z')
+        };
+        let start = std::time::Instant::now();
+        while start.elapsed() < bound {
+            if gone() {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        !gone()
+    }
+
+    /// Every `tmp_*` name in a clone's pack directory, read independently of
+    /// `temp_pack_names` so a prefix it misses still shows up here.
+    fn temp_packs(dir: &Path) -> Vec<String> {
+        let pack_dir = repo_dirs(dir).unwrap().common_dir.join("objects/pack");
+        let mut names: Vec<String> = std::fs::read_dir(pack_dir)
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n.starts_with("tmp_"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// FZ-34 (#83), criteria 1 and 2: a timed-out fetch leaves nothing
+    /// running and none of its own temp packs. The upload-pack hook stands in
+    /// for a slow remote: it starts a grandchild of `git fetch` (the
+    /// `ssh`/`index-pack` that `kill_on_drop` used to orphan, writing its pid
+    /// to a file) and creates the temp files a half-done download leaves,
+    /// then never answers. A temp pack that was there before the fetch is
+    /// someone else's and stays.
+    #[tokio::test]
+    async fn a_timed_out_fetch_kills_its_process_group_and_its_temp_packs() {
+        let (upstream, dir) = fetched_clone("fetchleak");
+        let pack_dir = repo_dirs(&dir).unwrap().common_dir.join("objects/pack");
+        std::fs::write(pack_dir.join("tmp_pack_before"), b"theirs").unwrap();
+        let pid_file = dir.join("hook.pid");
+        let hook = format!(
+            "sleep 600 </dev/null >/dev/null 2>&1 & echo $! > '{pid}'; \
+             : > '{pack}/tmp_pack_hook'; : > '{pack}/tmp_idx_hook'; : > '{pack}/tmp_rev_hook'; \
+             cat >/dev/null; :",
+            pid = pid_file.display(),
+            pack = pack_dir.display(),
+        );
+        sh(
+            &dir,
+            &["git", "config", "remote.origin.uploadpack", hook.as_str()],
+        );
+        let outcome = fetch_within(&dir, std::time::Duration::from_millis(2000)).await;
+        assert!(
+            matches!(&outcome, FetchOutcome::Failed(f) if f.kind == FetchFailureKind::TimedOut),
+            "{outcome:?}"
+        );
+        let pid = std::fs::read_to_string(&pid_file).expect("the hook ran within the limit");
+        let pid = pid.trim();
+        let survived = alive_after(pid, std::time::Duration::from_secs(3));
+        if survived {
+            let _ = StdCommand::new("kill").args(["-9", pid]).status();
+        }
+        assert!(
+            !survived,
+            "the fetch's grandchild {pid} outlived the timeout"
+        );
+        assert_eq!(
+            temp_packs(&dir),
+            ["tmp_pack_before"],
+            "the fetch's own temp files must go, the earlier one must stay"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// FZ-34 (#83): a fetch dropped mid-run (its task cancelled, fleetz
+    /// quitting) kills its process group and removes its temp packs too,
+    /// without waiting.
+    #[tokio::test]
+    async fn a_cancelled_fetch_kills_its_process_group_and_its_temp_packs() {
+        let (upstream, dir) = fetched_clone("fetchcancel");
+        let pack_dir = repo_dirs(&dir).unwrap().common_dir.join("objects/pack");
+        std::fs::write(pack_dir.join("tmp_pack_before"), b"theirs").unwrap();
+        let pid_file = dir.join("hook.pid");
+        let hook = format!(
+            ": > '{pack}/tmp_pack_hook'; : > '{pack}/tmp_rev_hook'; \
+             sleep 600 </dev/null >/dev/null 2>&1 & echo $! > '{pid}'; cat >/dev/null; :",
+            pid = pid_file.display(),
+            pack = pack_dir.display(),
+        );
+        sh(
+            &dir,
+            &["git", "config", "remote.origin.uploadpack", hook.as_str()],
+        );
+        let fetch_dir = dir.clone();
+        let task = tokio::spawn(async move {
+            fetch_within(&fetch_dir, std::time::Duration::from_secs(60)).await
+        });
+        let start = std::time::Instant::now();
+        while std::fs::read_to_string(&pid_file).map_or(true, |p| p.trim().is_empty()) {
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(10),
+                "the hook never ran"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        let pid = pid.trim();
+        let survived = alive_after(pid, std::time::Duration::from_secs(3));
+        if survived {
+            let _ = StdCommand::new("kill").args(["-9", pid]).status();
+        }
+        assert!(!survived, "the cancelled fetch's grandchild {pid} survived");
+        assert_eq!(temp_packs(&dir), ["tmp_pack_before"]);
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// FZ-34 (#83), criterion 5d: a fetch that ends by itself removes
+    /// nothing. git cleans up after its own exit, and a temp file there is
+    /// another process's.
+    #[tokio::test]
+    async fn a_fetch_that_finishes_leaves_other_temp_packs_alone() {
+        let (upstream, dir) = fetched_clone("fetchkeep");
+        let pack_dir = repo_dirs(&dir).unwrap().common_dir.join("objects/pack");
+        std::fs::write(pack_dir.join("tmp_pack_other"), b"theirs").unwrap();
+        sh(
+            &upstream,
+            &["git", "commit", "-q", "--allow-empty", "-m", "two"],
+        );
+        assert_eq!(fetch(&dir).await, FetchOutcome::Succeeded);
+        assert_eq!(temp_packs(&dir), ["tmp_pack_other"]);
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&upstream).ok();
     }

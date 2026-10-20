@@ -16,5 +16,6 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 dirs = "6"
+libc = "0.2"
 shellexpand = "3"
 toml_edit = "0.25.13"
