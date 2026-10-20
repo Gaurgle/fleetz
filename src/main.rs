@@ -404,6 +404,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.contrib_author = config.contributions_author.clone();
     app.github_poll_secs = configured_poll_secs(&config);
     app.github_poll_cost = github::poll_cost(config.repo_limit);
+    app.fetch_max_bytes = config.fetch_cap_bytes();
     app.contrib_cell = config
         .contributions_cell_size
         .as_deref()
@@ -468,6 +469,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         LoadKind::Initial,
         false,
         &app.fetches_in_flight,
+        HashSet::new(),
     );
 
     let result = run_event_loop(&mut terminal, &mut app, &args, &config, &repo_dir, tx, rx).await;
@@ -534,6 +536,7 @@ fn spawn_load(
     kind: LoadKind,
     bypass_cache: bool,
     fetch_claims: &app::FetchClaims,
+    size_held: HashSet<String>,
 ) {
     debug_assert!(
         !matches!(kind, LoadKind::WindowApply(_) | LoadKind::FromMemory),
@@ -554,6 +557,7 @@ fn spawn_load(
             window,
             bypass_cache,
             &fetch_claims,
+            &size_held,
         )
         .await
         .map(|(repos, notes, dataset, calendar, source, meta)| {
@@ -605,6 +609,7 @@ fn spawn_window_apply(
             false,
             Some(&tx),
             &fetch_claims,
+            &HashSet::new(),
         )
         .await
         .map(|(repos, notes)| Box::new(window_apply_result(w, repos, notes)))
@@ -633,6 +638,7 @@ fn spawn_memory_rebuild(
     let config = config.clone();
     let repo_dir = repo_dir.to_path_buf();
     let fetch_claims = app.fetches_in_flight.clone();
+    let size_held = size_held_rows(&app.repos);
     tokio::spawn(async move {
         let mode = args.mode();
         let result = match resolve_cutoff(window, &mode, &config) {
@@ -647,6 +653,7 @@ fn spawn_memory_rebuild(
                 git_fetch,
                 None,
                 &fetch_claims,
+                &size_held,
             )
             .await
             .map(|(repos, notes)| Box::new(memory_rebuild_result(repos, notes)))
@@ -758,6 +765,9 @@ fn apply_load_result_saving_to(
                 // the first tick instead.
                 app.github_freshness.loaded(&lr.source, now);
             }
+            // The rows are new and so may be the dataset: the pre-check
+            // reads both (FZ-35b).
+            assess_size_holds(&mut app.repos, &app.dataset, app.fetch_max_bytes);
             // Only a load that fetched carries one; a window apply keeps the
             // coverage its dataset came with.
             if let Some(meta) = lr.meta {
@@ -843,6 +853,26 @@ fn record_load_attempt(
             app.observe_budget(reading, true, now);
             app.github_attempt_failed(failure, now);
         }
+    }
+}
+
+/// GitHub's `diskUsage` for the remote `repo` carries, from `dataset`: the
+/// size the fetch cap's pre-check reads (FZ-35b). `None` for a row that
+/// carries no entry, or an entry from a payload without the field.
+fn disk_usage_of(repo: &RepoStatus, dataset: &[github::GithubRepo]) -> Option<u64> {
+    dataset
+        .iter()
+        .find(|g| carries(repo, g))
+        .and_then(|g| g.disk_usage)
+}
+
+/// Run the fetch cap's pre-check on every row against `dataset`
+/// (`FetchFacts::assess_growth`): whenever the dataset or the rows change,
+/// so every automatic selection reads a current hold off the row.
+fn assess_size_holds(repos: &mut [RepoStatus], dataset: &[github::GithubRepo], cap: Option<u64>) {
+    for repo in repos {
+        let current = disk_usage_of(repo, dataset);
+        repo.fetch.assess_growth(current, cap);
     }
 }
 
@@ -1959,6 +1989,11 @@ fn land_repo_update(
         }
         repo.apply_local_sweep(status);
         repo.fetch.record(&fetch, chrono::Local::now());
+        // The size this success brought the clone to: the pre-check's next
+        // baseline (FZ-35b). Recorded clears a growth hold.
+        if fetch == git::FetchOutcome::Succeeded {
+            repo.fetch.disk_baseline = disk_usage_of(repo, &app.dataset);
+        }
         name = Some(repo.name.clone());
     }
     let name = name.unwrap_or_else(|| path.to_string());
@@ -2087,12 +2122,17 @@ fn apply_github_poll_at(
                     moved.push(idx);
                 }
             }
-            // A row held after a timeout waits out its hold (FZ-34).
+            // The new sizes against each row's baseline, before choosing.
+            assess_size_holds(&mut app.repos, &dataset, app.fetch_max_bytes);
+            // A row held after a timeout waits out its hold (FZ-34), and one
+            // the fetch cap holds waits for `f` (FZ-35b).
             moved.retain(|&idx| {
-                app.repos[idx]
-                    .path
-                    .as_deref()
-                    .is_none_or(|path| !app.fetch_held(path, now))
+                let repo = &app.repos[idx];
+                repo.fetch.size_hold().is_none()
+                    && repo
+                        .path
+                        .as_deref()
+                        .is_none_or(|path| !app.fetch_held(path, now))
             });
             for &idx in &moved {
                 start_single_sweep(app, tx, idx, true, true, author.clone());
@@ -2358,6 +2398,7 @@ fn reload_key(
                 LoadKind::Reload,
                 true,
                 &app.fetches_in_flight,
+                size_held_rows(&app.repos),
             );
         }
     }
@@ -2617,23 +2658,95 @@ fn start_sweep(
     app.sweep_started = Some(std::time::Instant::now());
     app.sweep_manual = manual;
     // `F`: report its fetches when the last one lands. A watch sweep fetches
-    // silently, and `r` does not fetch here at all.
+    // silently, and `r` does not fetch here at all. A row the fetch cap
+    // holds is only rebuilt and lands `NotAttempted`, so it is not awaited
+    // (FZ-35b); a row whose fetch is already running is, since that fetch
+    // lands with a real outcome.
     if do_fetch && manual {
-        app.manual_fetches
-            .expect(targets.iter().map(|t| t.display_path.clone()));
+        let held = size_held_paths(app, &targets);
+        app.manual_fetches.expect(
+            targets
+                .iter()
+                .map(|t| t.display_path.clone())
+                .filter(|path| !held.contains(path)),
+        );
     }
-    let no_fetch = fetch_skips(app, &targets, do_fetch, !manual);
+    let plan = plan_sweep_fetch(app, &targets, do_fetch, FetchAsk::for_full_sweep(manual));
     let probe = contrib_probe(app);
     spawn_sweep(
         tx.clone(),
         targets,
         do_fetch,
-        &no_fetch,
+        &plan,
         author,
         true,
         probe,
         &app.fetches_in_flight,
     );
+}
+
+/// What a sweep hands `spawn_sweep` about fetching: the targets it rebuilds
+/// without a fetch, and the byte cap the rest run under (FZ-35b).
+struct SweepFetchPlan {
+    no_fetch: HashSet<String>,
+    max_bytes: Option<u64>,
+}
+
+/// The fetch half of a sweep asked for by `ask`: claims the targets it
+/// fetches (`fetch_skips_for`) and picks the cap (`FetchAsk::cap`).
+fn plan_sweep_fetch(
+    app: &mut App,
+    targets: &[SweepTarget],
+    do_fetch: bool,
+    ask: FetchAsk,
+) -> SweepFetchPlan {
+    SweepFetchPlan {
+        no_fetch: fetch_skips_for(app, targets, do_fetch, ask),
+        max_bytes: ask.cap(app.fetch_max_bytes),
+    }
+}
+
+/// Who asked for a fetch, which decides the holds it honours and whether
+/// the fetch cap bounds it (FZ-34, FZ-35b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FetchAsk {
+    /// The watch timer, a moved remote, the recovery refetch: skips a
+    /// timeout hold and a size hold, and is capped.
+    Automatic,
+    /// `F`: fetches through a timeout hold, but skips a size hold and is
+    /// capped. Nothing but a deliberate per-row key pulls a big repo.
+    All,
+    /// `f` on one row: the permission. Fetches through both holds, uncapped.
+    One,
+}
+
+impl FetchAsk {
+    /// A full sweep: `F` when `manual`, else the watch timer.
+    fn for_full_sweep(manual: bool) -> Self {
+        if manual {
+            FetchAsk::All
+        } else {
+            FetchAsk::Automatic
+        }
+    }
+
+    /// A single-repo sweep: a moved remote or the recovery refetch when
+    /// `automatic`, else `f` (a single sweep that does not fetch is no ask).
+    fn for_single_sweep(automatic: bool) -> Self {
+        if automatic {
+            FetchAsk::Automatic
+        } else {
+            FetchAsk::One
+        }
+    }
+
+    /// The byte cap this fetch runs under, given the configured one.
+    fn cap(self, configured: Option<u64>) -> Option<u64> {
+        match self {
+            FetchAsk::One => None,
+            FetchAsk::Automatic | FetchAsk::All => configured,
+        }
+    }
 }
 
 /// The targets an automatic sweep rebuilds without fetching at `now`: those
@@ -2650,8 +2763,28 @@ fn held_fetch_paths(
         .collect()
 }
 
+/// The display paths of the rows the fetch cap holds until `f` (FZ-35b).
+fn size_held_rows(repos: &[RepoStatus]) -> HashSet<String> {
+    repos
+        .iter()
+        .filter(|r| r.fetch.size_hold().is_some())
+        .filter_map(|r| r.path.clone())
+        .collect()
+}
+
+/// The targets whose row the fetch cap holds until `f` (FZ-35b).
+fn size_held_paths(app: &App, targets: &[SweepTarget]) -> HashSet<String> {
+    let held = size_held_rows(&app.repos);
+    targets
+        .iter()
+        .filter(|t| held.contains(&t.display_path))
+        .map(|t| t.display_path.clone())
+        .collect()
+}
+
 /// `f`: fetch the selected repo. Manual, so a timeout hold does not stop it
-/// (FZ-34); a fetch of it already running does.
+/// (FZ-34), and uncapped, so it is how a repo the fetch cap holds is pulled
+/// in full (FZ-35b); a fetch of it already running stops it.
 fn fetch_key(
     app: &mut App,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
@@ -2667,25 +2800,45 @@ fn fetch_key(
     }
 }
 
-/// The targets a sweep rebuilds without fetching, claiming the rest for a
-/// fetch (FZ-34). Every fetching sweep skips a path whose fetch is still
-/// running (R5); an `automatic` one (the watch timer, a moved remote, the
-/// recovery refetch) also skips a path held after a timeout (R3), where `f`
-/// and `F` fetch it as asked. A sweep that does not fetch claims nothing.
+/// `fetch_skips_for` as the FZ-34 tests ask it: `automatic`, or `f`.
+#[cfg(test)]
 fn fetch_skips(
     app: &mut App,
     targets: &[SweepTarget],
     do_fetch: bool,
     automatic: bool,
 ) -> std::collections::HashSet<String> {
+    let ask = if automatic {
+        FetchAsk::Automatic
+    } else {
+        FetchAsk::One
+    };
+    fetch_skips_for(app, targets, do_fetch, ask)
+}
+
+/// The targets a sweep rebuilds without fetching, claiming the rest for a
+/// fetch (FZ-34). Every fetching sweep skips a path whose fetch is still
+/// running (R5); an automatic one (the watch timer, a moved remote, the
+/// recovery refetch) also skips a path held after a timeout (R3), where `f`
+/// and `F` fetch it as asked. Every one but `f` skips a repo the fetch cap
+/// holds (FZ-35b). A sweep that does not fetch claims nothing.
+fn fetch_skips_for(
+    app: &mut App,
+    targets: &[SweepTarget],
+    do_fetch: bool,
+    ask: FetchAsk,
+) -> std::collections::HashSet<String> {
     if !do_fetch {
         return std::collections::HashSet::new();
     }
-    let mut skips = if automatic {
+    let mut skips = if ask == FetchAsk::Automatic {
         held_fetch_paths(app, targets, chrono::Local::now())
     } else {
         std::collections::HashSet::new()
     };
+    if ask != FetchAsk::One {
+        skips.extend(size_held_paths(app, targets));
+    }
     let started = std::time::Instant::now();
     for target in targets {
         if !skips.contains(&target.display_path) && !app.claim_fetch(&target.display_path, started)
@@ -2712,12 +2865,17 @@ fn start_single_sweep(
     if targets.is_empty() {
         return;
     }
-    let no_fetch = fetch_skips(app, &targets, do_fetch, automatic);
+    let plan = plan_sweep_fetch(
+        app,
+        &targets,
+        do_fetch,
+        FetchAsk::for_single_sweep(automatic),
+    );
     spawn_sweep(
         tx.clone(),
         targets,
         do_fetch,
-        &no_fetch,
+        &plan,
         author,
         false,
         contrib_probe(app),
@@ -2753,6 +2911,7 @@ impl ProgressThrottle {
 /// the caller's fetch permit was granted, before git starts, and kept alive
 /// by each progress update. `NotAttempted` without running git when a newer
 /// claim holds the path. With `tx`, progress goes to the row, throttled.
+#[cfg(test)]
 async fn fetch_under_claim(
     claims: &app::FetchClaims,
     display_path: &str,
@@ -2760,11 +2919,23 @@ async fn fetch_under_claim(
     token: u64,
     tx: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
 ) -> git::FetchOutcome {
+    fetch_under_claim_capped(claims, display_path, fs_path, token, tx, None).await
+}
+
+/// `fetch_under_claim`, cut as `TooBig` past `max_bytes` received (FZ-35b).
+async fn fetch_under_claim_capped(
+    claims: &app::FetchClaims,
+    display_path: &str,
+    fs_path: &Path,
+    token: u64,
+    tx: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+    max_bytes: Option<u64>,
+) -> git::FetchOutcome {
     if !claims.start(display_path, token, std::time::Instant::now()) {
         return git::FetchOutcome::NotAttempted;
     }
     let mut throttle = ProgressThrottle::default();
-    git::fetch_reporting(fs_path, |progress| {
+    git::fetch_reporting(fs_path, max_bytes, |progress| {
         let now = std::time::Instant::now();
         claims.touch(display_path, token, now);
         if let Some(tx) = tx
@@ -2781,23 +2952,25 @@ async fn fetch_under_claim(
 
 /// The shared sweep body: fetch (capped) then rebuild (capped), streaming
 /// each repo back as it lands so the list updates progressively. A target
-/// whose display path is in `no_fetch` is rebuilt without a fetch; every
-/// other one fetches under the claim `fetch_skips` reserved for it.
+/// whose display path is in the plan's `no_fetch` is rebuilt without a
+/// fetch; every other one fetches under the claim the plan reserved for it,
+/// cut as `TooBig` past the plan's `max_bytes` (`plan_sweep_fetch`, FZ-35b).
 #[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 fn spawn_sweep(
     tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
     targets: Vec<SweepTarget>,
     do_fetch: bool,
-    no_fetch: &std::collections::HashSet<String>,
+    plan: &SweepFetchPlan,
     author: Option<String>,
     report_done: bool,
     probe: Option<ContribProbe>,
     claims: &app::FetchClaims,
 ) {
+    let max_bytes = plan.max_bytes;
     let targets: Vec<(SweepTarget, Option<u64>)> = targets
         .into_iter()
         .map(|t| {
-            let fetch = do_fetch && !no_fetch.contains(&t.display_path);
+            let fetch = do_fetch && !plan.no_fetch.contains(&t.display_path);
             let claim = if fetch {
                 claims.token(&t.display_path)
             } else {
@@ -2822,12 +2995,13 @@ fn spawn_sweep(
                 let fetch = match claim {
                     Some(token) => {
                         let _permit = fetch_sem.acquire().await;
-                        fetch_under_claim(
+                        fetch_under_claim_capped(
                             &claims,
                             &target.display_path,
                             &target.fs_path,
                             token,
                             Some(&tx),
+                            max_bytes,
                         )
                         .await
                     }
@@ -3007,6 +3181,9 @@ fn spawn_github_poll(
 /// Load all repo data: GitHub API + local discovery + git status.
 /// Returns the assembled view plus the unfiltered dataset so the TUI can
 /// re-filter it live (time-window overlay) without re-fetching.
+/// `size_held` are the display paths the fetch cap holds, which its fetches
+/// skip (FZ-35b).
+#[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 async fn load_repos(
     args: &Args,
     config: &config::Config,
@@ -3015,6 +3192,7 @@ async fn load_repos(
     window: Option<time::TimeWindow>,
     bypass_cache: bool,
     fetch_claims: &app::FetchClaims,
+    size_held: &HashSet<String>,
 ) -> Result<
     (
         Vec<RepoStatus>,
@@ -3124,6 +3302,7 @@ async fn load_repos(
         true,
         None,
         fetch_claims,
+        size_held,
     )
     .await?;
 
@@ -3379,6 +3558,7 @@ async fn assemble_view(
     git_fetch: bool,
     progress: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
     fetch_claims: &app::FetchClaims,
+    size_held: &HashSet<String>,
 ) -> Result<(Vec<RepoStatus>, ViewNotes), String> {
     // Local scan roots: the primary repo_dir plus any configured extra dirs
     // (e.g. ~/.dotfiles) -- the fleetz equivalent of repoz's EXTRA_DIRS. Used
@@ -3389,7 +3569,7 @@ async fn assemble_view(
     scan_roots.extend(config.resolved_extra_dirs());
     let home = dirs::home_dir().unwrap_or_default();
 
-    let (repos, mut notes) = assemble_view_with(
+    let (repos, mut notes) = assemble_view_held(
         dataset,
         cutoff,
         header,
@@ -3400,6 +3580,7 @@ async fn assemble_view(
         git_fetch,
         progress,
         fetch_claims,
+        size_held,
     )
     .await?;
     notes.header = with_coverage_note(notes.header, coverage, cutoff, config.repo_limit);
@@ -3427,9 +3608,9 @@ fn with_coverage_note(
 /// walk. This is the test seam: a test can run the whole assembly against a
 /// temp home and temp roots instead of the real `$HOME`.
 ///
-/// `_config` is unread since the coverage note moved to `assemble_view`
-/// (FZ-09b), and kept so the seam's existing callers stand unchanged. The
-/// fetches run here under a claim table of their own.
+/// `_config` gives the fetch cap only (FZ-35b): the coverage note moved to
+/// `assemble_view` (FZ-09b). The fetches run here under a claim table of
+/// their own, with nothing held by size.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 async fn assemble_view_in(
@@ -3462,18 +3643,52 @@ async fn assemble_view_in(
 /// fetch it runs takes its claim in `fetch_claims` when its permit is
 /// granted and gives it back when it ends (FZ-35a); a path a sweep is
 /// fetching already is not fetched again, and its row records no fetch.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
 async fn assemble_view_with(
     dataset: &[github::GithubRepo],
     cutoff: Option<chrono::DateTime<chrono::Utc>>,
     header: String,
     args: &Args,
-    _config: &config::Config,
+    config: &config::Config,
     home: &Path,
     scan_roots: &[PathBuf],
     git_fetch: bool,
     progress: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
     fetch_claims: &app::FetchClaims,
+) -> Result<(Vec<RepoStatus>, ViewNotes), String> {
+    assemble_view_held(
+        dataset,
+        cutoff,
+        header,
+        args,
+        config,
+        home,
+        scan_roots,
+        git_fetch,
+        progress,
+        fetch_claims,
+        &HashSet::new(),
+    )
+    .await
+}
+
+/// `assemble_view_with`, whose fetches are capped at `config.fetch_max_mb`
+/// and skip the display paths in `size_held`, which the fetch cap holds
+/// (FZ-35b); a successful one records its row's size baseline.
+#[allow(clippy::too_many_arguments)] // one call spine; a params struct would only rename the problem
+async fn assemble_view_held(
+    dataset: &[github::GithubRepo],
+    cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    header: String,
+    args: &Args,
+    config: &config::Config,
+    home: &Path,
+    scan_roots: &[PathBuf],
+    git_fetch: bool,
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+    fetch_claims: &app::FetchClaims,
+    size_held: &HashSet<String>,
 ) -> Result<(Vec<RepoStatus>, ViewNotes), String> {
     // Apply --before filter
     let before_cutoff = match &args.before {
@@ -3545,7 +3760,10 @@ async fn assemble_view_with(
     // How each fetch run here ended, by path, for the rows built below.
     let mut load_fetches: HashMap<PathBuf, git::FetchOutcome> = HashMap::new();
     if git_fetch {
-        let stale = stale_remotes(&targets, &active);
+        let stale = stale_remotes(&targets, &active)
+            .into_iter()
+            .filter(|path| !size_held.contains(&tilde_display(path)));
+        let cap = config.fetch_cap_bytes();
         let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(FETCH_CONCURRENCY));
         let mut set = tokio::task::JoinSet::new();
         for path in stale {
@@ -3557,7 +3775,8 @@ async fn assemble_view_with(
                 let Some(token) = claims.reserve(&key, std::time::Instant::now()) else {
                     return (path, git::FetchOutcome::NotAttempted);
                 };
-                let outcome = fetch_under_claim(&claims, &key, &path, token, None).await;
+                let outcome =
+                    fetch_under_claim_capped(&claims, &key, &path, token, None, cap).await;
                 claims.release(&key, Some(token));
                 (path, outcome)
             });
@@ -3603,6 +3822,9 @@ async fn assemble_view_with(
     for (slot, (found, _)) in slots.iter_mut().zip(&targets) {
         if let (Some(repo), Some(outcome)) = (slot, load_fetches.get(&found.path)) {
             repo.fetch.record(outcome, fetched_at);
+            if *outcome == git::FetchOutcome::Succeeded {
+                repo.fetch.disk_baseline = disk_usage_of(repo, &active);
+            }
         }
     }
     let mut repos: Vec<RepoStatus> = slots.into_iter().flatten().collect();
@@ -4376,6 +4598,7 @@ mod tests {
                 ci_duration: Some("1m 4s".to_string()),
                 repo_kind: model::RepoKind::Private,
                 owner: Some("Gaurgle".to_string()),
+                disk_usage: None,
             }],
             calendar: None,
             has_pr_counts: true,
@@ -5732,6 +5955,268 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
     }
 
+    /// FZ-35b (#85), criterion 2 at launch and `R`: the load does not fetch a
+    /// path the fetch cap holds, and a fetch it runs records the row's size
+    /// baseline. The clone has no remote, so nothing leaves the disk.
+    #[tokio::test]
+    async fn the_load_skips_a_size_held_path_and_records_the_baseline() {
+        let home = wt_scratch("load_size_hold");
+        let root = home.join("R");
+        let repo = root.join("svc");
+        id_repo(&repo, None, false);
+        let dataset = [github::GithubRepo {
+            disk_usage: Some(777),
+            ..id_entry(
+                Some("x"),
+                "svc",
+                0,
+                model::CiStatus::Unknown,
+                0,
+                model::RepoKind::Unknown,
+            )
+        }];
+        let assemble = |held: HashSet<String>| {
+            let (dataset, home, root) = (dataset.clone(), home.clone(), root.clone());
+            async move {
+                let args = Args::parse_from(["fleetz"]);
+                let config = config::Config::default();
+                assemble_view_held(
+                    &dataset,
+                    None,
+                    String::new(),
+                    &args,
+                    &config,
+                    &home,
+                    &[root],
+                    true,
+                    None,
+                    &app::FetchClaims::default(),
+                    &held,
+                )
+                .await
+                .expect("assembly")
+                .0
+            }
+        };
+        let key = tilde_display(&repo);
+        let repos = assemble([key].into()).await;
+        let row = row_at(&repos, &repo);
+        assert_eq!(row.fetch.last_attempt, None, "fetched a held path");
+
+        let repos = assemble(HashSet::new()).await;
+        let row = row_at(&repos, &repo);
+        assert_eq!(row.fetch.outcome, git::FetchOutcome::Succeeded);
+        assert_eq!(row.fetch.disk_baseline, Some(777));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    const MIB: u64 = 1024 * 1024;
+
+    /// A row grown past the cap (the pre-check) and a row whose fetch was
+    /// cut at the cap, as the poll and a landing leave them.
+    fn hold_sizes(app: &mut App, grown: usize, cut: usize) {
+        app.repos[grown].fetch.disk_baseline = Some(1_000);
+        app.repos[grown]
+            .fetch
+            .assess_growth(Some(1_000 + 300 * 1024), Some(200 * MIB));
+        let path = app.repos[cut].path.clone().unwrap();
+        let status = app.repos[cut].clone();
+        apply_repo_updated(
+            app,
+            &path,
+            status,
+            git::FetchOutcome::Failed(git::FetchFailure::too_big(201 * MIB)),
+        );
+    }
+
+    /// FZ-35b (#85), criterion 4: `f` fetches a held row, uncapped; `F` and
+    /// the automatic selections skip it and stay capped.
+    #[test]
+    fn f_fetches_a_held_row_uncapped_and_shift_f_and_automatic_do_not() {
+        let mut app = fleet_app(3);
+        hold_sizes(&mut app, 0, 1);
+        let targets = sweep_targets(&app, None);
+        let held: HashSet<String> =
+            ["~/repos/repo-0".to_string(), "~/repos/repo-1".to_string()].into();
+        for ask in [FetchAsk::Automatic, FetchAsk::All] {
+            app.fetches_in_flight.clear();
+            assert_eq!(
+                fetch_skips_for(&mut app, &targets, true, ask),
+                held,
+                "{ask:?}"
+            );
+            assert!(app.fetches_in_flight.contains_key("~/repos/repo-2"));
+            assert_eq!(ask.cap(Some(200 * MIB)), Some(200 * MIB), "{ask:?}");
+        }
+        app.fetches_in_flight.clear();
+        assert!(fetch_skips_for(&mut app, &targets, true, FetchAsk::One).is_empty());
+        assert_eq!(FetchAsk::One.cap(Some(200 * MIB)), None);
+        // `fetch_max_mb = 0`: nothing is capped.
+        assert_eq!(FetchAsk::All.cap(None), None);
+    }
+
+    /// FZ-35b (#85), review F1: the cap each sweep entry point hands
+    /// `spawn_sweep` (it takes the plan, so the plan's cap is the one the
+    /// fetches run under): `f` uncapped, `F`, the watch timer and the poll's
+    /// single sweeps at the configured cap, and nothing capped at `0`.
+    #[test]
+    fn each_sweep_entry_point_plans_its_fetch_cap() {
+        let mut app = fleet_app(1);
+        app.fetch_max_bytes = Some(7 * MIB);
+        let targets = sweep_targets(&app, None);
+        let mut cap_for = |ask: FetchAsk| {
+            app.fetches_in_flight.clear();
+            plan_sweep_fetch(&mut app, &targets, true, ask).max_bytes
+        };
+        assert_eq!(cap_for(FetchAsk::for_single_sweep(false)), None, "f");
+        assert_eq!(
+            cap_for(FetchAsk::for_single_sweep(true)),
+            Some(7 * MIB),
+            "moved remote"
+        );
+        assert_eq!(cap_for(FetchAsk::for_full_sweep(true)), Some(7 * MIB), "F");
+        assert_eq!(
+            cap_for(FetchAsk::for_full_sweep(false)),
+            Some(7 * MIB),
+            "watch"
+        );
+        app.fetch_max_bytes = None;
+        app.fetches_in_flight.clear();
+        let plan = plan_sweep_fetch(&mut app, &targets, true, FetchAsk::for_full_sweep(true));
+        assert_eq!(plan.max_bytes, None, "fetch_max_mb = 0");
+    }
+
+    /// The same through the keys' own entry points: `F` claims no fetch for
+    /// a held row, `f` on it does.
+    #[tokio::test]
+    async fn shift_f_skips_a_held_row_and_f_on_it_fetches() {
+        let mut app = missing_paths_app(3, "sizehold");
+        hold_sizes(&mut app, 0, 1);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        start_sweep(&mut app, &tx, true, None, true);
+        for i in [0, 1] {
+            let path = app.repos[i].path.clone().unwrap();
+            assert!(
+                !app.fetches_in_flight.contains_key(&path),
+                "F fetched held row {i}"
+            );
+        }
+        let free = app.repos[2].path.clone().unwrap();
+        assert!(app.fetches_in_flight.contains_key(&free));
+        for i in [0, 1] {
+            start_single_sweep(&mut app, &tx, i, true, false, None);
+            let path = app.repos[i].path.clone().unwrap();
+            assert!(
+                app.fetches_in_flight.contains_key(&path),
+                "f skipped held row {i}"
+            );
+        }
+    }
+
+    /// FZ-35b (#85), review B1: `F` reports over the fetches it ran. A row
+    /// the fetch cap holds is only rebuilt and lands `NotAttempted`, so it
+    /// must not be awaited, or the batch never completes and a failure among
+    /// the others never reaches the status line (rule 9).
+    #[tokio::test]
+    async fn shift_f_reports_its_failures_with_a_size_held_row() {
+        let mut app = missing_paths_app(3, "ftally");
+        app.repos[0].fetch.disk_baseline = Some(1_000);
+        app.repos[0]
+            .fetch
+            .assess_growth(Some(1_000 + 300 * 1024), Some(200 * MIB));
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        start_sweep(&mut app, &tx, true, None, true);
+        for (i, fetch) in [
+            git::FetchOutcome::NotAttempted,
+            fetch_failed(git::FetchFailureKind::Unreachable),
+            git::FetchOutcome::Succeeded,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = app.repos[i].path.clone().unwrap();
+            let status = app.repos[i].clone();
+            apply_repo_updated(&mut app, &path, status, fetch);
+        }
+        let status = app.status_message.as_ref().map(|m| m.text.clone());
+        assert_eq!(status.as_deref(), Some("1 of 2 fetches failed: repo-1"));
+    }
+
+    /// FZ-35b (#85), criterion 2 for moved remotes: a poll that sees a remote
+    /// grow past the cap since the last fetch holds the row and does not
+    /// fetch it; a moved remote that did not grow is fetched as before.
+    #[tokio::test]
+    async fn a_moved_remote_grown_past_the_cap_is_held_not_fetched() {
+        let mut app = missing_paths_app(2, "moved");
+        let before = "2026-10-20T10:00:00Z";
+        let after = "2026-10-20T11:00:00Z";
+        let sized = |name: &str, pushed: &str, kb: u64| github::GithubRepo {
+            disk_usage: Some(kb),
+            ..gh(name, pushed)
+        };
+        app.dataset = vec![
+            sized("repo-0", before, 1_000),
+            sized("repo-1", before, 1_000),
+        ];
+        for repo in &mut app.repos {
+            repo.fetch.disk_baseline = Some(1_000);
+        }
+        app.refresh_awaits_poll = true;
+        poll_with(
+            &mut app,
+            Ok(Box::new(github::GithubFetch {
+                repos: vec![
+                    sized("repo-0", after, 1_000 + 300 * 1024),
+                    sized("repo-1", after, 1_000 + 10 * 1024),
+                ],
+                calendar: None,
+                has_pr_counts: true,
+                origin: github::Origin::Network,
+                meta: Default::default(),
+            })),
+        );
+        let (grown, quiet) = (
+            app.repos[0].path.clone().unwrap(),
+            app.repos[1].path.clone().unwrap(),
+        );
+        assert_eq!(
+            app.repos[0].fetch.size_hold(),
+            Some(model::SizeHold::Grown(300 * MIB))
+        );
+        assert!(
+            !app.refresh_fetches.contains(&grown),
+            "fetched the grown remote"
+        );
+        assert!(!app.fetches_in_flight.contains_key(&grown));
+        assert_eq!(app.repos[1].fetch.size_hold(), None);
+        assert!(
+            app.refresh_fetches.contains(&quiet),
+            "the small push was not fetched"
+        );
+    }
+
+    /// FZ-35b (#85), criterion 4: a successful fetch records GitHub's current
+    /// size as the baseline and lifts the hold.
+    #[test]
+    fn a_successful_fetch_records_the_baseline_and_lifts_the_hold() {
+        let mut app = fleet_app(1);
+        app.dataset = vec![github::GithubRepo {
+            disk_usage: Some(308_200),
+            ..gh("repo-0", "2026-10-20T11:00:00Z")
+        }];
+        hold_sizes(&mut app, 0, 0);
+        assert!(app.repos[0].fetch.size_hold().is_some());
+        land(&mut app, 0, git::FetchOutcome::Succeeded);
+        assert_eq!(app.repos[0].fetch.size_hold(), None);
+        assert_eq!(app.repos[0].fetch.disk_baseline, Some(308_200));
+        assess_size_holds(&mut app.repos, &app.dataset, app.fetch_max_bytes);
+        assert_eq!(
+            app.repos[0].fetch.size_hold(),
+            None,
+            "held again at its own size"
+        );
+    }
+
     /// FZ-34 (#83): a timeout from a fetch a load ran (launch, `R`) holds the
     /// row like a sweep's.
     #[test]
@@ -6028,6 +6513,7 @@ mod tests {
             ci_duration: None,
             repo_kind: model::RepoKind::Unknown,
             owner: None,
+            disk_usage: None,
         }
     }
 
@@ -6360,6 +6846,7 @@ mod tests {
             ci_duration: None,
             repo_kind: kind,
             owner: owner.map(str::to_string),
+            disk_usage: None,
         }
     }
 
@@ -8813,6 +9300,7 @@ mod tests {
             ci_duration: None,
             repo_kind: model::RepoKind::Unknown,
             owner: None,
+            disk_usage: None,
         });
         Ok(fetch)
     }
@@ -9799,6 +10287,7 @@ mod tests {
             ci_duration: None,
             repo_kind: model::RepoKind::Public,
             owner: Some(owner.to_string()),
+            disk_usage: None,
         }
     }
 

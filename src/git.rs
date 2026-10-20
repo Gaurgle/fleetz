@@ -346,6 +346,11 @@ pub enum FetchFailureKind {
     NoRemote,
     /// Anything else, including git failing to start.
     Other,
+    /// Received more than the automatic-fetch cap (`fetch_max_mb`, FZ-35b)
+    /// and was cut. Not an error: the repo is held until `f` fetches it
+    /// uncapped or a fetch succeeds. The detail is the bytes received
+    /// (`FetchFailure::received_bytes`).
+    TooBig,
 }
 
 /// A failed fetch: its kind, and at most git's first error line with any URL
@@ -354,6 +359,32 @@ pub enum FetchFailureKind {
 pub struct FetchFailure {
     pub kind: FetchFailureKind,
     pub detail: Option<String>,
+}
+
+/// The detail of a `TooBig` failure: `<bytes> bytes received`.
+const TOO_BIG_SUFFIX: &str = " bytes received";
+
+impl FetchFailure {
+    /// A fetch cut at the cap after receiving `bytes` (FZ-35b).
+    pub fn too_big(bytes: u64) -> Self {
+        Self {
+            kind: FetchFailureKind::TooBig,
+            detail: Some(format!("{bytes}{TOO_BIG_SUFFIX}")),
+        }
+    }
+
+    /// What a `TooBig` fetch had received when it was cut; `None` for any
+    /// other kind.
+    pub fn received_bytes(&self) -> Option<u64> {
+        if self.kind != FetchFailureKind::TooBig {
+            return None;
+        }
+        self.detail
+            .as_deref()?
+            .strip_suffix(TOO_BIG_SUFFIX)?
+            .parse()
+            .ok()
+    }
 }
 
 /// How a fetch for one checkout ended. `NotAttempted` is also what a sweep
@@ -371,6 +402,8 @@ pub enum FetchOutcome {
 /// folds the first two into one `None`; a fetch has to tell them apart.
 enum FetchRun {
     TimedOut,
+    /// Cut at the cap after receiving this many bytes.
+    TooBig(u64),
     NotStarted,
     Exited(std::process::Output),
 }
@@ -552,16 +585,18 @@ impl FetchStderr {
 /// `run_git` cannot say why one failed.
 #[cfg(test)]
 pub async fn fetch(repo_path: &Path) -> FetchOutcome {
-    fetch_reporting(repo_path, |_| {}).await
+    fetch_reporting(repo_path, None, |_| {}).await
 }
 
 /// `fetch`, handing each progress update to `on_progress` as git prints it,
-/// under `FETCH_STALL_LIMIT`.
+/// under `FETCH_STALL_LIMIT`, and cut as `TooBig` once more than `max_bytes`
+/// have arrived (FZ-35b). `None` is no cap: what `f` asks for.
 pub async fn fetch_reporting(
     repo_path: &Path,
+    max_bytes: Option<u64>,
     on_progress: impl FnMut(FetchProgress),
 ) -> FetchOutcome {
-    fetch_watched(repo_path, FETCH_STALL_LIMIT, on_progress).await
+    fetch_capped(repo_path, FETCH_STALL_LIMIT, max_bytes, on_progress).await
 }
 
 /// The ssh command a fetch hands git when the user chose none. ssh's own TCP
@@ -748,6 +783,8 @@ async fn fetch_within(repo_path: &Path, limit: std::time::Duration) -> FetchOutc
 enum Watched {
     Exited(std::process::Output),
     Stalled,
+    /// An update reported more bytes than the cap: this many.
+    TooBig(u64),
     WaitFailed,
 }
 
@@ -770,12 +807,14 @@ async fn read_chunk(pipe: &mut Option<tokio::process::ChildStderr>) -> Option<Ve
 /// Wait for the fetch while reading both pipes, so a chatty fetch never
 /// blocks on a full stderr pipe, and hand each progress update to
 /// `on_progress`. `Stalled` when `stall_limit` passes with no update; the
-/// clock starts when the child does and restarts on every update.
+/// clock starts when the child does and restarts on every update. `TooBig`
+/// as soon as an update reports more than `max_bytes` received.
 async fn watch_fetch(
     child: &mut tokio::process::Child,
     stdout: Option<tokio::process::ChildStdout>,
     mut stderr: Option<tokio::process::ChildStderr>,
     stall_limit: std::time::Duration,
+    max_bytes: Option<u64>,
     on_progress: &mut impl FnMut(FetchProgress),
 ) -> Watched {
     let wait = child.wait();
@@ -806,6 +845,9 @@ async fn watch_fetch(
                         .as_mut()
                         .reset(tokio::time::Instant::now() + stall_limit);
                     on_progress(update);
+                    if max_bytes.is_some_and(|max| update.bytes > max) {
+                        return Watched::TooBig(update.bytes);
+                    }
                 }
             },
             () = &mut deadline => return Watched::Stalled,
@@ -831,9 +873,23 @@ async fn watch_fetch(
 /// itself removes nothing: git cleans up after its own exit. A cancelled
 /// fetch (the guard dropped mid-run) kills the group and removes them
 /// without waiting (`FetchGroup`'s `Drop`).
+#[cfg(test)]
 async fn fetch_watched(
     repo_path: &Path,
     stall_limit: std::time::Duration,
+    on_progress: impl FnMut(FetchProgress),
+) -> FetchOutcome {
+    fetch_capped(repo_path, stall_limit, None, on_progress).await
+}
+
+/// `fetch_watched` with a cap (FZ-35b): once an update reports more than
+/// `max_bytes` received, the fetch is killed and cleaned exactly as a stalled
+/// one is, and reports `TooBig` with the bytes it had. A pack cannot be
+/// resumed, so at most the cap is wasted.
+async fn fetch_capped(
+    repo_path: &Path,
+    stall_limit: std::time::Duration,
+    max_bytes: Option<u64>,
     mut on_progress: impl FnMut(FetchProgress),
 ) -> FetchOutcome {
     let snapshot = repo_dirs(repo_path).map(|d| {
@@ -859,6 +915,7 @@ async fn fetch_watched(
         stdout,
         stderr,
         stall_limit,
+        max_bytes,
         &mut on_progress,
     )
     .await;
@@ -867,6 +924,11 @@ async fn fetch_watched(
             group.kill_and_reap().await;
             group.remove_temp_packs();
             FetchRun::TimedOut
+        }
+        Watched::TooBig(bytes) => {
+            group.kill_and_reap().await;
+            group.remove_temp_packs();
+            FetchRun::TooBig(bytes)
         }
         Watched::WaitFailed => {
             group.kill_and_reap().await;
@@ -912,6 +974,7 @@ fn fetch_outcome(run: FetchRun) -> FetchOutcome {
             kind: FetchFailureKind::TimedOut,
             detail: None,
         },
+        FetchRun::TooBig(bytes) => FetchFailure::too_big(bytes),
         FetchRun::NotStarted => FetchFailure {
             kind: FetchFailureKind::Other,
             detail: Some("git could not be started".to_string()),
@@ -4037,6 +4100,103 @@ mod real_repo_tests {
         assert_eq!(temp_packs(&dir), ["tmp_pack_before"]);
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// FZ-35b (#85), criterion 3: a fetch whose progress passes the cap is
+    /// cut at the first update over it, not at its end, and cleaned as a
+    /// stalled one is: its process group dead, its own temp packs gone, an
+    /// earlier one kept. The outcome is `TooBig` with the bytes seen.
+    #[tokio::test]
+    async fn a_fetch_past_the_cap_is_killed_cleaned_and_reported_too_big() {
+        let (upstream, dir) = fetched_clone("fetchcap");
+        let pack_dir = repo_dirs(&dir).unwrap().common_dir.join("objects/pack");
+        std::fs::write(pack_dir.join("tmp_pack_before"), b"theirs").unwrap();
+        let pid_file = dir.join("hook.pid");
+        // A grandchild and the temp packs first, then nine updates of 1 MiB
+        // more each, 300 ms apart, then a real upload-pack.
+        let hook = format!(
+            "sleep 600 </dev/null >/dev/null 2>&1 & echo $! > '{pid}'; \
+             : > '{pack}/tmp_pack_hook'; : > '{pack}/tmp_idx_hook'; {progress}",
+            pid = pid_file.display(),
+            pack = pack_dir.display(),
+            progress = progress_hook(9, "git upload-pack"),
+        );
+        sh(
+            &dir,
+            &["git", "config", "remote.origin.uploadpack", hook.as_str()],
+        );
+        let cap = 3 * 1024 * 1024;
+        let start = std::time::Instant::now();
+        let mut seen = Vec::new();
+        let outcome = fetch_capped(&dir, std::time::Duration::from_secs(10), Some(cap), |p| {
+            seen.push(p.bytes)
+        })
+        .await;
+        let took = start.elapsed();
+        assert_eq!(
+            outcome,
+            FetchOutcome::Failed(FetchFailure::too_big(4 * 1024 * 1024))
+        );
+        let FetchOutcome::Failed(failure) = &outcome else {
+            unreachable!()
+        };
+        assert_eq!(failure.received_bytes(), Some(4 * 1024 * 1024));
+        assert_eq!(
+            seen.last(),
+            Some(&(4 * 1024 * 1024)),
+            "cut at the first update over"
+        );
+        assert!(
+            took < std::time::Duration::from_millis(2500),
+            "ran on past the cap: {took:?}"
+        );
+        let pid = std::fs::read_to_string(&pid_file).expect("the hook ran");
+        let pid = pid.trim();
+        let survived = alive_after(pid, std::time::Duration::from_secs(3));
+        if survived {
+            let _ = StdCommand::new("kill").args(["-9", pid]).status();
+        }
+        assert!(!survived, "the capped fetch's grandchild {pid} survived");
+        assert_eq!(temp_packs(&dir), ["tmp_pack_before"]);
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// FZ-35b (#85), criterion 4: with no cap (`f`) the same fetch runs to
+    /// its end.
+    #[tokio::test]
+    async fn a_fetch_with_no_cap_runs_past_any_size() {
+        let (upstream, dir) = fetched_clone("fetchnocap");
+        sh(
+            &upstream,
+            &["git", "commit", "-q", "--allow-empty", "-m", "two"],
+        );
+        let hook = progress_hook(4, "git upload-pack");
+        sh(
+            &dir,
+            &["git", "config", "remote.origin.uploadpack", hook.as_str()],
+        );
+        let outcome = fetch_reporting(&dir, None, |_| {}).await;
+        assert_eq!(outcome, FetchOutcome::Succeeded);
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// Only a `TooBig` failure carries a byte count, and only in the shape
+    /// `too_big` wrote.
+    #[test]
+    fn only_a_too_big_failure_reports_received_bytes() {
+        assert_eq!(FetchFailure::too_big(0).received_bytes(), Some(0));
+        let other = FetchFailure {
+            kind: FetchFailureKind::Other,
+            detail: Some(FetchFailure::too_big(5).detail.unwrap()),
+        };
+        assert_eq!(other.received_bytes(), None);
+        let mangled = FetchFailure {
+            kind: FetchFailureKind::TooBig,
+            detail: Some("lots".to_string()),
+        };
+        assert_eq!(mangled.received_bytes(), None);
     }
 
     // --- #70: ssh gets a connect timeout and batch mode, unless the user

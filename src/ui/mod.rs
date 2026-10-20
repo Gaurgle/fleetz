@@ -109,6 +109,7 @@ pub fn fetch_failure_short(kind: crate::git::FetchFailureKind) -> &'static str {
         FetchFailureKind::Unreachable => "unreachable",
         FetchFailureKind::NoRemote => "no remote",
         FetchFailureKind::Other => "fetch",
+        FetchFailureKind::TooBig => "too big",
     }
 }
 
@@ -121,6 +122,7 @@ pub fn fetch_failure_phrase(kind: crate::git::FetchFailureKind) -> &'static str 
         FetchFailureKind::Unreachable => "remote unreachable",
         FetchFailureKind::NoRemote => "remote not found",
         FetchFailureKind::Other => "git error",
+        FetchFailureKind::TooBig => "over the size cap",
     }
 }
 
@@ -130,21 +132,38 @@ pub fn fetch_marker(facts: &crate::model::FetchFacts) -> Option<String> {
     Some(format!("⚠ {}", fetch_failure_short(failure.kind)))
 }
 
-/// The row's words for a fetch running now, once bytes have arrived:
-/// `fetching 312 MB` (FZ-35a). None before the first byte, and once the
-/// fetch has landed. Sizes are git's binary units, named as people say them.
-pub fn fetch_progress_label(facts: &crate::model::FetchFacts) -> Option<String> {
+/// A byte count the way the row names it: git's binary units, named as
+/// people say them. Never zero: a single byte is `1 KB`.
+fn size_label(bytes: u64) -> String {
     const KIB: u64 = 1024;
     const MIB: u64 = 1024 * KIB;
     const GIB: u64 = 1024 * MIB;
-    let bytes = facts.progress?.bytes;
-    let size = match bytes {
-        0 => return None,
-        b if b < MIB => format!("{} KB", b.div_ceil(KIB)),
+    match bytes {
+        b if b < MIB => format!("{} KB", b.div_ceil(KIB).max(1)),
         b if b < GIB => format!("{} MB", b / MIB),
         b => format!("{:.1} GB", b as f64 / GIB as f64),
-    };
-    Some(format!("fetching {size}"))
+    }
+}
+
+/// The row's words for a fetch running now, once bytes have arrived:
+/// `fetching 312 MB` (FZ-35a). None before the first byte, and once the
+/// fetch has landed.
+pub fn fetch_progress_label(facts: &crate::model::FetchFacts) -> Option<String> {
+    let bytes = facts.progress?.bytes;
+    (bytes > 0).then(|| format!("fetching {}", size_label(bytes)))
+}
+
+/// The row's words for a repo the fetch cap holds until `f` (FZ-35b):
+/// `fetch ~300 MB, press f` when GitHub says it grew that much since the
+/// last fetch, `fetch over 200 MB, press f` when a fetch was cut at the cap
+/// after that much. The label is the question and `f` the answer, so there
+/// is no confirmation step.
+pub fn fetch_hold_label(facts: &crate::model::FetchFacts) -> Option<String> {
+    use crate::model::SizeHold;
+    Some(match facts.size_hold()? {
+        SizeHold::Grown(bytes) => format!("fetch ~{}, press f", size_label(bytes)),
+        SizeHold::OverCap(bytes) => format!("fetch over {}, press f", size_label(bytes)),
+    })
 }
 
 /// The detail pane's fetch line: that the last fetch failed, why, and when
@@ -1889,6 +1908,44 @@ mod tests {
             kinds.iter().map(|k| fetch_failure_phrase(*k)).collect();
         assert_eq!(shorts.len(), kinds.len());
         assert_eq!(phrases.len(), kinds.len());
+    }
+
+    /// FZ-35b: `TooBig` has words of its own too.
+    #[test]
+    fn a_fetch_cut_at_the_cap_has_its_own_words() {
+        use crate::git::FetchFailureKind::*;
+        let others = [TimedOut, Auth, Unreachable, NoRemote, Other];
+        assert!(
+            others
+                .iter()
+                .all(|k| fetch_failure_short(*k) != fetch_failure_short(TooBig)
+                    && fetch_failure_phrase(*k) != fetch_failure_phrase(TooBig))
+        );
+    }
+
+    /// FZ-35b (#85): the two hold labels, sized as the progress label is,
+    /// and nothing for a repo nothing holds.
+    #[test]
+    fn a_held_repo_is_labelled_with_the_size_and_the_key() {
+        const MIB: u64 = 1024 * 1024;
+        let mut facts = crate::model::FetchFacts {
+            disk_baseline: Some(10),
+            ..Default::default()
+        };
+        assert_eq!(fetch_hold_label(&facts), None);
+        facts.assess_growth(Some(10 + 3 * 1024 * 1024 / 2), Some(200 * MIB));
+        assert_eq!(
+            fetch_hold_label(&facts).as_deref(),
+            Some("fetch ~1.5 GB, press f")
+        );
+        facts.record(
+            &crate::git::FetchOutcome::Failed(crate::git::FetchFailure::too_big(201 * MIB)),
+            at(2026, 10, 20, 14, 0),
+        );
+        assert_eq!(
+            fetch_hold_label(&facts).as_deref(),
+            Some("fetch over 201 MB, press f")
+        );
     }
 
     /// Rule 9's status line, for each shape of result.

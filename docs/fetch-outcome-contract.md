@@ -189,6 +189,45 @@ userinfo never appearing in the detail.
    taken again if the path is free, and the fetch does not run if a newer
    claim holds it), kept alive by each update, and ended only by its own
    landing, so a late landing cannot end a newer claim. `SWEEP_STUCK_AFTER`
-   counts from the last sign of life. A launch or `R` load now claims its
-   fetches too and skips a path a sweep is fetching; its fetches report no
-   progress to the rows.
+   expires a claim from its last sign of life (reserved, permit granted, or
+   an update); the refresh spinner and the manual fetch report followed in
+   amendment 4. A launch or `R` load now claims its fetches too and skips a
+   path a sweep is fetching; its fetches report no progress to the rows.
+4. **2026-10-20, the automatic-fetch cap** (FZ-35b,
+   [#85](https://github.com/Gaurgle/fleetz/issues/85), the spec
+   `docs/superpowers/specs/2026-10-20-fetch-progress-and-cap-design.md`
+   section B, approved by Andreas: no question on `f`, `F` keeps the cap,
+   200 MB). Amends rule 6 and amendment 2's "`f` and `F` fetch as before".
+   The config key `fetch_max_mb` (MB, default 200, `0` no cap) bounds every
+   fetch but `f`: launch, `R`, the watch sweep, a moved remote, the recovery
+   refetch of amendment 1, and `F`.
+   - **The kind.** `TooBig` joins the kinds in [State](#state): a fetch
+     whose received bytes (amendment 3's progress) pass the cap is killed
+     and cleaned as amendment 2 kills a timeout, and its detail is the bytes
+     it had received. Row: `fetch over N MB, press f`; detail pane and
+     status line: `over the size cap`.
+   - **The baseline.** The fetch facts keep GitHub's `diskUsage` at the
+     last successful fetch in this session (`FetchFacts::disk_baseline`, in
+     memory only). The poll asks for `diskUsage` on every repo (free: cost 3
+     / nodeCount 1030 at `repo_limit` 50 with and without it, 2026-10-20);
+     a payload cached without it parses unchanged. When the current value
+     exceeds the baseline by more than the cap, the repo is held before any
+     download (`FetchFacts::grown`). Row: `fetch ~N MB, press f`, N the
+     growth. A missing current value, an unknown baseline, or an unchanged
+     or shrunken size decide nothing: the fetch runs under the cap.
+     `grown` is derived state: recomputed from the dataset and the baseline
+     on every poll apply and every load apply (`main.rs::assess_size_holds`),
+     never set by a fetch (a successful one only clears it). A sweep that started before a push and lands
+     after the poll that saw it records the new size as its baseline, so the
+     pre-check misses that growth once and the in-fetch cap bounds it.
+   - **The hold.** A repo held either way is skipped by every fetch but
+     `f`, which fetches it uncapped under amendment 3's stall limit and
+     shows `fetching N MB` meanwhile. The hold lasts until `f` on that row or
+     any successful fetch, which also records the new baseline. It is not
+     amendment 2's backoff: `TooBig` is not counted there, and `r` and `R`
+     do not lift it.
+   - **Reports outlive long fetches.** The refresh spinner's fetch set and
+     the manual fetch report (rule 9) expire `SWEEP_STUCK_AFTER` after the
+     last progress of a fetch they wait on, not after they started: an `f`
+     on a big repo can run well past 180 s and still owes its "N of M
+     fetches failed" line.

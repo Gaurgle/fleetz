@@ -329,6 +329,8 @@ pub fn badge_spans_marked(
 
     // A fetch is running and has bytes in: how many (FZ-35a). It says more
     // than an earlier failure's marker, which the fetch's landing replaces.
+    // Otherwise, a repo the fetch cap holds says how big and that `f` pulls
+    // it (FZ-35b), in the failure marker's colour: its counts are stale too.
     // Otherwise, the last fetch failed, so behind and ahead are counted
     // against old remote refs. Beside the status it qualifies, and left of
     // it so the status keeps the right edge.
@@ -336,6 +338,10 @@ pub fn badge_spans_marked(
         let label = format!("{label} ");
         width += label.chars().count();
         spans.push(Span::styled(label, Style::default().fg(colors::SUBTEXT)));
+    } else if let Some(label) = crate::ui::fetch_hold_label(&repo.fetch) {
+        let label = format!("{label} ");
+        width += label.chars().count();
+        spans.push(Span::styled(label, Style::default().fg(colors::PEACH)));
     } else if let Some(marker) = crate::ui::fetch_marker(&repo.fetch) {
         let marker = format!("{marker} ");
         width += marker.chars().count();
@@ -473,6 +479,38 @@ mod tests {
         r.fetch
             .record(&crate::git::FetchOutcome::Succeeded, chrono::Local::now());
         assert_eq!(rendered(&r).0, "3↓");
+    }
+
+    /// FZ-35b (#85), criteria 2 and 3: a held repo says how big and that
+    /// `f` pulls it, in the failure marker's place and colour; a running `f`
+    /// shows its progress over it, and its success clears it.
+    #[test]
+    fn a_repo_the_fetch_cap_holds_says_so_on_the_row() {
+        const MIB: u64 = 1024 * 1024;
+        let mut behind = repo("behind");
+        behind.behind = 3;
+        let mut grown = behind.clone();
+        grown.fetch.disk_baseline = Some(1_000);
+        grown
+            .fetch
+            .assess_growth(Some(1_000 + 300 * 1024), Some(200 * MIB));
+        let (text, width) = rendered(&grown);
+        assert_eq!(text, "fetch ~300 MB, press f 3↓");
+        assert_eq!(width, text.chars().count(), "width matches what is drawn");
+        let (spans, _) = badge_spans(&grown, false);
+        assert_eq!(spans[0].style.fg, Some(colors::PEACH));
+
+        let mut cut = behind;
+        cut.fetch.record(
+            &crate::git::FetchOutcome::Failed(crate::git::FetchFailure::too_big(200 * MIB + 7)),
+            chrono::Local::now(),
+        );
+        assert_eq!(rendered(&cut).0, "fetch over 200 MB, press f 3↓");
+        cut.fetch.progress = Some(receiving(48 * MIB));
+        assert_eq!(rendered(&cut).0, "fetching 48 MB 3↓");
+        cut.fetch
+            .record(&crate::git::FetchOutcome::Succeeded, chrono::Local::now());
+        assert_eq!(rendered(&cut).0, "3↓");
     }
 
     /// Nothing extra on the row while fetches work.

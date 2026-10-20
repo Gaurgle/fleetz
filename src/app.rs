@@ -1743,7 +1743,10 @@ impl GithubBackoff {
 /// honour it (the watch sweep, the poll's moved remotes, the recovery
 /// refetch); `f` and `F` fetch as before and their outcome counts like any.
 /// A success clears the path; `r` and `R` clear every path. Any other failure
-/// kind fails fast, costs nothing, and leaves the count as it was.
+/// kind fails fast, costs nothing, and leaves the count as it was. That
+/// includes `TooBig` (FZ-35b): a fetch cut at the cap holds its repo
+/// explicitly, until `f` or a success (`model::FetchFacts::size_hold`), not
+/// on a doubling timer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FetchBackoff {
     /// Consecutive timeouts and when the last one landed, per path.
@@ -1937,6 +1940,8 @@ pub struct FetchTally {
     awaiting: std::collections::HashSet<String>,
     total: usize,
     failed: Vec<(String, crate::git::FetchFailureKind)>,
+    /// The batch's last sign of life: when it started, or the latest
+    /// progress of a fetch it awaits (`touch`). What `expire` measures from.
     started: Option<std::time::Instant>,
 }
 
@@ -1983,8 +1988,19 @@ impl FetchTally {
         })
     }
 
-    /// Stop waiting on fetches that have outlived `limit`. They report
-    /// nothing; their rows say what happened if they ever land.
+    /// A fetch for `path` made progress at `now`: if this batch awaits it,
+    /// the batch is alive. An uncapped `f` on a big repo can run far longer
+    /// than `SWEEP_STUCK_AFTER` and still owes its report (FZ-35b,
+    /// criterion 7).
+    pub fn touch(&mut self, path: &str, now: std::time::Instant) {
+        if self.awaiting.contains(path) {
+            self.started = Some(now);
+        }
+    }
+
+    /// Stop waiting on fetches that have shown no sign of life for longer
+    /// than `limit`. They report nothing; their rows say what happened if
+    /// they ever land.
     pub fn expire(&mut self, limit: std::time::Duration) {
         if self.started.is_some_and(|t| t.elapsed() > limit) {
             *self = Self::default();
@@ -2184,8 +2200,10 @@ pub struct App {
     /// Display paths of the fetches that poll set off for a manual `r`, each
     /// cleared by that repo's fetched update. See `is_refreshing`.
     pub refresh_fetches: std::collections::HashSet<String>,
-    /// When `refresh_fetches` was filled, so a fetch that never returns
-    /// cannot leave the spinner running for the rest of the session.
+    /// When `refresh_fetches` was filled, or one of its fetches last made
+    /// progress (`apply_fetch_progress`), so a fetch that never returns
+    /// cannot leave the spinner running for the rest of the session while
+    /// one still downloading is waited for.
     pub refresh_fetches_started: Option<std::time::Instant>,
     /// How current the GitHub data is: data time, last attempt and outcome.
     ///
@@ -2202,6 +2220,9 @@ pub struct App {
     pub github_backoff: GithubBackoff,
     /// Paths the automatic fetches skip after a timeout (`FetchBackoff`).
     pub fetch_backoff: FetchBackoff,
+    /// The automatic-fetch cap in bytes, `None` for no cap (`fetch_max_mb`,
+    /// FZ-35b). Copied from `Config` at startup, as `github_poll_secs` is.
+    pub fetch_max_bytes: Option<u64>,
     /// Paths with a fetch running or queued: one fetch per repo at a time
     /// (FZ-34, R5). Every fetch selection, automatic or manual, skips a path
     /// listed here and only sweeps it (`App::claim_fetch`). Two fetches of
@@ -2373,6 +2394,7 @@ impl App {
             api_budget: ApiBudget::default(),
             github_backoff: GithubBackoff::default(),
             fetch_backoff: FetchBackoff::default(),
+            fetch_max_bytes: crate::config::Config::default().fetch_cap_bytes(),
             fetches_in_flight: FetchClaims::default(),
             github_poll_secs: crate::config::Config::default().github_poll_interval as i64,
             github_poll_cost: crate::github::poll_cost(crate::config::Config::default().repo_limit),
@@ -2545,7 +2567,15 @@ impl App {
 
     /// A progress update for the fetch running on `path`: drawn on its row
     /// (`ui::fetch_marker`) until the fetch lands (`FetchFacts::record`).
+    /// Also a sign of life for a refresh or a fetch report waiting on that
+    /// fetch, which then expire from their last update rather than from
+    /// their start, as the fetch's claim does (FZ-35b, criterion 7).
     pub fn apply_fetch_progress(&mut self, path: &str, progress: crate::git::FetchProgress) {
+        let now = std::time::Instant::now();
+        self.manual_fetches.touch(path, now);
+        if self.refresh_fetches.contains(path) {
+            self.refresh_fetches_started = Some(now);
+        }
         if let Some(repo) = self
             .repos
             .iter_mut()
@@ -2556,8 +2586,8 @@ impl App {
         }
     }
 
-    /// Give up on refresh fetches that have outlived `limit`, and on a fetch
-    /// report still waiting after as long.
+    /// Give up on refresh fetches with no sign of life for longer than
+    /// `limit`, and on a fetch report silent for as long.
     pub fn expire_refresh_fetches(&mut self, limit: std::time::Duration) {
         if self
             .refresh_fetches_started
@@ -6627,6 +6657,74 @@ mod tests {
             kind: crate::git::FetchFailureKind::TimedOut,
             detail: None,
         })
+    }
+
+    /// FZ-35b (#85), criterion 3: a fetch cut at the cap is not counted by
+    /// the timeout backoff, neither holding a path nor resetting a count.
+    #[test]
+    fn the_fetch_backoff_ignores_a_fetch_cut_at_the_cap() {
+        let t0 = Local::now();
+        let too_big =
+            crate::git::FetchOutcome::Failed(crate::git::FetchFailure::too_big(300 * 1024 * 1024));
+        let mut b = FetchBackoff::default();
+        b.record("~/r", &too_big, t0);
+        assert_eq!(b.timeouts("~/r"), 0);
+        assert!(!b.holds("~/r", t0, 60));
+        b.record("~/r", &timed_out(), t0);
+        b.record("~/r", &too_big, t0 + chrono::Duration::seconds(1));
+        assert_eq!(b.timeouts("~/r"), 1, "the count stands");
+    }
+
+    /// FZ-35b (#85), criterion 7: an `f` still downloading past
+    /// `SWEEP_STUCK_AFTER` from its start keeps its report and its refresh,
+    /// timed from its last progress; one silent that long is given up on.
+    #[test]
+    fn a_fetch_report_lives_while_its_fetch_reports_progress() {
+        let stuck = std::time::Duration::from_secs(180);
+        let long_ago =
+            |secs| std::time::Instant::now().checked_sub(std::time::Duration::from_secs(secs));
+        let mut app = make_app(2);
+        let path = app.repos[0].path.clone().unwrap();
+        let quiet = app.repos[1].path.clone().unwrap();
+        app.manual_fetches.expect([path.clone()]);
+        app.refresh_awaits_poll = true;
+        app.settle_refresh_poll([path.clone()]);
+        // Started 200 s ago, under the 180 s limit's nose.
+        app.manual_fetches.started = long_ago(200);
+        app.refresh_fetches_started = long_ago(200);
+        // Another repo's progress is no sign of life for this batch.
+        app.apply_fetch_progress(&quiet, receiving(1));
+        assert!(
+            app.manual_fetches.started.unwrap().elapsed() > stuck,
+            "another repo's progress kept this batch alive"
+        );
+        app.apply_fetch_progress(&path, receiving(300 * 1024 * 1024));
+        app.expire_refresh_fetches(stuck);
+        assert!(!app.manual_fetches.awaiting.is_empty(), "the tally expired");
+        assert!(
+            app.is_refreshing(),
+            "the refresh gave up on a fetch still moving"
+        );
+        let report = app.manual_fetches.land(
+            &path,
+            "repo-0",
+            &crate::git::FetchOutcome::Failed(crate::git::FetchFailure {
+                kind: crate::git::FetchFailureKind::Unreachable,
+                detail: None,
+            }),
+        );
+        assert_eq!(report.map(|r| r.total), Some(1), "the report was lost");
+
+        let mut silent = make_app(1);
+        let path = silent.repos[0].path.clone().unwrap();
+        silent.manual_fetches.expect([path.clone()]);
+        silent.manual_fetches.started = long_ago(200);
+        silent.expire_refresh_fetches(stuck);
+        assert_eq!(
+            silent.manual_fetches.land(&path, "repo-0", &timed_out()),
+            None,
+            "a silent batch expires as before"
+        );
     }
 
     /// FZ-34 (#83), R3: after the nth consecutive timeout a path is held for
