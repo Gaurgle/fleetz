@@ -2294,6 +2294,85 @@ pub struct App {
     /// Progress of an in-flight window apply, or None when idle. Drives the
     /// footer gauge; set when the apply is spawned, cleared when it lands.
     pub apply_progress: Option<ApplyProgress>,
+    /// The CI pane's data per remote identity, held for the session and
+    /// never written to disk (FZ-30b). See `ci.rs`.
+    pub ci: std::collections::HashMap<RemoteKey, CiState>,
+    /// The CI pane is folded: nothing polls. True until FZ-30c draws the
+    /// pane and reads `ci_pane` from the config.
+    pub ci_folded: bool,
+    /// The `core` budget the CI calls bill, apart from `api_budget`, which
+    /// is the GraphQL one the fleet poll paces on.
+    pub ci_budget: ApiBudget,
+    /// The CI poll's retry ladder and not-before, apart from the fleet's.
+    pub ci_backoff: GithubBackoff,
+    /// The CI target the cursor rests on (`None` for a row without one) and
+    /// since when, for the dwell (`ci::DWELL`).
+    pub ci_cursor: Option<(Option<RemoteKey>, std::time::Instant)>,
+}
+
+/// The CI pane's data for one repo (FZ-30b).
+#[derive(Debug, Clone, Default)]
+pub struct CiState {
+    /// The newest list, newest run first.
+    pub runs: Vec<crate::ci::WorkflowRun>,
+    /// The list's `ETag`, sent back as `If-None-Match`.
+    pub runs_etag: Option<String>,
+    /// The run whose jobs are read on each poll; set by FZ-30d's `Enter`.
+    pub expanded: Option<u64>,
+    /// Each read run's jobs with their `ETag`, by run id.
+    pub jobs: std::collections::HashMap<u64, CiJobs>,
+    /// Runs whose `/jobs` answered 404, dropped by the next list.
+    pub gone: std::collections::HashSet<u64>,
+    /// Failed jobs' log tails by job id, each read once.
+    pub logs: std::collections::HashMap<u64, crate::ci::LogTail>,
+    /// The three freshness facts, for this repo's CI alone. A 304 is a
+    /// successful attempt; the fleet header never reads this.
+    pub freshness: GithubFreshness,
+    /// A poll for this repo is out.
+    pub inflight: bool,
+}
+
+/// One run's jobs as last read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CiJobs {
+    pub etag: Option<String>,
+    pub jobs: Vec<crate::ci::Job>,
+}
+
+impl CiState {
+    /// What one poll of this repo costs on `core`: the list, plus the
+    /// expanded run's jobs.
+    pub fn poll_cost(&self) -> u32 {
+        crate::ci::CALL_COST * if self.expanded.is_some() { 2 } else { 1 }
+    }
+
+    /// Land an applied answer's data. The outcome is `App::apply_ci`'s.
+    fn land(&mut self, answer: crate::ci::CiAnswer) {
+        use crate::ci::{Fetched, JobsAnswer};
+        if let Some(Fetched::Fresh { data, etag }) = answer.runs {
+            let gone = std::mem::take(&mut self.gone);
+            self.runs = data.into_iter().filter(|r| !gone.contains(&r.id)).collect();
+            self.runs_etag = etag;
+            let listed: std::collections::HashSet<u64> = self.runs.iter().map(|r| r.id).collect();
+            self.jobs.retain(|id, _| listed.contains(id));
+            if self.expanded.is_some_and(|id| !listed.contains(&id)) {
+                self.expanded = None;
+            }
+        }
+        match answer.jobs {
+            Some((run_id, JobsAnswer::Fetched(Fetched::Fresh { data, etag }))) => {
+                self.jobs.insert(run_id, CiJobs { etag, jobs: data });
+            }
+            Some((run_id, JobsAnswer::Gone)) => {
+                self.jobs.remove(&run_id);
+                self.gone.insert(run_id);
+            }
+            Some((_, JobsAnswer::Fetched(Fetched::NotModified))) | None => {}
+        }
+        if let Some((job_id, tail)) = answer.log {
+            self.logs.insert(job_id, tail);
+        }
+    }
 }
 
 /// Below this width or height, `Detail`'s list+detail split doesn't have
@@ -2411,7 +2490,124 @@ impl App {
             window: None,
             dirty_mode: false,
             apply_progress: None,
+            ci: std::collections::HashMap::new(),
+            ci_folded: true,
+            ci_budget: ApiBudget::default(),
+            ci_backoff: GithubBackoff::default(),
+            ci_cursor: None,
         }
+    }
+
+    /// How long the cursor has rested on `target` at `now`, restarting the
+    /// clock when it moved to another one.
+    pub fn ci_settled_for(
+        &mut self,
+        target: Option<&RemoteKey>,
+        now: std::time::Instant,
+    ) -> std::time::Duration {
+        match &self.ci_cursor {
+            Some((held, since)) if held.as_ref() == target => now.duration_since(*since),
+            _ => {
+                self.ci_cursor = Some((target.cloned(), now));
+                std::time::Duration::ZERO
+            }
+        }
+    }
+
+    /// The cadence inputs for the repo at `key`, judged at `now`.
+    pub fn ci_cadence(
+        &self,
+        key: &RemoteKey,
+        settled_for: std::time::Duration,
+        now: DateTime<Local>,
+    ) -> crate::ci::Cadence<'_> {
+        let state = self.ci.get(key);
+        let runs = state.map_or(&[][..], |s| &s.runs);
+        let last_attempt = state.and_then(|s| s.freshness.last_attempt);
+        let cost = state.map_or(crate::ci::CALL_COST, CiState::poll_cost);
+        crate::ci::Cadence {
+            folded: self.ci_folded,
+            has_identity: true,
+            settled_for,
+            inflight: state.is_some_and(|s| s.inflight),
+            runs,
+            last_attempt,
+            pace: self.ci_budget.pace(cost, last_attempt.unwrap_or(now)),
+            not_before: self
+                .ci_backoff
+                .not_before(crate::ci::base_interval_secs(runs)),
+            now,
+        }
+    }
+
+    /// Take the repo's in-flight lock and an attempt id, and build the poll.
+    pub fn claim_ci_poll(
+        &mut self,
+        key: RemoteKey,
+        owner: String,
+        name: String,
+    ) -> crate::ci::CiRequest {
+        let state = self.ci.entry(key.clone()).or_default();
+        state.inflight = true;
+        let attempt = state.freshness.begin_attempt();
+        let expanded = state.expanded.map(|run_id| {
+            let held = state.jobs.get(&run_id);
+            crate::ci::ExpandedRequest {
+                run_id,
+                jobs_etag: held.and_then(|j| j.etag.clone()),
+                held_jobs: held.map(|j| j.jobs.clone()).unwrap_or_default(),
+                logs_held: state.logs.keys().copied().collect(),
+            }
+        });
+        crate::ci::CiRequest {
+            key,
+            owner,
+            name,
+            attempt,
+            runs_etag: state.runs_etag.clone(),
+            expanded,
+        }
+    }
+
+    /// Land a CI poll's answer (`AppEvent::Ci`) at `now`. Only the repo's
+    /// `CiState`, `ci_budget` and `ci_backoff` change: never a row, the fleet
+    /// poll's freshness, budget or backoff, or the cache.
+    ///
+    /// The fleet poll's rules, per repo: the newest attempt releases the lock;
+    /// an answer older than one applied is discarded but may still lower the
+    /// budget; a failure keeps the data and advances the retry clock; a 304
+    /// is a success that keeps the data.
+    pub fn apply_ci(&mut self, answer: crate::ci::CiAnswer, now: DateTime<Local>) {
+        let Some(state) = self.ci.get_mut(&answer.key) else {
+            return;
+        };
+        if state.freshness.is_latest(answer.attempt) {
+            state.inflight = false;
+        }
+        let applied = state.freshness.accept_answer(answer.attempt);
+        if let Some(reading) = &answer.budget
+            && self
+                .ci_budget
+                .observe(reading, applied, now, self.jitter.as_mut())
+                == Observed::Switched
+        {
+            self.ci_backoff.account_switched();
+        }
+        if !applied {
+            return;
+        }
+        match answer.failure.clone() {
+            Some(failure) => {
+                state.freshness.failed(failure.clone(), now);
+                self.ci_backoff
+                    .failed(&failure, now, &self.ci_budget, self.jitter.as_mut());
+            }
+            None => {
+                state.freshness.succeeded(now);
+                self.ci_backoff.succeeded();
+            }
+        }
+        state.land(answer);
     }
 
     /// Whether `repo` carries GitHub fields the last poll did not return, so

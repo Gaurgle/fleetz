@@ -1,0 +1,62 @@
+﻿2026-10-09T16:19:47.2694937Z Current runner version: '2.337.0'
+2026-10-09T16:19:50.5255452Z ##[group]Run cargo fmt --check
+2026-10-09T16:19:50.5255955Z [36;1mcargo fmt --check[0m
+2026-10-09T16:19:50.5286534Z shell: /usr/bin/bash -e {0}
+2026-10-09T16:19:50.5287167Z env:
+2026-10-09T16:19:50.5287858Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T16:19:50.5288479Z   CARGO_INCREMENTAL: 0
+2026-10-09T16:19:50.5289119Z   CARGO_TERM_COLOR: always
+2026-10-09T16:19:50.5289652Z ##[endgroup]
+2026-10-09T16:19:52.4401931Z ##[group]Run cargo clippy --all-targets -- -D warnings
+2026-10-09T16:19:52.4402432Z [36;1mcargo clippy --all-targets -- -D warnings[0m
+2026-10-09T16:19:52.4443889Z shell: /usr/bin/bash -e {0}
+2026-10-09T16:19:52.4444262Z env:
+2026-10-09T16:19:52.4444618Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T16:19:52.4444935Z   CARGO_INCREMENTAL: 0
+2026-10-09T16:19:52.4445256Z   CARGO_TERM_COLOR: always
+2026-10-09T16:19:52.4445579Z ##[endgroup]
+2026-10-09T16:19:53.1625898Z [1m[92m    Updating[0m crates.io index
+2026-10-09T16:19:54.3047899Z [1m[92m Downloading[0m crates ...
+2026-10-09T16:19:54.3785074Z [1m[92m  Downloaded[0m subtle v2.6.1
+2026-10-09T16:19:54.4028206Z [1m[92m  Downloaded[0m strum_macros v0.27.2
+2026-10-09T16:20:32.2573892Z [1m[92m    Checking[0m ratatui v0.30.0
+2026-10-09T16:20:32.2686147Z [1m[92m    Checking[0m toml v0.8.23
+2026-10-09T16:20:32.4266600Z [1m[92m    Checking[0m fleetz v0.5.1 (/home/runner/work/fleetz/fleetz)
+2026-10-09T16:20:35.4584779Z [1m[91merror[0m[1m: the `Err`-variant returned from this function is very large[0m
+2026-10-09T16:20:35.4585571Z     [1m[94m--> [0msrc/main.rs:2687:6
+2026-10-09T16:20:35.4624217Z      [1m[94m|[0m
+2026-10-09T16:20:35.4643962Z [1m[94m2687[0m [1m[94m|[0m   ) -> Result<
+2026-10-09T16:20:35.4663991Z      [1m[94m|[0m [1m[91m ______^[0m
+2026-10-09T16:20:35.4683911Z [1m[94m2688[0m [1m[94m|[0m [1m[91m|[0m     (
+2026-10-09T16:20:35.4694448Z [1m[94m2689[0m [1m[94m|[0m [1m[91m|[0m         Vec<RepoStatus>,
+2026-10-09T16:20:35.4713979Z [1m[94m2690[0m [1m[94m|[0m [1m[91m|[0m         ViewNotes,
+2026-10-09T16:20:35.4733843Z [1m[94m...[0m    [1m[91m|[0m
+2026-10-09T16:20:35.4753901Z [1m[94m2696[0m [1m[94m|[0m [1m[91m|[0m     LoadError,
+2026-10-09T16:20:35.4774224Z [1m[94m2697[0m [1m[94m|[0m [1m[91m|[0m > {
+2026-10-09T16:20:35.4814081Z      [1m[94m|[0m [1m[91m|_^[0m [1m[91mthe `Err`-variant is at least 128 bytes[0m
+2026-10-09T16:20:35.4833828Z      [1m[94m|[0m
+2026-10-09T16:20:35.4834758Z      [1m[94m= [0m[1mhelp[0m: try reducing the size of `LoadError`, for example by boxing large elements or replacing it with `Box<LoadError>`
+2026-10-09T16:20:35.4836453Z      [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+2026-10-09T16:20:35.4861301Z      [1m[94m= [0m[1mnote[0m: `-D clippy::result-large-err` implied by `-D warnings`
+2026-10-09T16:20:35.4884377Z      [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+2026-10-09T16:20:35.4894380Z 
+2026-10-09T16:20:35.5115724Z [1m[91merror[0m: could not compile `fleetz` (bin "fleetz") due to 1 previous error
+2026-10-09T16:20:35.5117167Z [1m[33mwarning[0m: build failed, waiting for other jobs to finish...
+2026-10-09T16:20:37.4265325Z [1m[91merror[0m: could not compile `fleetz` (bin "fleetz" test) due to 1 previous error
+2026-10-09T16:20:37.5048777Z ##[error]Process completed with exit code 101.
+2026-10-09T16:20:37.5177235Z Post job cleanup.
+2026-10-09T16:20:37.6003946Z [command]/usr/bin/git version
+2026-10-09T16:20:37.6056331Z git version 2.55.0
+2026-10-09T16:20:37.6084985Z Temporarily overriding HOME='/home/runner/work/_temp/57849663-788b-4338-ab79-0590d807b6e1' before making global git config changes
+2026-10-09T16:20:37.6086330Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-09T16:20:37.6087392Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/fleetz/fleetz
+2026-10-09T16:20:37.6139068Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-09T16:20:37.6185647Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-09T16:20:37.6485997Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-09T16:20:37.6487193Z http.https://github.com/.extraheader
+2026-10-09T16:20:37.6489081Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-10-09T16:20:37.6567007Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-09T16:20:37.6793384Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-09T16:20:37.6823448Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-09T16:20:37.7311752Z Cleaning up orphan processes
+2026-10-09T16:20:37.7555995Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

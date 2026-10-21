@@ -1,5 +1,6 @@
 mod app;
 mod cache;
+mod ci;
 mod cli;
 mod clipboard;
 mod config;
@@ -155,6 +156,9 @@ pub enum AppEvent {
     SweepDone {
         at: chrono::DateTime<chrono::Local>,
     },
+    /// A CI poll's answer for one repo (FZ-30b), applied by `App::apply_ci`.
+    /// It touches only that repo's CI state and the `core` budget.
+    Ci(Box<ci::CiAnswer>),
 }
 
 /// Why a load ran, which decides what the loop does with the result.
@@ -979,6 +983,11 @@ async fn run_event_loop(
                     app.push_detected = false;
                     start_github_poll(app, &tx, config);
                 }
+                if let Some(request) =
+                    ci_poll_request(app, chrono::Local::now(), std::time::Instant::now())
+                {
+                    spawn_ci_poll(&tx, request);
+                }
             }
             AppEvent::Input(Event::Key(key)) => {
                 // Any keypress takes the loading field down. Skip means skip:
@@ -1041,6 +1050,7 @@ async fn run_event_loop(
                 app.last_refreshed = Some(at);
                 app.needs_redraw = true;
             }
+            AppEvent::Ci(answer) => app.apply_ci(*answer, chrono::Local::now()),
         }
 
         if app.should_quit {
@@ -2586,6 +2596,34 @@ fn start_github_poll(
     if let Some(attempt) = claim_github_poll(app) {
         spawn_github_poll(tx, config, attempt);
     }
+}
+
+/// The CI poll the tick should start for the selected repo, with its lock
+/// taken, or `None`. Nothing while the pane is folded (the default until
+/// FZ-30c), under `-d`, or on a row without a GitHub identity; otherwise
+/// `ci::poll_due` decides, from the cursor's dwell and the repo's cadence.
+fn ci_poll_request(
+    app: &mut App,
+    now: chrono::DateTime<chrono::Local>,
+    instant: std::time::Instant,
+) -> Option<ci::CiRequest> {
+    if app.ci_folded || app.dirty_mode {
+        return None;
+    }
+    let target = app.selected_repo().and_then(ci::target);
+    let settled_for = app.ci_settled_for(target.as_ref().map(|(key, ..)| key), instant);
+    let (key, owner, name) = target?;
+    ci::poll_due(&app.ci_cadence(&key, settled_for, now))
+        .then(|| app.claim_ci_poll(key, owner, name))
+}
+
+/// Run a claimed CI poll in the background and send its answer back.
+fn spawn_ci_poll(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, request: ci::CiRequest) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let answer = ci::poll(request).await;
+        let _ = tx.send(AppEvent::Ci(Box::new(answer)));
+    });
 }
 
 /// Take the in-flight lock and an attempt id for a new poll, or `None` when
@@ -11277,5 +11315,312 @@ mod tests {
             yank_status(&app),
             Some(("copied bbb2222".to_string(), false))
         );
+    }
+
+    // FZ-30b: the CI pane's data layer, its trigger and its answers.
+
+    fn ci_app() -> App {
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.repos = vec![RepoStatus {
+            name: "fleetz".to_string(),
+            owner: Some("Gaurgle".to_string()),
+            ..test_repo()
+        }];
+        app.jitter = Box::new(Planted {
+            factor: 1.0,
+            resume: 7,
+        });
+        app
+    }
+
+    fn ci_key() -> app::RemoteKey {
+        (Some("gaurgle".to_string()), "fleetz".to_string())
+    }
+
+    fn ci_runs() -> Vec<ci::WorkflowRun> {
+        ci::parse_runs(include_str!("ci/fixtures/runs.json")).unwrap()
+    }
+
+    fn ci_answer(request: &ci::CiRequest) -> ci::CiAnswer {
+        ci::CiAnswer {
+            key: request.key.clone(),
+            attempt: request.attempt,
+            runs: None,
+            jobs: None,
+            log: None,
+            failure: None,
+            budget: None,
+        }
+    }
+
+    fn fresh_runs(etag: &str) -> Option<ci::Fetched<Vec<ci::WorkflowRun>>> {
+        Some(ci::Fetched::Fresh {
+            data: ci_runs(),
+            etag: Some(etag.to_string()),
+        })
+    }
+
+    /// Claim and land one successful list poll at `now`.
+    fn ci_landed(app: &mut App, now: chrono::DateTime<chrono::Local>) {
+        let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        let answer = ci::CiAnswer {
+            runs: fresh_runs("W/\"6b13\""),
+            ..ci_answer(&request)
+        };
+        app.apply_ci(answer, now);
+    }
+
+    #[test]
+    fn a_ci_target_needs_an_owner() {
+        let legacy = RepoStatus {
+            name: "fleetz".to_string(),
+            ..test_repo()
+        };
+        assert_eq!(ci::target(&legacy), None, "known by name only: no URL");
+        let (key, owner, name) = ci::target(&ci_app().repos[0]).unwrap();
+        assert_eq!(key, ci_key());
+        assert_eq!((owner.as_str(), name.as_str()), ("gaurgle", "fleetz"));
+    }
+
+    #[test]
+    fn the_ci_pane_starts_folded_and_polls_nothing() {
+        let mut app = ci_app();
+        assert!(app.ci_folded, "folded until FZ-30c reads `ci_pane`");
+        let start = std::time::Instant::now();
+        for ms in [0, 300, 60_000] {
+            let instant = start + std::time::Duration::from_millis(ms);
+            assert_eq!(ci_poll_request(&mut app, at(12, 0, 0), instant), None);
+        }
+        assert!(app.ci.is_empty());
+    }
+
+    #[test]
+    fn an_unfolded_pane_polls_the_selected_repo_once_the_cursor_dwells() {
+        let mut app = ci_app();
+        app.ci_folded = false;
+        let start = std::time::Instant::now();
+        let after = |ms| start + std::time::Duration::from_millis(ms);
+        assert_eq!(ci_poll_request(&mut app, at(12, 0, 0), after(0)), None);
+        assert_eq!(ci_poll_request(&mut app, at(12, 0, 0), after(299)), None);
+        let request = ci_poll_request(&mut app, at(12, 0, 0), after(300)).expect("settled");
+        assert_eq!(request.key, ci_key());
+        assert_eq!(request.runs_etag, None);
+        assert_eq!(
+            ci_poll_request(&mut app, at(12, 0, 1), after(1300)),
+            None,
+            "one poll out at a time"
+        );
+    }
+
+    #[test]
+    fn a_row_without_a_github_identity_sends_no_ci_poll() {
+        let mut app = ci_app();
+        app.ci_folded = false;
+        app.repos[0].owner = None;
+        let start = std::time::Instant::now();
+        ci_poll_request(&mut app, at(12, 0, 0), start);
+        let later = start + std::time::Duration::from_secs(5);
+        assert_eq!(ci_poll_request(&mut app, at(12, 0, 5), later), None);
+    }
+
+    #[test]
+    fn the_ci_poll_follows_the_cadence_of_the_shown_runs() {
+        let mut app = ci_app();
+        app.ci_folded = false;
+        ci_landed(&mut app, at(12, 0, 0));
+        let start = std::time::Instant::now();
+        let settled = start + std::time::Duration::from_secs(1);
+        ci_poll_request(&mut app, at(12, 0, 0), start);
+        // The fixture's newest run is in progress: 10 s.
+        assert_eq!(ci_poll_request(&mut app, at(12, 0, 9), settled), None);
+        let request = ci_poll_request(&mut app, at(12, 0, 10), settled).expect("10 s on");
+        assert_eq!(request.runs_etag.as_deref(), Some("W/\"6b13\""));
+        // Every shown run finished: 60 s.
+        let mut finished = ci_runs();
+        finished.retain(|r| !r.is_live());
+        let answer = ci::CiAnswer {
+            runs: Some(ci::Fetched::Fresh {
+                data: finished,
+                etag: None,
+            }),
+            ..ci_answer(&request)
+        };
+        app.apply_ci(answer, at(12, 0, 10));
+        assert_eq!(ci_poll_request(&mut app, at(12, 1, 9), settled), None);
+        assert!(ci_poll_request(&mut app, at(12, 1, 10), settled).is_some());
+    }
+
+    #[test]
+    fn a_304_keeps_the_runs_and_is_a_successful_attempt() {
+        let mut app = ci_app();
+        ci_landed(&mut app, at(12, 0, 0));
+        let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        assert_eq!(
+            request.runs_etag.as_deref(),
+            Some("W/\"6b13\""),
+            "sent back"
+        );
+        let answer = ci::CiAnswer {
+            runs: Some(ci::Fetched::NotModified),
+            ..ci_answer(&request)
+        };
+        app.apply_ci(answer, at(12, 0, 10));
+        let state = &app.ci[&ci_key()];
+        assert_eq!(state.runs, ci_runs(), "the data is kept");
+        assert_eq!(state.runs_etag.as_deref(), Some("W/\"6b13\""));
+        assert_eq!(state.freshness.last_attempt, Some(at(12, 0, 10)));
+        assert_eq!(state.freshness.data_time, app::DataTime::At(at(12, 0, 10)));
+        assert_eq!(state.freshness.outcome, app::Outcome::Success);
+        assert!(!state.inflight);
+    }
+
+    /// What a CI answer must never move: the rows, and the fleet poll's
+    /// freshness, budget, backoff, lock, dataset and coverage.
+    fn fleet_snapshot(app: &App) -> String {
+        format!(
+            "{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}",
+            app.repos,
+            app.github_freshness,
+            app.api_budget,
+            app.github_backoff,
+            app.github_poll_inflight,
+            app.dataset.len(),
+            app.github_meta,
+            app.not_in_last_poll,
+        )
+    }
+
+    fn ci_failure_lands(failure: github::Failure, budget: Option<github::BudgetReading>) -> App {
+        let mut app = ci_app();
+        ci_landed(&mut app, at(12, 0, 0));
+        let before = fleet_snapshot(&app);
+        let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        let answer = ci::CiAnswer {
+            failure: Some(failure.clone()),
+            budget,
+            ..ci_answer(&request)
+        };
+        app.apply_ci(answer, at(12, 0, 10));
+        assert_eq!(fleet_snapshot(&app), before, "{failure:?} moved the fleet");
+        let state = &app.ci[&ci_key()];
+        assert_eq!(state.runs, ci_runs(), "a failure keeps the data");
+        assert_eq!(state.freshness.data_time, app::DataTime::At(at(12, 0, 0)));
+        assert_eq!(state.freshness.last_attempt, Some(at(12, 0, 10)));
+        assert_eq!(state.freshness.outcome, app::Outcome::Failed(failure));
+        assert!(!state.inflight);
+        app
+    }
+
+    #[test]
+    fn an_offline_ci_poll_keeps_the_runs_and_leaves_the_fleet_alone() {
+        let failure = github::Failure::new(github::FailureKind::Offline, "no route");
+        let app = ci_failure_lands(failure, None);
+        assert_eq!(
+            app.ci_backoff.not_before(60),
+            None,
+            "offline counts nothing"
+        );
+    }
+
+    #[test]
+    fn a_rate_limited_ci_poll_holds_until_the_reset_and_leaves_the_fleet_alone() {
+        let reset = at(12, 40, 0);
+        let budget = reading("tok", 0, reset, at(12, 0, 10));
+        let failure = github::Failure::rate_limit("API rate limit exceeded");
+        let mut app = ci_failure_lands(failure, Some(budget));
+        let resume = reset + secs(7);
+        assert_eq!(app.ci_backoff.limit_until(60), Some(resume));
+        assert_eq!(app.ci_budget.known(at(12, 0, 10)).unwrap().remaining, 0);
+        app.ci_folded = false;
+        let start = std::time::Instant::now();
+        let settled = start + std::time::Duration::from_secs(1);
+        ci_poll_request(&mut app, at(12, 0, 10), start);
+        assert_eq!(ci_poll_request(&mut app, at(12, 39, 0), settled), None);
+        assert!(ci_poll_request(&mut app, resume, settled).is_some());
+    }
+
+    #[test]
+    fn a_404_on_a_gone_run_marks_it_until_the_next_list_drops_it() {
+        let mut app = ci_app();
+        ci_landed(&mut app, at(12, 0, 0));
+        let gone = ci_runs()[2].id;
+        app.ci.get_mut(&ci_key()).unwrap().expanded = Some(gone);
+        let before = fleet_snapshot(&app);
+        let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        assert_eq!(request.expanded.as_ref().map(|e| e.run_id), Some(gone));
+        let answer = ci::CiAnswer {
+            runs: Some(ci::Fetched::NotModified),
+            jobs: Some((gone, ci::JobsAnswer::Gone)),
+            ..ci_answer(&request)
+        };
+        app.apply_ci(answer, at(12, 0, 10));
+        assert_eq!(fleet_snapshot(&app), before);
+        let state = &app.ci[&ci_key()];
+        assert!(state.gone.contains(&gone), "the pane can say `run gone`");
+        assert_eq!(state.runs.len(), 3, "until the next list");
+        assert_eq!(state.freshness.outcome, app::Outcome::Success);
+
+        let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        let answer = ci::CiAnswer {
+            runs: fresh_runs("W/\"next\""),
+            ..ci_answer(&request)
+        };
+        app.apply_ci(answer, at(12, 0, 20));
+        let state = &app.ci[&ci_key()];
+        assert!(state.runs.iter().all(|r| r.id != gone), "dropped");
+        assert!(state.gone.is_empty());
+        assert_eq!(state.expanded, None, "nothing left to expand");
+    }
+
+    #[test]
+    fn a_late_ci_answer_does_not_move_the_data_backwards() {
+        let mut app = ci_app();
+        let first = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        let second = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        let newer = ci::CiAnswer {
+            runs: fresh_runs("W/\"new\""),
+            ..ci_answer(&second)
+        };
+        app.apply_ci(newer, at(12, 0, 10));
+        let older = ci::CiAnswer {
+            runs: Some(ci::Fetched::Fresh {
+                data: Vec::new(),
+                etag: Some("W/\"old\"".to_string()),
+            }),
+            ..ci_answer(&first)
+        };
+        app.apply_ci(older, at(12, 0, 20));
+        let state = &app.ci[&ci_key()];
+        assert_eq!(state.runs_etag.as_deref(), Some("W/\"new\""));
+        assert_eq!(state.runs.len(), 3);
+        assert_eq!(state.freshness.last_attempt, Some(at(12, 0, 10)));
+    }
+
+    #[test]
+    fn a_failed_log_is_read_once_per_job() {
+        let mut app = ci_app();
+        ci_landed(&mut app, at(12, 0, 0));
+        let run = ci_runs()[2].id;
+        app.ci.get_mut(&ci_key()).unwrap().expanded = Some(run);
+        let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        let jobs = ci::parse_jobs(include_str!("ci/fixtures/jobs-failed.json")).unwrap();
+        let answer = ci::CiAnswer {
+            runs: Some(ci::Fetched::NotModified),
+            jobs: Some((
+                run,
+                ci::JobsAnswer::Fetched(ci::Fetched::Fresh {
+                    data: jobs.clone(),
+                    etag: Some("W/\"jobs\"".to_string()),
+                }),
+            )),
+            log: Some((jobs[0].id, ci::LogTail::Lines(vec!["boom".to_string()]))),
+            ..ci_answer(&request)
+        };
+        app.apply_ci(answer, at(12, 0, 10));
+        let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        let expanded = request.expanded.expect("the run is still expanded");
+        assert_eq!(expanded.jobs_etag.as_deref(), Some("W/\"jobs\""));
+        assert_eq!(expanded.held_jobs, jobs);
+        assert_eq!(expanded.logs_held, vec![jobs[0].id]);
     }
 }
