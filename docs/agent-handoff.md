@@ -247,7 +247,15 @@ inside the scratchpad and remove it when done.
   dispatched 15:29 in `.claude/worktrees/issue-92`, branch
   `feat/92-ci-pane2-view`, base `f51c20f`; six rulings in the
   assignment comment (the #89 and #91 test changes follow the band out,
-  pre-authorized as the consequence of his decision). Reviewer next,
+  pre-authorized as the consequence of his decision); four more at
+  15:19 on the worker's stop (`colors.rs` allowed for the `ci` tab in
+  Catppuccin sky, a small look change; two more existing-test edits as
+  the consequence of the sixth view, for him to object to: the view
+  cycle wrap test and the #90 `ci_folded` test renamed to
+  `the_ci_poll_waits_for_the_ci_view`; `ci_wanted` requires the Detail
+  view; `ALL` loops fix the code). Clock note: the 15:27 to 15:29 stamps
+  on #92, #67 and here ran about ten minutes ahead (true about 15:15 to
+  15:17). Reviewer next,
   then Ready to integrate for his look. After it: #95 FZ-30f (the
   inspector's jobs/log/script bodies, created 15:27, Backlog) and #93
   FZ-30e (handoffs, reworded). `CLAUDE.md`'s invariant line goes back
