@@ -2,7 +2,8 @@
 
 Written 2026-10-21 by the coordinator (`claude-fable-5-1`) for Andreas's
 approval. Planning issue: [#67](https://github.com/Gaurgle/fleetz/issues/67)
-(FZ-30, M4). Status: **draft, not approved; no worker before his word.**
+(FZ-30, M4). Status: **accepted 2026-10-21** (every point under "Open
+with Andreas" answered); tickets #89 to #93.
 The issue's two decisions stand: draw natively, never embed `gh`; its own
 pane, pane 4, with the contributions strip renumbered to pane 5.
 
@@ -40,7 +41,7 @@ Measured 2026-10-21 against `Gaurgle/fleetz` with `gh api -i`:
 
 ## Design
 
-### A. Layout: a full-width band above the strip (decision for Andreas)
+### A. Layout: a full-width band above the strip (Option A, accepted)
 
 Window layout today: `body` (pane 1 beside window 2, which splits into
 pane 2 and the inspector 3) over the contributions strip, which
@@ -232,14 +233,15 @@ bullets of its section here.
 
 ## Open with Andreas
 
-1. **Layout:** Option A (a band above the strip, recommended) or B (under
-   the inspector).
+1. **Layout:** **Option A, decided 2026-10-21 13:05** ("think option a
+   for workflow pane").
 2. **The thirteen existing tests** in section B: **"ok with me"
    (2026-10-21)**; `4` to `5`, `[4]` to `[5]` in FZ-30a, the Tab walks
    gaining a pane in FZ-30c, no assertion weakened.
 3. **Keys:** `Enter` expand, `l` log, `a` rerun, `x` cancel, `O` open, and
-   `5` for the strip. His call; alternatives welcome. Asked 2026-10-21
-   what they mean; answered in chat, decision pending.
+   `5` for the strip: **"fine as proposed", 2026-10-21 13:05**, after
+   the keys were explained in chat (all apply with the CI pane focused,
+   to the run under its cursor).
 4. **Start folded:** decided, see section A.
 5. Creating the five issues FZ-30a to e as P2 in M4, and the word to run
    FZ-30a: **"sure" (2026-10-21)**; created and FZ-30a dispatched.

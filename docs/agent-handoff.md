@@ -41,6 +41,15 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-21, 13:05.** "1, think option a for workflow pane. 3. fine as
+  proposed. #79 go with your recommended option. #81 yes.": the CI pane
+  spec is accepted on every point (layout A, keys as proposed); #79 takes
+  option (A) (four expected strings updated) and #81 the two footer test
+  edits. Both re-dispatched at 13:10 with fresh workers. Not given: the
+  merge word for #89 ("i still need to check out #89 ?" answered: yes,
+  or wave it through), and the word to run FZ-30b to e (the 2026-10-17
+  batch 3 approval covers them once a slot is free; FZ-30c after #89
+  merges).
 - **2026-10-21, 11:05.** To the spec's five open points: "1. show me the
   examples (ascii is fine)" (layout still open); "2. ok with me" (the
   thirteen existing tests pinning the strip as pane 4 may change `4` to
@@ -147,8 +156,9 @@ the log, "Merged on 2026-10-20"). `libc` is a direct dependency since
 
 ## Worktrees
 
-Under `.claude/worktrees/`: only `issue-88` (FZ-38, parked, uncommitted,
-see "Baton"). The sweep keeps it.
+Under `.claude/worktrees/`: `issue-79` and `issue-81` (workers running),
+`issue-89` (Ready to integrate, committed and pushed), `issue-88` (FZ-38,
+parked, uncommitted, see "Baton"; the sweep keeps it).
 
 ## In flight
 
@@ -159,8 +169,17 @@ see "Baton"). The sweep keeps it.
   combined check with `main` green (1181 tests). On his OK: merge under
   the safe-merge rule, then sweep. Authority: his "sure"
   (11:05) to creating FZ-30a to e (#89 to #93) and running FZ-30a; his
-  "ok with me" to the existing-test edits. #90 to #93 are Backlog and
-  wait on the spec's open points (layout, keys) and his word.
+  "ok with me" to the existing-test edits. #90 to #93 are Backlog; the
+  spec is accepted, so they run in plan order as slots free up (FZ-30b
+  next, FZ-30c after #89 merges).
+- **#79 FZ-03a**: `fz-worker` (`claude-opus-5-5`, medium) dispatched
+  13:10 in `.claude/worktrees/issue-79`, branch
+  `feat/79-date-the-failed-attempt`, base `4b958c1`, option (A) on the
+  four tests. Reviewer next, then Ready to integrate for his look.
+- **#81 FZ-13n**: `fz-worker` (`claude-opus-5-5`, medium) dispatched
+  13:10 in `.claude/worktrees/issue-81`, branch
+  `feat/81-footer-hints-follow-focus`, base `4b958c1`, the two test
+  edits approved. Reviewer next, then Ready to integrate for his look.
 
 ## Next step, and the order after it
 
