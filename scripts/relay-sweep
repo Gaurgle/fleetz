@@ -15,6 +15,17 @@
 # that rule removed a parked worktree on 2026-10-17. A squash-merged branch
 # never counts either and is reported instead.
 #
+# After the worktree sweep it also prunes dead scratch builds: in every other
+# session's directory under $RELAY_SCRATCH_ROOT/<escaped repo path>/ (default
+# root /private/tmp/claude-501), it deletes scratchpad/*/target and any
+# scratchpad/<dir> that is a git clone (has a .git directory), whatever their
+# age. The current session ($CLAUDE_CODE_SESSION_ID, else $CLAUDE_SESSION_ID)
+# is never touched; with no id, or an id naming no session directory, the
+# prune is skipped. RELAY_SCRATCH_ROOT must be an absolute path. Symlinked
+# scratchpads are skipped and every deletion is checked to resolve inside the
+# project directory. --dry-run lists without deleting. The CI check does not
+# gate this step: it frees disk, it does not decide what is merged.
+#
 # Usage: scripts/relay-sweep [--dry-run] [--skip-ci-check] [integration-branch]
 
 set -euo pipefail
@@ -26,7 +37,7 @@ for arg in "$@"; do
   case "$arg" in
     --dry-run) dry_run=true ;;
     --skip-ci-check) skip_ci=true ;;
-    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,/^# Usage/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "relay-sweep: unknown option $arg" >&2; exit 2 ;;
     *) branch=$arg ;;
   esac
@@ -36,6 +47,8 @@ done
 root=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 cd "$root"
 target="origin/$branch"
+# The scratch prune follows the user's --dry-run only, not a red CI.
+prune_dry=$dry_run
 
 git fetch --quiet origin "$branch"
 
@@ -96,3 +109,72 @@ while IFS= read -r line; do
 done < <(git worktree list --porcelain; echo)
 
 echo "relay-sweep: $removed removed, $kept kept."
+
+# Dead scratch builds. Claude Code names a project's directory after its path
+# with every "/" replaced by "-".
+scratch_root=${RELAY_SCRATCH_ROOT:-/private/tmp/claude-501}
+project_dir="$scratch_root/${root//\//-}"
+pruned=0
+
+# Deletes one directory, but only a real (non-symlink) one whose physical
+# path is inside the physical project directory, so no link can reach out.
+prune_dir() {
+  local dir=$1 size real
+  [ -d "$dir" ] && [ ! -L "$dir" ] || return 0
+  real=$(cd -P "$dir" 2>/dev/null && pwd -P) || real=
+  case "$real" in
+    "$real_project"/*) ;;
+    *) echo "skipped $dir: outside the root"; return 0 ;;
+  esac
+  size=$(du -sh "$dir" 2>/dev/null | awk '{print $1}')
+  if $prune_dry; then
+    echo "would  prune $dir (${size:-?})"
+  else
+    rm -rf "$dir"
+    echo "pruned $dir (${size:-?})"
+  fi
+  pruned=$((pruned + 1))
+}
+
+current=${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}
+skip_reason=
+case "$scratch_root" in
+  /*) ;;
+  *) skip_reason="RELAY_SCRATCH_ROOT is not an absolute path" ;;
+esac
+if [ -z "$skip_reason" ]; then
+  case "$current" in
+    ""|.|..|*/*) skip_reason="no usable session id" ;;
+    *) [ -d "$project_dir/$current" ] || skip_reason="no usable session id" ;;
+  esac
+fi
+
+if [ -n "$skip_reason" ]; then
+  echo "relay-sweep: $skip_reason, scratch prune skipped"
+else
+  real_project=$(cd -P "$project_dir" && pwd -P)
+  for session in "$project_dir"/*/; do
+    session=${session%/}
+    [ -d "$session" ] && [ ! -L "$session" ] || continue
+    [ "${session##*/}" != "$current" ] || continue
+    scratchpad=$session/scratchpad
+    [ -d "$scratchpad" ] && [ ! -L "$scratchpad" ] || continue
+    for dir in "$scratchpad"/*/; do
+      dir=${dir%/}
+      [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+      if [ -d "$dir/.git" ]; then
+        prune_dir "$dir"
+      else
+        prune_dir "$dir/target"
+      fi
+    done
+  done
+fi
+
+if [ -n "$skip_reason" ]; then
+  :
+elif $prune_dry; then
+  echo "relay-sweep: would prune $pruned"
+else
+  echo "relay-sweep: pruned $pruned"
+fi
