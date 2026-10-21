@@ -156,30 +156,38 @@ the log, "Merged on 2026-10-20"). `libc` is a direct dependency since
 
 ## Worktrees
 
-Under `.claude/worktrees/`: `issue-79` and `issue-81` (workers running),
-`issue-89` (Ready to integrate, committed and pushed), `issue-88` (FZ-38,
-parked, uncommitted, see "Baton"; the sweep keeps it).
+Under `.claude/worktrees/`: `issue-79` (Ready to integrate, pushed),
+`issue-81` (in review, uncommitted), `issue-90` (worker running),
+`issue-88` (FZ-38, parked, uncommitted, see "Baton"; the sweep keeps
+it). `issue-89` was swept after the merge.
 
 ## In flight
 
-- **#89 FZ-30a** (strip to pane 5): **Ready to integrate** since 13:00,
-  waiting for his look. Worktree `.claude/worktrees/issue-89`, branch
-  `feat/89-strip-to-pane-5`, base `5cce618`, reviewed revision
-  `ad334fc2` committed as `954cc24`, pushed, CI green on the branch,
-  combined check with `main` green (1181 tests). On his OK: merge under
-  the safe-merge rule, then sweep. Authority: his "sure"
-  (11:05) to creating FZ-30a to e (#89 to #93) and running FZ-30a; his
-  "ok with me" to the existing-test edits. #90 to #93 are Backlog; the
-  spec is accepted, so they run in plan order as slots free up (FZ-30b
-  next, FZ-30c after #89 merges).
-- **#79 FZ-03a**: `fz-worker` (`claude-opus-5-5`, medium) dispatched
-  13:10 in `.claude/worktrees/issue-79`, branch
-  `feat/79-date-the-failed-attempt`, base `4b958c1`, option (A) on the
-  four tests. Reviewer next, then Ready to integrate for his look.
-- **#81 FZ-13n**: `fz-worker` (`claude-opus-5-5`, medium) dispatched
-  13:10 in `.claude/worktrees/issue-81`, branch
-  `feat/81-footer-hints-follow-focus`, base `4b958c1`, the two test
-  edits approved. Reviewer next, then Ready to integrate for his look.
+- **#89 FZ-30a** Done: merged `f9c2804` at 13:12 on his "looks good"
+  (record in the log, "Merged on 2026-10-21"). #90 to #93 are Backlog;
+  the spec is accepted, so they run in plan order as slots free up
+  (FZ-30b next, then FZ-30c, now that #89 is in). Authority: his "sure"
+  (11:05) to creating FZ-30a to e and the 2026-10-17 batch 3 approval.
+- **#79 FZ-03a**: **Ready to integrate** since 13:20, waiting for his
+  look at the header. Worktree `.claude/worktrees/issue-79`, branch
+  `feat/79-date-the-failed-attempt`, base `4b958c1`, reviewed revision
+  `b5998cd8` committed as `fb9a21c`, pushed, branch CI green, combined
+  check with `main` (`f9c2804`) green, 1187 tests. On his OK: merge
+  under the safe-merge rule, then sweep.
+- **#81 FZ-13n**: worker done (revision `92954df9`, `src/ui/footer.rs`
+  and `README.md`, the three authorized test edits, 1187 tests);
+  `fz-reviewer` (`claude-opus-5-5`, medium) running since 13:18.
+  Worktree `.claude/worktrees/issue-81`, branch
+  `feat/81-footer-hints-follow-focus`, base `4b958c1`. Then commit,
+  push, CI, combined check, Ready to integrate for his look at the
+  footer.
+- **#90 FZ-30b** (CI data layer, no screen change): `fz-worker`
+  (`claude-opus-5-5`, medium) dispatched 13:16 in
+  `.claude/worktrees/issue-90`, branch `feat/90-ci-data-layer`, base
+  `f9c2804`; five rulings in the assignment comment (invisible until
+  FZ-30c via `ci_folded = true`, dwell, second `ApiBudget` and
+  `GithubBackoff`, `GithubFreshness` per repo, log fetch call site waits
+  for FZ-30d). Reviewer next; merges under the safe-merge rule.
 
 ## Next step, and the order after it
 

@@ -263,6 +263,24 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-10-21
+
+- **#89 (FZ-30a), the contributions strip becomes pane 5.** Merged
+  `f9c2804` at 13:12 CEST; ticket commit `954cc24` (reviewed diff
+  `ad334fc2`), branch `feat/89-strip-to-pane-5` from `5cce618`. First
+  ticket of the CI pane spec
+  (`docs/superpowers/specs/2026-10-21-ci-pane-design.md`, section B),
+  created and run on his "sure" (11:05). `CONTRIBUTIONS_NUM = 5`, the
+  `5` arm, `4` unbound until FZ-30c, README, help and doc comments; six
+  existing tests changed one digit each under his "ok with me"; new
+  handler tests for the `4` no-op and the `5` binding (the second ruled
+  in after review 1 found nothing pressed `5` through the handler).
+  Rulings: the `[4]` grep criterion narrowed to pane tags; `config.rs`
+  joined the allowed files for one comment. Review 1 accepted with the
+  follow-up, review 2 accepted. His look: "looks good" (13:11). Branch
+  CI green; combined check 1181 tests; `main` CI green. Swept.
+  FZ-30a: review accepted first; fix cycles 0; owner decisions 2; worker 12; review 6; usage not read
+
 ### Merged on 2026-10-20
 
 - **#85 (FZ-35b), cap automatic fetches at `fetch_max_mb`, hold big ones
