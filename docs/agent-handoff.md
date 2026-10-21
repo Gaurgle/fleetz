@@ -1,6 +1,6 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-21 16:10 CEST by `claude-fable-5-1` (`claude --agent
+Last written 2026-10-21 20:35 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `6c0bef32-e39d-4d66-98b4-edcb6d119773`) at the
 release of the baton (the stamps of this session ran up to ten minutes
 ahead of the clock at times; commit dates are authoritative). Read
@@ -14,13 +14,16 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Held again** since 2026-10-21 18:55 CEST by `claude-fable-5-1`, the
-same session (`6c0bef32-e39d-4d66-98b4-edcb6d119773`), on Andreas's
-"we can continue. I will be on a party for a while tho, can you keep
-going for 2 hours without me interweining?" (18:52). It had released
-the baton at 16:10 on his "we have to stop here for this tokens
-window". **Unattended run, 18:55 to 21:30:** scope, cap and stop
-conditions under "Authorized by the owner", 18:52.
+**Released** 2026-10-21 20:33 CEST by `claude-fable-5-1` (session
+`6c0bef32-e39d-4d66-98b4-edcb6d119773`) at the end of the unattended
+run he asked for at 18:52 ("keep going for 2 hours without me
+interweining", stop at 21:30): the run ended early at its cap, with
+#93 and #95 both at Ready to integrate for his look and the FZ-14
+spec drafted. **Nothing is running: no worker, no reviewer, no build,
+no background job.** Earlier today the same session held the baton
+10:50 to 16:10 (seven tickets Done) and 18:55 to 20:33. The next lead
+records its own session and takeover time here after confirming with
+Andreas.
 **Nothing is running: no worker, no reviewer, no build, no background
 job.** Seven tickets went Done today (#89, #79, #81, #90, #94, #91,
 #92; records in the log, "Merged on 2026-10-21"). The next lead
@@ -235,20 +238,32 @@ sweep keeps it).
 
 ## In flight
 
-Unattended run (18:55 to 21:30):
+Nothing running. Two tickets wait at **Ready to integrate for his
+look**; both are look changes, so nothing merged unattended:
 
-- **#95 FZ-30f** (inspector jobs/log/script bodies, tab colour to
-  maroon): worker done 19:14 (tracked diff `2beb22a5` over nine files,
-  new `src/ci/fixtures/ci.yml` `9e8a089a`; 1279 tests; 22 new); the
-  worktree's base is `69c1b5b`, not the `7c03cff` the assignment named
-  (docs-only difference). Two things for his look: `[`/`]` cycle the
-  inspector's bodies instead of pane 2's views only while the inspector
-  is focused on a run (a key behaviour change); whole logs are held in
-  memory per session with no cap. `fz-reviewer` (`claude-opus-5-5`,
-  medium) running since 19:15. Then commit, push, CI, combined check
-  (against `main`, and note #93 touches `src/main.rs`, `footer.rs` and
-  `README.md` too: the second to merge is re-verified), Ready to
-  integrate for his look.
+- **#95 FZ-30f** (the inspector's jobs, log and script bodies; the
+  `ci` tab in maroon): review 1 changes requested (four contract
+  guards untested), fix cycle 1 (gate tests, the hex-sha pin, the
+  budget reserve honoured, a 5000-line log cap with the wrap cached
+  per job and width), fix cycle 2 (one test pinning the cache's job
+  id); accepted `43fe030d` plus fixture `9e8a089a`; committed as
+  `fa4f14a` on `feat/95-ci-inspector-bodies` (base `69c1b5b`), pushed
+  19:36; branch CI green; combined with `main` 1287 tests, with #93 on
+  top 1302 tests, no conflicts. For his look: `[`/`]` cycle the bodies
+  instead of pane 2's views only while the inspector is focused on a
+  run; from a focused inspector in `branches`, `]` enters `ci` and
+  then sticks on the bodies; the maroon tab (his "perhaps red"). On
+  his OK: merge under the safe-merge rule, sweep, log; follow-ups to
+  note: a stuck expiry for detail claims, a possible duplicate `/jobs`
+  read, `LOG_TRUNCATED` names `l` (lands with #93).
+- **#93 FZ-30e** (`l`/`a`/`x`/`O` on the highlighted run): accepted
+  `7d39d52d`, committed as `8a5bdac` (base `7c03cff`), pushed 19:13,
+  branch CI green, combined 1271 tests. On his OK: merge, sweep, log.
+  Whichever merges second is re-verified against the new `main` (the
+  pair was checked together: 1302 tests).
+
+Worktrees: `issue-93` and `issue-95` (both committed and pushed),
+`issue-88` (parked). The FZ-14 spec is drafted (next step 3).
 - **#93 FZ-30e** (handoffs `l`/`a`/`x`/`O`): review accepted 19:10
   (rulings 5 to 10 on the issue: the `,` help row reflowed, the `ci`
   footer segment carries the keys and keeps `[[ ]] view`, `l`/`a` gated
@@ -364,27 +379,15 @@ inside the scratchpad and remove it when done.
 
 Nothing starts until Andreas opens the next session.
 
-1. **#95 FZ-30f, the inspector's CI bodies** (jobs, log, script; spec
-   "Amendment 2026-10-21" point 5): the next dispatch, authorized by
-   the standing batch 3 approval and his 16:05 note that the inspector
-   shows nothing yet. Worktree `.claude/worktrees/issue-95` on branch
-   `feat/95-ci-inspector-bodies` from `69c1b5b` is created and empty;
-   no worker was started. Rulings to give at assignment: the `ci` tab
-   colour changes in this ticket to his pick (his "perhaps red?"; the
-   coordinator's reading is Catppuccin maroon, `#eba0ac`, the red
-   family without the failing lamp's `RED`; show him at the look);
-   bodies cycle with `[`/`]` while the inspector is focused, `J`/`K`
-   from pane 2 scroll; the log is fetched once per job id when its body
-   or the failing tail needs it; the script is local first (`git show
-   <sha>:<path>`), the contents API second, held per sha and path; a
-   new crate stops the ticket. The #92 review's optional follow-ups
-   ride along (stale "band" and "CI pane" wording in tests and doc
-   comments; the `info` section test asserting it precedes
-   `worktrees`; the `ci` view's selection wash only with focus, his
-   call).
-2. **#93 FZ-30e, the handoffs** (`l`, `a`, `x`, `O` on the highlighted
-   run), after #95 or beside it in the second slot (they share
-   `src/main.rs` by region: the key arms).
+1. **#95 FZ-30f and #93 FZ-30e: his look, then merge** (see "In
+   flight"). Try: `cargo run --release --manifest-path
+   /Users/at-a/Repos/fleetz/.claude/worktrees/issue-95/Cargo.toml` and
+   the same with `issue-93`. After both merge: `main` CI, sweep, log
+   records, and the `ci` view's selection wash only with focus (from
+   the #92 review) is still his call.
+2. **FZ-30 is then complete** (a to f). The `0.7.0` release is ready
+   to prepare on his word (the CI view, the hints, the header stamp,
+   the handoffs are features).
 3. **FZ-14 attention view spec drafted** (19:00,
    `docs/superpowers/specs/2026-10-21-attention-view-design.md`, comment
    on #27): waits on his answers to its "Open with Andreas" (the reason
