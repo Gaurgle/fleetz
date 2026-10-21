@@ -391,6 +391,34 @@ first (from `git log --merges main`).
   line (coordinator). Branch CI green; combined check 1256 tests;
   `main` CI green. Swept.
   FZ-30c: review accepted first; fix cycles 0; owner decisions 3; worker 42; review 8; usage not read
+- **#92 (FZ-30d), CI as a pane 2 view; the band removed, the strip
+  back to 4.** Merged `69c1b5b` at 16:07 CEST; ticket commit `fa6fbfc`
+  (reviewed diff `b16aa538`), branch `feat/92-ci-pane2-view` from
+  `f51c20f`. The spec's "Amendment 2026-10-21" (his 15:12 and 15:20
+  decision after using the band: a pane 2 page, lazy loading, an `info`
+  section, the inspector for details): `HistoryView::Ci` sixth view
+  (tab in sky, index 5), rows via `ui::ci::run_line`, selection and
+  scroll in the per-view slots over pane 2's shared code, a pinned
+  first line with the freshness mark and the empty states, the clamp
+  on a shorter list; `App::ci_wanted()` (`Detail` view and `ci`
+  showing) gates the trigger, cadence, loading and live states and the
+  stuck expiry through `main.rs::ci_tick`; held runs survive leaving
+  the view; `info` gains a `ci` section after `branches` (`◉ default
+  branch passed` from the pane 1 lamp's fact, static, then the latest
+  run of the three newest branches or `] for runs`; nothing polls);
+  the band, `FocusedPanel::Ci`, `CI_NUM`, `split_docks`, `ci_folded`,
+  `ci_pane` and the band footer segment removed, `CONTRIBUTIONS_NUM`
+  back to 4 with #89's wording, `dock_bottom` kept under
+  `split_main_area`. Fifteen rulings (the #89 and #91 test changes
+  followed the band out; `colors.rs` for the tab; two more existing
+  tests on his "sound sgood to me"; four `detail.rs` tests narrowed or
+  made explicit, the caret test landing the runs fixture; `◉ default
+  branch` wording since the payload holds no branch name, follow-up).
+  Fourteen new tests. Review accepted first (five mutations caught on
+  assertions). His look: "looks great." with the tab colour to change
+  (FZ-30f). Branch CI green; combined check 1256 tests; `main` CI
+  green. Swept.
+  FZ-30d: review accepted first; fix cycles 0; owner decisions 3; worker 25; review 7; usage not read
 
 ### Merged on 2026-10-20
 

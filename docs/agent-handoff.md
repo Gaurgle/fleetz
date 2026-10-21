@@ -1,7 +1,9 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-21 11:05 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `6c0bef32-e39d-4d66-98b4-edcb6d119773`). Read
+Last written 2026-10-21 16:10 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `6c0bef32-e39d-4d66-98b4-edcb6d119773`) at the
+release of the baton (the stamps of this session ran up to ten minutes
+ahead of the clock at times; commit dates are authoritative). Read
 this file, the repository instructions, [agent-workflow.md](agent-workflow.md)
 and [release-plan.md](release-plan.md) before acting. GitHub (the issues and
 the [release Project](https://github.com/users/Gaurgle/projects/1)) is
@@ -12,13 +14,15 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Held** since 2026-10-21 10:50 CEST by `claude-fable-5-1` (session
-`6c0bef32-e39d-4d66-98b4-edcb6d119773`), taken on Andreas's "continue"
-after the file showed the baton released (2026-10-20 14:40 CEST, same
-model, session `08f5d4fe-31ad-4813-8535-0abfc0844250`) and nothing
-running. **Nothing is running: no worker, no reviewer, no build, no
-background job.** The next lead records its own session and takeover
-time here after confirming with Andreas.
+**Released** 2026-10-21 16:10 CEST by `claude-fable-5-1` (session
+`6c0bef32-e39d-4d66-98b4-edcb6d119773`), which held it from 10:50, on
+Andreas's "we have to stop here for this tokens window" and "commit and
+push asap" (about 16:07).
+**Nothing is running: no worker, no reviewer, no build, no background
+job.** Seven tickets went Done today (#89, #79, #81, #90, #94, #91,
+#92; records in the log, "Merged on 2026-10-21"). The next lead
+records its own session and takeover time here after confirming with
+Andreas.
 
 - **Installed binary:** `fleetz 0.6.0`, the tagged build, installed
   2026-10-20 under his one-time release.
@@ -41,6 +45,14 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-21, 16:05.** "looks great. but yes, we need another color
+  for the CI page, perhaps red? and CI page highlight is not showing
+  anything in inspector yet". Read as: #92 accepted and merged
+  (`69c1b5b`); the `ci` tab colour changes in FZ-30f (#95), the
+  coordinator's reading of "perhaps red" being Catppuccin maroon, the
+  red family without the failing lamp's red, for his pick at the look;
+  FZ-30f (the inspector's bodies) dispatched under the standing
+  approval.
 - **2026-10-21, about 15:28 (clock read 15:30).** "sound sgood to me" to the #92 rulings of
   15:19: the `ci` tab in sky and the two further existing-test edits
   (the view-cycle wrap test; #90's `ci_folded` test renamed
@@ -186,19 +198,26 @@ are written into the repository.
 
 ## State of `main`
 
-`main` is `v0.6.0` (`192a838`) plus docs commits, 1179 tests passing and
-1 ignored, CI green. 0.6.0 carries FZ-34 to FZ-37 and FZ-26 (details in
-the log, "Merged on 2026-10-20"). `libc` is a direct dependency since
-#83 (approved). Local toolchain rustc 1.99.0, same as CI's.
+`main` is `69c1b5b` (the merge of #92) plus docs commits, 1256 tests
+passing and 1 ignored; CI on `main` for `69c1b5b` was still running at
+the release (runs 39614008453 and 39614007922; confirm, then sweep
+`issue-92`). Since `v0.6.0` it carries #79 (header dates the failed
+attempt), #81 (footer hints follow focus), #90 (CI data layer), #94
+(relay-sweep prunes scratch builds), #89 and #91 (the band, later
+undone) and #92 (CI as a pane 2 view with an `info` section). The next
+release is `0.7.0`. Local toolchain rustc 1.99.0, same as CI's.
 
 ## Worktrees
 
-Under `.claude/worktrees/`: `issue-79` (Ready to integrate, pushed),
-`issue-81` (in review, uncommitted), `issue-90` (worker running),
-`issue-88` (FZ-38, parked, uncommitted, see "Baton"; the sweep keeps
-it). `issue-89` was swept after the merge.
+Under `.claude/worktrees/`: `issue-92` (merged, sweep once `main` CI is
+confirmed green), `issue-95` (created from `69c1b5b`, empty, no worker
+started), `issue-88` (FZ-38, parked, uncommitted, see "Baton"; the
+sweep keeps it).
 
 ## In flight
+
+**Nothing** (released 16:10). The entries below are today's trail, kept
+for the next lead's orientation; the next lead moves them to the log.
 
 Resumed 13:45 after a disk-full pause (about 13:38 to 13:45): the disk filled
 under a reviewer's scratch build; on his "yes, delete those" the
@@ -297,24 +316,43 @@ inside the scratchpad and remove it when done.
 
 ## Next step, and the order after it
 
-1. **#67 CI pane spec drafted** (2026-10-21 11:30,
-   `docs/superpowers/specs/2026-10-21-ci-pane-design.md`, `1e522f3`,
-   comment on #67). Waits on his answers to its "Open with Andreas":
-   layout A or B, the thirteen existing-test edits for the renumbering,
-   keys, start folded, and the yes to create FZ-30a to e. No worker on
-   #67 before that. The handoff trim is done.
-2. **Batch 3 after #67:** FZ-14 attention view, FZ-15 changes since seen,
-   FZ-16 handoffs, each spec first. Remembered folds (deferred from
-   FZ-13o to the dropped FZ-13m) have no home; ask him if he wants them.
-3. **#88 FZ-38** if he wants it after all (see "Baton").
-4. **#81 and #79** on his answers, each with a fresh worker.
-5. **Follow-up issues** (items 7-10 of 2026-10-17, approved): one measure
-   for width, the ref query cost at 20,000 refs, the small review
-   follow-ups cut into reviewable tickets. Fillers for a free slot. The
-   2026-10-20 follow-ups (log, "Follow-ups found and not ticketed") need
-   his yes.
-6. Batch 4 (FZ-12, FZ-11, the ref query cost), each measured against the
-   FZ-01 baseline. Release scope: later, when Andreas asks.
+Nothing starts until Andreas opens the next session.
+
+1. **#95 FZ-30f, the inspector's CI bodies** (jobs, log, script; spec
+   "Amendment 2026-10-21" point 5): the next dispatch, authorized by
+   the standing batch 3 approval and his 16:05 note that the inspector
+   shows nothing yet. Worktree `.claude/worktrees/issue-95` on branch
+   `feat/95-ci-inspector-bodies` from `69c1b5b` is created and empty;
+   no worker was started. Rulings to give at assignment: the `ci` tab
+   colour changes in this ticket to his pick (his "perhaps red?"; the
+   coordinator's reading is Catppuccin maroon, `#eba0ac`, the red
+   family without the failing lamp's `RED`; show him at the look);
+   bodies cycle with `[`/`]` while the inspector is focused, `J`/`K`
+   from pane 2 scroll; the log is fetched once per job id when its body
+   or the failing tail needs it; the script is local first (`git show
+   <sha>:<path>`), the contents API second, held per sha and path; a
+   new crate stops the ticket. The #92 review's optional follow-ups
+   ride along (stale "band" and "CI pane" wording in tests and doc
+   comments; the `info` section test asserting it precedes
+   `worktrees`; the `ci` view's selection wash only with focus, his
+   call).
+2. **#93 FZ-30e, the handoffs** (`l`, `a`, `x`, `O` on the highlighted
+   run), after #95 or beside it in the second slot (they share
+   `src/main.rs` by region: the key arms).
+3. **Follow-up from #92:** the default branch's name in the `info`
+   line needs `name` on `defaultBranchRef` (free field, payload change,
+   cached payloads must parse without it); ask before creating.
+4. **Batch 3 after FZ-30:** FZ-14 attention view, FZ-15 changes since
+   seen, FZ-16 handoffs, each spec first. Remembered folds (deferred
+   from FZ-13o to the dropped FZ-13m) have no home; ask him.
+5. **#88 FZ-38** if he wants it after all (see "Baton").
+6. **Follow-up issues** (items 7-10 of 2026-10-17, approved): one
+   measure for width, the ref query cost at 20,000 refs, the small
+   review follow-ups cut into reviewable tickets. The 2026-10-20
+   follow-ups (log, "Follow-ups found and not ticketed") need his yes.
+7. Batch 4 (FZ-12, FZ-11, the ref query cost), each measured against
+   the FZ-01 baseline. Release scope: later, when Andreas asks. The
+   next release is `0.7.0` (the CI view and the hints are features).
 
 ## Open with Andreas
 
