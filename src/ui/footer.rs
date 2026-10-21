@@ -4,15 +4,17 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Padding, Paragraph};
 
-use crate::app::{App, ContributionsMode, Overlay, View};
+use crate::app::{App, ContributionsMode, FocusedPanel, HistoryView, Overlay, View};
 use crate::model::{NOT_CLONED, Summary};
 use crate::ui::colors;
 
 /// Render the footer: summary stats on the left, keybind hints on the right.
 ///
-/// Never lets the two sides collide: hints drop their descriptions first
-/// (keys only) when tight, and the summary drops entirely if even that
-/// doesn't fit, rather than risk a negative spacer width.
+/// The hints open with the focused pane's keys (`focus_hints`). Never lets
+/// the two sides collide: when tight, the global keys drop their
+/// descriptions, then the pane's keys do, then the pane's keys go, and the
+/// summary drops entirely if even the bare global keys don't fit, rather
+/// than risk a negative spacer width.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // An in-flight window apply takes over the whole footer with a gauge,
     // so the user sees real-time progress instead of a frozen list.
@@ -55,11 +57,21 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         None => summary_spans(&summary),
     };
 
-    let full_hints = keybind_hints(app, true);
+    // Widest first (Andreas, 2026-10-17): the global row's words go before
+    // the segment's, since they are the same every day and the segment is
+    // the news; the segment goes before the summary, which outranks it.
+    let with_segment = [
+        hints_with_segment(app, true, true),
+        hints_with_segment(app, true, false),
+        hints_with_segment(app, false, false),
+    ];
     let compact_hints = keybind_hints(app, false);
 
-    let (mut spans, hints) = if fits(width, &left, &full_hints) {
-        (left, full_hints)
+    let (mut spans, hints) = if let Some(hints) = with_segment
+        .into_iter()
+        .find(|hints| fits(width, &left, hints))
+    {
+        (left, hints)
     } else if fits(width, &left, &compact_hints) {
         (left, compact_hints)
     } else {
@@ -230,6 +242,81 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
     if with_desc {
         hints.push(Span::styled(" quit", desc_style));
     }
+    hints
+}
+
+/// Between the focused pane's keys and the global ones, wider than the gap
+/// between two keys, so the two groups read apart.
+const SEGMENT_GAP: &str = "   ";
+
+/// The keys that belong to the focused pane, which open the hint row: they
+/// have no room beside what they change, so without this they were only in
+/// the help overlay. Keys the global row already hints are not repeated,
+/// except the strip's `[c]`, which is that pane's own key; it is drawn plain
+/// here, since the global `[c]` is the one that lights in the strip's colour.
+/// The compact view has one grid that takes keys, so it hints the list's
+/// keys unless the strip is focused.
+fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
+    let pane = match (app.view, app.focused_panel) {
+        (_, FocusedPanel::Contributions) => FocusedPanel::Contributions,
+        (View::Compact, _) => FocusedPanel::RepoList,
+        (View::Detail, pane) => pane,
+    };
+    let mut keys: Vec<(String, &str)> = match pane {
+        FocusedPanel::RepoList => vec![
+            ("[j/k]".into(), "move"),
+            ("[/]".into(), "search"),
+            ("[g]".into(), "group"),
+            ("[t]".into(), "window"),
+            ("[e]".into(), "edit"),
+            ("[o]".into(), "shell"),
+        ],
+        FocusedPanel::Detail => vec![
+            ("[j/k]".into(), "commit"),
+            ("[[ ]]".into(), "view"),
+            ("[J/K]".into(), "inspector"),
+        ],
+        FocusedPanel::Inspector => vec![
+            ("[j/k]".into(), "scroll"),
+            ("[+/-]".into(), "size"),
+            (format!("[{}]", crate::ui::INSPECTOR_NUM), "fold"),
+        ],
+        FocusedPanel::Contributions => vec![
+            ("[h/l]".into(), "week"),
+            ("[j/k]".into(), "day"),
+            ("[Home/End]".into(), "ends"),
+            ("[c]".into(), "source"),
+            (format!("[{}]", crate::ui::CONTRIBUTIONS_NUM), "fold"),
+        ],
+    };
+    // `B` folds `info`'s remote branch summary and does nothing elsewhere.
+    if pane == FocusedPanel::Detail && app.history_view == HistoryView::Info {
+        keys.push(("[B]".into(), "remotes"));
+    }
+
+    let key_style = Style::default()
+        .fg(colors::TEXT)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(colors::OVERLAY);
+    let gap = if with_desc { "  " } else { " " };
+    let mut hints = Vec::new();
+    for (i, (key, desc)) in keys.into_iter().enumerate() {
+        if i > 0 {
+            hints.push(Span::raw(gap));
+        }
+        hints.push(Span::styled(key, key_style));
+        if with_desc {
+            hints.push(Span::styled(format!(" {desc}"), desc_style));
+        }
+    }
+    hints
+}
+
+/// The focused pane's keys, the segment gap, then the global keys.
+fn hints_with_segment(app: &App, segment_desc: bool, global_desc: bool) -> Vec<Span<'static>> {
+    let mut hints = focus_hints(app, segment_desc);
+    hints.push(Span::raw(SEGMENT_GAP));
+    hints.extend(keybind_hints(app, global_desc));
     hints
 }
 
@@ -496,7 +583,8 @@ mod tests {
             "no multi-byte glyph"
         );
         let full = text(&keybind_hints(&app, true));
-        let width = snug_width(&summary, &full);
+        let segment = text(&focus_hints(&app, true));
+        let width = snug_width(&summary, &format!("{segment}{SEGMENT_GAP}{full}"));
 
         let row = footer_row(&app, width);
         assert!(row.contains(&summary), "summary dropped: {row:?}");
@@ -531,7 +619,7 @@ mod tests {
     #[test]
     fn the_hints_end_at_the_right_edge_beside_a_glyph_summary() {
         let app = app_with_glyph_summary();
-        let width = 160u16;
+        let width = 220u16;
         let row = footer_row(&app, width);
         let right_edge = width as usize - crate::ui::PANE_CONTENT_INSET as usize;
         let drawn = row.trim_end().chars().count();
@@ -546,7 +634,7 @@ mod tests {
     fn the_footer_drops_descriptions_before_the_summary() {
         let app = app_with_glyph_summary();
         let mut states: Vec<(bool, bool)> = Vec::new();
-        for width in (20u16..=160).rev() {
+        for width in (20u16..=260).rev() {
             let row = footer_row(&app, width);
             let state = (row.contains("synced"), row.contains(" lazygit"));
             if states.last() != Some(&state) {
@@ -554,6 +642,198 @@ mod tests {
             }
         }
         assert_eq!(states, vec![(true, true), (true, false), (false, false)]);
+    }
+
+    /// Wide enough for every pane's segment and the global row, both with
+    /// descriptions, beside the glyph summary.
+    const WIDE: u16 = 260;
+
+    const LIST_SEGMENT: &str = "[j/k] move  [/] search  [g] group  [t] window  [e] edit  [o] shell";
+    const LIST_SEGMENT_BARE: &str = "[j/k] [/] [g] [t] [e] [o]";
+    const REPO_SEGMENT_INFO: &str = "[j/k] commit  [[ ]] view  [J/K] inspector  [B] remotes";
+    const REPO_SEGMENT_COMMITS: &str = "[j/k] commit  [[ ]] view  [J/K] inspector";
+
+    fn inspector_segment() -> String {
+        format!(
+            "[j/k] scroll  [+/-] size  [{}] fold",
+            crate::ui::INSPECTOR_NUM
+        )
+    }
+
+    fn strip_segment() -> String {
+        format!(
+            "[h/l] week  [j/k] day  [Home/End] ends  [c] source  [{}] fold",
+            crate::ui::CONTRIBUTIONS_NUM
+        )
+    }
+
+    /// The hint row as drawn, for an app with no summary: everything but
+    /// the inset and the spacer.
+    fn hint_row(app: &App, width: u16) -> String {
+        footer_row(app, width).trim().to_string()
+    }
+
+    fn global_row(app: &App) -> String {
+        text(&keybind_hints(app, true))
+    }
+
+    #[test]
+    fn the_focused_repo_list_opens_the_row_with_its_keys() {
+        let app = app_in(View::Detail);
+        assert_eq!(app.focused_panel, crate::app::FocusedPanel::RepoList);
+        assert_eq!(
+            hint_row(&app, WIDE),
+            format!("{LIST_SEGMENT}   {}", global_row(&app))
+        );
+    }
+
+    #[test]
+    fn the_focused_inspector_opens_the_row_with_its_keys() {
+        let mut app = app_in(View::Detail);
+        app.focused_panel = crate::app::FocusedPanel::Inspector;
+        assert_eq!(
+            hint_row(&app, WIDE),
+            format!("{}   {}", inspector_segment(), global_row(&app))
+        );
+    }
+
+    #[test]
+    fn the_focused_strip_opens_the_row_with_its_keys() {
+        let mut app = app_in(View::Detail);
+        app.focused_panel = crate::app::FocusedPanel::Contributions;
+        assert_eq!(
+            hint_row(&app, WIDE),
+            format!("{}   {}", strip_segment(), global_row(&app))
+        );
+    }
+
+    /// `B` folds `info`'s remote branch summary and does nothing elsewhere,
+    /// so it is hinted only in that view.
+    #[test]
+    fn the_repo_pane_hints_remotes_only_in_info() {
+        let mut app = app_in(View::Detail);
+        app.focused_panel = crate::app::FocusedPanel::Detail;
+        app.history_view = crate::app::HistoryView::Info;
+        assert_eq!(
+            hint_row(&app, WIDE),
+            format!("{REPO_SEGMENT_INFO}   {}", global_row(&app))
+        );
+        app.history_view = crate::app::HistoryView::Commits;
+        let row = hint_row(&app, WIDE);
+        assert_eq!(
+            row,
+            format!("{REPO_SEGMENT_COMMITS}   {}", global_row(&app))
+        );
+        assert!(!row.contains("[B]"), "{row:?}");
+    }
+
+    /// The compact view has one grid that takes keys, plus the strip.
+    #[test]
+    fn the_compact_view_hints_the_list_or_the_focused_strip() {
+        let mut app = app_in(View::Compact);
+        assert_eq!(
+            hint_row(&app, WIDE),
+            format!("{LIST_SEGMENT}   {}", global_row(&app))
+        );
+        app.focused_panel = crate::app::FocusedPanel::Contributions;
+        assert_eq!(
+            hint_row(&app, WIDE),
+            format!("{}   {}", strip_segment(), global_row(&app))
+        );
+    }
+
+    /// The owner's order of 2026-10-17, widest first: the global row's
+    /// words go before the segment's, the segment's before the segment,
+    /// and the summary last. Read from the drawn footer at every width for
+    /// every pane, so a reordering, or a skipped step, fails.
+    #[test]
+    fn the_footer_degrades_in_the_owners_order_in_every_pane() {
+        use crate::app::{FocusedPanel, HistoryView};
+        let panes = [
+            (FocusedPanel::RepoList, LIST_SEGMENT.to_string()),
+            (FocusedPanel::Detail, REPO_SEGMENT_INFO.to_string()),
+            (FocusedPanel::Inspector, inspector_segment()),
+            (FocusedPanel::Contributions, strip_segment()),
+        ];
+        for (pane, segment) in panes {
+            let mut app = app_with_glyph_summary();
+            app.focused_panel = pane;
+            app.history_view = HistoryView::Info;
+            // The first key and the first description, which no other
+            // pane's segment or the global row draws in that place.
+            let first_key = segment.split(' ').next().unwrap().to_string();
+            let first_desc: String = segment.split("  ").next().unwrap().to_string();
+            let mut states: Vec<(bool, bool, bool, bool)> = Vec::new();
+            for width in (20u16..=300).rev() {
+                let row = footer_row(&app, width);
+                let state = (
+                    row.contains(&first_key),
+                    row.contains(&format!("{first_desc}  ")),
+                    row.contains(" lazygit"),
+                    row.contains("synced"),
+                );
+                if states.last() != Some(&state) {
+                    states.push(state);
+                }
+            }
+            assert_eq!(
+                states,
+                vec![
+                    (true, true, true, true),
+                    (true, true, false, true),
+                    (true, false, false, true),
+                    (false, false, false, true),
+                    (false, false, false, false),
+                ],
+                "{pane:?}"
+            );
+        }
+    }
+
+    /// Where the segment does not fit even bare, the footer is exactly the
+    /// row it drew before the segment existed: the summary beside the bare
+    /// keys, then the bare keys alone.
+    #[test]
+    fn without_room_for_the_segment_the_row_is_todays() {
+        let app = app_with_glyph_summary();
+        let summary = text(&summary_spans(&app.summary()));
+        let keys = text(&keybind_hints(&app, false));
+        let inset = crate::ui::PANE_CONTENT_INSET as usize;
+        let n = |s: &str| s.chars().count();
+        // The narrowest width the bare segment fits at, beside the summary.
+        let segment_from = 2 * inset + n(&summary) + n(LIST_SEGMENT_BARE) + n("   ") + n(&keys) + 1;
+        let mut with_summary = 0;
+        let mut without = 0;
+        for width in (2 * inset + n(&keys) + 1)..segment_from {
+            let content = width - 2 * inset;
+            let left = if n(&summary) + n(&keys) < content {
+                with_summary += 1;
+                summary.clone()
+            } else {
+                without += 1;
+                String::new()
+            };
+            let spacer = " ".repeat(content - n(&left) - n(&keys));
+            let pad = " ".repeat(inset);
+            let today = format!("{pad}{left}{spacer}{keys}{pad}");
+            assert_eq!(footer_row(&app, width as u16), today, "at {width}");
+        }
+        assert!(with_summary > 0 && without > 0);
+    }
+
+    /// The strip's segment names `c` as that pane's key, but plainly: the
+    /// global row's `[c]` is the one that lights in the strip's colour.
+    #[test]
+    fn the_strip_segment_draws_c_in_the_plain_key_style() {
+        let mut app = app_in(View::Detail);
+        app.focused_panel = crate::app::FocusedPanel::Contributions;
+        app.contributions_folded = false;
+        app.contributions = ContributionsMode::Github;
+        let c = focus_hints(&app, true)
+            .into_iter()
+            .find(|s| s.content == "[c]")
+            .expect("[c] in the strip segment");
+        assert_eq!(c.style.fg, Some(colors::TEXT));
     }
 
     #[test]

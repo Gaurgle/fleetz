@@ -220,7 +220,9 @@ fleetz --watch                        # live dashboard, auto-refreshes
 The footer hints the global keys. A key whose action has an "on" state lights
 up green while it is on (`r` and `R` in flight, `v` in the compact view, `?`
 with help open); `c` lights in the strip's own colour. Watch shows its state
-in the header instead.
+in the header instead. The row opens with the focused pane's own keys; as
+the terminal narrows, the global keys lose their descriptions first, then the
+pane's keys lose theirs, then the pane's keys go, and the summary goes last.
 
 | Key | Action |
 |-----|--------|
