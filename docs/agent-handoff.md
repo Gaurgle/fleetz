@@ -388,7 +388,17 @@ Nothing starts until Andreas opens the next session.
 2. **FZ-30 is then complete** (a to f). The `0.7.0` release is ready
    to prepare on his word (the CI view, the hints, the header stamp,
    the handoffs are features).
-3. **FZ-14 attention view spec drafted** (19:00,
+3. **His feature of 20:38, not yet ticketed (ask before creating):**
+   "per script, see the actual code (linting, lsp and highlight might
+   be needed?) to watch the actual CI script code". Coordinator's
+   reading, offered in chat: (a) syntax colour for the inspector's
+   script body with a small YAML tokenizer of our own (keys, strings,
+   comments, `run:` blocks), no crate, an easy FZ-30g; (b) linting via
+   `actionlint`: a handoff through suspend-and-run, or run in the
+   background when on PATH with its diagnostics drawn as marks in the
+   body, a medium FZ-30h; (c) an LSP in the TUI: not recommended. His
+   pick needed.
+4. **FZ-14 attention view spec drafted** (19:00,
    `docs/superpowers/specs/2026-10-21-attention-view-design.md`, comment
    on #27): waits on his answers to its "Open with Andreas" (the reason
    table, section versus tag, the fetch two-failure rule, creating
