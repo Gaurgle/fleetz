@@ -211,6 +211,7 @@ pub fn github_freshness_segment(
     match (&freshness.outcome, freshness.data_time) {
         (Outcome::Failed(failure), data_time) => Some(failed_segment(
             github_failure_label(failure),
+            freshness.last_attempt,
             data_time,
             now,
         )),
@@ -228,17 +229,21 @@ pub fn github_freshness_segment(
     }
 }
 
-/// The stale form: the failure's words and the age of the data on screen.
+/// The stale form: the failure's words, when the failed attempt was
+/// (`at 12:02`, always, however recent; #79), and the age of the data on
+/// screen. Both times are written the way `swept_label` writes them.
 fn failed_segment(
     label: &str,
+    attempt: Option<chrono::DateTime<chrono::Local>>,
     data_time: crate::app::DataTime,
     now: chrono::DateTime<chrono::Local>,
 ) -> (String, String, Color) {
     use crate::app::DataTime;
+    let stamp = attempt.map_or(String::new(), |t| format!(" at {}", swept_label(t, now)));
     let long = match data_time {
-        DataTime::At(t) => format!(" ⚠ github {label}, as of {} ", swept_label(t, now)),
-        DataTime::Unknown => format!(" ⚠ github {label}, age unknown "),
-        DataTime::NoData => format!(" ⚠ github {label} "),
+        DataTime::At(t) => format!(" ⚠ github {label}{stamp}, as of {} ", swept_label(t, now)),
+        DataTime::Unknown => format!(" ⚠ github {label}{stamp}, age unknown "),
+        DataTime::NoData => format!(" ⚠ github {label}{stamp} "),
     };
     (long, " ⚠ github ".to_string(), colors::PEACH)
 }
@@ -248,6 +253,7 @@ fn failed_segment(
 ///
 /// - Rate limited: the failure form with when polling resumes, while the
 ///   limit lasts, with watch on or off, since `r` and `R` wait for it too.
+///   That form drops the attempt stamp; it returns once the limit passes.
 /// - Paused at the reserve, or with too little left for one poll: until the
 ///   reset. `PEACH` like a failure, without its `⚠`: nothing failed, but
 ///   the data will age until then.
@@ -275,7 +281,9 @@ pub fn github_segment(
                 github_failure_label(failure),
                 swept_label(until, now)
             );
-            return Some(failed_segment(&label, freshness.data_time, now));
+            // No attempt stamp while the limit lasts: the resume time is
+            // the one that matters, and two clock times in a row read badly.
+            return Some(failed_segment(&label, None, freshness.data_time, now));
         }
         return github_freshness_segment(freshness, now);
     }
@@ -1980,7 +1988,7 @@ mod tests {
         freshness.succeeded(at(2026, 10, 1, 14, 2));
         freshness.failed(failure(crate::github::FailureKind::Offline, "dns"), now);
         let (long, short, color) = github_freshness_segment(&freshness, now).unwrap();
-        assert_eq!(long, " ⚠ github offline, as of 14:02 ");
+        assert_eq!(long, " ⚠ github offline at 14:30, as of 14:02 ");
         assert_eq!(short, " ⚠ github ");
         assert_eq!(color, colors::PEACH);
     }
@@ -1997,7 +2005,94 @@ mod tests {
             now,
         );
         let (long, _, _) = github_freshness_segment(&freshness, now).unwrap();
-        assert_eq!(long, " ⚠ github rate limited, age unknown ");
+        assert_eq!(long, " ⚠ github rate limited at 14:30, age unknown ");
+    }
+
+    /// #79. The failure is dated by the attempt that failed, not only by the
+    /// data it left on screen: an hour-old offline verdict and one from this
+    /// minute used to read the same.
+    #[test]
+    fn a_failed_header_says_when_the_attempt_failed() {
+        let now = at(2026, 10, 1, 12, 30);
+        let mut freshness = crate::app::GithubFreshness::default();
+        freshness.succeeded(at(2026, 10, 1, 11, 2));
+        freshness.failed(
+            failure(crate::github::FailureKind::Offline, "dns"),
+            at(2026, 10, 1, 12, 2),
+        );
+        let (long, short, color) = github_freshness_segment(&freshness, now).unwrap();
+        assert_eq!(long, " ⚠ github offline at 12:02, as of 11:02 ");
+        assert_eq!(short, " ⚠ github ");
+        assert_eq!(color, colors::PEACH);
+    }
+
+    /// #79. No threshold: an attempt seconds old is stamped too.
+    #[test]
+    fn a_failed_attempt_seconds_old_is_stamped_too() {
+        let now = at(2026, 10, 1, 12, 2) + chrono::Duration::seconds(5);
+        let mut freshness = crate::app::GithubFreshness::default();
+        freshness.succeeded(at(2026, 10, 1, 11, 2));
+        freshness.failed(
+            failure(crate::github::FailureKind::Offline, "dns"),
+            at(2026, 10, 1, 12, 2),
+        );
+        let (long, _, _) = github_freshness_segment(&freshness, now).unwrap();
+        assert_eq!(long, " ⚠ github offline at 12:02, as of 11:02 ");
+    }
+
+    /// #79. Data of unknown age keeps saying so after the stamp.
+    #[test]
+    fn a_failed_attempt_on_data_of_unknown_age_is_stamped() {
+        let now = at(2026, 10, 1, 12, 30);
+        let mut freshness = crate::app::GithubFreshness::default();
+        freshness.loaded(&crate::app::DatasetSource::Cache { written: None }, now);
+        freshness.failed(
+            failure(crate::github::FailureKind::Offline, "dns"),
+            at(2026, 10, 1, 12, 2),
+        );
+        let (long, _, _) = github_freshness_segment(&freshness, now).unwrap();
+        assert_eq!(long, " ⚠ github offline at 12:02, age unknown ");
+    }
+
+    /// #79. With no data at all there is no data part, only the stamp.
+    #[test]
+    fn a_failed_attempt_with_no_data_is_stamped() {
+        let now = at(2026, 10, 1, 12, 30);
+        let mut freshness = crate::app::GithubFreshness::default();
+        freshness.failed(
+            failure(crate::github::FailureKind::Offline, "dns"),
+            at(2026, 10, 1, 12, 2),
+        );
+        let (long, _, _) = github_freshness_segment(&freshness, now).unwrap();
+        assert_eq!(long, " ⚠ github offline at 12:02 ");
+    }
+
+    /// #79. A failure with no attempt recorded (built by hand: no real path
+    /// sets one without the other) renders as before, with no stamp.
+    #[test]
+    fn a_failure_with_no_attempt_recorded_has_no_stamp() {
+        let now = at(2026, 10, 1, 12, 30);
+        let mut freshness = crate::app::GithubFreshness::default();
+        freshness.data_time = crate::app::DataTime::At(at(2026, 10, 1, 11, 2));
+        freshness.outcome =
+            crate::app::Outcome::Failed(failure(crate::github::FailureKind::Offline, "dns"));
+        assert_eq!(freshness.last_attempt, None);
+        let (long, _, _) = github_freshness_segment(&freshness, now).unwrap();
+        assert_eq!(long, " ⚠ github offline, as of 11:02 ");
+    }
+
+    /// #79. An attempt on another day carries its date, as `swept` does.
+    #[test]
+    fn a_failed_attempt_from_yesterday_carries_its_date() {
+        let now = at(2026, 10, 2, 9, 0);
+        let mut freshness = crate::app::GithubFreshness::default();
+        freshness.succeeded(at(2026, 10, 1, 11, 2));
+        freshness.failed(
+            failure(crate::github::FailureKind::Offline, "dns"),
+            at(2026, 10, 1, 12, 2),
+        );
+        let (long, _, _) = github_freshness_segment(&freshness, now).unwrap();
+        assert_eq!(long, " ⚠ github offline at Oct 1 12:02, as of Oct 1 11:02 ");
     }
 
     /// A jitter that draws nothing, so a resume is the reset to the second.
@@ -2057,7 +2152,7 @@ mod tests {
         // Once the limit has passed the time goes; the failure stays until a
         // poll succeeds.
         let (long, _, _) = github_segment(&app, at(2026, 10, 1, 15, 1)).unwrap();
-        assert_eq!(long, " ⚠ github rate limited, as of 14:02 ");
+        assert_eq!(long, " ⚠ github rate limited at 14:10, as of 14:02 ");
     }
 
     /// FZ-10c, 4.6. Paused at the reserve: polls succeed, but none goes again
@@ -2108,7 +2203,7 @@ mod tests {
             app.github_freshness.failed(failed, now);
         }
         let (long, _, color) = github_segment(&app, at(2026, 10, 1, 14, 14)).unwrap();
-        assert_eq!(long, " ⚠ github server error, as of 14:02 ");
+        assert_eq!(long, " ⚠ github server error at 14:13, as of 14:02 ");
         assert_eq!(color, colors::PEACH);
     }
 

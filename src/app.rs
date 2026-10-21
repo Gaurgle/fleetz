@@ -1250,7 +1250,8 @@ pub enum DatasetSource {
 pub struct GithubFreshness {
     pub data_time: DataTime,
     /// When the most recent attempt finished or was given up on. Drives the
-    /// retry clock and nothing else; a cache read never sets it.
+    /// retry clock and the budget's pace, and dates a failure in the header
+    /// (`offline at 12:02`, #79); a cache read never sets it.
     pub last_attempt: Option<DateTime<Local>>,
     pub outcome: Outcome,
     /// The id handed to the newest background poll started.
