@@ -316,6 +316,26 @@ first (from `git log --merges main`).
   `docs/ideas.md` "Header noise" amended on `main` after acceptance.
   Branch CI green; combined check 1195 tests; `main` CI green. Swept.
   FZ-13n: review accepted first; fix cycles 0; owner decisions 3; worker 8; review 6; usage not read
+- **#90 (FZ-30b), the CI data layer.** Merged `d3816ca` at 13:50 CEST;
+  ticket commit `ea5a78f` (tracked diff `1c4b3543`, `src/ci.rs`
+  `67323f4d`, fixtures under `src/ci/fixtures/`), branch
+  `feat/90-ci-data-layer` from `f9c2804`. Spec sections C and D: REST
+  Actions fetch with `ETag`/`If-None-Match` (a 304 is free, measured
+  again: `X-Ratelimit-Used` 48, 51, 51, 52 across 200, 304, 304, 200;
+  runs list 117,631 bytes at `per_page=10`, jobs 2,230), serde types,
+  the log tail cut to the failing step (`##[group]` to the last
+  `##[error]`, ANSI stripped), per-repo `CiState` with
+  `GithubFreshness`, cadence as pure functions, a second `ApiBudget`
+  and `GithubBackoff`, `AppEvent::Ci`, the trigger gated on `ci_folded`
+  (default true, so nothing polls). `pub(crate)` on five `github.rs`
+  functions. 38 new tests, no existing test touched; eleven rulings
+  (five at assignment, six on the worker's decisions). Review accepted
+  first; its mutation runs were cut short by the disk filling under
+  its scratch build (freed at 13:45 on his word). Follow-ups to FZ-30c:
+  stuck-expiry for `inflight`, token per session, redraw on the event,
+  per-repo backoff, `data_time` on a partial failure. Branch CI green;
+  combined check 1231 tests; `main` CI green. Swept.
+  FZ-30b: review accepted first; fix cycles 0; owner decisions 0; worker 19; review 5; usage not read
 
 ### Merged on 2026-10-20
 

@@ -161,22 +161,16 @@ Under `.claude/worktrees/`: `issue-79` (Ready to integrate, pushed),
 `issue-88` (FZ-38, parked, uncommitted, see "Baton"; the sweep keeps
 it). `issue-89` was swept after the merge.
 
-## Paused 2026-10-21 about 13:50 CEST on Andreas's "paus"
-
-The disk filled at about 13:45 (ENOSPC; a reviewer's scratch build
-under the session scratchpad, `mut-target`, was the last writer). No
-command runs until space is freed; he was told and asked before
-anything is deleted. Nothing is running: no worker, no reviewer, no
-background job. **Uncommitted and accepted:** #90's revision in
-`.claude/worktrees/issue-90` (tracked diff `1c4b3543`, untracked
-`src/ci.rs` and `src/ci/fixtures/*`), review accepted 13:47 with three
-low follow-ups for FZ-30c (stuck-expiry for the per-repo CI lock,
-`data_time` on a partial failure, one backoff ladder across repos).
-Resume: free space (his word), commit #90 staging the four new files,
-push, CI, combined check, merge; confirm `main` CI for the #81 merge
-(`599dc2e`, never watched) and sweep `issue-81`; then FZ-30c.
-
 ## In flight
+
+Resumed 13:45 after a disk-full pause (about 13:38 to 13:45): the disk filled
+under a reviewer's scratch build; on his "yes, delete those" the
+coordinator removed yesterday's 14 GB session scratchpad, this
+session's throwaway clones and the three worktree `target/` dirs
+(22 GB free after). Lesson for every lead: scratch clones and their
+builds go under the session scratchpad and are removed after each
+check, and a reviewer's scratch build must set `CARGO_TARGET_DIR`
+inside the scratchpad and remove it when done.
 
 - **#89 FZ-30a** Done: merged `f9c2804` at 13:12 on his "looks good"
   (record in the log, "Merged on 2026-10-21"). #90 to #93 are Backlog;
@@ -191,13 +185,19 @@ push, CI, combined check, merge; confirm `main` CI for the #81 merge
   (`claude-opus-5-5`, medium) dispatched 13:16 in
   `.claude/worktrees/issue-90`, branch `feat/90-ci-data-layer`, base
   `f9c2804`; five rulings in the assignment comment and six more on the
-  worker's decisions (13:40, all accepted). Worker done: tracked diff
-  `1c4b3543` plus untracked `src/ci.rs` and three fixtures under
-  `src/ci/fixtures/`, 38 new tests, 1217 passed. `fz-reviewer`
-  (`claude-opus-5-5`, medium) running since 13:41. Then commit (stage
-  the four new files explicitly), push, CI, combined check, merge under
-  the safe-merge rule (no screen change). Follow-ups carried to FZ-30c:
-  cache the `gh` token per session; `AppEvent::Ci` requests a redraw.
+  worker's decisions (about 13:37, all accepted). Review accepted about
+  13:40 (tracked diff `1c4b3543`, `src/ci.rs` `67323f4d`, three
+  fixtures under `src/ci/fixtures/`; 1217 tests). Committed as
+  `ea5a78f`, pushed 13:46; branch CI green; combined check 1231 tests.
+  **Done: merged `d3816ca` at 13:50** (record in the log); `main` CI
+  run 39594726330 watched, sweep after.
+- **#91 FZ-30c** (the CI pane band): `fz-worker` (`claude-opus-5-5`,
+  medium) dispatched 13:53 in `.claude/worktrees/issue-91`, branch
+  `feat/91-ci-pane-band`, base `d3816ca`; seven rulings in the
+  assignment comment (layout A, pane 4, `ci_pane`, the run list, the
+  footer segment, the #90 follow-ups, the Tab-walk test edits; any
+  other existing test stops the worker). Reviewer next, then Ready to
+  integrate for his look (a new pane). #92 and #93 follow.
 
 ## Next step, and the order after it
 
