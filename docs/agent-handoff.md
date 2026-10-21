@@ -146,9 +146,12 @@ Nothing.
 
 ## Next step, and the order after it
 
-1. **Trim the handoff** (done 2026-10-21) and **write the #67 CI pane
-   spec** under `docs/superpowers/specs/` for Andreas's approval; no
-   worker on #67 before he approves it. Under his "doesnt matter to me".
+1. **#67 CI pane spec drafted** (2026-10-21 11:30,
+   `docs/superpowers/specs/2026-10-21-ci-pane-design.md`, `1e522f3`,
+   comment on #67). Waits on his answers to its "Open with Andreas":
+   layout A or B, the thirteen existing-test edits for the renumbering,
+   keys, start folded, and the yes to create FZ-30a to e. No worker on
+   #67 before that. The handoff trim is done.
 2. **Batch 3 after #67:** FZ-14 attention view, FZ-15 changes since seen,
    FZ-16 handoffs, each spec first. Remembered folds (deferred from
    FZ-13o to the dropped FZ-13m) have no home; ask him if he wants them.
