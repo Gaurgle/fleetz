@@ -240,8 +240,18 @@ inside the scratchpad and remove it when done.
   caught). Committed as `393c110`, pushed 14:59. **Done: merged
   `a0526eb` at 15:08 on his "this looks great!"** (record in the log);
   `main` CI watched, sweep after; the `CLAUDE.md` invariant line
-  updated by the coordinator. Next: amend spec section E for the
-  inspector design (his 15:07 request), update #92, dispatch it. Five optional follow-ups carried to #92 (cursor clamp
+  updated by the coordinator.
+- **#92 FZ-30d** (CI as the sixth pane 2 view, the band removed, the
+  strip back to 4, lazy polling, the `info` section): body rewritten
+  15:27 for the spec amendment; `fz-worker` (`claude-opus-5-5`, medium)
+  dispatched 15:29 in `.claude/worktrees/issue-92`, branch
+  `feat/92-ci-pane2-view`, base `f51c20f`; six rulings in the
+  assignment comment (the #89 and #91 test changes follow the band out,
+  pre-authorized as the consequence of his decision). Reviewer next,
+  then Ready to integrate for his look. After it: #95 FZ-30f (the
+  inspector's jobs/log/script bodies, created 15:27, Backlog) and #93
+  FZ-30e (handoffs, reworded). `CLAUDE.md`'s invariant line goes back
+  to naming `split_main_area` at the merge (coordinator). Five optional follow-ups carried to #92 (cursor clamp
   test; wheel re-entry; divider grab zone over the band; polling keyed
   off the config fold, not the drawn one; token kept across
   `gh auth switch`); `CLAUDE.md`'s panel_rects invariant must name
