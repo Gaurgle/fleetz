@@ -235,8 +235,29 @@ sweep keeps it).
 
 ## In flight
 
-**Nothing** (released 16:10). The entries below are today's trail, kept
-for the next lead's orientation; the next lead moves them to the log.
+Unattended run (18:55 to 21:30):
+
+- **#95 FZ-30f** (inspector jobs/log/script bodies, tab colour to
+  maroon): `fz-worker` (`claude-opus-5-5`, medium) running since 18:58
+  in `.claude/worktrees/issue-95`, branch `feat/95-ci-inspector-bodies`,
+  base `7c03cff`; seven rulings in the assignment comment plus one in
+  chat (no help.rs row: the overlay is full; the body hint goes in the
+  inspector's footer segment). Reviewer next, then Ready to integrate
+  for his look.
+- **#93 FZ-30e** (handoffs `l`/`a`/`x`/`O`): worker done (diff
+  `c5706021`, 1270 tests; rulings 5 to 8 on #93: the `,` help row
+  reflowed to free a line, the `ci` footer segment carries the keys and
+  keeps `[[ ]] view`, `l`/`a` gated on completed runs); `fz-reviewer`
+  (`claude-opus-5-5`, medium) running since 19:04 in
+  `.claude/worktrees/issue-93`, branch `feat/93-ci-handoffs`, base
+  `7c03cff`. Then commit, push, CI, combined check, Ready to integrate
+  for his look. Both tickets touch `src/main.rs` (by region),
+  `README.md` and `src/ui/footer.rs` (different arms); the second to
+  integrate is re-verified against the new `main` and may need a
+  rebase of the help/README rows.
+
+The entries below are today's earlier trail, kept for the next lead's
+orientation; the next lead moves them to the log.
 
 Resumed 13:45 after a disk-full pause (about 13:38 to 13:45): the disk filled
 under a reviewer's scratch build; on his "yes, delete those" the
