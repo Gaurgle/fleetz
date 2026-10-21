@@ -238,20 +238,26 @@ sweep keeps it).
 Unattended run (18:55 to 21:30):
 
 - **#95 FZ-30f** (inspector jobs/log/script bodies, tab colour to
-  maroon): `fz-worker` (`claude-opus-5-5`, medium) running since 18:58
-  in `.claude/worktrees/issue-95`, branch `feat/95-ci-inspector-bodies`,
-  base `7c03cff`; seven rulings in the assignment comment plus one in
-  chat (no help.rs row: the overlay is full; the body hint goes in the
-  inspector's footer segment). Reviewer next, then Ready to integrate
-  for his look.
+  maroon): worker done 19:14 (tracked diff `2beb22a5` over nine files,
+  new `src/ci/fixtures/ci.yml` `9e8a089a`; 1279 tests; 22 new); the
+  worktree's base is `69c1b5b`, not the `7c03cff` the assignment named
+  (docs-only difference). Two things for his look: `[`/`]` cycle the
+  inspector's bodies instead of pane 2's views only while the inspector
+  is focused on a run (a key behaviour change); whole logs are held in
+  memory per session with no cap. `fz-reviewer` (`claude-opus-5-5`,
+  medium) running since 19:15. Then commit, push, CI, combined check
+  (against `main`, and note #93 touches `src/main.rs`, `footer.rs` and
+  `README.md` too: the second to merge is re-verified), Ready to
+  integrate for his look.
 - **#93 FZ-30e** (handoffs `l`/`a`/`x`/`O`): review accepted 19:10
   (rulings 5 to 10 on the issue: the `,` help row reflowed, the `ci`
   footer segment carries the keys and keeps `[[ ]] view`, `l`/`a` gated
   on completed runs, the `timed_out`/`cancelled` test ruled in);
   re-review accepted `7d39d52d`; committed as `8a5bdac`, pushed 19:13;
-  branch CI and the combined check in progress; then **Ready to
-  integrate for his look** (new keys; nothing merges unattended).
-  Worktree `.claude/worktrees/issue-93`, base `7c03cff`. Both tickets touch `src/main.rs` (by region),
+  branch CI green; combined check with `main` green (1271 tests).
+  **Ready to integrate since 19:15, waiting for his look** (new keys;
+  nothing merges unattended). Worktree `.claude/worktrees/issue-93`,
+  base `7c03cff`. Both tickets touch `src/main.rs` (by region),
   `README.md` and `src/ui/footer.rs` (different arms); the second to
   integrate is re-verified against the new `main` and may need a
   rebase of the help/README rows.
