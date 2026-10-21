@@ -259,8 +259,15 @@ inside the scratchpad and remove it when done.
   `the_ci_poll_waits_for_the_ci_view`; `ci_wanted` requires the Detail
   view; `ALL` loops fix the code). Clock note: the 15:27 to 15:29 stamps
   on #92, #67 and here ran about ten minutes ahead (true about 15:15 to
-  15:17). Reviewer next,
-  then Ready to integrate for his look. After it: #95 FZ-30f (the
+  15:17). Five more rulings at 15:38 on four `detail.rs` tests the
+  sixth view breaks (needles narrowed to `CI ◉`; an explicit `None`
+  for `ci`; the caret test lands the runs fixture; `◉ default branch`
+  wording, no branch name in the payload, follow-up; three small
+  additions accepted). Review accepted 15:46 (diff `b16aa538`, 1256
+  tests, five mutations caught). Committed as `fa6fbfc`, pushed 15:47;
+  branch CI and the combined check in progress; then **Ready to
+  integrate for his look**. At the merge: `CLAUDE.md`'s panel_rects
+  line back to `split_main_area`. After it: #95 FZ-30f (the
   inspector's jobs/log/script bodies, created 15:27, Backlog) and #93
   FZ-30e (handoffs, reworded). `CLAUDE.md`'s invariant line goes back
   to naming `split_main_area` at the merge (coordinator). Five optional follow-ups carried to #92 (cursor clamp
