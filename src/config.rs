@@ -17,7 +17,7 @@ pub struct Config {
     #[serde(default)]
     pub extra_dirs: Vec<String>,
     /// Which source the contribution strip starts on: "github" or "local",
-    /// or "off" to start it folded. `c` switches source and `4` folds it
+    /// or "off" to start it folded. `c` switches source and `5` folds it
     /// live; this is what a fresh launch starts from.
     #[serde(default)]
     pub contributions: Option<String>,

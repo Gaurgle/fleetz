@@ -1627,7 +1627,7 @@ async fn handle_normal_input(
                 start_sweep(app, tx, false, args.author.clone(), true);
             }
         }
-        KeyCode::Char('4') => app.press_panel_key(FocusedPanel::Contributions),
+        KeyCode::Char('5') => app.press_panel_key(FocusedPanel::Contributions),
         // Left/right walk columns (weeks), up/down walk rows (weekdays),
         // which is how the grid reads on screen. They used to be swapped, so
         // the arrow keys moved at right angles to what the eye expected.
@@ -1715,8 +1715,9 @@ async fn handle_normal_input(
         KeyCode::Char('G') => {
             app.clear_group();
         }
-        // Panel focus: 1 = repo list, 2 = detail pane, 3 = inspector, and on
-        // the focused inspector or strip its number folds it. Quick
+        // Panel focus: 1 = repo list, 2 = detail pane, 3 = inspector, 5 =
+        // strip, and on the focused inspector or strip its number folds it.
+        // `4` is unbound, held for the CI pane (FZ-30c). Quick
         // filters moved to `#tag` words typed into search (see
         // app::parse_query) so plain digits are free for this.
         KeyCode::Char('1') => app.press_panel_key(FocusedPanel::RepoList),
@@ -9115,6 +9116,106 @@ mod tests {
 
     fn press(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    /// FZ-30a (#89): the strip moved to `5` and `4` is held for the CI pane,
+    /// so until that pane lands `4` changes nothing: not focus, not either
+    /// fold. Fails while `4` still reaches the strip.
+    #[tokio::test]
+    async fn the_4_key_does_nothing_until_the_ci_pane_takes_it() {
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let backend = CrosstermBackend::new(io::stdout());
+        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
+        let mut terminal =
+            Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
+        for focused in [
+            FocusedPanel::RepoList,
+            FocusedPanel::Detail,
+            FocusedPanel::Inspector,
+            FocusedPanel::Contributions,
+        ] {
+            for folded in [false, true] {
+                let mut app = App::new(Vec::new(), String::new(), 120, 44);
+                app.view = app::View::Detail;
+                app.contributions = app::ContributionsMode::Github;
+                app.focused_panel = focused;
+                app.inspector_folded = folded;
+                app.contributions_folded = folded;
+                handle_normal_input(
+                    &mut app,
+                    &mut terminal,
+                    press('4'),
+                    &tx,
+                    &args,
+                    &config,
+                    Path::new("/nonexistent"),
+                )
+                .await
+                .unwrap();
+                let case = format!("{focused:?}, folded {folded}");
+                assert_eq!(app.focused_panel, focused, "focus moved: {case}");
+                assert_eq!(app.inspector_folded, folded, "inspector fold: {case}");
+                assert_eq!(app.contributions_folded, folded, "strip fold: {case}");
+            }
+        }
+    }
+
+    /// FZ-30a (#89): `5` is the strip's key. From another pane it focuses a
+    /// folded strip and unfolds it; on the focused strip it folds it and
+    /// keeps focus. Fails if the handler binds the strip to any other key.
+    #[tokio::test]
+    async fn the_5_key_reaches_and_folds_the_strip() {
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let backend = CrosstermBackend::new(io::stdout());
+        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
+        let mut terminal =
+            Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
+        let mut app = App::new(Vec::new(), String::new(), 120, 44);
+        app.view = app::View::Detail;
+        app.contributions = app::ContributionsMode::Github;
+        app.focused_panel = FocusedPanel::Detail;
+        app.contributions_folded = true;
+
+        let repo_dir = Path::new("/nonexistent");
+        handle_normal_input(
+            &mut app,
+            &mut terminal,
+            press('5'),
+            &tx,
+            &args,
+            &config,
+            repo_dir,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::Contributions,
+            "not focused"
+        );
+        assert!(!app.contributions_folded, "a folded strip stayed folded");
+
+        handle_normal_input(
+            &mut app,
+            &mut terminal,
+            press('5'),
+            &tx,
+            &args,
+            &config,
+            repo_dir,
+        )
+        .await
+        .unwrap();
+        assert!(app.contributions_folded, "the focused strip did not fold");
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::Contributions,
+            "folding moved focus"
+        );
     }
 
     /// Open the overlay as `,` does and walk to the icons row with `j`.
