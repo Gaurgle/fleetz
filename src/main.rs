@@ -406,6 +406,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(app::DEFAULT_CONTRIBUTIONS),
     ));
     app.contrib_author = config.contributions_author.clone();
+    // Open unless the config says `ci_pane = false`: a first launch opens
+    // every pane. `4` folds it for the session.
+    app.ci_folded = !config.ci_pane;
     app.github_poll_secs = configured_poll_secs(&config);
     app.github_poll_cost = github::poll_cost(config.repo_limit);
     app.fetch_max_bytes = config.fetch_cap_bytes();
@@ -949,10 +952,12 @@ async fn run_event_loop(
                 // animation reads as a slow stutter rather than a spin. A
                 // silent watch sweep draws no spinner, so it buys no repaints
                 // either: it just updates the rows when it lands.
-                let spinning = app.loading || app.is_refreshing();
+                let spinning = app.loading || app.is_refreshing() || app.ci_pane_loading();
                 // Everything else that moves on its own (the swept-ago clock,
-                // the CI blink) only needs about one repaint a second.
-                let slow_animated = app.watch_mode || app.apply_progress.is_some();
+                // the CI blink, a running CI run's duration) only needs about
+                // one repaint a second.
+                let slow_animated =
+                    app.watch_mode || app.apply_progress.is_some() || app.ci_pane_live();
                 if spinning
                     || (slow_animated && app.spinner_frame.is_multiple_of(SLOW_REPAINT_TICKS))
                 {
@@ -983,6 +988,11 @@ async fn run_event_loop(
                     app.push_detected = false;
                     start_github_poll(app, &tx, config);
                 }
+                app.expire_stuck_ci_polls(
+                    CI_POLL_STUCK_AFTER,
+                    std::time::Instant::now(),
+                    chrono::Local::now(),
+                );
                 if let Some(request) =
                     ci_poll_request(app, chrono::Local::now(), std::time::Instant::now())
                 {
@@ -1183,8 +1193,8 @@ fn handle_mouse_input(
         return;
     }
 
-    // A click on the inspector's or the strip's `[N]` tag folds or unfolds
-    // it. Ahead of the divider, whose grab zone covers the inspector's tag.
+    // A click on the inspector's, the CI pane's or the strip's `[N]` tag
+    // folds or unfolds it. Ahead of the divider, whose grab zone covers the inspector's tag.
     if m.kind == MouseEventKind::Down(MouseButton::Left)
         && let Some(panel) = rects.fold_tag_at(m.column, m.row)
     {
@@ -1230,6 +1240,13 @@ fn handle_mouse_input(
             if panel == FocusedPanel::Detail {
                 click_detail(app, m.column, m.row, clipboard::copy);
             }
+            // A click on a run row of the CI pane puts its cursor there.
+            if let Some(band) = rects.ci
+                && !rects.ci_folded
+                && let Some(index) = ui::ci::run_at(band, app, m.column, m.row)
+            {
+                app.select_ci_run(index);
+            }
         }
         // Scroll the panel under the cursor without changing focus.
         //
@@ -1252,12 +1269,14 @@ fn handle_mouse_input(
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.scroll_detail(DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(1),
+            FocusedPanel::Ci => app.scroll_ci(1),
             FocusedPanel::Contributions => {}
         },
         MouseEventKind::ScrollUp => match panel {
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.scroll_detail(-DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
+            FocusedPanel::Ci => app.scroll_ci(-1),
             FocusedPanel::Contributions => {}
         },
         _ => {}
@@ -1657,6 +1676,7 @@ async fn handle_normal_input(
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
             FocusedPanel::Inspector => app.scroll_inspector(1),
+            FocusedPanel::Ci => app.move_ci_cursor(1),
             FocusedPanel::Contributions => {
                 app.move_contrib_cursor(0, 1, chrono::Local::now().date_naive())
             }
@@ -1665,6 +1685,7 @@ async fn handle_normal_input(
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.detail_nav_up(),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
+            FocusedPanel::Ci => app.move_ci_cursor(-1),
             FocusedPanel::Contributions => {
                 app.move_contrib_cursor(0, -1, chrono::Local::now().date_naive())
             }
@@ -1725,14 +1746,14 @@ async fn handle_normal_input(
         KeyCode::Char('G') => {
             app.clear_group();
         }
-        // Panel focus: 1 = repo list, 2 = detail pane, 3 = inspector, 5 =
-        // strip, and on the focused inspector or strip its number folds it.
-        // `4` is unbound, held for the CI pane (FZ-30c). Quick
-        // filters moved to `#tag` words typed into search (see
-        // app::parse_query) so plain digits are free for this.
+        // Panel focus: 1 = repo list, 2 = detail pane, 3 = inspector, 4 = CI
+        // pane, 5 = strip, and on the focused inspector, CI pane or strip its
+        // number folds it. Quick filters moved to `#tag` words typed into
+        // search (see app::parse_query) so plain digits are free for this.
         KeyCode::Char('1') => app.press_panel_key(FocusedPanel::RepoList),
         KeyCode::Char('2') => app.press_panel_key(FocusedPanel::Detail),
         KeyCode::Char('3') => app.press_panel_key(FocusedPanel::Inspector),
+        KeyCode::Char('4') => app.press_panel_key(FocusedPanel::Ci),
         KeyCode::Char('0') => app.clear_filters(),
         // Branches overlay: switch (Enter) or clean up merged branches
         // (space to mark, d to delete). `b` and `s` both open it -- `s` for
@@ -1917,6 +1938,12 @@ const SWEEP_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(18
 /// Past this the poll is given up on and recorded as a timed-out failure,
 /// which the header shows (`expire_stuck_github_poll`).
 const GITHUB_POLL_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Same idea for a CI poll (`App::expire_stuck_ci_polls`). Longer than the
+/// fleet's, since one poll is up to three calls in a row (list, jobs, log),
+/// each bounded at 30 s by the shared client, after a token lookup bounded at
+/// 10 s: past this one is wedged, not slow.
+const CI_POLL_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Floor on the GitHub poll interval, whatever the config says, and the
 /// interval while a repo is `Pending`. One poll at `repo_limit` 50 costs 3
@@ -2599,8 +2626,8 @@ fn start_github_poll(
 }
 
 /// The CI poll the tick should start for the selected repo, with its lock
-/// taken, or `None`. Nothing while the pane is folded (the default until
-/// FZ-30c), under `-d`, or on a row without a GitHub identity; otherwise
+/// taken, or `None`. Nothing while the pane is folded (`ci_pane = false`, or
+/// `4`), under `-d`, or on a row without a GitHub identity; otherwise
 /// `ci::poll_due` decides, from the cursor's dwell and the repo's cadence.
 fn ci_poll_request(
     app: &mut App,
@@ -9156,50 +9183,6 @@ mod tests {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
     }
 
-    /// FZ-30a (#89): the strip moved to `5` and `4` is held for the CI pane,
-    /// so until that pane lands `4` changes nothing: not focus, not either
-    /// fold. Fails while `4` still reaches the strip.
-    #[tokio::test]
-    async fn the_4_key_does_nothing_until_the_ci_pane_takes_it() {
-        let args = Args::parse_from(["fleetz"]);
-        let config = config::Config::default();
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let backend = CrosstermBackend::new(io::stdout());
-        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
-        let mut terminal =
-            Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
-        for focused in [
-            FocusedPanel::RepoList,
-            FocusedPanel::Detail,
-            FocusedPanel::Inspector,
-            FocusedPanel::Contributions,
-        ] {
-            for folded in [false, true] {
-                let mut app = App::new(Vec::new(), String::new(), 120, 44);
-                app.view = app::View::Detail;
-                app.contributions = app::ContributionsMode::Github;
-                app.focused_panel = focused;
-                app.inspector_folded = folded;
-                app.contributions_folded = folded;
-                handle_normal_input(
-                    &mut app,
-                    &mut terminal,
-                    press('4'),
-                    &tx,
-                    &args,
-                    &config,
-                    Path::new("/nonexistent"),
-                )
-                .await
-                .unwrap();
-                let case = format!("{focused:?}, folded {folded}");
-                assert_eq!(app.focused_panel, focused, "focus moved: {case}");
-                assert_eq!(app.inspector_folded, folded, "inspector fold: {case}");
-                assert_eq!(app.contributions_folded, folded, "strip fold: {case}");
-            }
-        }
-    }
-
     /// FZ-30a (#89): `5` is the strip's key. From another pane it focuses a
     /// folded strip and unfolds it; on the focused strip it folds it and
     /// keeps focus. Fails if the handler binds the strip to any other key.
@@ -11516,7 +11499,7 @@ mod tests {
         let failure = github::Failure::new(github::FailureKind::Offline, "no route");
         let app = ci_failure_lands(failure, None);
         assert_eq!(
-            app.ci_backoff.not_before(60),
+            app.ci[&ci_key()].backoff.not_before(60),
             None,
             "offline counts nothing"
         );
@@ -11529,7 +11512,7 @@ mod tests {
         let failure = github::Failure::rate_limit("API rate limit exceeded");
         let mut app = ci_failure_lands(failure, Some(budget));
         let resume = reset + secs(7);
-        assert_eq!(app.ci_backoff.limit_until(60), Some(resume));
+        assert_eq!(app.ci[&ci_key()].backoff.limit_until(60), Some(resume));
         assert_eq!(app.ci_budget.known(at(12, 0, 10)).unwrap().remaining, 0);
         app.ci_folded = false;
         let start = std::time::Instant::now();
@@ -11622,5 +11605,182 @@ mod tests {
         assert_eq!(expanded.jobs_etag.as_deref(), Some("W/\"jobs\""));
         assert_eq!(expanded.held_jobs, jobs);
         assert_eq!(expanded.logs_held, vec![jobs[0].id]);
+    }
+
+    // FZ-30c: the band's follow-ups to #90.
+
+    /// One repo's failures climb that repo's ladder only: a second repo the
+    /// cursor moves to polls as soon as it dwells. Fails while the backoff
+    /// is one for the whole session.
+    #[test]
+    fn one_repos_ci_failure_does_not_hold_another_repos_first_poll() {
+        let mut app = ci_app();
+        app.repos.push(RepoStatus {
+            name: "repoz".to_string(),
+            owner: Some("Gaurgle".to_string()),
+            ..test_repo()
+        });
+        app.ci_folded = false;
+        let server = github::Failure::new(github::FailureKind::Server, "502");
+        for n in 0..3 {
+            let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+            let answer = ci::CiAnswer {
+                failure: Some(server.clone()),
+                ..ci_answer(&request)
+            };
+            app.apply_ci(answer, at(12, 0, n));
+        }
+        assert!(app.ci[&ci_key()].backoff.not_before(60).is_some());
+        let other = app
+            .visible_repos()
+            .iter()
+            .position(|(_, r)| r.name == "repoz")
+            .unwrap();
+        app.selected = other;
+        let start = std::time::Instant::now();
+        ci_poll_request(&mut app, at(12, 0, 3), start);
+        let settled = start + std::time::Duration::from_secs(1);
+        let request = ci_poll_request(&mut app, at(12, 0, 3), settled).expect("not held");
+        assert_eq!(request.name, "repoz");
+    }
+
+    /// A CI poll that never answers is given up on, as the fleet poll is:
+    /// the lock is released and the attempt is a timed-out failure on that
+    /// repo. Fails while `inflight` can stay set for the session.
+    #[test]
+    fn a_stuck_ci_poll_is_given_up_on() {
+        let mut app = ci_app();
+        ci_landed(&mut app, at(12, 0, 0));
+        let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        let claimed = std::time::Instant::now();
+        app.expire_stuck_ci_polls(CI_POLL_STUCK_AFTER, claimed, at(12, 0, 30));
+        assert!(app.ci[&ci_key()].inflight, "not yet");
+        let later = claimed + CI_POLL_STUCK_AFTER + std::time::Duration::from_secs(1);
+        app.expire_stuck_ci_polls(CI_POLL_STUCK_AFTER, later, at(12, 2, 1));
+        let state = &app.ci[&ci_key()];
+        assert!(!state.inflight);
+        assert_eq!(state.started, None);
+        assert!(matches!(
+            &state.freshness.outcome,
+            app::Outcome::Failed(f) if f.kind == github::FailureKind::TimedOut
+        ));
+        assert_eq!(state.freshness.last_attempt, Some(at(12, 2, 1)));
+        assert_eq!(state.runs, ci_runs(), "the data is kept");
+        assert!(
+            state.backoff.not_before(60).is_some(),
+            "it climbs the ladder"
+        );
+        // An answer that still arrives is applied like any.
+        let answer = ci::CiAnswer {
+            runs: Some(ci::Fetched::NotModified),
+            ..ci_answer(&request)
+        };
+        app.apply_ci(answer, at(12, 2, 5));
+        assert_eq!(app.ci[&ci_key()].freshness.outcome, app::Outcome::Success);
+    }
+
+    /// The list answered and a later call failed: the runs on screen are
+    /// that current, so the data time advances while the outcome is the
+    /// failure. Fails while a failed attempt never moves the data time.
+    #[test]
+    fn a_fresh_list_advances_the_data_time_when_a_later_call_fails() {
+        let mut app = ci_app();
+        ci_landed(&mut app, at(12, 0, 0));
+        app.ci.get_mut(&ci_key()).unwrap().expanded = Some(ci_runs()[2].id);
+        let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        let offline = github::Failure::new(github::FailureKind::Offline, "jobs: no route");
+        let answer = ci::CiAnswer {
+            runs: fresh_runs("W/\"next\""),
+            failure: Some(offline.clone()),
+            ..ci_answer(&request)
+        };
+        app.apply_ci(answer, at(12, 0, 10));
+        let state = &app.ci[&ci_key()];
+        assert_eq!(state.freshness.data_time, app::DataTime::At(at(12, 0, 10)));
+        assert_eq!(state.freshness.outcome, app::Outcome::Failed(offline));
+        assert_eq!(state.runs_etag.as_deref(), Some("W/\"next\""));
+    }
+
+    /// An answer landing is something to draw. Fails while `AppEvent::Ci`
+    /// waits for the next tick's repaint.
+    #[test]
+    fn a_ci_answer_asks_for_a_redraw() {
+        let mut app = ci_app();
+        let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        app.needs_redraw = false;
+        app.apply_ci(
+            ci::CiAnswer {
+                runs: fresh_runs("W/\"6b13\""),
+                ..ci_answer(&request)
+            },
+            at(12, 0, 0),
+        );
+        assert!(app.needs_redraw);
+    }
+
+    /// FZ-30c: `4` is the CI pane's key. From another pane it focuses a
+    /// folded pane and unfolds it; on the focused pane it folds it and keeps
+    /// focus. Fails while `4` is unbound.
+    #[tokio::test]
+    async fn the_4_key_reaches_and_folds_the_ci_pane() {
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let backend = CrosstermBackend::new(io::stdout());
+        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
+        let mut terminal =
+            Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
+        let repo_dir = Path::new("/nonexistent");
+        for view in [app::View::Detail, app::View::Compact] {
+            let mut app = App::new(Vec::new(), String::new(), 120, 44);
+            app.view = view;
+            app.ci_folded = true;
+            for (folded, case) in [(false, "unfolds"), (true, "folds")] {
+                handle_normal_input(
+                    &mut app,
+                    &mut terminal,
+                    press('4'),
+                    &tx,
+                    &args,
+                    &config,
+                    repo_dir,
+                )
+                .await
+                .unwrap();
+                assert_eq!(app.focused_panel, FocusedPanel::Ci, "{view:?}: {case}");
+                assert_eq!(app.ci_folded, folded, "{view:?}: {case}");
+            }
+        }
+    }
+
+    /// The `j`/`k` keys move the CI pane's run cursor while it has focus.
+    #[tokio::test]
+    async fn j_and_k_move_the_ci_cursor_when_the_pane_is_focused() {
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let backend = CrosstermBackend::new(io::stdout());
+        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
+        let mut terminal =
+            Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
+        let mut app = ci_app();
+        app.ci_folded = false;
+        ci_landed(&mut app, at(12, 0, 0));
+        app.focused_panel = FocusedPanel::Ci;
+        for (key, cursor) in [('j', 1), ('j', 2), ('j', 2), ('k', 1)] {
+            handle_normal_input(
+                &mut app,
+                &mut terminal,
+                press(key),
+                &tx,
+                &args,
+                &config,
+                Path::new("/nonexistent"),
+            )
+            .await
+            .unwrap();
+            assert_eq!(app.ci[&ci_key()].cursor, cursor, "after {key}");
+        }
+        assert_eq!(app.selected, 0, "the repo list did not move");
     }
 }
