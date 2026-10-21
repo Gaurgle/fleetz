@@ -41,6 +41,21 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-21, 15:12 and 15:20.** "why are we not having CI as it's own
+  page in pane 2 instead of its own pane?", "id even want to be able to
+  scroll thru the ci script/code somehow", then the decision: "i think
+  we can have a small addition for CI in the 'INFO' page, that's there
+  to shed light on the general status, but then i think CI should be a
+  pane 2 page, and not it's own pane. use inspector to inspect CI
+  details, and or it's script?" and "having CI on its own pane 2 page
+  also lets us lazyily load that when actually reaching for CI info".
+  Read as: the spec's "Amendment 2026-10-21" (CI as the sixth pane 2
+  view, the band removed and the strip back to 4, lazy polling only in
+  the `ci` view, an `info` section from data in hand, the inspector's
+  jobs/log/script bodies, handoffs on the highlighted run); #92
+  rewritten as FZ-30d, FZ-30f created, #93 reworded; FZ-30d dispatched
+  under the standing batch 3 approval. This replaces his 2026-10-03
+  own-pane decision on #67.
 - **2026-10-21, 15:07.** "this looks great! i feature, can we use the
   inspector for inspecting the CI's ? so say im highlighting a branch
   in pane 2, details for that is viewed in inspector. and if i switch

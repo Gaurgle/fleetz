@@ -2,8 +2,12 @@
 
 Written 2026-10-21 by the coordinator (`claude-fable-5-1`) for Andreas's
 approval. Planning issue: [#67](https://github.com/Gaurgle/fleetz/issues/67)
-(FZ-30, M4). Status: **accepted 2026-10-21** (every point under "Open
-with Andreas" answered); tickets #89 to #93.
+(FZ-30, M4). Status: **accepted 2026-10-21**, then **amended the same
+afternoon** after he used the band (see "Amendment 2026-10-21: a pane 2
+page, not a pane"): CI becomes a view in pane 2 with the inspector
+detailing the highlighted run, and the band goes. Sections A, B and E
+below describe the band as merged in #89 and #91 and are kept for the
+record; the amendment supersedes them. Tickets #89 to #93 plus FZ-30f.
 The issue's two decisions stand: draw natively, never embed `gh`; its own
 pane, pane 4, with the contributions strip renumbered to pane 5.
 
@@ -245,3 +249,87 @@ bullets of its section here.
 4. **Start folded:** decided, see section A.
 5. Creating the five issues FZ-30a to e as P2 in M4, and the word to run
    FZ-30a: **"sure" (2026-10-21)**; created and FZ-30a dispatched.
+
+## Amendment 2026-10-21: a pane 2 page, not a pane
+
+Andreas, after trying #91 ("this looks great!"), 15:07 to 15:12: "can we
+use the inspector for inspecting the CI's ? so say im highlighting a
+branch in pane 2, details for that is viewed in inspector. and if i
+switch focus to pane 4/ci, and highlight a certain CI there, the
+inspector can detail that instead?"; "why are we not having CI as it's
+own page in pane 2 instead of its own pane?"; "id even want to be able
+to scroll thru the ci script/code somehow"; and the decision: "i think
+we can have a small addition for CI in the 'INFO' page, that's there to
+shed light on the general status, but then i think CI should be a pane 2
+page, and not it's own pane. use inspector to inspect CI details, and or
+it's script?" This replaces his 2026-10-03 decision on #67 for an own
+pane: that pane was built (#91), used, and found to cost ten rows and a
+fourth focus for what pane 2 and the inspector already do.
+
+### What changes
+
+1. **`ci` is the sixth view of pane 2** (`info`, `commits`, `reflog`,
+   `graph`, `branches`, `ci`), cycled with `[` and `]` as the others,
+   titled `[2] ci`. Its rows are the band's run rows unchanged (lamp,
+   workflow, branch, event, title, live duration, age), `j`/`k` move the
+   cursor, the view scrolls, the empty states and the freshness mark
+   move from the band's title and status line into the view's first
+   line (`as of 12:02`, `⚠ 12:05 offline`, `loading`, `no GitHub
+   remote`, `no workflow runs`, `not signed in`, `GitHub off under -d`).
+2. **The band goes.** `FocusedPanel::Ci`, `CI_NUM`, `ci::split_docks`
+   and the `ci_pane` config key are removed (unreleased, so no contract
+   is broken); the strip returns to pane 4 and the `4` key, with the
+   README, help, footer segment and the tests of #89 and #91 following
+   it back. `contributions::dock_bottom` stays as the one carve the
+   strip uses. The data layer (#90) and `ui::ci`'s row rendering stay
+   and are reused by the view.
+3. **Polling is lazy: only the `ci` view polls.** His 15:20: "having CI
+   on its own pane 2 page also lets us lazyily load that when actually
+   reaching for CI info". The data layer polls the selected repo only
+   while pane 2 shows `ci`, with the dwell, the 10 s / 60 s cadence and
+   the budget as before; never otherwise, and never for the `info`
+   section. The `ci_folded` gate becomes "pane 2 is not showing `ci`".
+   Runs held from an earlier visit stay for the session, so coming back
+   paints at once and a 304 confirms them for free.
+4. **A small CI section in `info`, from what is already in hand.**
+   Between `branches` and `recent commits`: a `ci` section label and one
+   line for the default branch from the fleet poll's check state (the
+   same fact the pane 1 lamp draws, free: `● main passing`, `✗ main
+   failing`, `● main running`, `no checks`), then up to three run rows
+   (the latest run of each of the three most recent branches) when runs
+   are held from a visit to `ci`, else a dim `] for runs` hint. Nothing
+   polls for it; nothing is selectable; the full list is one `]` away.
+5. **The inspector details the highlighted run** while pane 2 shows
+   `ci`, exactly as it details a commit or a branch in the other views,
+   with three bodies cycled by `[` and `]` while the inspector is
+   focused (his to change at the look): **jobs** (each job with its
+   lamp and duration, its steps on one wrapped line with `✓`, `✗`, `●`,
+   `·`, and under a failed job the failing step's name and the last 12
+   lines of its log); **log** (the selected job's full log, scrollable,
+   fetched once per job id, ANSI and timestamps stripped); **script**
+   (the workflow file that produced the run, from the run's `path` at
+   its `head_sha`: `git show <sha>:<path>` when the commit is in the
+   clone, else `GET /repos/{o}/{r}/contents/{path}?ref=<sha>`, fetched
+   once per sha and path; the failing step's `run:` or `uses:` block
+   highlighted when the run failed). `J`/`K` from pane 2 scroll the
+   inspector as today; the inspector title names the body:
+   `[3] inspector  jobs` (`log`, `script`).
+6. **Handoffs** (section F) act on the highlighted run while pane 2
+   shows `ci`, keys as proposed.
+
+### Tickets, amended
+
+- **FZ-30d (#92):** the `ci` view in pane 2, the band's removal and the
+  strip's return to 4, the polling gate, the `info` section. Look change
+  for his look.
+- **FZ-30f (new):** the inspector's three bodies. Look change for his
+  look.
+- **FZ-30e (#93):** the handoffs, unchanged in substance, "with pane 2
+  showing `ci`" instead of "with the CI pane focused".
+
+### Rejected in the amendment
+
+- Keeping the band beside the pane 2 view "to decide from use": two
+  places for the same list; he decided from use already.
+- Jobs expanded inline under the run row: the band is gone and pane 2
+  has the inspector for exactly this.
