@@ -161,6 +161,21 @@ Under `.claude/worktrees/`: `issue-79` (Ready to integrate, pushed),
 `issue-88` (FZ-38, parked, uncommitted, see "Baton"; the sweep keeps
 it). `issue-89` was swept after the merge.
 
+## Paused 2026-10-21 about 13:50 CEST on Andreas's "paus"
+
+The disk filled at about 13:45 (ENOSPC; a reviewer's scratch build
+under the session scratchpad, `mut-target`, was the last writer). No
+command runs until space is freed; he was told and asked before
+anything is deleted. Nothing is running: no worker, no reviewer, no
+background job. **Uncommitted and accepted:** #90's revision in
+`.claude/worktrees/issue-90` (tracked diff `1c4b3543`, untracked
+`src/ci.rs` and `src/ci/fixtures/*`), review accepted 13:47 with three
+low follow-ups for FZ-30c (stuck-expiry for the per-repo CI lock,
+`data_time` on a partial failure, one backoff ladder across repos).
+Resume: free space (his word), commit #90 staging the four new files,
+push, CI, combined check, merge; confirm `main` CI for the #81 merge
+(`599dc2e`, never watched) and sweep `issue-81`; then FZ-30c.
+
 ## In flight
 
 - **#89 FZ-30a** Done: merged `f9c2804` at 13:12 on his "looks good"
