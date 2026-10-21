@@ -209,10 +209,11 @@ inside the scratchpad and remove it when done.
   recommended (A)). Worker revision `65af480e` plus untracked
   `src/ui/ci.rs` `0ad64249` has the chat rulings in (title `⚠` is the
   attempt time; the band never vanishes on a short terminal; 1251
-  passed, the six failing). On his answer: the worker edits those tests
-  (`src/ui/detail.rs` joins the allowed files), review, commit, push,
-  CI, combined check, Ready to integrate for his look. #92 and #93
-  follow.
+  passed, the six failing). **His answer 14:47: "A"** (all six edits,
+  the placeholder test deleted; `src/ui/detail.rs` joined the allowed
+  files for two height edits). Worker resumed 14:48; then review,
+  commit, push, CI, combined check, Ready to integrate for his look.
+  #92 and #93 follow.
 - **#94 FZ-39** (relay-sweep prunes dead scratch builds; the discipline
   rule in the workflow doc): created 14:20 as P1 in M5 under his "ok.
   use an agent to set this up then?" (about 14:15); `fz-small`
