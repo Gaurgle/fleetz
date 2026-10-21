@@ -265,8 +265,9 @@ inside the scratchpad and remove it when done.
   wording, no branch name in the payload, follow-up; three small
   additions accepted). Review accepted 15:46 (diff `b16aa538`, 1256
   tests, five mutations caught). Committed as `fa6fbfc`, pushed 15:47;
-  branch CI and the combined check in progress; then **Ready to
-  integrate for his look**. At the merge: `CLAUDE.md`'s panel_rects
+  branch CI green; combined check with `main` green (1256 tests).
+  **Ready to integrate since 15:50, waiting for his look.** At the
+  merge: `CLAUDE.md`'s panel_rects
   line back to `split_main_area`. After it: #95 FZ-30f (the
   inspector's jobs/log/script bodies, created 15:27, Backlog) and #93
   FZ-30e (handoffs, reworded). `CLAUDE.md`'s invariant line goes back
