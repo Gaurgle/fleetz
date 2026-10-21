@@ -213,9 +213,11 @@ inside the scratchpad and remove it when done.
   placeholder test deleted; `src/ui/detail.rs` joined the allowed files
   for two height edits). Review accepted 14:58 (tracked diff
   `9b127a87`, `src/ui/ci.rs` `0ad64249`; 1256 tests; seven mutations
-  caught). Committed as `393c110`, pushed 14:59; branch CI and the
-  combined check in progress; then **Ready to integrate for his look**
-  (a new pane). Five optional follow-ups carried to #92 (cursor clamp
+  caught). Committed as `393c110`, pushed 14:59; branch CI green;
+  combined check with `main` green (1256 tests). **Ready to integrate
+  since 15:01, waiting for his look** (a new pane). On his OK: merge
+  under the safe-merge rule, sweep, log, fix the `CLAUDE.md` invariant
+  line, dispatch #92. Five optional follow-ups carried to #92 (cursor clamp
   test; wheel re-entry; divider grab zone over the band; polling keyed
   off the config fold, not the drawn one; token kept across
   `gh auth switch`); `CLAUDE.md`'s panel_rects invariant must name
