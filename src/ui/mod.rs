@@ -1,5 +1,6 @@
 pub mod badges;
 pub mod branches;
+pub mod ci;
 pub mod colors;
 pub mod compact;
 pub mod contributions;
@@ -453,7 +454,8 @@ pub struct PanelRects {
     /// for being inside it at all.
     pub main: Rect,
     /// The part of `main` the pane splits are actually computed in: `main`
-    /// minus the contribution strip and the blank row above it.
+    /// minus the docked bands (the CI band, the contribution strip) and the
+    /// blank row above each.
     ///
     /// A drag converts back into a percentage of *this*, not of `main`. The
     /// two differ by eleven rows whenever the strip is open, and dividing by
@@ -465,6 +467,10 @@ pub struct PanelRects {
     pub inspector: Option<Rect>,
     /// Whether that inspector is folded, which leaves it nothing to resize.
     pub inspector_folded: bool,
+    /// The CI band (pane 4), open or folded, when the area had room for it.
+    pub ci: Option<Rect>,
+    /// Whether that band is folded to its title row.
+    pub ci_folded: bool,
     /// The contribution strip, when it is open and the area had room for it.
     pub contributions: Option<Rect>,
 }
@@ -500,6 +506,9 @@ impl PanelRects {
         }
         if self.inspector.is_some_and(|r| r.contains(p)) {
             return Some(FocusedPanel::Inspector);
+        }
+        if self.ci.is_some_and(|r| r.contains(p)) {
+            return Some(FocusedPanel::Ci);
         }
         if self.contributions.is_some_and(|r| r.contains(p)) {
             return Some(FocusedPanel::Contributions);
@@ -540,6 +549,7 @@ impl PanelRects {
         let p = Position { x: col, y: row };
         [
             (self.inspector, FocusedPanel::Inspector, INSPECTOR_NUM),
+            (self.ci, FocusedPanel::Ci, CI_NUM),
             (
                 self.contributions,
                 FocusedPanel::Contributions,
@@ -598,23 +608,26 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
     ])
     .split(area);
     let main = chunks[1];
-    let strip_folded = app.contributions_folded;
+    // Both bands dock off the bottom of the whole area, the CI band above
+    // the strip, through the one split `render` draws from.
+    let (body, ci, contributions) = ci::split_docks(main, app.ci_folded, app.contributions_folded);
+    // Folded as drawn: a short terminal folds an open band too.
+    let ci_folded = ci.is_some_and(ci::is_folded);
 
     match app.view {
-        // Compact has no right column for the strip to dock under, so it
-        // comes off the bottom of the whole area and the list shrinks by it.
-        View::Compact => {
-            let (body, contributions) = contributions::split_main_area(main, strip_folded);
-            PanelRects {
-                main: body,
-                body,
-                repo_list: body,
-                detail: None,
-                inspector: None,
-                inspector_folded: false,
-                contributions,
-            }
-        }
+        // Compact has no right column for the bands to dock under, so they
+        // come off the bottom of the whole area and the list shrinks by them.
+        View::Compact => PanelRects {
+            main: body,
+            body,
+            repo_list: body,
+            detail: None,
+            inspector: None,
+            inspector_folded: false,
+            ci,
+            ci_folded,
+            contributions,
+        },
         // Detail stacks from the bottom: the strip comes off the whole area,
         // the inspector docks across the full width above it, and the repo
         // list and detail pane share the row that is left.
@@ -624,7 +637,6 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
         // the width there is no column for it to dock under, and the list
         // scrolls anyway, so the trade is gone.
         View::Detail => {
-            let (body, contributions) = contributions::split_main_area(main, strip_folded);
             let (top, inspector) = detail::split_inspector(
                 body,
                 app.inspector_pct,
@@ -639,6 +651,8 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
                 detail: Some(detail),
                 inspector,
                 inspector_folded: app.inspector_folded,
+                ci,
+                ci_folded,
                 contributions,
             }
         }
@@ -819,9 +833,10 @@ pub fn divider_line(width: usize) -> Line<'static> {
     ))
 }
 
-/// The panel numbers of the two foldable panes, which are also the keys that
-/// focus them. The strip is 5, not 4: 4 is held for the CI pane (FZ-30).
+/// The panel numbers of the three foldable panes, which are also the keys
+/// that focus them.
 pub const INSPECTOR_NUM: u8 = 3;
+pub const CI_NUM: u8 = 4;
 pub const CONTRIBUTIONS_NUM: u8 = 5;
 
 /// The number half of a panel title, spaces included: the cells a click has
@@ -920,6 +935,9 @@ pub fn render(frame: &mut Frame, app: &App) {
             }
             View::Compact => compact::render(frame, rects.main, app),
         }
+    }
+    if let Some(band) = rects.ci {
+        ci::render(frame, band, app);
     }
     if let Some(strip) = rects.contributions {
         contributions::render(frame, strip, app);
@@ -1199,6 +1217,8 @@ mod tests {
             detail: Some(Rect::new(36, 1, 64, 24)),
             inspector: Some(Rect::new(0, 25, 100, 16)),
             inspector_folded: false,
+            ci: None,
+            ci_folded: false,
             contributions: None,
         }
     }
@@ -1646,6 +1666,8 @@ mod tests {
             detail: None,
             inspector: None,
             inspector_folded: false,
+            ci: None,
+            ci_folded: false,
             contributions: None,
         };
         assert_eq!(empty.repo_list_pct_at(10), 0);
@@ -1722,8 +1744,8 @@ mod tests {
     }
 
     /// The strip spans the full width at the very bottom whatever the
-    /// terminal size: the inspector sits directly above it and the list and
-    /// detail pane above that.
+    /// terminal size: the CI band sits directly above it, the inspector
+    /// directly above the band, and the list and detail pane above that.
     #[test]
     fn the_strip_spans_the_bottom_under_the_inspector() {
         let mut app = layout_app();
@@ -1742,7 +1764,9 @@ mod tests {
             );
             // `split_main_area` keeps one blank row between the strip and
             // whatever is above it.
-            assert_eq!(inspector.y + inspector.height + 1, strip.y);
+            let ci = rects.ci.expect("band present");
+            assert_eq!(inspector.y + inspector.height + 1, ci.y);
+            assert_eq!(ci.y + ci.height + 1, strip.y);
             assert_eq!(inspector.width, rects.main.width);
         }
     }
@@ -2792,7 +2816,7 @@ mod tests {
     }
 
     /// Below a folded inspector's one row there is no frame left: the next
-    /// row is the gap above the strip, and the strip's title follows it.
+    /// row is the gap above the CI band, and the band's folded row follows it.
     #[test]
     fn the_row_below_a_folded_inspector_belongs_to_the_next_pane() {
         let (rects, buffer) = rendered(|a| {
@@ -2800,7 +2824,7 @@ mod tests {
             a.contributions_folded = true;
         });
         let inspector = rects.inspector.expect("folded inspector laid out");
-        let strip = rects.contributions.expect("folded strip laid out");
+        let band = rects.ci.expect("folded band laid out");
         let below = inspector.y + inspector.height;
         assert_eq!(below, inspector.y + 1, "the fold is the title row alone");
         assert_ne!(
@@ -2814,8 +2838,8 @@ mod tests {
         ] {
             assert_eq!(buffer[(x, below)].symbol(), " ", "no frame below at {x}");
         }
-        assert_eq!(strip.y, below + 1, "the strip follows the one-row gap");
-        assert!(column_of(&buffer, strip.y, "contributions").is_some());
+        assert_eq!(band.y, below + 1, "the band follows the one-row gap");
+        assert!(column_of(&buffer, band.y, "[4] ci").is_some());
     }
 
     /// A folded inspector has nothing to resize, and its top row is its tag.

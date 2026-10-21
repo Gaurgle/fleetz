@@ -370,15 +370,69 @@ pub fn poll_due(c: &Cadence) -> bool {
         .is_none_or(|t| (c.now - t).num_seconds() >= every)
 }
 
-/// Run one CI poll against GitHub with the `gh` token.
+/// The `gh` token, looked up once per session and kept in memory only, so a
+/// poll every 10 s does not spawn `gh auth token` every 10 s. Forgotten when
+/// an answer says the token is no good, so the next poll asks `gh` again.
+pub struct TokenCache(std::sync::Mutex<Option<String>>);
+
+impl TokenCache {
+    pub const fn new() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+
+    /// The held token, or a fresh one from `source`, kept when it answers.
+    /// The lock is never held across the lookup.
+    pub async fn token<S, F>(&self, source: S) -> Result<String, String>
+    where
+        S: FnOnce() -> F,
+        F: std::future::Future<Output = Result<String, String>>,
+    {
+        if let Some(token) = self.held() {
+            return Ok(token);
+        }
+        let token = source().await?;
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(token.clone());
+        Ok(token)
+    }
+
+    fn held(&self) -> Option<String> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Drop the held token when `answer` failed on it: `gh` had none
+    /// (`Auth`), or GitHub refused it (`Refused`, a 401 or a 403 that is not
+    /// a limit). A token `gh` refreshed or re-issued is then picked up.
+    pub fn forget_after(&self, answer: &CiAnswer) {
+        let refused = answer
+            .failure
+            .as_ref()
+            .is_some_and(|f| matches!(f.kind, FailureKind::Auth | FailureKind::Refused));
+        if refused {
+            *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+}
+
+impl Default for TokenCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The session's `gh` token for the CI calls.
+static SESSION_TOKEN: TokenCache = TokenCache::new();
+
+/// Run one CI poll against GitHub with the session's `gh` token.
 pub async fn poll(request: CiRequest) -> CiAnswer {
-    poll_with(
+    let answer = poll_with(
         request,
-        crate::github::get_gh_token,
+        || SESSION_TOKEN.token(crate::github::get_gh_token),
         crate::github::client(),
         API_ROOT,
     )
-    .await
+    .await;
+    SESSION_TOKEN.forget_after(&answer);
+    answer
 }
 
 /// `poll` with the token source, the client and the API root passed in, so a
@@ -1122,6 +1176,60 @@ mod tests {
         assert_eq!(answer.failure.unwrap().kind, FailureKind::Offline);
         assert_eq!(answer.runs, None);
         assert_eq!(answer.budget, None);
+    }
+
+    // --- The session token (FZ-30c follow-up of #90) ---
+
+    #[tokio::test]
+    async fn the_token_is_looked_up_once_and_again_after_an_auth_failure() {
+        let cache = TokenCache::new();
+        let lookups = std::sync::atomic::AtomicUsize::new(0);
+        let source = || async {
+            let n = lookups.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok::<_, String>(format!("tok{n}"))
+        };
+        assert_eq!(cache.token(source).await.unwrap(), "tok0");
+        assert_eq!(cache.token(source).await.unwrap(), "tok0", "held");
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let mut answer = poll_answer();
+        answer.failure = Some(Failure::new(FailureKind::Offline, "no route"));
+        cache.forget_after(&answer);
+        assert_eq!(
+            cache.token(source).await.unwrap(),
+            "tok0",
+            "offline keeps it"
+        );
+
+        answer.failure = Some(Failure::new(FailureKind::Refused, "Bad credentials"));
+        cache.forget_after(&answer);
+        assert_eq!(cache.token(source).await.unwrap(), "tok1", "asked again");
+        answer.failure = Some(Failure::new(FailureKind::Auth, "not logged in"));
+        cache.forget_after(&answer);
+        assert_eq!(cache.token(source).await.unwrap(), "tok2");
+    }
+
+    #[tokio::test]
+    async fn a_failed_lookup_is_not_held() {
+        let cache = TokenCache::new();
+        let failed = cache
+            .token(|| async { Err::<String, _>("not signed in".to_string()) })
+            .await;
+        assert!(failed.is_err());
+        let token = cache.token(|| async { Ok::<_, String>("tok".to_string()) });
+        assert_eq!(token.await.unwrap(), "tok");
+    }
+
+    fn poll_answer() -> CiAnswer {
+        CiAnswer {
+            key: (Some("gaurgle".to_string()), "fleetz".to_string()),
+            attempt: 1,
+            runs: None,
+            jobs: None,
+            log: None,
+            failure: None,
+            budget: None,
+        }
     }
 
     #[tokio::test]

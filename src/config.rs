@@ -21,6 +21,12 @@ pub struct Config {
     /// live; this is what a fresh launch starts from.
     #[serde(default)]
     pub contributions: Option<String>,
+    /// Whether the CI pane (pane 4) starts unfolded. On by default, so a
+    /// first launch opens every pane; `false` starts it folded to its title
+    /// row, where it polls nothing. `4` folds and unfolds it live. Anything
+    /// but a boolean keeps the default.
+    #[serde(default = "default_ci_pane", deserialize_with = "lenient_ci_pane")]
+    pub ci_pane: bool,
     /// Git author regex the local contribution source filters by, overriding
     /// each repo's own `user.email`. `--author` takes a regex, so several
     /// identities can be joined: `me@work.com\|me@home.com`.
@@ -102,6 +108,19 @@ fn lenient_fetch_max_mb<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D
     })
 }
 
+fn default_ci_pane() -> bool {
+    true
+}
+
+/// `ci_pane` as written, or the default for a value that is not a boolean,
+/// so a typo there does not throw away the whole file.
+fn lenient_ci_pane<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    Ok(match toml::Value::deserialize(d)? {
+        toml::Value::Boolean(open) => open,
+        _ => default_ci_pane(),
+    })
+}
+
 fn default_watch() -> bool {
     true
 }
@@ -126,6 +145,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             contributions: None,
+            ci_pane: default_ci_pane(),
             contributions_author: None,
             contributions_cell_size: None,
             icons: None,
@@ -684,6 +704,24 @@ mod tests {
         assert_eq!(icons(r#"icons = "nerd""#), crate::app::Icons::Nerd);
         assert_eq!(icons(r#"icons = "plain""#), crate::app::Icons::Plain);
         assert_eq!(icons(r#"icons = "plian""#), crate::app::Icons::Nerd);
+    }
+
+    /// FZ-30c: a missing config or key opens the CI pane, `false` starts it
+    /// folded, and a typo keeps the default rather than failing the file.
+    #[test]
+    fn the_ci_pane_key_defaults_to_open_and_is_lenient() {
+        let ci_pane = |toml: &str| {
+            let cfg: Config = toml::from_str(toml).expect("config parses");
+            cfg.ci_pane
+        };
+        assert!(Config::default().ci_pane, "no config file opens it");
+        assert!(ci_pane(""), "an absent key opens it");
+        assert!(ci_pane("ci_pane = true"));
+        assert!(!ci_pane("ci_pane = false"));
+        assert!(ci_pane(r#"ci_pane = "no""#), "a typo keeps the default");
+        let cfg: Config = toml::from_str("ci_pane = 0\nrefresh_interval = 7").unwrap();
+        assert!(cfg.ci_pane);
+        assert_eq!(cfg.refresh_interval, 7, "the rest of the file still reads");
     }
 
     #[test]

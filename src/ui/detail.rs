@@ -5884,7 +5884,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let (w, h) = (120u16, 40u16);
+        let (w, h) = (120u16, 42u16);
         let mut repo = busy_repo();
         let hashes: Vec<String> = (0..12).map(|i| format!("a1b2c{i:02x}")).collect();
         repo.graph_expanded = hashes
@@ -6014,7 +6014,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let (w, h) = (120u16, 30u16);
+        let (w, h) = (120u16, 32u16);
         let mut repo = list_repo(3);
         // One long paragraph of long words. Broken at spaces every word takes a
         // row of its own and most of that row's width goes unused, so a

@@ -21,6 +21,10 @@ pub enum FocusedPanel {
     /// The inspector pane (full detail of the selected commit). j/k here
     /// scrolls its content.
     Inspector,
+    /// The CI pane (pane 4, FZ-30c): the selected repo's workflow runs, in
+    /// a band docked above the strip. Like the strip it exists in Compact
+    /// view too, and j/k here move its run cursor.
+    Ci,
     /// The contribution strip. Unlike the other three it exists in Compact
     /// view too, and only while the pane is open, so both `focus_panel` and
     /// `toggle_panel_focus` special-case it.
@@ -2298,14 +2302,14 @@ pub struct App {
     /// The CI pane's data per remote identity, held for the session and
     /// never written to disk (FZ-30b). See `ci.rs`.
     pub ci: std::collections::HashMap<RemoteKey, CiState>,
-    /// The CI pane is folded: nothing polls. True until FZ-30c draws the
-    /// pane and reads `ci_pane` from the config.
+    /// The CI pane is folded: nothing polls. Launch sets it from the
+    /// `ci_pane` config key (open unless `false`); `App::new` starts folded,
+    /// so an app built without a config polls nothing.
     pub ci_folded: bool,
     /// The `core` budget the CI calls bill, apart from `api_budget`, which
-    /// is the GraphQL one the fleet poll paces on.
+    /// is the GraphQL one the fleet poll paces on. One per session: the
+    /// allowance is the account's, whichever repo spends it.
     pub ci_budget: ApiBudget,
-    /// The CI poll's retry ladder and not-before, apart from the fleet's.
-    pub ci_backoff: GithubBackoff,
     /// The CI target the cursor rests on (`None` for a row without one) and
     /// since when, for the dwell (`ci::DWELL`).
     pub ci_cursor: Option<(Option<RemoteKey>, std::time::Instant)>,
@@ -2331,6 +2335,18 @@ pub struct CiState {
     pub freshness: GithubFreshness,
     /// A poll for this repo is out.
     pub inflight: bool,
+    /// When the poll that holds `inflight` was claimed, so one that never
+    /// answers can be given up on (`App::expire_stuck_ci_polls`).
+    pub started: Option<std::time::Instant>,
+    /// This repo's retry ladder and not-before, apart from the fleet's and
+    /// from every other repo's, so one repo's failures never delay another
+    /// repo's first poll.
+    pub backoff: GithubBackoff,
+    /// The run the pane's cursor is on, an index into `runs`.
+    pub cursor: usize,
+    /// The first run row drawn. `j`/`k` keep the cursor in view; the wheel
+    /// moves this alone.
+    pub scroll: usize,
 }
 
 /// One run's jobs as last read.
@@ -2359,6 +2375,7 @@ impl CiState {
             if self.expanded.is_some_and(|id| !listed.contains(&id)) {
                 self.expanded = None;
             }
+            self.cursor = self.cursor.min(self.runs.len().saturating_sub(1));
         }
         match answer.jobs {
             Some((run_id, JobsAnswer::Fetched(Fetched::Fresh { data, etag }))) => {
@@ -2494,7 +2511,6 @@ impl App {
             ci: std::collections::HashMap::new(),
             ci_folded: true,
             ci_budget: ApiBudget::default(),
-            ci_backoff: GithubBackoff::default(),
             ci_cursor: None,
         }
     }
@@ -2534,10 +2550,131 @@ impl App {
             runs,
             last_attempt,
             pace: self.ci_budget.pace(cost, last_attempt.unwrap_or(now)),
-            not_before: self
-                .ci_backoff
-                .not_before(crate::ci::base_interval_secs(runs)),
+            not_before: state
+                .and_then(|s| s.backoff.not_before(crate::ci::base_interval_secs(runs))),
             now,
+        }
+    }
+
+    /// When the CI rate limit on `key`'s repo lifts, if one holds it at
+    /// `now`: its backoff's limit hold, or the `core` budget's reset once
+    /// it is spent. The pane's `rate limited until 12:40`.
+    pub fn ci_limit_until(&self, key: &RemoteKey, now: DateTime<Local>) -> Option<DateTime<Local>> {
+        let state = self.ci.get(key)?;
+        let interval = crate::ci::base_interval_secs(&state.runs);
+        let limit = state.backoff.limit_until(interval).filter(|t| *t > now);
+        let exhausted = self
+            .ci_budget
+            .exhausted(state.poll_cost(), now)
+            .then(|| self.ci_budget.resume_at())
+            .flatten();
+        limit.max(exhausted)
+    }
+
+    /// The selected repo's CI target and state, as the pane draws them:
+    /// `None` when the row has no GitHub identity, and a `None` state while
+    /// nothing was ever claimed for it.
+    pub fn selected_ci(&self) -> Option<(RemoteKey, Option<&CiState>)> {
+        let (key, ..) = self.selected_repo().and_then(crate::ci::target)?;
+        let state = self.ci.get(&key);
+        Some((key, state))
+    }
+
+    fn selected_ci_mut(&mut self) -> Option<&mut CiState> {
+        let (key, ..) = self.selected_repo().and_then(crate::ci::target)?;
+        self.ci.get_mut(&key)
+    }
+
+    /// `j`/`k` on the CI pane: move the run cursor by `delta`, clamped to
+    /// the runs, and scroll the band just enough to keep it in view.
+    pub fn move_ci_cursor(&mut self, delta: i32) {
+        let Some(state) = self.selected_ci_mut() else {
+            return;
+        };
+        let last = state.runs.len().saturating_sub(1) as i64;
+        state.cursor = (state.cursor as i64 + delta as i64).clamp(0, last) as usize;
+        let rows = crate::ui::ci::RUN_ROWS;
+        if state.cursor < state.scroll {
+            state.scroll = state.cursor;
+        } else if state.cursor >= state.scroll + rows {
+            state.scroll = state.cursor + 1 - rows;
+        }
+        self.needs_redraw = true;
+    }
+
+    /// The wheel over the CI pane: move the view by `delta` rows, never the
+    /// cursor, clamped so the last run stays on the bottom row.
+    pub fn scroll_ci(&mut self, delta: i32) {
+        let Some(state) = self.selected_ci_mut() else {
+            return;
+        };
+        let max = state.runs.len().saturating_sub(crate::ui::ci::RUN_ROWS) as i64;
+        state.scroll = (state.scroll as i64 + delta as i64).clamp(0, max) as usize;
+        self.needs_redraw = true;
+    }
+
+    /// A click on the CI pane's run row `index`: put the cursor there.
+    pub fn select_ci_run(&mut self, index: usize) {
+        let Some(state) = self.selected_ci_mut() else {
+            return;
+        };
+        if index < state.runs.len() {
+            state.cursor = index;
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Whether the open CI pane draws the loading spinner, which repaints on
+    /// every tick: the selected repo has a GitHub identity and no answer
+    /// has landed for it yet.
+    pub fn ci_pane_loading(&self) -> bool {
+        if self.ci_folded || self.dirty_mode {
+            return false;
+        }
+        match self.selected_ci() {
+            Some((_, None)) => true,
+            Some((_, Some(state))) => state.freshness.last_attempt.is_none(),
+            None => false,
+        }
+    }
+
+    /// Whether the open CI pane shows a run still moving, whose duration
+    /// ticks and whose lamp pulses: about one repaint a second.
+    pub fn ci_pane_live(&self) -> bool {
+        !self.ci_folded
+            && self
+                .selected_ci()
+                .and_then(|(_, state)| state)
+                .is_some_and(|s| s.runs.iter().any(crate::ci::WorkflowRun::is_live))
+    }
+
+    /// Give up on CI polls claimed longer than `limit` before `instant` that
+    /// never answered, as `main.rs::expire_stuck_github_poll` does for the
+    /// fleet poll: the lock is released and the attempt recorded as a
+    /// timed-out failure on that repo, which climbs its ladder. An answer
+    /// that still arrives is applied like any.
+    pub fn expire_stuck_ci_polls(
+        &mut self,
+        limit: std::time::Duration,
+        instant: std::time::Instant,
+        now: DateTime<Local>,
+    ) {
+        for state in self.ci.values_mut() {
+            let stuck = state
+                .started
+                .is_some_and(|t| instant.saturating_duration_since(t) > limit);
+            if !state.inflight || !stuck {
+                continue;
+            }
+            state.inflight = false;
+            state.started = None;
+            state.freshness.gave_up(limit, now);
+            if let Outcome::Failed(failure) = state.freshness.outcome.clone() {
+                state
+                    .backoff
+                    .failed(&failure, now, &self.ci_budget, self.jitter.as_mut());
+            }
+            self.needs_redraw = true;
         }
     }
 
@@ -2550,6 +2687,7 @@ impl App {
     ) -> crate::ci::CiRequest {
         let state = self.ci.entry(key.clone()).or_default();
         state.inflight = true;
+        state.started = Some(std::time::Instant::now());
         let attempt = state.freshness.begin_attempt();
         let expanded = state.expanded.map(|run_id| {
             let held = state.jobs.get(&run_id);
@@ -2570,20 +2708,25 @@ impl App {
         }
     }
 
-    /// Land a CI poll's answer (`AppEvent::Ci`) at `now`. Only the repo's
-    /// `CiState`, `ci_budget` and `ci_backoff` change: never a row, the fleet
-    /// poll's freshness, budget or backoff, or the cache.
+    /// Land a CI poll's answer (`AppEvent::Ci`) at `now`, and ask for a
+    /// redraw. Only CI state changes (`ci`, `ci_budget`): never a row, the
+    /// fleet poll's freshness, budget or backoff, or the cache.
     ///
     /// The fleet poll's rules, per repo: the newest attempt releases the lock;
     /// an answer older than one applied is discarded but may still lower the
-    /// budget; a failure keeps the data and advances the retry clock; a 304
-    /// is a success that keeps the data.
+    /// budget; a failure keeps the data and advances the repo's own retry
+    /// clock; a 304 is a success that keeps the data. A list that answered
+    /// (fresh or 304) advances the data time even when a later `/jobs` or log
+    /// call failed the attempt: the runs on screen are that current, and the
+    /// failure still marks the pane and climbs the ladder.
     pub fn apply_ci(&mut self, answer: crate::ci::CiAnswer, now: DateTime<Local>) {
+        self.needs_redraw = true;
         let Some(state) = self.ci.get_mut(&answer.key) else {
             return;
         };
         if state.freshness.is_latest(answer.attempt) {
             state.inflight = false;
+            state.started = None;
         }
         let applied = state.freshness.accept_answer(answer.attempt);
         if let Some(reading) = &answer.budget
@@ -2592,20 +2735,29 @@ impl App {
                 .observe(reading, applied, now, self.jitter.as_mut())
                 == Observed::Switched
         {
-            self.ci_backoff.account_switched();
+            for state in self.ci.values_mut() {
+                state.backoff.account_switched();
+            }
         }
         if !applied {
             return;
         }
+        let Some(state) = self.ci.get_mut(&answer.key) else {
+            return;
+        };
         match answer.failure.clone() {
             Some(failure) => {
                 state.freshness.failed(failure.clone(), now);
-                self.ci_backoff
+                if answer.runs.is_some() {
+                    state.freshness.data_time = DataTime::At(now);
+                }
+                state
+                    .backoff
                     .failed(&failure, now, &self.ci_budget, self.jitter.as_mut());
             }
             None => {
                 state.freshness.succeeded(now);
-                self.ci_backoff.succeeded();
+                state.backoff.succeeded();
             }
         }
         state.land(answer);
@@ -2846,12 +2998,13 @@ impl App {
     fn fold_flag(&mut self, panel: FocusedPanel) -> Option<&mut bool> {
         match panel {
             FocusedPanel::Inspector => Some(&mut self.inspector_folded),
+            FocusedPanel::Ci => Some(&mut self.ci_folded),
             FocusedPanel::Contributions => Some(&mut self.contributions_folded),
             FocusedPanel::RepoList | FocusedPanel::Detail => None,
         }
     }
 
-    /// A pane's number key (`1`-`3`, `5`). On a pane that is not focused it
+    /// A pane's number key (`1`-`5`). On a pane that is not focused it
     /// focuses it, unfolding it if folded. On the focused pane it folds or
     /// unfolds it in place, keeping focus, so the same key both reaches a
     /// pane and gets it out of the way.
@@ -2864,14 +3017,18 @@ impl App {
             return;
         }
         if let Some(folded) = self.fold_flag(panel) {
+            let was = *folded;
             *folded = focused && !*folded;
+            if was && !*folded {
+                self.ci_unfolded(panel);
+            }
         }
         self.contributions_unfolded(panel, chrono::Local::now().date_naive());
         self.needs_redraw = true;
     }
 
     /// Fold `panel` to an empty frame, or unfold it: the click on a pane's
-    /// `[3]`/`[5]` tag. Unfolding focuses the pane, since opening it is
+    /// `[3]`/`[4]`/`[5]` tag. Unfolding focuses the pane, since opening it is
     /// asking to look at it; folding leaves focus where it is, the same as
     /// the number key does.
     pub fn toggle_fold(&mut self, panel: FocusedPanel) {
@@ -2881,9 +3038,22 @@ impl App {
         *folded = !*folded;
         if !*folded {
             self.focus_panel(panel);
+            self.ci_unfolded(panel);
         }
         self.contributions_unfolded(panel, chrono::Local::now().date_naive());
         self.needs_redraw = true;
+    }
+
+    /// The CI pane just unfolded: its cursor starts on the first (newest)
+    /// run, scrolled to the top, whatever it was left on.
+    fn ci_unfolded(&mut self, panel: FocusedPanel) {
+        if panel != FocusedPanel::Ci {
+            return;
+        }
+        if let Some(state) = self.selected_ci_mut() {
+            state.cursor = 0;
+            state.scroll = 0;
+        }
     }
 
     /// The one unfold entry point the `5` key and the `[5]` tag click share:
@@ -3283,7 +3453,11 @@ impl App {
             // list instead would spend the only line-by-line gesture the graph
             // has on moving to a different repo.
             FocusedPanel::Detail => FocusedPanel::Detail,
-            FocusedPanel::Inspector | FocusedPanel::Contributions => FocusedPanel::RepoList,
+            // The CI pane is never a target either, like the strip: from
+            // either, as from the inspector, the keys wrap to the list.
+            FocusedPanel::Inspector | FocusedPanel::Ci | FocusedPanel::Contributions => {
+                FocusedPanel::RepoList
+            }
         })
     }
 
@@ -3323,8 +3497,8 @@ impl App {
                 }
             }
             FocusedPanel::Inspector => self.scroll_inspector(delta),
-            // Never selected as a target, but the match has to be total.
-            FocusedPanel::Contributions => {}
+            // Never selected as targets, but the match has to be total.
+            FocusedPanel::Ci | FocusedPanel::Contributions => {}
         }
     }
 
@@ -3343,48 +3517,54 @@ impl App {
         self.set_detail_scroll(0);
     }
 
-    /// Cycle keyboard focus: repo list -> detail -> inspector -> strip ->
-    /// repo list.
-    /// Only meaningful in `Detail` view.
+    /// Cycle keyboard focus: repo list -> detail -> inspector -> ci -> strip
+    /// -> repo list, skipping a hidden inspector. Compact has no detail or
+    /// inspector, so there it walks list -> ci -> strip.
     pub fn toggle_panel_focus(&mut self) {
         if self.view != View::Detail {
-            // Compact has one flat grid, but the strip is still a real target.
+            // Compact has one flat grid, but the two bands are real targets.
             self.focused_panel = match self.focused_panel {
+                FocusedPanel::Ci => FocusedPanel::Contributions,
                 FocusedPanel::Contributions => FocusedPanel::RepoList,
-                _ => FocusedPanel::Contributions,
+                _ => FocusedPanel::Ci,
             };
             return;
         }
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             FocusedPanel::Detail if self.shows_inspector() => FocusedPanel::Inspector,
-            FocusedPanel::Detail | FocusedPanel::Inspector => FocusedPanel::Contributions,
+            FocusedPanel::Detail | FocusedPanel::Inspector => FocusedPanel::Ci,
+            FocusedPanel::Ci => FocusedPanel::Contributions,
             FocusedPanel::Contributions => FocusedPanel::RepoList,
         };
     }
 
-    /// `toggle_panel_focus` in reverse (Shift-Tab): repo list -> strip ->
-    /// inspector -> detail -> repo list, skipping a hidden inspector the same
-    /// way.
+    /// `toggle_panel_focus` in reverse (Shift-Tab): repo list -> strip -> ci
+    /// -> inspector -> detail -> repo list, skipping a hidden inspector the
+    /// same way; in Compact, list -> strip -> ci.
     pub fn toggle_panel_focus_back(&mut self) {
         if self.view != View::Detail {
-            // Two targets, so the reverse is the same toggle.
-            self.toggle_panel_focus();
+            self.focused_panel = match self.focused_panel {
+                FocusedPanel::Contributions => FocusedPanel::Ci,
+                FocusedPanel::Ci => FocusedPanel::RepoList,
+                _ => FocusedPanel::Contributions,
+            };
             return;
         }
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Contributions,
-            FocusedPanel::Contributions if self.shows_inspector() => FocusedPanel::Inspector,
-            FocusedPanel::Contributions | FocusedPanel::Inspector => FocusedPanel::Detail,
+            FocusedPanel::Contributions => FocusedPanel::Ci,
+            FocusedPanel::Ci if self.shows_inspector() => FocusedPanel::Inspector,
+            FocusedPanel::Ci | FocusedPanel::Inspector => FocusedPanel::Detail,
             FocusedPanel::Detail => FocusedPanel::RepoList,
         };
     }
 
-    /// Jump keyboard focus directly to `panel` (the `1`/`2` bindings).
-    /// Only meaningful in `Detail` view.
+    /// Jump keyboard focus directly to `panel` (the number keys).
+    /// The list, detail and inspector only in `Detail` view.
     pub fn focus_panel(&mut self, panel: FocusedPanel) {
-        // The strip is the one panel that exists in both views.
-        if panel == FocusedPanel::Contributions {
+        // The two bands are the panels that exist in both views.
+        if matches!(panel, FocusedPanel::Ci | FocusedPanel::Contributions) {
             self.focused_panel = panel;
             return;
         }
@@ -5222,6 +5402,7 @@ mod tests {
         for next in [
             FocusedPanel::Detail,
             FocusedPanel::Inspector,
+            FocusedPanel::Ci,
             FocusedPanel::Contributions,
             FocusedPanel::RepoList,
         ] {
@@ -5231,17 +5412,15 @@ mod tests {
         app.history_view = HistoryView::Graph;
         app.focused_panel = FocusedPanel::Detail;
         app.toggle_panel_focus();
-        assert_eq!(
-            app.focused_panel,
-            FocusedPanel::Contributions,
-            "no inspector"
-        );
+        assert_eq!(app.focused_panel, FocusedPanel::Ci, "no inspector");
     }
 
     #[test]
     fn tab_in_compact_toggles_between_the_list_and_the_pane() {
         let mut app = make_app(1);
         app.view = View::Compact;
+        app.toggle_panel_focus();
+        assert_eq!(app.focused_panel, FocusedPanel::Ci);
         app.toggle_panel_focus();
         assert_eq!(app.focused_panel, FocusedPanel::Contributions);
         app.toggle_panel_focus();
@@ -5256,6 +5435,7 @@ mod tests {
         app.view = View::Detail;
         for next in [
             FocusedPanel::Contributions,
+            FocusedPanel::Ci,
             FocusedPanel::Inspector,
             FocusedPanel::Detail,
             FocusedPanel::RepoList,
@@ -5267,6 +5447,7 @@ mod tests {
             FocusedPanel::RepoList,
             FocusedPanel::Detail,
             FocusedPanel::Inspector,
+            FocusedPanel::Ci,
             FocusedPanel::Contributions,
         ] {
             app.focused_panel = start;
@@ -5282,6 +5463,8 @@ mod tests {
         app.view = View::Compact;
         app.toggle_panel_focus_back();
         assert_eq!(app.focused_panel, FocusedPanel::Contributions);
+        app.toggle_panel_focus_back();
+        assert_eq!(app.focused_panel, FocusedPanel::Ci);
         app.toggle_panel_focus_back();
         assert_eq!(app.focused_panel, FocusedPanel::RepoList);
     }
@@ -6224,13 +6407,13 @@ mod tests {
     }
 
     /// The reverse walk has the same trap from the other side: back from the
-    /// strip is the inspector, unless the graph view hides it.
+    /// CI pane is the inspector, unless the graph view hides it.
     #[test]
     fn reverse_focus_cycling_skips_a_hidden_inspector() {
         let mut app = make_app(1);
         app.history_view = HistoryView::Graph;
         app.view = View::Detail;
-        app.focused_panel = FocusedPanel::Contributions;
+        app.focused_panel = FocusedPanel::Ci;
         app.toggle_panel_focus_back();
         assert_eq!(
             app.focused_panel,

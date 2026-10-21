@@ -80,12 +80,23 @@ const MAIN_MIN_HEIGHT: u16 = 10;
 /// `detail::split_main` and `detail::split_inspector`: `ui::render` draws
 /// from it and `ui::panel_rects` hit-tests against it. It lives here rather
 /// than in `detail.rs` because the strip exists in Compact view too.
+///
+/// The CI band docks above it through `ui::ci::split_docks`, which calls this
+/// for the strip and `dock_bottom` for the band, so both bands share one
+/// copy of the carve and of the `MAIN_MIN_HEIGHT` rule.
 pub fn split_main_area(main: Rect, folded: bool) -> (Rect, Option<Rect>) {
     let height = if folded {
         crate::ui::FOLDED_HEIGHT
     } else {
         CONTRIB_HEIGHT
     };
+    dock_bottom(main, height)
+}
+
+/// Carve a band `height` rows tall off the bottom of `main`, with one blank
+/// row above it, or nothing when that would leave the panes above fewer than
+/// `MAIN_MIN_HEIGHT` rows.
+pub(crate) fn dock_bottom(main: Rect, height: u16) -> (Rect, Option<Rect>) {
     if main.height < MAIN_MIN_HEIGHT + height + 1 {
         return (main, None);
     }
