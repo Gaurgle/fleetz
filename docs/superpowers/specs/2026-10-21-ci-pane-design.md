@@ -62,14 +62,17 @@ views, which he said he wants to keep watching beside CI. Not recommended.
 Folded, it is one row with its title on a rule, exactly like the inspector
 and the strip (`render_folded`). The title is `[4] ci` plus the freshness
 mark from section D, for example `[4] ci  as of 12:02` or
-`[4] ci  ⚠ 12:05`. `ContributionsMode`-style "start folded" is not added:
-the pane starts folded by default and remembers nothing across sessions
-(no new config key in the first version).
+`[4] ci  ⚠ 12:05`. **Decided 2026-10-21** ("as per config, but first time
+users have all panes open"): a config key `ci_pane = true` (default) starts
+it unfolded, `false` folded, beside `contributions` in the README block; a
+missing config opens every pane.
 
 ### B. The renumbering (lands first, alone)
 
-- `CONTRIBUTIONS_NUM` becomes 5, a new `CI_NUM = 4`; `FocusedPanel` gains
-  `Ci`. The `'4'` key moves to the CI pane and `'5'` takes the strip;
+- `CONTRIBUTIONS_NUM` becomes 5 and `'5'` takes the strip in FZ-30a, with
+  `'4'` left unbound; `CI_NUM = 4` and `FocusedPanel::Ci` arrive with the
+  pane in FZ-30c (an unused variant would trip `dead_code` under
+  `-D warnings`). Then the `'4'` key is the CI pane's;
   `press_panel_key`, `fold_flag`, `toggle_fold`, `fold_tag_at`, the focus
   cycle (list, detail, inspector, ci, strip; Compact toggles list, ci,
   strip) and `scroll_next_panel` (the CI pane is never a `J`/`K` target,
@@ -231,11 +234,12 @@ bullets of its section here.
 
 1. **Layout:** Option A (a band above the strip, recommended) or B (under
    the inspector).
-2. **The thirteen existing tests** in section B: may the renumbering
-   ticket edit them (`4` to `5`, `[4]` to `[5]`, the Tab walks gaining a
-   pane), with no assertion weakened? Without a yes FZ-30a cannot start.
+2. **The thirteen existing tests** in section B: **"ok with me"
+   (2026-10-21)**; `4` to `5`, `[4]` to `[5]` in FZ-30a, the Tab walks
+   gaining a pane in FZ-30c, no assertion weakened.
 3. **Keys:** `Enter` expand, `l` log, `a` rerun, `x` cancel, `O` open, and
-   `5` for the strip. His call; alternatives welcome.
-4. **Start folded** by default (no config key), or unfolded?
+   `5` for the strip. His call; alternatives welcome. Asked 2026-10-21
+   what they mean; answered in chat, decision pending.
+4. **Start folded:** decided, see section A.
 5. Creating the five issues FZ-30a to e as P2 in M4, and the word to run
-   FZ-30a.
+   FZ-30a: **"sure" (2026-10-21)**; created and FZ-30a dispatched.
