@@ -152,10 +152,12 @@ see "Baton"). The sweep keeps it.
 
 ## In flight
 
-- **#89 FZ-30a** (strip to pane 5): `fz-worker` (`claude-opus-5-5`,
-  medium) dispatched 11:15 in `.claude/worktrees/issue-89`, branch
-  `feat/89-strip-to-pane-5`, base `5cce618`. Reviewer next, then Ready
-  to integrate for his look (a tag and a key). Authority: his "sure"
+- **#89 FZ-30a** (strip to pane 5): **Ready to integrate** since 13:00,
+  waiting for his look. Worktree `.claude/worktrees/issue-89`, branch
+  `feat/89-strip-to-pane-5`, base `5cce618`, reviewed revision
+  `ad334fc2` committed as `954cc24`, pushed, CI green on the branch,
+  combined check with `main` green (1181 tests). On his OK: merge under
+  the safe-merge rule, then sweep. Authority: his "sure"
   (11:05) to creating FZ-30a to e (#89 to #93) and running FZ-30a; his
   "ok with me" to the existing-test edits. #90 to #93 are Backlog and
   wait on the spec's open points (layout, keys) and his word.
