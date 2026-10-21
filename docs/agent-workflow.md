@@ -259,6 +259,18 @@ contract, handoff templates and limits in this document apply unchanged.
    stay on GitHub. A worktree whose ticket is not merged (blocked, parked,
    discarded) is removed only when Andreas says so.
 
+Scratch builds are disposable and bounded. A scratch clone and its build output
+(a combined check, a reviewer's base build or mutation run) live under the
+session scratchpad, are built with `CARGO_TARGET_DIR` set inside that
+scratchpad (never inside a worktree or the main checkout), and are removed by
+the same command that used them. `scripts/relay-sweep` also prunes other
+sessions' leftover `target` directories and scratch clones (a directory with a
+`.git` directory); it never touches the current session, named by
+`CLAUDE_CODE_SESSION_ID`, and skips the prune when that is unset. The Relay
+template copy of `relay-sweep` in `~/claude-config` needs the same change.
+Leaving a clone behind for "later" filled the disk on
+2026-10-21.
+
 PRs are optional. The release Project and planning tickets are published. New
 external publication remains a separate explicit action unless already
 authorized for the current task.
