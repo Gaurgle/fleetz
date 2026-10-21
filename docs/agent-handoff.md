@@ -244,14 +244,14 @@ Unattended run (18:55 to 21:30):
   chat (no help.rs row: the overlay is full; the body hint goes in the
   inspector's footer segment). Reviewer next, then Ready to integrate
   for his look.
-- **#93 FZ-30e** (handoffs `l`/`a`/`x`/`O`): worker done (diff
-  `c5706021`, 1270 tests; rulings 5 to 8 on #93: the `,` help row
-  reflowed to free a line, the `ci` footer segment carries the keys and
-  keeps `[[ ]] view`, `l`/`a` gated on completed runs); `fz-reviewer`
-  (`claude-opus-5-5`, medium) running since 19:04 in
-  `.claude/worktrees/issue-93`, branch `feat/93-ci-handoffs`, base
-  `7c03cff`. Then commit, push, CI, combined check, Ready to integrate
-  for his look. Both tickets touch `src/main.rs` (by region),
+- **#93 FZ-30e** (handoffs `l`/`a`/`x`/`O`): review accepted 19:10
+  (rulings 5 to 10 on the issue: the `,` help row reflowed, the `ci`
+  footer segment carries the keys and keeps `[[ ]] view`, `l`/`a` gated
+  on completed runs, the `timed_out`/`cancelled` test ruled in);
+  re-review accepted `7d39d52d`; committed as `8a5bdac`, pushed 19:13;
+  branch CI and the combined check in progress; then **Ready to
+  integrate for his look** (new keys; nothing merges unattended).
+  Worktree `.claude/worktrees/issue-93`, base `7c03cff`. Both tickets touch `src/main.rs` (by region),
   `README.md` and `src/ui/footer.rs` (different arms); the second to
   integrate is re-verified against the new `main` and may need a
   rebase of the help/README rows.
