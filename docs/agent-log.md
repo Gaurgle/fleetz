@@ -16,6 +16,32 @@ instead; a note marks each place.
 Lead records older than the most recent session, newest first, as they stood
 in the handoff's "Baton" section.
 
+**The 2026-10-21 session** (`claude-fable-5-1`, `claude --agent
+fz-coordinator`, session `6c0bef32-e39d-4d66-98b4-edcb6d119773`, held
+10:50 to 16:10 CEST and again 18:55 to 20:35 as an unattended run).
+Takeover on his "continue" with the baton released and nothing
+running. Seven tickets Done: #89 FZ-30a, #79 FZ-03a, #81 FZ-13n, #90
+FZ-30b, #94 FZ-39, #91 FZ-30c, #92 FZ-30d (records under "Merged on
+2026-10-21"); two at Ready to integrate for his look: #93 FZ-30e and
+#95 FZ-30f. The CI pane spec was drafted, accepted on every point
+(layout A, keys, tests, `ci_pane`), built as a band (#91), then
+amended the same afternoon on his decision after using it: CI as a
+pane 2 page with lazy polling, an `info` section and the inspector for
+details (#92, #95). The FZ-14 attention view spec was drafted. The
+disk filled at about 13:38 (a closed session's 14 GB scratchpad, this
+session's clones, a reviewer's scratch build; ENOSPC at 505 MB free);
+freed on his "yes, delete those" (22 GB); two cleanup layers landed: a
+global `SessionStart` hook in `~/claude-config` (`e751f06`, prunes
+scratchpads older than two days, skips live sessions) and FZ-39's
+`relay-sweep` prune. Lessons: scratch clones and reviewer builds live
+under the session scratchpad with their own `CARGO_TARGET_DIR` and are
+removed by the command that used them; the coordinator's "HH:MM"
+stamps ran up to ten minutes ahead of the clock at times (corrected
+where found; commit dates are authoritative); a ticket's acceptance
+criterion written as a bare grep must target the thing meant, not the
+syntax (#89's `[4]`); the help overlay is exactly full at 80x24, so a
+new row needs a reflow. Released 20:33 at the unattended run's cap.
+
 **The 2026-10-20 session** (`claude-fable-5-1`, `claude --agent
 fz-coordinator`, session `08f5d4fe-31ad-4813-8535-0abfc0844250`, held
 11:26 to 14:40 CEST). Takeover evidence: the 2026-10-17 record said

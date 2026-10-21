@@ -1,6 +1,6 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-21 20:35 CEST by `claude-fable-5-1` (`claude --agent
+Last written 2026-10-21 20:42 CEST by `claude-fable-5-1` (`claude --agent
 fz-coordinator`, session `6c0bef32-e39d-4d66-98b4-edcb6d119773`) at the
 release of the baton (the stamps of this session ran up to ten minutes
 ahead of the clock at times; commit dates are authoritative). Read
@@ -277,103 +277,9 @@ Worktrees: `issue-93` and `issue-95` (both committed and pushed),
   integrate is re-verified against the new `main` and may need a
   rebase of the help/README rows.
 
-The entries below are today's earlier trail, kept for the next lead's
-orientation; the next lead moves them to the log.
-
-Resumed 13:45 after a disk-full pause (about 13:38 to 13:45): the disk filled
-under a reviewer's scratch build; on his "yes, delete those" the
-coordinator removed yesterday's 14 GB session scratchpad, this
-session's throwaway clones and the three worktree `target/` dirs
-(22 GB free after). Lesson for every lead: scratch clones and their
-builds go under the session scratchpad and are removed after each
-check, and a reviewer's scratch build must set `CARGO_TARGET_DIR`
-inside the scratchpad and remove it when done.
-
-- **#89 FZ-30a** Done: merged `f9c2804` at 13:12 on his "looks good"
-  (record in the log, "Merged on 2026-10-21"). #90 to #93 are Backlog;
-  the spec is accepted, so they run in plan order as slots free up
-  (FZ-30b next, then FZ-30c, now that #89 is in). Authority: his "sure"
-  (11:05) to creating FZ-30a to e and the 2026-10-17 batch 3 approval.
-- **#79 FZ-03a** Done: merged `b69ad37` at 13:27 on his "i dont need
-  to check small things as that" (record in the log).
-- **#81 FZ-13n** Done: merged `599dc2e` at 13:36 on his "all good"
-  (record in the log); `docs/ideas.md` "Header noise" amended.
-- **#90 FZ-30b** (CI data layer, no screen change): `fz-worker`
-  (`claude-opus-5-5`, medium) dispatched 13:16 in
-  `.claude/worktrees/issue-90`, branch `feat/90-ci-data-layer`, base
-  `f9c2804`; five rulings in the assignment comment and six more on the
-  worker's decisions (about 13:37, all accepted). Review accepted about
-  13:40 (tracked diff `1c4b3543`, `src/ci.rs` `67323f4d`, three
-  fixtures under `src/ci/fixtures/`; 1217 tests). Committed as
-  `ea5a78f`, pushed 13:46; branch CI green; combined check 1231 tests.
-  **Done: merged `d3816ca` at 13:50** (record in the log); `main` CI
-  run 39594726330 watched, sweep after.
-- **#91 FZ-30c** (the CI pane band): `fz-worker` (`claude-opus-5-5`,
-  medium) dispatched 13:53 in `.claude/worktrees/issue-91`, branch
-  `feat/91-ci-pane-band`, base `d3816ca`; seven rulings in the
-  assignment comment. **Stopped since 14:09 on six existing tests**
-  (stop comment on the issue: (A) all six as proposed, one a deletion
-  of FZ-30a's placeholder test; (B) all but the deletion; (C) other;
-  recommended (A)). Worker revision `65af480e` plus untracked
-  `src/ui/ci.rs` `0ad64249` has the chat rulings in (title `⚠` is the
-  attempt time; the band never vanishes on a short terminal; 1251
-  passed, the six failing). His answer 14:47: "A" (all six edits, the
-  placeholder test deleted; `src/ui/detail.rs` joined the allowed files
-  for two height edits). Review accepted 14:58 (tracked diff
-  `9b127a87`, `src/ui/ci.rs` `0ad64249`; 1256 tests; seven mutations
-  caught). Committed as `393c110`, pushed 14:59. **Done: merged
-  `a0526eb` at 15:08 on his "this looks great!"** (record in the log);
-  `main` CI watched, sweep after; the `CLAUDE.md` invariant line
-  updated by the coordinator.
-- **#92 FZ-30d** (CI as the sixth pane 2 view, the band removed, the
-  strip back to 4, lazy polling, the `info` section): body rewritten
-  15:27 for the spec amendment; `fz-worker` (`claude-opus-5-5`, medium)
-  dispatched 15:29 in `.claude/worktrees/issue-92`, branch
-  `feat/92-ci-pane2-view`, base `f51c20f`; six rulings in the
-  assignment comment (the #89 and #91 test changes follow the band out,
-  pre-authorized as the consequence of his decision); four more at
-  15:19 on the worker's stop (`colors.rs` allowed for the `ci` tab in
-  Catppuccin sky, a small look change; two more existing-test edits as
-  the consequence of the sixth view, for him to object to: the view
-  cycle wrap test and the #90 `ci_folded` test renamed to
-  `the_ci_poll_waits_for_the_ci_view`; `ci_wanted` requires the Detail
-  view; `ALL` loops fix the code). Clock note: the 15:27 to 15:29 stamps
-  on #92, #67 and here ran about ten minutes ahead (true about 15:15 to
-  15:17). Five more rulings at 15:38 on four `detail.rs` tests the
-  sixth view breaks (needles narrowed to `CI ◉`; an explicit `None`
-  for `ci`; the caret test lands the runs fixture; `◉ default branch`
-  wording, no branch name in the payload, follow-up; three small
-  additions accepted). Review accepted 15:46 (diff `b16aa538`, 1256
-  tests, five mutations caught). Committed as `fa6fbfc`, pushed 15:47;
-  branch CI green; combined check with `main` green (1256 tests).
-  **Ready to integrate since 15:50, waiting for his look.** At the
-  merge: `CLAUDE.md`'s panel_rects
-  line back to `split_main_area`. After it: #95 FZ-30f (the
-  inspector's jobs/log/script bodies, created 15:27, Backlog) and #93
-  FZ-30e (handoffs, reworded). `CLAUDE.md`'s invariant line goes back
-  to naming `split_main_area` at the merge (coordinator). Five optional follow-ups carried to #92 (cursor clamp
-  test; wheel re-entry; divider grab zone over the band; polling keyed
-  off the config fold, not the drawn one; token kept across
-  `gh auth switch`); `CLAUDE.md`'s panel_rects invariant must name
-  `ui::ci::split_docks` after the merge (coordinator). #92 and #93
-  follow.
-- **#94 FZ-39** (relay-sweep prunes dead scratch builds; the discipline
-  rule in the workflow doc): created 14:20 as P1 in M5 under his "ok.
-  use an agent to set this up then?" (about 14:15); `fz-small`
-  dispatched 14:23 in `.claude/worktrees/issue-94`, branch
-  `chore/94-relay-sweep-prune`, base `d3816ca`. Review 1 changes
-  requested (B1 the wrong session variable, `CLAUDE_CODE_SESSION_ID` is
-  the real one, and a guess that did not spare the live session; B2 a
-  symlinked `scratchpad` escaped the root), fix cycle 1 accepted, plus a
-  ruled-in guard against `.`/`..`/slashed ids; accepted revision
-  `5558056c` committed as `83c7eb9`. **Done: merged `fed5060` at
-  14:38** (record in the log); `main` CI watched, sweep after. The
-  template copy in `~/claude-config` needs the same change (his). The
-  other layer, a global `SessionStart` hook that deletes scratchpads
-  older than two days, was prepared in `~/claude-config` by a general
-  agent outside Relay and committed and pushed there as `e751f06` on
-  his "you may commit and push this" (14:25); it also skips sessions
-  whose registered pid is alive.
+Today's earlier trail (the seven merged tickets, the disk pause, the
+rulings) is in the log: "Merged on 2026-10-21" and the lead record
+for 2026-10-21 under "Earlier leads".
 
 ## Next step, and the order after it
 
