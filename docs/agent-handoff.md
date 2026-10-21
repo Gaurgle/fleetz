@@ -170,22 +170,19 @@ it). `issue-89` was swept after the merge.
   (11:05) to creating FZ-30a to e and the 2026-10-17 batch 3 approval.
 - **#79 FZ-03a** Done: merged `b69ad37` at 13:27 on his "i dont need
   to check small things as that" (record in the log).
-- **#81 FZ-13n**: reviewed and accepted (revision `92954df9`),
-  committed as `c540b36` on `feat/81-footer-hints-follow-focus`, pushed,
-  branch CI green; combined check against `main` with #79 in
-  (`b69ad37`) green, 1195 tests. **Ready to integrate since 13:30 for
-  his look at the footer** (his "lets try it out" of 2026-10-17; he may
-  reject it, in which case the branch is discarded and `docs/ideas.md`
-  "Header noise" records why; on acceptance the ideas note is amended
-  after the merge). Worktree `.claude/worktrees/issue-81`, base
-  `4b958c1`.
+- **#81 FZ-13n** Done: merged `599dc2e` at 13:36 on his "all good"
+  (record in the log); `docs/ideas.md` "Header noise" amended.
 - **#90 FZ-30b** (CI data layer, no screen change): `fz-worker`
   (`claude-opus-5-5`, medium) dispatched 13:16 in
   `.claude/worktrees/issue-90`, branch `feat/90-ci-data-layer`, base
-  `f9c2804`; five rulings in the assignment comment (invisible until
-  FZ-30c via `ci_folded = true`, dwell, second `ApiBudget` and
-  `GithubBackoff`, `GithubFreshness` per repo, log fetch call site waits
-  for FZ-30d). Reviewer next; merges under the safe-merge rule.
+  `f9c2804`; five rulings in the assignment comment and six more on the
+  worker's decisions (13:40, all accepted). Worker done: tracked diff
+  `1c4b3543` plus untracked `src/ci.rs` and three fixtures under
+  `src/ci/fixtures/`, 38 new tests, 1217 passed. `fz-reviewer`
+  (`claude-opus-5-5`, medium) running since 13:41. Then commit (stage
+  the four new files explicitly), push, CI, combined check, merge under
+  the safe-merge rule (no screen change). Follow-ups carried to FZ-30c:
+  cache the `gh` token per session; `AppEvent::Ci` requests a redraw.
 
 ## Next step, and the order after it
 

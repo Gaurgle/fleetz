@@ -299,6 +299,23 @@ first (from `git log --merges main`).
   through ("i dont need to check small things as that"). Branch CI
   green; combined check 1187 tests; `main` CI green. Swept.
   FZ-03a: review accepted first; fix cycles 0; owner decisions 2; worker 5; review 3; usage not read
+- **#81 (FZ-13n), footer hints follow the focused pane.** Merged
+  `599dc2e` at 13:36 CEST; ticket commit `c540b36` (reviewed diff
+  `92954df9`), branch `feat/81-footer-hints-follow-focus` from
+  `4b958c1` (a fresh worker; the 2026-10-17 worktree was lost).
+  `focus_hints` and `hints_with_segment` in `footer.rs`, `SEGMENT_GAP`,
+  the five-step order of his 2026-10-17 "invert the order"; fold digits
+  from `INSPECTOR_NUM` and `CONTRIBUTIONS_NUM` so the strip reads `[5]`
+  after #89; `[B]` only in `info`; the strip's `[c]` in the plain style;
+  compact shows the list's or the focused strip's segment. Three
+  existing tests moved to widths where the full row fits (one
+  authorized 2026-10-17, two on his "yes" of 2026-10-21), assertions
+  unchanged; eight new tests. Review accepted first (a dump over 64
+  configurations and widths 10 to 300 showed the global row byte for
+  byte the base's; two mutations caught). His look: "all good" (13:35).
+  `docs/ideas.md` "Header noise" amended on `main` after acceptance.
+  Branch CI green; combined check 1195 tests; `main` CI green. Swept.
+  FZ-13n: review accepted first; fix cycles 0; owner decisions 3; worker 8; review 6; usage not read
 
 ### Merged on 2026-10-20
 

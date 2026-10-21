@@ -651,6 +651,18 @@ hint row is 97 columns and would reach 119, which with the summary on the left
 needs about 154 columns before it stops degrading to bare keys. Consistency
 there would have cost the descriptions on everything.
 
+**Amended 2026-10-21 (FZ-13n, #81), tried and kept.** The pane keys (`[`/`]`
+views in the repo pane, `+`/`-` on the inspector, `h`/`l` on the strip, `B`
+in `info`) have no room beside what they change, so the rule left them
+nowhere but the help overlay. The footer's hint row now opens with a segment
+for the focused pane, then the global row as before. Andreas's order when it
+does not fit, widest first: segment with words and global with words; segment
+with words and global bare; all bare; then today's two narrow steps with no
+segment, so a row without the segment is byte for byte what it was. The
+global row's words give way first because they are the same every day and
+the segment is the new information; the cost he accepted is that between
+about 125 and 190 columns the global row shows bare keys where it had words.
+
 Fixing the pulse exposed a latent bug worth recording: `SLOW_REPAINT_TICKS` was
 10 against a `BLINK_TICKS` of 5, so between any two repaints the blink flipped
 exactly twice and was always drawn in the same phase. The pending-CI blink had
