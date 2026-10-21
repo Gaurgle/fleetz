@@ -41,6 +41,10 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-21, 15:22.** "sound sgood to me" to the #92 rulings of
+  15:19: the `ci` tab in sky and the two further existing-test edits
+  (the view-cycle wrap test; #90's `ci_folded` test renamed
+  `the_ci_poll_waits_for_the_ci_view`) are his.
 - **2026-10-21, 15:12 and 15:20.** "why are we not having CI as it's own
   page in pane 2 instead of its own pane?", "id even want to be able to
   scroll thru the ci script/code somehow", then the decision: "i think
