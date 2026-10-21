@@ -41,6 +41,16 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-21, 11:05.** To the spec's five open points: "1. show me the
+  examples (ascii is fine)" (layout still open); "2. ok with me" (the
+  thirteen existing tests pinning the strip as pane 4 may change `4` to
+  `5` and `[4]` to `[5]`, and the Tab walks gain a pane in FZ-30c, no
+  assertion weakened); "3. i dont know what these mean, what
+  circumstance?" (keys still open, explained in chat); "4. as per config,
+  but first time users have all panes open" (config key `ci_pane`,
+  default open; recorded in the spec); "5. sure" (create FZ-30a to e, run
+  FZ-30a: #89 to #93 created, #89 dispatched). Also "#79 and #81 you have
+  to give me more info about" (explained in chat; no answer yet).
 - **2026-10-21, 10:58.** "doesnt matter to me", to the takeover report's
   five options and the coordinator's suggestion (5: trim the handoff; 4:
   the #67 CI pane spec first). Read as: do those two in that order; the
@@ -142,7 +152,13 @@ see "Baton"). The sweep keeps it.
 
 ## In flight
 
-Nothing.
+- **#89 FZ-30a** (strip to pane 5): `fz-worker` (`claude-opus-5-5`,
+  medium) dispatched 11:15 in `.claude/worktrees/issue-89`, branch
+  `feat/89-strip-to-pane-5`, base `5cce618`. Reviewer next, then Ready
+  to integrate for his look (a tag and a key). Authority: his "sure"
+  (11:05) to creating FZ-30a to e (#89 to #93) and running FZ-30a; his
+  "ok with me" to the existing-test edits. #90 to #93 are Backlog and
+  wait on the spec's open points (layout, keys) and his word.
 
 ## Next step, and the order after it
 
