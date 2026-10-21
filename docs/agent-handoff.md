@@ -172,11 +172,13 @@ it). `issue-89` was swept after the merge.
   to check small things as that" (record in the log).
 - **#81 FZ-13n**: reviewed and accepted (revision `92954df9`),
   committed as `c540b36` on `feat/81-footer-hints-follow-focus`, pushed,
-  branch CI green; combined check rerun against `main` with #79 in
-  (`b69ad37`) in progress. Then **Ready to integrate for his look at the
-  footer** (his "lets try it out" of 2026-10-17; he may reject it, in
-  which case the branch is discarded and `docs/ideas.md` "Header noise"
-  records why). Worktree `.claude/worktrees/issue-81`, base `4b958c1`.
+  branch CI green; combined check against `main` with #79 in
+  (`b69ad37`) green, 1195 tests. **Ready to integrate since 13:30 for
+  his look at the footer** (his "lets try it out" of 2026-10-17; he may
+  reject it, in which case the branch is discarded and `docs/ideas.md`
+  "Header noise" records why; on acceptance the ideas note is amended
+  after the merge). Worktree `.claude/worktrees/issue-81`, base
+  `4b958c1`.
 - **#90 FZ-30b** (CI data layer, no screen change): `fz-worker`
   (`claude-opus-5-5`, medium) dispatched 13:16 in
   `.claude/worktrees/issue-90`, branch `feat/90-ci-data-layer`, base
