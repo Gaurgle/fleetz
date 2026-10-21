@@ -14,10 +14,13 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Released** 2026-10-21 16:10 CEST by `claude-fable-5-1` (session
-`6c0bef32-e39d-4d66-98b4-edcb6d119773`), which held it from 10:50, on
-Andreas's "we have to stop here for this tokens window" and "commit and
-push asap" (about 16:07).
+**Held again** since 2026-10-21 18:55 CEST by `claude-fable-5-1`, the
+same session (`6c0bef32-e39d-4d66-98b4-edcb6d119773`), on Andreas's
+"we can continue. I will be on a party for a while tho, can you keep
+going for 2 hours without me interweining?" (18:52). It had released
+the baton at 16:10 on his "we have to stop here for this tokens
+window". **Unattended run, 18:55 to 21:30:** scope, cap and stop
+conditions under "Authorized by the owner", 18:52.
 **Nothing is running: no worker, no reviewer, no build, no background
 job.** Seven tickets went Done today (#89, #79, #81, #90, #94, #91,
 #92; records in the log, "Merged on 2026-10-21"). The next lead
@@ -45,6 +48,22 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-21, 18:52.** "we can continue. I will be on a party for a
+  while tho, can you keep going for 2 hours without me interweining?"
+  Read as an unattended run under "Unattended runs" in
+  agent-workflow.md. **Scope:** the standing batch 3 approval
+  (2026-10-17) as amended today: run #95 FZ-30f and #93 FZ-30e in the
+  two worker slots to Ready to integrate (both are look changes and
+  wait for him; nothing merges without his look), then write the
+  FZ-14 attention view spec under `docs/superpowers/specs/` for his
+  approval (no worker on it). **Cap:** those two tickets and one spec.
+  **Not in scope:** creating issues (the worktree disk-usage feature
+  and the default-branch name wait for his yes), merging look changes,
+  anything outside batch 3. **Stop conditions:** 21:30 (his "can you
+  ruin autonomnously for two hours then stop? stop at 21:30", 18:58),
+  the cap, a safe-merge or review blocker surviving two fix cycles, a
+  usage limit, or his return; each ends with a report in chat and the
+  handoff updated.
 - **2026-10-21, 16:05.** "looks great. but yes, we need another color
   for the CI page, perhaps red? and CI page highlight is not showing
   anything in inspector yet". Read as: #92 accepted and merged
