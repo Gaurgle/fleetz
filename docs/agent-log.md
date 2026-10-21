@@ -336,6 +336,32 @@ first (from `git log --merges main`).
   per-repo backoff, `data_time` on a partial failure. Branch CI green;
   combined check 1231 tests; `main` CI green. Swept.
   FZ-30b: review accepted first; fix cycles 0; owner decisions 0; worker 19; review 5; usage not read
+- **#94 (FZ-39), relay-sweep prunes dead scratch builds and clones.**
+  Merged `fed5060` at 14:38 CEST; ticket commit `83c7eb9` (accepted
+  diff `5558056c`), branch `chore/94-relay-sweep-prune` from `d3816ca`.
+  Created at 14:20 as P1 in M5 on his "ok. use an agent to set this up
+  then?" after the disk filled (ENOSPC at 505 MB free: a closed
+  session's 14 GB scratchpad plus 4 GB of this session's clones and a
+  reviewer's scratch build). The sweep now removes other sessions'
+  `scratchpad/*/target` dirs and git clones (a `.git` directory) under
+  this repository's Claude scratch root, never the current session
+  (`CLAUDE_CODE_SESSION_ID`, then `CLAUDE_SESSION_ID`; no usable id, no
+  prune), never a symlink at any level, never outside the root (physical
+  path check before every `rm -rf`), `--dry-run`, `RELAY_SCRATCH_ROOT`
+  for tests; one paragraph in `docs/agent-workflow.md` makes scratch
+  clones and their builds the responsibility of the command that used
+  them. `fz-small` (`claude-sonnet-5-5`). Review 1 changes requested
+  (B1: the ticket named the wrong variable and the newest-dir guess did
+  not spare the live session, reproduced; B2: a symlinked `scratchpad`
+  escaped the root, reproduced); fix cycle 1 accepted; a ruled-in guard
+  against `.`, `..` and slashed ids accepted after the reviewer rebuilt
+  the previous revision to prove the one-line delta. The other layer,
+  a global `SessionStart` hook pruning scratchpads older than two days
+  (skipping live sessions by registered pid), landed in `~/claude-config`
+  as `e751f06` on his word. Template drift: the Relay template's
+  `relay-sweep` needs the port (his). Branch CI green; combined check
+  1231 tests; `main` CI green. Swept.
+  FZ-39: review changes 1; fix cycles 2; owner decisions 1; worker 6; review 12; usage not read
 
 ### Merged on 2026-10-20
 

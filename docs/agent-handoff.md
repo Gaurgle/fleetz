@@ -217,11 +217,19 @@ inside the scratchpad and remove it when done.
   rule in the workflow doc): created 14:20 as P1 in M5 under his "ok.
   use an agent to set this up then?" (about 14:15); `fz-small`
   dispatched 14:23 in `.claude/worktrees/issue-94`, branch
-  `chore/94-relay-sweep-prune`, base `d3816ca`. Reviewer next; merges
-  under the safe-merge rule. The other layer, a global `SessionStart`
-  hook that deletes scratchpads older than two days, is being prepared
-  in `~/claude-config` by a general agent outside Relay, for his own
-  commit (not fleetz state; its report goes to him in chat).
+  `chore/94-relay-sweep-prune`, base `d3816ca`. Review 1 changes
+  requested (B1 the wrong session variable, `CLAUDE_CODE_SESSION_ID` is
+  the real one, and a guess that did not spare the live session; B2 a
+  symlinked `scratchpad` escaped the root), fix cycle 1 accepted, plus a
+  ruled-in guard against `.`/`..`/slashed ids; accepted revision
+  `5558056c` committed as `83c7eb9`. **Done: merged `fed5060` at
+  14:38** (record in the log); `main` CI watched, sweep after. The
+  template copy in `~/claude-config` needs the same change (his). The
+  other layer, a global `SessionStart` hook that deletes scratchpads
+  older than two days, was prepared in `~/claude-config` by a general
+  agent outside Relay and committed and pushed there as `e751f06` on
+  his "you may commit and push this" (14:25); it also skips sessions
+  whose registered pid is alive.
 
 ## Next step, and the order after it
 
