@@ -358,7 +358,12 @@ Nothing starts until Andreas opens the next session.
 2. **#93 FZ-30e, the handoffs** (`l`, `a`, `x`, `O` on the highlighted
    run), after #95 or beside it in the second slot (they share
    `src/main.rs` by region: the key arms).
-3. **His feature of 16:12, not yet ticketed (ask before creating):**
+3. **FZ-14 attention view spec drafted** (19:00,
+   `docs/superpowers/specs/2026-10-21-attention-view-design.md`, comment
+   on #27): waits on his answers to its "Open with Andreas" (the reason
+   table, section versus tag, the fetch two-failure rule, creating
+   FZ-14a to c and the word to run FZ-14a).
+4. **His feature of 16:12, not yet ticketed (ask before creating):**
    "how are we doing on the worktree page? it should also review how
    much space each worktree is taking up, as we ll as the collective
    amount, and their location on disk". The `info` worktrees section
