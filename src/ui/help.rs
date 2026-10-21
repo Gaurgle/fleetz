@@ -48,8 +48,8 @@ const GROUPS: [Group; 6] = [
                 desc: &["focus next / previous pane"],
             },
             Row {
-                key: "1-5",
-                desc: &["focus; again folds 3, 4, 5"],
+                key: "1 2 3 4",
+                desc: &["focus; again folds 3 and 4"],
             },
             Row {
                 key: "h/l ←/→",
@@ -61,7 +61,7 @@ const GROUPS: [Group; 6] = [
             },
             Row {
                 key: "mouse",
-                desc: &["click focus, [3]-[5] folds", "wheel, drag grip or strip"],
+                desc: &["click focus, [3]/[4] folds", "wheel, drag grip or strip"],
             },
         ],
     },

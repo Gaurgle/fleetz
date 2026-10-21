@@ -80,10 +80,6 @@ const MAIN_MIN_HEIGHT: u16 = 10;
 /// `detail::split_main` and `detail::split_inspector`: `ui::render` draws
 /// from it and `ui::panel_rects` hit-tests against it. It lives here rather
 /// than in `detail.rs` because the strip exists in Compact view too.
-///
-/// The CI band docks above it through `ui::ci::split_docks`, which calls this
-/// for the strip and `dock_bottom` for the band, so both bands share one
-/// copy of the carve and of the `MAIN_MIN_HEIGHT` rule.
 pub fn split_main_area(main: Rect, folded: bool) -> (Rect, Option<Rect>) {
     let height = if folded {
         crate::ui::FOLDED_HEIGHT
@@ -298,7 +294,7 @@ pub fn slot_at(area: Rect, scroll: usize, col: u16, row: u16) -> Option<usize> {
 ///
 /// Framed like the other three panes rather than drawn bare, because it is
 /// focusable the same way they are: without a border there is nothing on
-/// screen to say `5` reached it or that it currently holds the keys.
+/// screen to say `4` reached it or that it currently holds the keys.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     if app.contributions_folded {
         crate::ui::render_folded(
@@ -998,7 +994,7 @@ mod tests {
         let lines = drawn(120, &app_with_calendar(1));
         assert_eq!(lines.len(), CONTRIB_HEIGHT as usize);
         assert!(
-            lines[0].contains("[5] contributions"),
+            lines[0].contains("[4] contributions"),
             "title: {}",
             lines[0]
         );
@@ -1084,7 +1080,7 @@ mod tests {
         app.contributions = ContributionsMode::Github;
         assert!(app.github_calendar.is_none());
         let lines = drawn(120, &app);
-        assert!(lines[0].contains("[5] contributions"), "frame drawn");
+        assert!(lines[0].contains("[4] contributions"), "frame drawn");
         assert!(!lines[3].contains(CELL), "no cells painted: {}", lines[3]);
     }
 
@@ -1209,10 +1205,10 @@ mod tests {
     }
 
     #[test]
-    fn the_5_key_unfolds_a_never_opened_strip_onto_today() {
+    fn the_4_key_unfolds_a_never_opened_strip_onto_today() {
         assert_unfolds_onto_today(
             |app| app.press_panel_key(FocusedPanel::Contributions),
-            "5 key",
+            "4 key",
         );
     }
 
@@ -1279,7 +1275,7 @@ mod tests {
         assert!(app.contributions_folded);
         app.press_panel_key(FocusedPanel::Contributions);
         assert!(!app.contributions_folded);
-        assert_eq!(app.contrib_cursor, Some(travelled), "5 key kept the day");
+        assert_eq!(app.contrib_cursor, Some(travelled), "4 key kept the day");
     }
 
     /// While travelling, the top title reads out the day under the cursor,

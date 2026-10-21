@@ -1,29 +1,26 @@
-//! The CI pane (pane 4, FZ-30c): the selected repo's recent workflow runs,
-//! one row each, in a band docked across the full width above the
-//! contribution strip. See `docs/superpowers/specs/2026-10-21-ci-pane-design.md`,
-//! sections A, D and E. The data is `ci.rs`'s; jobs, steps and the log tail
-//! are FZ-30d.
+//! The `ci` view of pane 2 (FZ-30d): the selected repo's recent workflow
+//! runs, one row each, under a first line that says how current they are or
+//! why there are none; and the small `ci` section of the `info` view, drawn
+//! from what is already in hand. See
+//! `docs/superpowers/specs/2026-10-21-ci-pane-design.md`, sections D and E
+//! and "Amendment 2026-10-21". The data is `ci.rs`'s; the inspector's run
+//! bodies are FZ-30f.
 
 use chrono::{DateTime, Local, Utc};
-use ratatui::Frame;
-use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
-use crate::app::{App, CiState, DataTime, FocusedPanel, Outcome};
+use crate::app::{App, CiState, DataTime, Outcome};
 use crate::ci::WorkflowRun;
-use crate::model::CiStatus;
-use crate::ui::{CI_NUM, FOLDED_HEIGHT, badges, colors, contributions};
+use crate::model::{CiStatus, RepoStatus};
+use crate::ui::{badges, colors};
 
-/// Rows the open band takes: its frame and eight lines of runs.
-pub const CI_HEIGHT: u16 = 10;
+/// Run rows the `info` section shows at most: the latest run of each of
+/// the three most recently run branches.
+pub const INFO_RUNS: usize = 3;
 
-/// Run rows the open band shows at once.
-pub const RUN_ROWS: usize = (CI_HEIGHT - 2) as usize;
-
-/// The pane's label, after its `[4]` tag.
-const LABEL: &str = "ci";
+/// The `info` section's pointer to the full list, while no runs are held.
+pub const RUNS_HINT: &str = "] for runs";
 
 /// Column caps, so one long workflow or branch name cannot take the title's
 /// room. Longer names truncate with `…`.
@@ -37,141 +34,139 @@ const COLUMN_GAP: &str = "  ";
 /// Columns the selection marker holds open on every row (`▸ ` or blank).
 const MARKER_W: usize = 2;
 
-/// Dock both bands off the bottom of `main`: the strip at the very bottom,
-/// the CI band above it, the panes above both. Returns `(body, ci, strip)`.
-///
-/// The single source of truth for that geometry: `ui::panel_rects` reports it
-/// and `ui::render` draws from `panel_rects`, so a click lands where the band
-/// is drawn. The strip is carved by `split_main_area` and the band from what
-/// is left with the same carve (`contributions::dock_bottom`).
-///
-/// When the height runs out, in this order: an open band drops to its folded
-/// row; then the strip gives way, as it always has; the band's folded row
-/// stays as long as the panes above keep `MAIN_MIN_HEIGHT`. The band never
-/// disappears while the strip stays.
-pub fn split_docks(
-    main: Rect,
-    ci_folded: bool,
-    strip_folded: bool,
-) -> (Rect, Option<Rect>, Option<Rect>) {
-    let (rest, strip) = contributions::split_main_area(main, strip_folded);
-    if strip.is_some() {
-        let heights = if ci_folded {
-            &[FOLDED_HEIGHT][..]
-        } else {
-            &[CI_HEIGHT, FOLDED_HEIGHT][..]
-        };
-        for &height in heights {
-            if let (body, Some(ci)) = contributions::dock_bottom(rest, height) {
-                return (body, Some(ci), strip);
-            }
-        }
-    }
-    // No room for the strip beside the band: the strip gives way, and the
-    // band keeps its folded row.
-    let (body, ci) = contributions::dock_bottom(main, FOLDED_HEIGHT);
-    (body, ci, None)
-}
-
-/// Whether a band `split_docks` laid out is drawn folded: its title row
-/// alone, whether `4` folded it or a short terminal did.
-pub fn is_folded(band: Rect) -> bool {
-    band.height <= FOLDED_HEIGHT
-}
-
-/// The run row under (`col`, `row`) in the open band `area`, an index into
-/// the selected repo's runs, or `None` off the rows. Reads the same scroll
-/// `render` draws with.
-pub fn run_at(area: Rect, app: &App, col: u16, row: u16) -> Option<usize> {
-    if is_folded(area) {
-        return None;
-    }
-    let inner = Rect::new(
-        area.x + 1,
-        area.y + 1,
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    );
-    if !inner.contains(ratatui::layout::Position { x: col, y: row }) {
-        return None;
-    }
-    let (_, state) = app.selected_ci()?;
-    let state = state?;
-    let index = first_row(state) + (row - inner.y) as usize;
-    (index < state.runs.len()).then_some(index)
-}
-
-/// The first run drawn: the stored scroll, clamped so the last run sits on
-/// the bottom row once the list is shorter than it was.
-fn first_row(state: &CiState) -> usize {
-    state.scroll.min(state.runs.len().saturating_sub(RUN_ROWS))
-}
-
-/// Draw the band: folded, its title row; open, a frame titled `[4] ci` and
-/// the freshness mark, one row per run, and the status line in the bottom
-/// border.
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let now = Local::now();
-    let focused = app.focused_panel == FocusedPanel::Ci;
+/// The `ci` view's first line: the freshness mark and the status line folded
+/// into one (`as of 12:02`, `⚠ 12:05  offline`, `loading`, `no GitHub
+/// remote`, `no workflow runs`, `not signed in`, `GitHub off under -d`).
+pub fn first_line(app: &App, now: DateTime<Local>) -> Line<'static> {
     let state = app.selected_ci().and_then(|(_, state)| state);
-    let mark = freshness_mark(state, now);
-    if is_folded(area) {
-        crate::ui::render_folded(frame, area, CI_NUM, LABEL, focused);
-        if let Some(mark) = mark {
-            let title = crate::ui::panel_title(CI_NUM, LABEL, focused).width() as u16;
-            let x = area.x + 1 + title;
-            let rest = Rect::new(x, area.y, area.width.saturating_sub(1 + title), 1);
-            frame.render_widget(
-                Line::from(vec![mark, Span::raw(" ")]),
-                rest.intersection(area),
-            );
-        }
-        return;
+    let mut spans = Vec::new();
+    if let Some(mark) = freshness_mark(state, now) {
+        spans.push(mark);
     }
-    let border_color = if focused {
-        colors::LAVENDER
-    } else {
-        colors::SURFACE
-    };
-    let mut title = crate::ui::panel_title(CI_NUM, LABEL, focused);
-    if let Some(mark) = mark {
-        title.spans.push(mark);
-        title.spans.push(Span::raw(" "));
-    }
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
-        .padding(Padding::horizontal(1))
-        .title_top(title);
     if let Some(status) = status_line(app, now) {
-        block = block.title_bottom(Line::from(status));
-    }
-    let inner = block.inner(area);
-    let lines = match state {
-        Some(state) => {
-            let dim_pending = app.watch_mode && !app.blink_on;
-            let first = first_row(state);
-            let shown = &state.runs[first..state.runs.len().min(first + RUN_ROWS)];
-            let widths = Widths::of(&state.runs, now);
-            shown
-                .iter()
-                .enumerate()
-                .map(|(i, run)| {
-                    let selected = first + i == state.cursor;
-                    run_line(run, &widths, inner.width as usize, now, dim_pending)
-                        .marked(selected, focused)
-                })
-                .collect()
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
         }
-        None => Vec::new(),
-    };
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+        spans.extend(trimmed(status));
+    }
+    Line::from(spans)
 }
 
-/// The title's freshness mark (spec section D): `as of 12:02` once an
-/// attempt succeeded, dated by the data on screen; `⚠ 12:05` while the last
-/// one failed, dated by that failed attempt (when fleetz last tried), as the
+/// `spans` without the blank the status line pads itself with for a border.
+fn trimmed(mut spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    if let Some(first) = spans.first_mut() {
+        first.content = first.content.trim_start().to_string().into();
+    }
+    if let Some(last) = spans.last_mut() {
+        last.content = last.content.trim_end().to_string().into();
+    }
+    spans
+}
+
+/// The `ci` view's run rows, one line each and `width` wide, the run at
+/// `selected` carrying the cursor (washed while pane 2 has focus). Empty
+/// while the selected repo holds no runs; the first line says why.
+pub fn run_rows(
+    app: &App,
+    width: usize,
+    now: DateTime<Local>,
+    selected: usize,
+    focused: bool,
+) -> Vec<Line<'static>> {
+    let Some(state) = app.selected_ci().and_then(|(_, state)| state) else {
+        return Vec::new();
+    };
+    let dim_pending = app.watch_mode && !app.blink_on;
+    let widths = Widths::of(&state.runs, now);
+    state
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(i, run)| {
+            run_line(run, &widths, width, now, dim_pending).marked(i == selected, focused)
+        })
+        .collect()
+}
+
+/// The `info` view's `ci` section under its label, from what is in hand and
+/// never polled for: the default branch's check state as the fleet poll
+/// left it (the pane 1 lamp's fact), then the latest run of each of the
+/// three most recently run branches when runs are held from a visit to
+/// `ci`, else a dim `] for runs` hint. `None` for a row with no GitHub
+/// identity, which has no section.
+pub fn info_rows(
+    app: &App,
+    repo: &RepoStatus,
+    width: usize,
+    now: DateTime<Local>,
+) -> Option<Vec<Line<'static>>> {
+    let (key, ..) = crate::ci::target(repo)?;
+    let mut lines = vec![default_branch_line(app, repo)];
+    let runs = app.ci.get(&key).map_or(&[][..], |s| &s.runs[..]);
+    let latest = latest_per_branch(runs);
+    if latest.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  {RUNS_HINT}"),
+            Style::default().fg(colors::OVERLAY),
+        )));
+        return Some(lines);
+    }
+    let widths = Widths::of(&latest, now);
+    lines.extend(
+        latest
+            .iter()
+            .map(|run| run_line(run, &widths, width, now, false).marked(false, false)),
+    );
+    Some(lines)
+}
+
+/// The default branch's line: the lamp and word the repo list and the
+/// header draw for `ci_status`, dimmed as they are when the last poll did
+/// not return the repo, or `no checks`. Held still, as the section's run
+/// rows are: the list lamp and the header's already pulse for this fact,
+/// and a third in step reads as a third thing happening.
+fn default_branch_line(app: &App, repo: &RepoStatus) -> Line<'static> {
+    let (glyph, color, label) = badges::ci_display(&repo.ci_status, false);
+    if label.is_empty() {
+        return Line::from(Span::styled(
+            "  no checks",
+            Style::default().fg(colors::OVERLAY),
+        ));
+    }
+    let color = if app.is_not_in_last_poll(repo) {
+        badges::EARLIER_REFRESH
+    } else {
+        color
+    };
+    Line::from(vec![
+        Span::styled(format!("  {glyph} "), Style::default().fg(color)),
+        Span::styled("default branch ", Style::default().fg(colors::TEXT)),
+        Span::styled(label, Style::default().fg(color)),
+    ])
+}
+
+/// The newest run of each branch, for the first `INFO_RUNS` branches in the
+/// list's order (newest first). A run with no branch is a branch of its own.
+fn latest_per_branch(runs: &[WorkflowRun]) -> Vec<WorkflowRun> {
+    let mut seen: Vec<Option<&str>> = Vec::new();
+    let mut latest = Vec::new();
+    for run in runs {
+        let branch = run.branch.as_deref();
+        if seen.contains(&branch) {
+            continue;
+        }
+        seen.push(branch);
+        latest.push(run.clone());
+        if latest.len() == INFO_RUNS {
+            break;
+        }
+    }
+    latest
+}
+
+/// The freshness mark (spec section D): `as of 12:02` once an attempt
+/// succeeded, dated by the data on screen; `⚠ 12:05` while the last one
+/// failed, dated by that failed attempt (when fleetz last tried), as the
 /// header's `at 12:05` is. Nothing before the first answer.
 pub fn freshness_mark(state: Option<&CiState>, now: DateTime<Local>) -> Option<Span<'static>> {
     let freshness = &state?.freshness;
@@ -197,9 +192,9 @@ pub fn freshness_mark(state: Option<&CiState>, now: DateTime<Local>) -> Option<S
     }
 }
 
-/// The pane's status line, in its bottom border: why there are no runs to
-/// show, or how the last attempt failed. `None` when the runs speak for
-/// themselves.
+/// The status half of the first line: why there are no runs to show, or
+/// how the last attempt failed. `None` when the runs speak for themselves.
+/// Padded with a blank each side; `first_line` trims it.
 ///
 /// - `loading`, on the spinner, before the first answer for this repo;
 /// - `no GitHub remote` on a row with no GitHub identity, and
@@ -292,7 +287,7 @@ fn workflow_text(run: &WorkflowRun) -> &str {
 
 /// Column widths, sized as the repo list sizes its columns: to the widest
 /// entry among all the runs held (not only the ones scrolled into view, so
-/// the columns hold still while the band scrolls), capped.
+/// the columns hold still while the view scrolls), capped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Widths {
     workflow: usize,
@@ -408,11 +403,11 @@ pub fn run_line(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::View;
-    use crate::model::RepoStatus;
+    use crate::app::{FocusedPanel, HistoryView, View};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
 
     const RUNS: &str = include_str!("../ci/fixtures/runs.json");
 
@@ -478,12 +473,12 @@ mod tests {
         }
     }
 
-    /// An app on one GitHub repo, the CI pane open, nothing polled.
+    /// An app on one GitHub repo, pane 2 showing `ci`, nothing polled.
     fn app() -> App {
         let mut app = App::new(Vec::new(), String::new(), 120, 44);
         app.repos = vec![repo()];
         app.view = View::Detail;
-        app.ci_folded = false;
+        app.history_view = HistoryView::Ci;
         app.jitter = Box::new(NoJitter);
         app
     }
@@ -537,138 +532,31 @@ mod tests {
             .collect()
     }
 
+    /// The detail pane's rows as drawn, one string each.
+    fn detail_rows(app: &App) -> Vec<String> {
+        let (rects, buffer) = draw(app, 160, 50);
+        let detail = rects.detail.expect("detail pane laid out");
+        (detail.y..detail.y + detail.height)
+            .map(|y| {
+                (detail.x..detail.x + detail.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The start of a run's title, which a narrow title column truncates.
+    fn head(run: &WorkflowRun) -> String {
+        run.title.chars().take(20).collect()
+    }
+
+    fn line_text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
     fn status_text(app: &App) -> Option<String> {
         status_line(app, Local::now())
             .map(|spans| spans.iter().map(|s| s.content.as_ref()).collect())
-    }
-
-    // --- Geometry: the one split, reported where it is drawn ---
-
-    #[test]
-    fn the_band_docks_above_the_strip_with_one_gap_row_each() {
-        let main = Rect::new(0, 1, 120, 41);
-        let (body, ci, strip) = split_docks(main, false, false);
-        let (ci, strip) = (ci.expect("band laid out"), strip.expect("strip laid out"));
-        assert_eq!(ci.height, CI_HEIGHT);
-        assert_eq!(strip.height, contributions::CONTRIB_HEIGHT);
-        assert_eq!(
-            strip.y + strip.height,
-            main.y + main.height,
-            "strip at the bottom"
-        );
-        assert_eq!(
-            ci.y + ci.height + 1,
-            strip.y,
-            "band directly above the strip"
-        );
-        assert_eq!(
-            body.y + body.height + 1,
-            ci.y,
-            "panes directly above the band"
-        );
-        assert_eq!((ci.x, ci.width), (main.x, main.width), "full width");
-
-        let (_, folded, _) = split_docks(main, true, false);
-        assert_eq!(folded.expect("folded band laid out").height, FOLDED_HEIGHT);
-    }
-
-    /// On a short terminal the band folds to its row before anything else
-    /// gives way, and the panes above keep their floor.
-    #[test]
-    fn a_short_area_folds_the_band_before_the_strip_goes() {
-        let open_both = 10 + CI_HEIGHT + 1 + contributions::CONTRIB_HEIGHT + 1;
-        let at = |h| split_docks(Rect::new(0, 0, 120, h), false, false);
-        let (_, ci, strip) = at(open_both);
-        assert_eq!(ci.unwrap().height, CI_HEIGHT);
-        assert!(strip.is_some());
-        let (body, ci, strip) = at(open_both - 1);
-        assert_eq!(ci.unwrap().height, FOLDED_HEIGHT, "folded first");
-        assert_eq!(
-            strip.unwrap().height,
-            contributions::CONTRIB_HEIGHT,
-            "strip kept"
-        );
-        assert!(body.height >= 10);
-    }
-
-    /// Spec A's order when the height runs out, at every height from 15 to
-    /// 30 and every fold state: the open band folds first, the strip gives
-    /// way next, and the band's folded row stays while the panes keep
-    /// `MAIN_MIN_HEIGHT`. The band never disappears while the strip stays.
-    #[test]
-    fn the_band_keeps_its_row_longer_than_the_strip_at_every_short_height() {
-        const MAIN_MIN: u16 = 10;
-        // The blank row above each docked band.
-        const GAP: u16 = 1;
-        let row = FOLDED_HEIGHT + GAP;
-        for ci_folded in [false, true] {
-            for strip_folded in [false, true] {
-                let strip_h = if strip_folded {
-                    FOLDED_HEIGHT
-                } else {
-                    contributions::CONTRIB_HEIGHT
-                };
-                for h in 15u16..=30 {
-                    let case = format!("h {h}, ci folded {ci_folded}, strip folded {strip_folded}");
-                    let main = Rect::new(0, 0, 120, h);
-                    let (body, ci, strip) = split_docks(main, ci_folded, strip_folded);
-                    let ci = ci.unwrap_or_else(|| panic!("{case}: the band's row is gone"));
-                    assert!(body.height >= MAIN_MIN, "{case}: body {}", body.height);
-                    let strip_fits = h >= MAIN_MIN + row + strip_h + GAP;
-                    assert_eq!(strip.is_some(), strip_fits, "{case}: strip");
-                    let open_fits = !ci_folded && h >= MAIN_MIN + CI_HEIGHT + GAP + strip_h + GAP;
-                    let expected = if open_fits { CI_HEIGHT } else { FOLDED_HEIGHT };
-                    assert_eq!(ci.height, expected, "{case}: band height");
-                    assert_eq!(body.y + body.height + 1, ci.y, "{case}: gap above the band");
-                    match strip {
-                        Some(strip) => {
-                            assert_eq!(ci.y + ci.height + 1, strip.y, "{case}: band above strip");
-                            assert_eq!(strip.y + strip.height, h, "{case}: strip at the bottom");
-                        }
-                        None => assert_eq!(ci.y + ci.height, h, "{case}: band at the bottom"),
-                    }
-                }
-            }
-        }
-    }
-
-    /// `panel_rects` reports the band exactly where `render` draws it, open,
-    /// folded and in Compact, with the strip below it.
-    #[test]
-    fn panel_rects_reports_the_band_where_render_draws_it() {
-        for view in [View::Detail, View::Compact] {
-            for folded in [false, true] {
-                let mut app = app();
-                app.view = view;
-                app.ci_folded = folded;
-                let (rects, buffer) = draw(&app, 120, 44);
-                let band = rects
-                    .ci
-                    .unwrap_or_else(|| panic!("{view:?} lays out the band"));
-                let strip = rects.contributions.expect("strip laid out");
-                assert_eq!(band.y + band.height + 1, strip.y, "{view:?}: strip below");
-                assert_eq!(rects.ci_folded, folded);
-                let x = (band.x..band.x + band.width - 2)
-                    .find(|&x| {
-                        (0..3).all(|d| {
-                            buffer[(x + d, band.y)].symbol() == &"[4]"[d as usize..=d as usize]
-                        })
-                    })
-                    .unwrap_or_else(|| panic!("{view:?}: [4] drawn on the band's top row"));
-                assert_eq!(rects.fold_tag_at(x + 1, band.y), Some(FocusedPanel::Ci));
-                assert_eq!(rects.at(band.x + 3, band.y), Some(FocusedPanel::Ci));
-                if !folded {
-                    let corner = buffer[(band.x, band.y + band.height - 1)].symbol();
-                    assert_eq!(
-                        corner, "╰",
-                        "{view:?}: the frame ends on the band's last row"
-                    );
-                    assert_eq!(rects.at(band.x + 3, band.y + 4), Some(FocusedPanel::Ci));
-                }
-                let above = band.y - 1;
-                assert_ne!(rects.at(band.x + 3, above), Some(FocusedPanel::Ci));
-            }
-        }
     }
 
     // --- Title and status line ---
@@ -686,15 +574,6 @@ mod tests {
         let mark = freshness_mark(app.ci.get(&key()), now).unwrap();
         assert_eq!(mark.content, "⚠ 12:05", "dated by the failed attempt");
         assert_eq!(mark.style.fg, Some(colors::PEACH));
-    }
-
-    #[test]
-    fn the_band_draws_ci_with_its_tag_and_mark() {
-        let mut app = app();
-        landed(&mut app, runs(), Local::now());
-        let (rects, buffer) = draw(&app, 120, 44);
-        let top = row_text(&buffer, rects.ci.unwrap().y);
-        assert!(top.contains("[4] ci as of"), "{top}");
     }
 
     #[test]
@@ -761,6 +640,42 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect();
         assert_eq!(text, " rate limited until 12:40 ");
+    }
+
+    /// FZ-30d, ruling 5: the view's first line is the freshness mark and
+    /// the status folded into one, unpadded. Fails while the two live in a
+    /// band's title and bottom border.
+    #[test]
+    fn the_first_line_folds_the_mark_and_the_status_together() {
+        let now = local("2026-10-21T12:05:00+02:00");
+        let first = |app: &App| line_text(&first_line(app, now));
+
+        let mut app = app();
+        assert!(first(&app).ends_with("loading"), "{}", first(&app));
+
+        landed(&mut app, runs(), local("2026-10-21T12:02:00+02:00"));
+        assert_eq!(first(&app), "as of 12:02");
+
+        let offline = crate::github::Failure::new(crate::github::FailureKind::Offline, "x");
+        failed(&mut app, offline, now);
+        assert_eq!(first(&app), "⚠ 12:05  offline");
+
+        let mut empty = self::app();
+        landed(&mut empty, Vec::new(), local("2026-10-21T12:02:00+02:00"));
+        assert_eq!(first(&empty), "as of 12:02  no workflow runs");
+
+        let mut local_only = self::app();
+        local_only.repos[0].owner = None;
+        assert_eq!(first(&local_only), "no GitHub remote");
+
+        let mut dirty = self::app();
+        dirty.dirty_mode = true;
+        assert_eq!(first(&dirty), "GitHub off under -d");
+
+        let mut signed_out = self::app();
+        let auth = crate::github::Failure::new(crate::github::FailureKind::Auth, "no token");
+        failed(&mut signed_out, auth, now);
+        assert_eq!(first(&signed_out), "⚠ 12:05  not signed in");
     }
 
     // --- Run rows ---
@@ -847,116 +762,195 @@ mod tests {
         assert_eq!(run_age(run, at("2026-10-22T12:00:00Z")), "1d ago");
     }
 
-    // --- Cursor, scroll and mouse ---
+    // --- The `ci` view in pane 2 ---
 
-    fn many_runs(n: usize) -> Vec<WorkflowRun> {
+    /// `ci` is pane 2's sixth view: its tab names it, its first line says
+    /// how current the runs are, and the recorded runs follow one row each,
+    /// the cursor on the first. Fails while the runs live in a band.
+    #[test]
+    fn the_ci_view_draws_the_held_runs_under_its_first_line() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Detail;
+        landed(&mut app, runs(), Local::now());
+        let rows = detail_rows(&app);
+        assert!(rows[0].contains("CI"), "the tab: {}", rows[0]);
+        let first = rows
+            .iter()
+            .position(|r| r.contains("as of "))
+            .expect("the first line");
+        let held = runs();
+        for (i, run) in held.iter().enumerate() {
+            let row = &rows[first + 1 + i];
+            assert!(row.contains(&head(run)), "row {i}: {row}");
+            assert_eq!(row.contains('▸'), i == 0, "cursor on the first: {row}");
+        }
+        assert!(
+            rows.iter().all(|r| !r.contains("[5]")),
+            "no band, no fifth pane"
+        );
+    }
+
+    /// With nothing held the view is its first line alone: the empty state
+    /// and no rows.
+    #[test]
+    fn the_ci_view_shows_its_empty_states_on_the_first_line() {
+        let mut app = app();
+        landed(&mut app, Vec::new(), Local::now());
+        let rows = detail_rows(&app);
+        assert!(
+            rows.iter().any(|r| r.contains("no workflow runs")),
+            "{rows:#?}"
+        );
+        assert!(rows.iter().all(|r| !r.contains('▸')), "no cursor");
+
+        let mut local_only = self::app();
+        local_only.repos[0].owner = None;
+        let rows = detail_rows(&local_only);
+        assert!(rows.iter().any(|r| r.contains("no GitHub remote")));
+    }
+
+    /// `j`/`k` walk the runs through the view's own selection slot, and the
+    /// marked row follows. Fails while the cursor lives on `CiState`.
+    #[test]
+    fn the_cursor_is_the_views_selection_and_the_marked_row_follows() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Detail;
+        landed(&mut app, runs(), Local::now());
+        assert_eq!(app.selected_commit_count(), 3);
+        app.detail_nav_down();
+        app.detail_nav_down();
+        app.detail_nav_down();
+        assert_eq!(app.detail_selected(), 2, "clamped to the last run");
+        let rows = detail_rows(&app);
+        let marked: Vec<&String> = rows.iter().filter(|r| r.contains('▸')).collect();
+        assert_eq!(marked.len(), 1);
+        assert!(marked[0].contains(&head(&runs()[2])), "{}", marked[0]);
+        app.detail_nav_up();
+        assert_eq!(app.detail_selected(), 1);
+        assert_eq!(
+            app.detail_selections[HistoryView::Commits.index()],
+            0,
+            "another view's slot untouched"
+        );
+    }
+
+    /// The #91 review's follow-up: a shorter list landing for the repo on
+    /// screen pulls the cursor onto its last run. Fails while the cursor can
+    /// sit past the end of the list.
+    #[test]
+    fn a_shorter_list_landing_clamps_the_cursor() {
+        let mut app = app();
+        landed(&mut app, runs(), Local::now());
+        app.set_detail_selected(2);
+        landed(&mut app, runs()[..1].to_vec(), Local::now());
+        assert_eq!(app.detail_selected(), 0);
+        landed(&mut app, Vec::new(), Local::now());
+        assert_eq!(app.detail_selected(), 0, "an empty list parks it at 0");
+    }
+
+    /// A click on a run row moves the view's cursor there, through the
+    /// pane's own hit map.
+    #[test]
+    fn a_click_on_a_run_row_selects_it() {
+        let mut app = app();
+        landed(&mut app, runs(), Local::now());
+        let (_, buffer) = draw(&app, 160, 50);
+        let title = head(&runs()[2]);
+        let y = (0..50)
+            .find(|&y| row_text(&buffer, y).contains(title.as_str()))
+            .expect("third run drawn");
+        let hits = app.detail_hits.borrow().clone();
+        let click = hits.at(hits.body.x + 4, y).expect("a run row");
+        app.click_detail(&click);
+        assert_eq!(app.detail_selected(), 2);
+    }
+
+    // --- The `info` section ---
+
+    /// Four branches: `latest_per_branch` picks one run for each of the
+    /// three newest.
+    fn four_branch_runs() -> Vec<WorkflowRun> {
         let base = runs()[1].clone();
-        (0..n)
-            .map(|i| WorkflowRun {
+        ["main", "main", "feat/a", "feat/b", "feat/c"]
+            .iter()
+            .enumerate()
+            .map(|(i, branch)| WorkflowRun {
                 id: i as u64 + 1,
-                title: format!("run {i}"),
+                title: format!("run {i} on {branch}"),
+                branch: Some(branch.to_string()),
                 ..base.clone()
             })
             .collect()
     }
 
-    #[test]
-    fn j_and_k_move_the_cursor_and_the_band_scrolls_to_keep_it() {
-        let mut app = app();
-        landed(&mut app, many_runs(12), Local::now());
-        app.move_ci_cursor(-1);
-        assert_eq!(app.ci[&key()].cursor, 0, "clamped at the top");
-        for _ in 0..RUN_ROWS {
-            app.move_ci_cursor(1);
-        }
-        let state = &app.ci[&key()];
-        assert_eq!((state.cursor, state.scroll), (RUN_ROWS, 1), "scrolled one");
-        for _ in 0..20 {
-            app.move_ci_cursor(1);
-        }
-        let state = &app.ci[&key()];
-        assert_eq!(
-            (state.cursor, state.scroll),
-            (11, 12 - RUN_ROWS),
-            "clamped at the end"
-        );
-        for _ in 0..11 {
-            app.move_ci_cursor(-1);
-        }
-        let state = &app.ci[&key()];
-        assert_eq!((state.cursor, state.scroll), (0, 0));
+    fn info_text(app: &App) -> Option<Vec<String>> {
+        info_rows(app, &app.repos[0], 120, Local::now())
+            .map(|lines| lines.iter().map(line_text).collect())
     }
 
+    /// Held runs on four branches: the default branch's line, then the
+    /// latest run of each of the three newest branches. Fails while `info`
+    /// has no `ci` section.
     #[test]
-    fn the_cursor_row_is_the_one_drawn_marked() {
+    fn the_info_section_shows_the_default_branch_and_three_branches() {
         let mut app = app();
-        landed(&mut app, many_runs(12), Local::now());
-        app.focused_panel = FocusedPanel::Ci;
-        for _ in 0..9 {
-            app.move_ci_cursor(1);
+        app.repos[0].ci_status = CiStatus::Passed;
+        landed(&mut app, four_branch_runs(), Local::now());
+        let lines = info_text(&app).expect("a section");
+        assert_eq!(lines.len(), 1 + INFO_RUNS, "{lines:#?}");
+        assert_eq!(lines[0], "  ◉ default branch passed");
+        for (line, title) in
+            lines[1..]
+                .iter()
+                .zip(["run 0 on main", "run 2 on feat/a", "run 3 on feat/b"])
+        {
+            assert!(line.contains(title), "{title} missing: {line}");
         }
-        let (rects, buffer) = draw(&app, 120, 44);
-        let band = rects.ci.unwrap();
-        let marked: Vec<u16> = (band.y + 1..band.y + band.height - 1)
-            .filter(|&y| row_text(&buffer, y).contains('▸'))
-            .collect();
-        assert_eq!(marked.len(), 1);
-        assert!(row_text(&buffer, marked[0]).contains("run 9"));
-        assert_eq!(run_at(band, &app, band.x + 4, marked[0]), Some(9));
+        assert!(lines.iter().all(|l| !l.contains('▸')), "nothing selectable");
     }
 
+    /// No runs held (the repo was never visited in `ci`): the line and the
+    /// dim hint. No GitHub identity: no section at all.
     #[test]
-    fn a_click_selects_the_row_and_the_wheel_scrolls_the_view() {
+    fn the_info_section_hints_at_runs_and_needs_a_github_identity() {
         let mut app = app();
-        landed(&mut app, many_runs(12), Local::now());
-        let (rects, _) = draw(&app, 120, 44);
-        let band = rects.ci.unwrap();
-        let third = band.y + 3;
-        let index = run_at(band, &app, band.x + 4, third).unwrap();
-        assert_eq!(index, 2);
-        app.select_ci_run(index);
-        assert_eq!(app.ci[&key()].cursor, 2);
-        assert_eq!(
-            run_at(band, &app, band.x + 4, band.y),
-            None,
-            "the title row"
-        );
+        app.history_view = HistoryView::Info;
+        app.repos[0].ci_status = CiStatus::Failed;
+        let lines = info_text(&app).expect("a section");
+        assert_eq!(lines, vec!["  ◉ default branch failed", "  ] for runs"]);
+        app.repos[0].ci_status = CiStatus::Unknown;
+        assert_eq!(info_text(&app).unwrap()[0], "  no checks");
 
-        app.scroll_ci(3);
-        assert_eq!(app.ci[&key()].scroll, 3);
-        assert_eq!(app.ci[&key()].cursor, 2, "the wheel leaves the cursor");
-        app.scroll_ci(50);
-        assert_eq!(
-            app.ci[&key()].scroll,
-            12 - RUN_ROWS,
-            "the last run on the bottom row"
-        );
-        assert_eq!(
-            run_at(band, &app, band.x + 4, band.y + 1),
-            Some(12 - RUN_ROWS)
-        );
+        app.repos[0].owner = None;
+        assert_eq!(info_text(&app), None);
     }
 
+    /// The section is drawn in `info` between `branches` and `recent
+    /// commits`, and drawing it polls nothing.
     #[test]
-    fn unfolding_puts_the_cursor_on_the_first_run() {
+    fn info_draws_the_ci_section_and_polls_nothing() {
         let mut app = app();
-        landed(&mut app, many_runs(12), Local::now());
-        for _ in 0..10 {
-            app.move_ci_cursor(1);
-        }
-        app.focused_panel = FocusedPanel::Ci;
-        app.press_panel_key(FocusedPanel::Ci);
-        assert!(app.ci_folded, "the focused pane's number folds it");
-        app.press_panel_key(FocusedPanel::Ci);
-        assert!(!app.ci_folded);
-        let state = &app.ci[&key()];
-        assert_eq!((state.cursor, state.scroll), (0, 0));
-
-        for _ in 0..10 {
-            app.move_ci_cursor(1);
-        }
-        app.toggle_fold(FocusedPanel::Ci);
-        app.toggle_fold(FocusedPanel::Ci);
-        assert_eq!(app.ci[&key()].cursor, 0, "the tag click too");
+        app.history_view = HistoryView::Info;
+        app.repos[0].branches = vec![crate::model::BranchStatus {
+            name: "main".to_string(),
+            upstream: None,
+            behind: 0,
+            ahead: 0,
+            is_head: true,
+            tip: "abc1234".to_string(),
+        }];
+        app.repos[0].ci_status = CiStatus::Passed;
+        assert!(!app.ci_wanted());
+        let rows = detail_rows(&app);
+        let at = |label: &str| {
+            rows.iter()
+                .position(|r| r.trim_matches(|c| c == '│' || c == ' ') == label)
+        };
+        let branches = at("branches").expect("branches label");
+        let ci = at("ci").expect("ci label");
+        assert!(branches < ci, "{rows:#?}");
+        assert!(rows[ci + 1].contains("default branch passed"));
+        assert!(rows[ci + 2].contains(RUNS_HINT));
+        assert!(app.ci.is_empty(), "nothing claimed");
     }
 }
