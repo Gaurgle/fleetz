@@ -46,6 +46,22 @@ pub(crate) async fn run_git(repo_path: &Path, args: &[&str]) -> Option<std::proc
     }
 }
 
+/// The text of `path` as commit `sha` has it (`git show <sha>:<path>`),
+/// bounded like every git call: the inspector's `script` body reads a run's
+/// workflow file here before asking GitHub (FZ-30f). `None` when the clone
+/// lacks the commit or the file, or `sha` is not a hex object name.
+pub async fn show_file(repo_path: &Path, sha: &str, path: &str) -> Option<String> {
+    if sha.is_empty() || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let spec = format!("{sha}:{path}");
+    let output = run_git(repo_path, &["show", &spec]).await?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Per-day commit counts for one author over the contribution grid.
 ///
 /// `--all` rather than the default branch: work on a feature branch is still
@@ -2902,6 +2918,40 @@ mod real_repo_tests {
         sh(&dir, &["git", "add", "."]);
         sh(&dir, &["git", "commit", "-q", "-m", "init"]);
         dir
+    }
+
+    /// FZ-30f: the `script` body reads a run's workflow file from the clone
+    /// when it has the commit, and gets `None` (so it asks GitHub) for a
+    /// commit or a file the clone lacks, or a sha that is not hex.
+    #[tokio::test]
+    async fn show_file_reads_a_file_at_a_commit_the_clone_has() {
+        let dir = temp_repo("showfile");
+        let head = StdCommand::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
+        std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+        sh(&dir, &["git", "commit", "-qam", "two"]);
+        assert_eq!(
+            show_file(&dir, &sha, "a.txt").await.as_deref(),
+            Some("one\n"),
+            "the file as that commit has it, not the worktree's"
+        );
+        let absent = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            show_file(&dir, absent, "a.txt").await,
+            None,
+            "no such commit"
+        );
+        assert_eq!(
+            show_file(&dir, &sha, "missing.yml").await,
+            None,
+            "no such file"
+        );
+        assert_eq!(show_file(&dir, "--help", "a.txt").await, None, "not a sha");
+        assert_eq!(show_file(&dir, "HEAD", "a.txt").await, None);
     }
 
     /// The failure this closes: creating a tag moves no commit, no index and

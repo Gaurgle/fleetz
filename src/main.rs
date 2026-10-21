@@ -159,6 +159,10 @@ pub enum AppEvent {
     /// A CI poll's answer for one repo (FZ-30b), applied by `App::apply_ci`.
     /// It touches only that repo's CI state and the `core` budget.
     Ci(Box<ci::CiAnswer>),
+    /// An inspector fetch's answer for the highlighted run (FZ-30f): its
+    /// jobs, a job's whole log or the workflow file, applied by
+    /// `App::apply_ci_detail`.
+    CiDetail(Box<ci::DetailAnswer>),
 }
 
 /// Why a load ran, which decides what the loop does with the result.
@@ -989,6 +993,10 @@ async fn run_event_loop(
                 {
                     spawn_ci_poll(&tx, request);
                 }
+                let (now, instant) = (chrono::Local::now(), std::time::Instant::now());
+                for request in app.claim_ci_details(now, instant) {
+                    spawn_ci_detail(&tx, request);
+                }
             }
             AppEvent::Input(Event::Key(key)) => {
                 // Any keypress takes the loading field down. Skip means skip:
@@ -1052,6 +1060,7 @@ async fn run_event_loop(
                 app.needs_redraw = true;
             }
             AppEvent::Ci(answer) => app.apply_ci(*answer, chrono::Local::now()),
+            AppEvent::CiDetail(answer) => app.apply_ci_detail(*answer, chrono::Local::now()),
         }
 
         if app.should_quit {
@@ -1622,8 +1631,10 @@ async fn handle_normal_input(
         // `[` and `]` step the repo pane's body between its six views --
         // lazygit's own binding for the same gesture, and unlike a shifted
         // letter it gives backwards for free.
-        KeyCode::Char(']') => app.cycle_history_view(false),
-        KeyCode::Char('[') => app.cycle_history_view(true),
+        // On the focused inspector while pane 2 shows `ci`, they step its
+        // run bodies instead (`App::press_bracket`).
+        KeyCode::Char(']') => app.press_bracket(false),
+        KeyCode::Char('[') => app.press_bracket(true),
         // Only while the strip is unfolded; `cycle_contributions_source`
         // ignores it otherwise.
         KeyCode::Char('c') => {
@@ -1657,7 +1668,7 @@ async fn handle_normal_input(
         KeyCode::Char('j') | KeyCode::Down => match app.focused_panel {
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
-            FocusedPanel::Inspector => app.scroll_inspector(1),
+            FocusedPanel::Inspector => app.inspector_nav(1),
             FocusedPanel::Contributions => {
                 app.move_contrib_cursor(0, 1, chrono::Local::now().date_naive())
             }
@@ -1665,7 +1676,7 @@ async fn handle_normal_input(
         KeyCode::Char('k') | KeyCode::Up => match app.focused_panel {
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.detail_nav_up(),
-            FocusedPanel::Inspector => app.scroll_inspector(-1),
+            FocusedPanel::Inspector => app.inspector_nav(-1),
             FocusedPanel::Contributions => {
                 app.move_contrib_cursor(0, -1, chrono::Local::now().date_naive())
             }
@@ -2635,6 +2646,8 @@ fn ci_poll_request(
     let target = app.selected_repo().and_then(ci::target);
     let settled_for = app.ci_settled_for(target.as_ref().map(|(key, ..)| key), instant);
     let (key, owner, name) = target?;
+    // The poll reads the highlighted run's jobs (`CiState::expanded`).
+    app.sync_ci_inspector(instant);
     ci::poll_due(&app.ci_cadence(&key, settled_for, now))
         .then(|| app.claim_ci_poll(key, owner, name))
 }
@@ -2645,6 +2658,15 @@ fn spawn_ci_poll(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, request: ci:
     tokio::spawn(async move {
         let answer = ci::poll(request).await;
         let _ = tx.send(AppEvent::Ci(Box::new(answer)));
+    });
+}
+
+/// Run a claimed inspector fetch in the background and send its answer back.
+fn spawn_ci_detail(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, request: ci::DetailRequest) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let answer = ci::fetch_detail(request).await;
+        let _ = tx.send(AppEvent::CiDetail(Box::new(answer)));
     });
 }
 
@@ -11296,7 +11318,7 @@ mod tests {
         );
     }
 
-    // FZ-30b: the CI pane's data layer, its trigger and its answers.
+    // FZ-30b: the `ci` view's data layer, its trigger and its answers.
 
     fn ci_app() -> App {
         let mut app = App::new(Vec::new(), String::new(), 120, 40);
@@ -11327,6 +11349,7 @@ mod tests {
             runs: None,
             jobs: None,
             log: None,
+            full_log: None,
             failure: None,
             budget: None,
         }
@@ -11374,7 +11397,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unfolded_pane_polls_the_selected_repo_once_the_cursor_dwells() {
+    fn the_ci_view_polls_the_selected_repo_once_the_cursor_dwells() {
         let mut app = ci_app();
         app.history_view = app::HistoryView::Ci;
         app.view = app::View::Detail;
@@ -11607,7 +11630,7 @@ mod tests {
         assert_eq!(expanded.logs_held, vec![jobs[0].id]);
     }
 
-    // FZ-30c: the band's follow-ups to #90.
+    // FZ-30c: the follow-ups to #90, kept by the `ci` view.
 
     /// One repo's failures climb that repo's ladder only: a second repo the
     /// cursor moves to polls as soon as it dwells. Fails while the backoff
@@ -11769,6 +11792,57 @@ mod tests {
             assert_eq!(app.detail_selected(), cursor, "after {key}");
         }
         assert_eq!(app.selected, 0, "the repo list did not move");
+    }
+
+    /// FZ-30f: on the focused inspector in `ci`, `]` steps the body and `j`
+    /// moves the job mark; pane 2's view and the run cursor stay put.
+    #[tokio::test]
+    async fn the_inspector_keys_step_the_bodies_and_the_job_mark() {
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let backend = CrosstermBackend::new(io::stdout());
+        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
+        let mut terminal =
+            Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
+        let mut app = ci_app();
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Ci;
+        ci_landed(&mut app, at(12, 0, 0));
+        let run = ci_runs()[2].id;
+        let mut jobs = ci::parse_jobs(include_str!("ci/fixtures/jobs-failed.json")).unwrap();
+        let mut second = jobs[0].clone();
+        second.id = 7;
+        jobs.push(second);
+        app.ci
+            .get_mut(&ci_key())
+            .unwrap()
+            .jobs
+            .insert(run, app::CiJobs { etag: None, jobs });
+        app.set_detail_selected(2);
+        app.focused_panel = FocusedPanel::Inspector;
+        let repo_dir = Path::new("/nonexistent");
+        for key in ['j', ']'] {
+            handle_normal_input(
+                &mut app,
+                &mut terminal,
+                press(key),
+                &tx,
+                &args,
+                &config,
+                repo_dir,
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            app.ci_marked_job().map(|j| j.id),
+            Some(7),
+            "j moved the mark"
+        );
+        assert_eq!(app.ci_body, app::CiBody::Log, "] stepped the body");
+        assert_eq!(app.history_view, app::HistoryView::Ci, "not the view");
+        assert_eq!(app.detail_selected(), 2, "not the run");
     }
 
     /// The tick polls only while pane 2 shows `ci`: never on `info` (whose

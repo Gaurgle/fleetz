@@ -283,6 +283,20 @@ fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
             ("[[ ]]".into(), "view"),
             ("[J/K]".into(), "inspector"),
         ],
+        // On a run (FZ-30f) `[`/`]` step its bodies, and in `jobs` the
+        // `j`/`k` keys move the job mark rather than scroll.
+        FocusedPanel::Inspector if app.inspects_ci_run() => vec![
+            (
+                "[j/k]".into(),
+                match app.ci_body {
+                    crate::app::CiBody::Jobs => "job",
+                    _ => "scroll",
+                },
+            ),
+            ("[[ ]]".into(), "body"),
+            ("[+/-]".into(), "size"),
+            (format!("[{}]", crate::ui::INSPECTOR_NUM), "fold"),
+        ],
         FocusedPanel::Inspector => vec![
             ("[j/k]".into(), "scroll"),
             ("[+/-]".into(), "size"),
@@ -701,6 +715,25 @@ mod tests {
         assert_eq!(
             hint_row(&app, WIDE),
             format!("{}   {}", inspector_segment(), global_row(&app))
+        );
+    }
+
+    /// FZ-30f: on a run the inspector hints `[[ ]] body`, and in `jobs`
+    /// names `j`/`k` for the job mark they move.
+    #[test]
+    fn the_focused_inspector_on_a_run_hints_its_bodies() {
+        let mut app = app_in(View::Detail);
+        app.focused_panel = crate::app::FocusedPanel::Inspector;
+        app.history_view = crate::app::HistoryView::Ci;
+        let num = crate::ui::INSPECTOR_NUM;
+        assert_eq!(
+            text(&focus_hints(&app, true)),
+            format!("[j/k] job  [[ ]] body  [+/-] size  [{num}] fold")
+        );
+        app.ci_body = crate::app::CiBody::Script;
+        assert_eq!(
+            text(&focus_hints(&app, true)),
+            format!("[j/k] scroll  [[ ]] body  [+/-] size  [{num}] fold")
         );
     }
 

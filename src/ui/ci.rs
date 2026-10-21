@@ -3,15 +3,16 @@
 //! why there are none; and the small `ci` section of the `info` view, drawn
 //! from what is already in hand. See
 //! `docs/superpowers/specs/2026-10-21-ci-pane-design.md`, sections D and E
-//! and "Amendment 2026-10-21". The data is `ci.rs`'s; the inspector's run
-//! bodies are FZ-30f.
+//! and "Amendment 2026-10-21"; and the inspector's three bodies for the
+//! highlighted run, `jobs`, `log` and `script` (FZ-30f, point 5). The data
+//! is `ci.rs`'s.
 
 use chrono::{DateTime, Local, Utc};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::app::{App, CiState, DataTime, Outcome};
-use crate::ci::WorkflowRun;
+use crate::app::{App, CiBody, CiState, DataTime, Outcome};
+use crate::ci::{Detail, Job, LogTail, Step, WorkflowRun};
 use crate::model::{CiStatus, RepoStatus};
 use crate::ui::{badges, colors};
 
@@ -239,10 +240,15 @@ pub fn status_line(app: &App, now: DateTime<Local>) -> Option<Vec<Span<'static>>
 /// passed or failed by its conclusion, and anything else (cancelled,
 /// skipped, neutral) has no verdict to show.
 pub fn run_status(run: &WorkflowRun) -> CiStatus {
-    if run.status.as_deref() != Some("completed") {
+    verdict(run.status.as_deref(), run.conclusion.as_deref())
+}
+
+/// `run_status` for anything with a status and a conclusion: a run, a job.
+fn verdict(status: Option<&str>, conclusion: Option<&str>) -> CiStatus {
+    if status != Some("completed") {
         return CiStatus::Pending;
     }
-    match run.conclusion.as_deref() {
+    match conclusion {
         Some("success") => CiStatus::Passed,
         Some("failure" | "timed_out" | "startup_failure" | "action_required") => CiStatus::Failed,
         _ => CiStatus::Unknown,
@@ -255,8 +261,12 @@ pub fn run_status(run: &WorkflowRun) -> CiStatus {
 pub fn run_duration(run: &WorkflowRun, now: DateTime<Utc>) -> String {
     let start = run.started.unwrap_or(run.created);
     let end = if run.is_live() { now } else { run.updated };
-    let secs = (end - start).num_seconds().max(0);
-    match secs {
+    duration_text((end - start).num_seconds())
+}
+
+/// `secs` in the run rows' words: `8s`, `1m 12s`, `1h 04m`.
+fn duration_text(secs: i64) -> String {
+    match secs.max(0) {
         s if s < 60 => format!("{s}s"),
         s if s < 3600 => format!("{}m {:02}s", s / 60, s % 60),
         s => format!("{}h {:02}m", s / 3600, (s % 3600) / 60),
@@ -400,6 +410,339 @@ pub fn run_line(
     RunLine(spans, width)
 }
 
+// --- The inspector's run bodies (FZ-30f) ---
+
+/// The inspector's lines for the highlighted run in the shown body
+/// (`App::ci_body`), unwrapped: the pane wraps and scrolls them. A held
+/// whole log is not among them; `shown_log` hands it over apart.
+pub fn inspector_body(app: &App, now: DateTime<Local>) -> Vec<Line<'static>> {
+    let Some(run) = app.ci_highlighted_run() else {
+        return vec![dim_line("no run selected")];
+    };
+    let mut lines = run_masthead(run);
+    lines.extend(match app.ci_body {
+        CiBody::Jobs => jobs_body(app, run, now),
+        CiBody::Log => log_body(app, run),
+        CiBody::Script => script_body(app, run),
+    });
+    lines
+}
+
+fn dim_line(text: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        text.to_string(),
+        Style::default().fg(colors::OVERLAY),
+    ))
+}
+
+/// The run's lamp and title, its workflow, branch and event beneath, and a
+/// blank: the commit masthead's shape.
+fn run_masthead(run: &WorkflowRun) -> Vec<Line<'static>> {
+    let (glyph, color, _) = badges::ci_display(&run_status(run), false);
+    let glyph = if glyph.is_empty() { "◉" } else { glyph };
+    vec![
+        Line::from(vec![
+            Span::styled(format!("{glyph} "), Style::default().fg(color)),
+            Span::styled(
+                run.title.clone(),
+                Style::default()
+                    .fg(colors::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        dim_line(&format!(
+            "{} · {} · {}",
+            workflow_text(run),
+            branch_text(run),
+            run.event
+        )),
+        Line::from(""),
+    ]
+}
+
+/// The held state of the inspector's own `/jobs` fetch in words, for a run
+/// whose jobs are not in hand.
+fn jobs_missing(state: Option<&CiState>, run: &WorkflowRun) -> Line<'static> {
+    let Some(state) = state else {
+        return dim_line("loading jobs");
+    };
+    if state.gone.contains(&run.id) {
+        return dim_line("run gone");
+    }
+    match state.jobs_fetch.get(&run.id) {
+        Some(Detail::Failed { message, .. }) => warn_line(message),
+        Some(Detail::Unavailable(message)) => dim_line(message),
+        _ => dim_line("loading jobs"),
+    }
+}
+
+fn warn_line(message: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("⚠ {message}"),
+        Style::default().fg(colors::PEACH),
+    ))
+}
+
+/// A step's glyph and colour: `✓` passed, `✗` failed, `●` running, `·`
+/// queued, skipped or cancelled. The colours are the lamp's.
+fn step_glyph(step: &Step) -> (&'static str, ratatui::style::Color) {
+    let status = verdict(Some(step.status.as_str()), step.conclusion.as_deref());
+    let glyph = match (&status, step.status.as_str()) {
+        (CiStatus::Passed, _) => "✓",
+        (CiStatus::Failed, _) => "✗",
+        (CiStatus::Pending, "in_progress") => "●",
+        _ => "·",
+    };
+    let color = match glyph {
+        "·" => colors::OVERLAY,
+        _ => badges::ci_display(&status, false).1,
+    };
+    (glyph, color)
+}
+
+/// How long a job took, or has taken so far: from its start to its end, or
+/// to `now` while it runs. Empty while it is queued.
+fn job_duration(job: &Job, now: DateTime<Local>) -> String {
+    let Some(start) = job.started else {
+        return String::new();
+    };
+    let end = job.completed.unwrap_or_else(|| now.with_timezone(&Utc));
+    duration_text((end - start).num_seconds())
+}
+
+/// The `jobs` body: each job with its lamp, name and duration, the marked
+/// one carrying `▸`, its steps on one line beneath, and under a failed job
+/// its failing step's name and the dimmed tail of its log.
+fn jobs_body(app: &App, run: &WorkflowRun, now: DateTime<Local>) -> Vec<Line<'static>> {
+    let state = app.selected_ci().and_then(|(_, state)| state);
+    let Some(jobs) = app.ci_highlighted_jobs() else {
+        return vec![jobs_missing(state, run)];
+    };
+    if jobs.is_empty() {
+        return vec![dim_line("no jobs")];
+    }
+    let marked = app.ci_marked_job_index();
+    let mut lines = Vec::new();
+    for (i, job) in jobs.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::from(""));
+        }
+        let status = verdict(Some(job.status.as_str()), job.conclusion.as_deref());
+        let (glyph, color, _) = badges::ci_display(&status, false);
+        let glyph = if glyph.is_empty() { "◉" } else { glyph };
+        let marker = if marked == Some(i) { "▸ " } else { "  " };
+        lines.push(Line::from(vec![
+            Span::styled(marker, Style::default().fg(colors::LAVENDER)),
+            Span::styled(format!("{glyph} "), Style::default().fg(color)),
+            Span::styled(
+                job.name.clone(),
+                Style::default()
+                    .fg(colors::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", job_duration(job, now)),
+                Style::default().fg(colors::OVERLAY),
+            ),
+        ]));
+        if !job.steps.is_empty() {
+            let mut spans = vec![Span::raw("    ")];
+            for (n, step) in job.steps.iter().enumerate() {
+                let (glyph, color) = step_glyph(step);
+                if n > 0 {
+                    spans.push(Span::raw("  "));
+                }
+                spans.push(Span::styled(
+                    format!("{glyph} "),
+                    Style::default().fg(color),
+                ));
+                spans.push(Span::styled(
+                    step.name.clone(),
+                    Style::default().fg(colors::SUBTEXT),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
+        if status != CiStatus::Failed {
+            continue;
+        }
+        if let Some(step) = crate::ci::failing_step(job) {
+            lines.push(Line::from(Span::styled(
+                format!("    ✗ {}", step.name),
+                Style::default().fg(colors::RED),
+            )));
+        }
+        match state.and_then(|s| s.logs.get(&job.id)) {
+            Some(LogTail::Lines(tail)) => {
+                lines.extend(tail.iter().map(|l| dim_line(&format!("    {l}"))));
+            }
+            Some(LogTail::Unavailable(message)) => lines.push(dim_line(&format!("    {message}"))),
+            None => lines.push(dim_line("    loading log")),
+        }
+    }
+    lines
+}
+
+/// The `log` body: the marked job's whole log, `##[error]` lines in the
+/// failing red and `##[group]` headers lifted.
+fn log_body(app: &App, run: &WorkflowRun) -> Vec<Line<'static>> {
+    let state = app.selected_ci().and_then(|(_, state)| state);
+    let Some(job) = app.ci_marked_job() else {
+        return match app.ci_highlighted_jobs() {
+            Some(_) => vec![dim_line("no jobs")],
+            None => vec![jobs_missing(state, run)],
+        };
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("{} log", job.name),
+            Style::default()
+                .fg(colors::TEXT)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+    if job.status != "completed" {
+        lines.push(dim_line("the log arrives once the job finishes"));
+        return lines;
+    }
+    match state.and_then(|s| s.full_logs.get(&job.id)) {
+        // The log itself follows these lines: `shown_log`, wrapped once.
+        Some(Detail::Ready(_)) => {}
+        Some(Detail::Unavailable(message)) => lines.push(dim_line(message)),
+        Some(Detail::Failed { message, .. }) => lines.push(warn_line(message)),
+        Some(Detail::Loading) | None => lines.push(dim_line("loading log")),
+    }
+    lines
+}
+
+/// The whole log the `log` body shows under `inspector_body`'s lines, and
+/// its job id: the marked, finished job's held log. Kept apart so the pane
+/// wraps it once per job and width (`App::ci_log_wrap`) rather than on
+/// every frame.
+pub fn shown_log(app: &App) -> Option<(u64, &[String])> {
+    if app.ci_body != CiBody::Log {
+        return None;
+    }
+    let job = app.ci_marked_job()?;
+    if job.status != "completed" {
+        return None;
+    }
+    let state = app.selected_ci()?.1?;
+    match state.full_logs.get(&job.id)? {
+        Detail::Ready(log) => Some((job.id, &log[..])),
+        _ => None,
+    }
+}
+
+/// One whole-log line, `##[error]` in the failing red and `##[group]`
+/// headers lifted.
+pub fn log_line(text: &str) -> Line<'static> {
+    let style = if text.starts_with("##[error]") {
+        Style::default().fg(colors::RED)
+    } else if text.starts_with("##[group]") {
+        Style::default()
+            .fg(colors::SUBTEXT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::TEXT)
+    };
+    Line::from(Span::styled(text.to_string(), style))
+}
+
+/// The step whose block the `script` body highlights: when the run failed,
+/// the marked job's failing step, else the first failed job's.
+fn highlighted_step(app: &App, run: &WorkflowRun) -> Option<Step> {
+    if run_status(run) != CiStatus::Failed {
+        return None;
+    }
+    let marked = app.ci_marked_job().and_then(crate::ci::failing_step);
+    marked
+        .or_else(|| {
+            app.ci_highlighted_jobs()?
+                .iter()
+                .find_map(crate::ci::failing_step)
+        })
+        .cloned()
+}
+
+/// The `script` body: the workflow file the run ran, at its commit, with
+/// line numbers, and the failing step's block marked in red when the run
+/// failed and the step can be found.
+fn script_body(app: &App, run: &WorkflowRun) -> Vec<Line<'static>> {
+    let (Some(sha), Some(path)) = (run.head_sha.as_deref(), run.path.as_deref()) else {
+        return vec![dim_line("no workflow file named for this run")];
+    };
+    let short: String = sha.chars().take(7).collect();
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                path.to_string(),
+                Style::default()
+                    .fg(colors::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" @ ", Style::default().fg(colors::SURFACE)),
+            Span::styled(short, Style::default().fg(colors::HASH_CLR)),
+        ]),
+        Line::from(""),
+    ];
+    let state = app.selected_ci().and_then(|(_, state)| state);
+    let held = state.and_then(|s| s.scripts.get(&(sha.to_string(), path.to_string())));
+    let text = match held {
+        Some(Detail::Ready(text)) => text,
+        Some(Detail::Unavailable(message)) => {
+            lines.push(dim_line(message));
+            return lines;
+        }
+        Some(Detail::Failed { message, .. }) => {
+            lines.push(warn_line(message));
+            return lines;
+        }
+        Some(Detail::Loading) | None => {
+            lines.push(dim_line("loading script"));
+            return lines;
+        }
+    };
+    let step = highlighted_step(app, run);
+    let block = step
+        .as_ref()
+        .and_then(|s| crate::ci::step_block(text, &s.name));
+    if let (Some(step), Some(block)) = (&step, &block) {
+        lines.push(Line::from(Span::styled(
+            format!("✗ {}  (line {})", step.name, block.start + 1),
+            Style::default().fg(colors::RED),
+        )));
+        lines.push(Line::from(""));
+    }
+    let count = text.lines().count();
+    let gutter = count.to_string().len();
+    for (i, line) in text.lines().enumerate() {
+        let marked = block.as_ref().is_some_and(|b| b.contains(&i));
+        let (mark, text_style) = if marked {
+            (
+                Span::styled("▌", Style::default().fg(colors::RED)),
+                Style::default()
+                    .fg(colors::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else if line.trim_start().starts_with('#') {
+            (Span::raw(" "), Style::default().fg(colors::OVERLAY))
+        } else {
+            (Span::raw(" "), Style::default().fg(colors::TEXT))
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:>gutter$} ", i + 1),
+                Style::default().fg(colors::SURFACE),
+            ),
+            mark,
+            Span::styled(format!(" {line}"), text_style),
+        ]));
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,6 +839,7 @@ mod tests {
                 }),
                 jobs: None,
                 log: None,
+                full_log: None,
                 failure: None,
                 budget: None,
             },
@@ -512,6 +856,7 @@ mod tests {
                 runs: None,
                 jobs: None,
                 log: None,
+                full_log: None,
                 failure: Some(failure),
                 budget: None,
             },
@@ -627,6 +972,7 @@ mod tests {
                 runs: None,
                 jobs: None,
                 log: None,
+                full_log: None,
                 failure: Some(crate::github::Failure::rate_limit(
                     "API rate limit exceeded",
                 )),
@@ -865,6 +1211,524 @@ mod tests {
         assert_eq!(app.detail_selected(), 2);
     }
 
+    // --- The inspector's run bodies (FZ-30f) ---
+
+    const JOBS_FAILED: &str = include_str!("../ci/fixtures/jobs-failed.json");
+    const LOG_FAILED: &str = include_str!("../ci/fixtures/job-log-failed.txt");
+    const CI_YML: &str = include_str!("../ci/fixtures/ci.yml");
+    /// The recorded failed run is the fixture's third.
+    const FAILED_RUN: usize = 2;
+    const FAILED_JOB: u64 = 113914377501;
+    const WORKFLOW: &str = ".github/workflows/ci.yml";
+
+    /// The runs fixture with the failed run naming its workflow file, which
+    /// the trimmed recording left out.
+    fn runs_with_path() -> Vec<WorkflowRun> {
+        let mut runs = runs();
+        runs[FAILED_RUN].path = Some(WORKFLOW.to_string());
+        runs
+    }
+
+    fn jobs() -> Vec<Job> {
+        crate::ci::parse_jobs(JOBS_FAILED).unwrap()
+    }
+
+    /// An app in `ci` on the recorded failed run, its jobs, tail and whole
+    /// log landed by one poll, as the poll for a highlighted failed run
+    /// lands them.
+    fn on_failed_run() -> App {
+        let mut app = app();
+        landed(&mut app, runs_with_path(), Local::now());
+        app.set_detail_selected(FAILED_RUN);
+        let run_id = runs()[FAILED_RUN].id;
+        let request = app.claim_ci_poll(key(), "gaurgle".into(), "fleetz".into());
+        let step = crate::ci::failing_step(&jobs()[0]).cloned().unwrap();
+        app.apply_ci(
+            crate::ci::CiAnswer {
+                key: key(),
+                attempt: request.attempt,
+                runs: Some(crate::ci::Fetched::NotModified),
+                jobs: Some((
+                    run_id,
+                    crate::ci::JobsAnswer::Fetched(crate::ci::Fetched::Fresh {
+                        data: jobs(),
+                        etag: None,
+                    }),
+                )),
+                log: Some((
+                    FAILED_JOB,
+                    LogTail::Lines(crate::ci::log_tail(LOG_FAILED, &step)),
+                )),
+                full_log: Some((FAILED_JOB, crate::ci::log_lines(LOG_FAILED))),
+                failure: None,
+                budget: None,
+            },
+            Local::now(),
+        );
+        app
+    }
+
+    fn body_text(app: &App) -> Vec<String> {
+        inspector_body(app, Local::now())
+            .iter()
+            .map(line_text)
+            .collect()
+    }
+
+    fn state(app: &App) -> &CiState {
+        &app.ci[&key()]
+    }
+
+    /// FZ-30f: the `jobs` body from recorded payloads: the run, each job
+    /// with its lamp and duration, its steps on one line, and under the
+    /// failed job its failing step and the dimmed log tail. Fails while the
+    /// inspector says `no commit selected` on a run.
+    #[test]
+    fn the_jobs_body_draws_the_jobs_steps_and_the_failing_tail() {
+        let app = on_failed_run();
+        assert_eq!(app.ci_body, CiBody::Jobs, "jobs is the first body");
+        let text = body_text(&app);
+        assert!(text[0].contains("feat: pace GitHub polling"), "{text:#?}");
+        let job = text.iter().position(|l| l.contains("check")).unwrap();
+        assert!(text[job].starts_with("▸ ◉ check"), "marked: {}", text[job]);
+        assert!(
+            text[job].ends_with("54s"),
+            "16:19:46 to 16:20:40: {}",
+            text[job]
+        );
+        let steps = &text[job + 1];
+        assert!(steps.contains("✓ Set up job"), "{steps}");
+        assert!(steps.contains("✗ Run cargo clippy"), "{steps}");
+        assert!(steps.contains("· Run cargo test"), "skipped: {steps}");
+        assert_eq!(
+            text[job + 2],
+            "    ✗ Run cargo clippy --all-targets -- -D warnings"
+        );
+        let tail = &text[job + 3..];
+        assert_eq!(tail.len(), crate::ci::LOG_TAIL_LINES);
+        assert_eq!(
+            tail.last().unwrap(),
+            "    ##[error]Process completed with exit code 101."
+        );
+        let lines = inspector_body(&app, Local::now());
+        assert_eq!(
+            lines[job + 3].spans[0].style.fg,
+            Some(colors::OVERLAY),
+            "the tail is dimmed"
+        );
+    }
+
+    /// The `log` body: the marked job's whole log, stamps stripped.
+    #[test]
+    fn the_log_body_draws_the_marked_jobs_whole_log() {
+        let mut app = on_failed_run();
+        app.ci_body = CiBody::Log;
+        let text = body_text(&app);
+        assert!(text.contains(&"check log".to_string()), "{text:#?}");
+        let (job_id, log) = shown_log(&app).expect("the held log");
+        assert_eq!(job_id, FAILED_JOB);
+        assert_eq!(log, &crate::ci::log_lines(LOG_FAILED)[..]);
+        assert!(log.iter().all(|l| !l.starts_with("2026-")));
+        let (rects, buffer) = draw(&app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let drawn: Vec<String> = (inspector.y..inspector.y + inspector.height)
+            .map(|y| row_text(&buffer, y))
+            .collect();
+        assert!(
+            drawn
+                .iter()
+                .any(|r| r.contains("Current runner version: '2.337.0'")),
+            "the log is drawn under its head: {drawn:#?}"
+        );
+    }
+
+    /// The whole log is wrapped once per job and width and the copy kept:
+    /// a second frame draws the kept rows, a new width wraps again. Fails
+    /// while every frame re-wraps the log.
+    #[test]
+    fn the_whole_log_is_wrapped_once_per_job_and_width() {
+        let mut app = on_failed_run();
+        app.ci_body = CiBody::Log;
+        draw(&app, 160, 50);
+        let width = {
+            let mut kept = app.ci_log_wrap.borrow_mut();
+            let wrap = kept.as_mut().expect("wrapped on the first frame");
+            assert_eq!(wrap.job_id, FAILED_JOB);
+            wrap.lines[0] = Line::from("KEPT ROW");
+            wrap.width
+        };
+        let (_, buffer) = draw(&app, 160, 50);
+        let rows: Vec<String> = (0..50).map(|y| row_text(&buffer, y)).collect();
+        assert!(
+            rows.iter().any(|r| r.contains("KEPT ROW")),
+            "not re-wrapped"
+        );
+        let (_, buffer) = draw(&app, 140, 50);
+        let rows: Vec<String> = (0..50).map(|y| row_text(&buffer, y)).collect();
+        assert!(
+            rows.iter().all(|r| !r.contains("KEPT ROW")),
+            "a new width wraps again"
+        );
+        assert_ne!(app.ci_log_wrap.borrow().as_ref().unwrap().width, width);
+    }
+
+    /// Another job's log at the same width is wrapped afresh, never drawn
+    /// from the first job's kept rows. Fails while the cache is keyed by
+    /// width alone.
+    #[test]
+    fn another_jobs_log_at_the_same_width_is_wrapped_afresh() {
+        let mut app = on_failed_run();
+        let mut second = jobs()[0].clone();
+        second.id = 7;
+        second.name = "docs".to_string();
+        let run_id = runs()[FAILED_RUN].id;
+        let held = app.ci.get_mut(&key()).unwrap();
+        held.jobs.get_mut(&run_id).unwrap().jobs.push(second);
+        held.full_logs.insert(
+            7,
+            Detail::Ready(vec!["the second job's own log".to_string()]),
+        );
+        app.ci_body = CiBody::Log;
+        draw(&app, 160, 50);
+        {
+            let mut kept = app.ci_log_wrap.borrow_mut();
+            let wrap = kept.as_mut().expect("wrapped on the first frame");
+            assert_eq!(wrap.job_id, FAILED_JOB);
+            wrap.lines[0] = Line::from("KEPT ROW");
+        }
+        app.ci_job_mark = Some(1);
+        assert_eq!(app.ci_marked_job().map(|j| j.id), Some(7));
+        let (_, buffer) = draw(&app, 160, 50);
+        let rows: Vec<String> = (0..50).map(|y| row_text(&buffer, y)).collect();
+        assert!(
+            rows.iter().all(|r| !r.contains("KEPT ROW")),
+            "the first job's rows are gone: {rows:#?}"
+        );
+        assert!(rows.iter().any(|r| r.contains("the second job's own log")));
+        assert_eq!(app.ci_log_wrap.borrow().as_ref().unwrap().job_id, 7);
+    }
+
+    /// An app whose next `claim_ci_details` claims the second run's jobs
+    /// at `at`, so each gate below can be shown to hold that claim alone.
+    fn claimable() -> (App, std::time::Instant) {
+        let mut app = on_failed_run();
+        app.set_detail_selected(1);
+        (app, std::time::Instant::now() + crate::ci::DWELL * 2)
+    }
+
+    #[test]
+    fn under_d_the_inspector_fetches_nothing() {
+        let (mut app, at) = claimable();
+        app.dirty_mode = true;
+        assert!(app.claim_ci_details(Local::now(), at).is_empty());
+        app.dirty_mode = false;
+        assert_eq!(app.claim_ci_details(Local::now(), at).len(), 1);
+    }
+
+    #[test]
+    fn outside_the_ci_view_the_inspector_fetches_nothing() {
+        let (mut app, at) = claimable();
+        app.history_view = HistoryView::Branches;
+        assert!(app.claim_ci_details(Local::now(), at).is_empty());
+        app.history_view = HistoryView::Ci;
+        assert_eq!(app.claim_ci_details(Local::now(), at).len(), 1);
+    }
+
+    #[test]
+    fn a_folded_inspector_fetches_nothing() {
+        let (mut app, at) = claimable();
+        app.inspector_folded = true;
+        assert!(app.claim_ci_details(Local::now(), at).is_empty());
+        app.inspector_folded = false;
+        assert_eq!(app.claim_ci_details(Local::now(), at).len(), 1);
+    }
+
+    /// Take a `core` reading of `remaining` of 5000, resetting at 12:40.
+    fn read_budget(app: &mut App, remaining: u32, now: DateTime<Local>) {
+        let reading = crate::github::BudgetReading {
+            limit: 5000,
+            remaining,
+            used: 5000 - remaining,
+            reset: local("2026-10-21T12:40:00+02:00").timestamp(),
+            date: Some(now.with_timezone(&Utc)),
+            token_id: "tok".to_string(),
+        };
+        app.ci_budget.observe(&reading, true, now, &mut NoJitter);
+    }
+
+    #[test]
+    fn a_spent_core_budget_holds_the_inspector_fetches_until_the_reset() {
+        let (mut app, at) = claimable();
+        let now = local("2026-10-21T12:00:10+02:00");
+        read_budget(&mut app, 0, now);
+        assert!(app.claim_ci_details(now, at).is_empty());
+        let reset = local("2026-10-21T12:40:01+02:00");
+        assert_eq!(app.claim_ci_details(reset, at).len(), 1);
+    }
+
+    /// F1 of the review: the inspector keeps the poll's reserve, so it
+    /// cannot spend the last tenth of the budget the poll paces around.
+    #[test]
+    fn the_inspector_fetches_honour_the_polls_reserve() {
+        let (mut app, at) = claimable();
+        let now = local("2026-10-21T12:00:10+02:00");
+        read_budget(&mut app, 500, now);
+        assert!(app.claim_ci_details(now, at).is_empty(), "at the reserve");
+        let reset = local("2026-10-21T12:40:01+02:00");
+        assert_eq!(app.claim_ci_details(reset, at).len(), 1);
+        let (mut above, at) = claimable();
+        read_budget(&mut above, 501, now);
+        assert_eq!(above.claim_ci_details(now, at).len(), 1, "above it");
+    }
+
+    /// The `script` body: the workflow file at the run's commit, the failing
+    /// step's line marked when the run failed. Fails while the inspector
+    /// has no script.
+    #[test]
+    fn the_script_body_highlights_the_failing_steps_block() {
+        let mut app = on_failed_run();
+        app.ci_body = CiBody::Script;
+        let sha = runs()[FAILED_RUN].head_sha.clone().unwrap();
+        assert!(body_text(&app).contains(&"loading script".to_string()));
+        app.ci.get_mut(&key()).unwrap().scripts.insert(
+            (sha, WORKFLOW.to_string()),
+            Detail::Ready(CI_YML.to_string()),
+        );
+        let text = body_text(&app);
+        assert!(
+            text.iter()
+                .any(|l| l.contains(".github/workflows/ci.yml @ 93f4c8e"))
+        );
+        assert!(
+            text.contains(
+                &"✗ Run cargo clippy --all-targets -- -D warnings  (line 27)".to_string()
+            ),
+            "{text:#?}"
+        );
+        let marked: Vec<&String> = text.iter().filter(|l| l.contains('▌')).collect();
+        assert_eq!(marked.len(), 1, "{marked:#?}");
+        assert!(marked[0].contains("- run: cargo clippy --all-targets -- -D warnings"));
+        assert!(marked[0].starts_with("27 ▌"), "{}", marked[0]);
+
+        // A passing run highlights nothing.
+        app.ci.get_mut(&key()).unwrap().runs[FAILED_RUN].conclusion = Some("success".to_string());
+        assert!(body_text(&app).iter().all(|l| !l.contains('▌')));
+    }
+
+    /// `[`/`]` on the focused inspector cycle its bodies, both ways, and the
+    /// title names the body; anywhere else they still cycle pane 2's views.
+    #[test]
+    fn brackets_cycle_the_bodies_on_the_focused_inspector_and_the_title_names_it() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.press_bracket(false);
+        assert_eq!(app.ci_body, CiBody::Log);
+        app.press_bracket(false);
+        assert_eq!(app.ci_body, CiBody::Script);
+        app.press_bracket(false);
+        assert_eq!(app.ci_body, CiBody::Jobs, "wraps forward");
+        app.press_bracket(true);
+        assert_eq!(app.ci_body, CiBody::Script, "wraps backward");
+        assert_eq!(app.history_view, HistoryView::Ci, "the view held");
+
+        app.ci_body = CiBody::Log;
+        let (rects, buffer) = draw(&app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        assert!(title.contains("[3] inspector  log"), "{title}");
+
+        app.focused_panel = FocusedPanel::Detail;
+        app.press_bracket(false);
+        assert_eq!(
+            app.history_view,
+            HistoryView::Info,
+            "pane 2 cycles its views"
+        );
+        assert_eq!(app.ci_body, CiBody::Log);
+    }
+
+    /// Each body keeps its own scroll; a different highlighted run starts
+    /// every body at the top and the job mark on its default.
+    #[test]
+    fn a_run_change_resets_every_bodys_scroll_and_the_mark() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.inspector_max_scroll.set(100);
+        app.ci_body = CiBody::Log;
+        app.scroll_inspector(5);
+        app.ci_body = CiBody::Script;
+        app.scroll_inspector(2);
+        assert_eq!(app.ci_body_scroll(), 2);
+        app.ci_body = CiBody::Log;
+        assert_eq!(app.ci_body_scroll(), 5, "kept per body");
+        assert_eq!(app.inspector_scroll, 0, "the commit inspector's untouched");
+
+        app.focused_panel = FocusedPanel::Detail;
+        app.detail_nav_up();
+        assert_eq!(app.ci_body_scroll(), 0, "reads as reset at once");
+        app.detail_nav_down();
+        assert_eq!(app.ci_body_scroll(), 0, "and stays reset");
+        app.sync_ci_inspector(std::time::Instant::now());
+        assert_eq!(app.ci_body_scrolls, [0, 0, 0]);
+    }
+
+    /// `j`/`k` in the focused `jobs` body move the mark the `log` body
+    /// follows; in the other bodies they scroll.
+    #[test]
+    fn j_and_k_move_the_job_mark_in_the_jobs_body() {
+        let mut app = on_failed_run();
+        let mut second = jobs()[0].clone();
+        second.id = 7;
+        second.name = "docs".to_string();
+        second.conclusion = Some("success".to_string());
+        let run_id = runs()[FAILED_RUN].id;
+        let held = app.ci.get_mut(&key()).unwrap();
+        held.jobs.get_mut(&run_id).unwrap().jobs.insert(0, second);
+        assert_eq!(app.ci_marked_job_index(), Some(1), "the first failed job");
+        app.focused_panel = FocusedPanel::Inspector;
+        app.inspector_nav(-1);
+        assert_eq!(app.ci_marked_job().unwrap().name, "docs");
+        app.inspector_nav(-1);
+        assert_eq!(app.ci_marked_job_index(), Some(0), "clamped");
+        app.inspector_nav(1);
+        app.inspector_nav(1);
+        assert_eq!(app.ci_marked_job_index(), Some(1), "clamped at the last");
+        app.ci_body = CiBody::Log;
+        app.inspector_max_scroll.set(100);
+        app.inspector_nav(1);
+        assert_eq!(app.ci_marked_job_index(), Some(1), "log scrolls instead");
+        assert_eq!(app.ci_body_scroll(), 1);
+    }
+
+    /// The inspector's poll reads the highlighted run's jobs while it is
+    /// open, and no run's once it is folded.
+    #[test]
+    fn the_highlighted_run_is_the_one_the_poll_expands() {
+        let mut app = app();
+        landed(&mut app, runs(), Local::now());
+        app.set_detail_selected(1);
+        app.sync_ci_inspector(std::time::Instant::now());
+        assert_eq!(state(&app).expanded, Some(runs()[1].id));
+        app.inspector_folded = true;
+        app.sync_ci_inspector(std::time::Instant::now());
+        assert_eq!(state(&app).expanded, None);
+    }
+
+    /// The fetch-once rules: nothing before the run has been highlighted
+    /// for the dwell; then the shown body's fetch once; held or loading, not
+    /// again; a failure again after a minute; a log the poll brought, never.
+    #[test]
+    fn each_body_fetches_once_per_job_or_commit_and_path() {
+        use crate::ci::DetailWant;
+        let mut app = on_failed_run();
+        let now = Local::now();
+        let t0 = std::time::Instant::now();
+        let settled = t0 + crate::ci::DWELL;
+        assert!(
+            app.claim_ci_details(now, t0).is_empty(),
+            "jobs and tail held"
+        );
+
+        // The poll brought the failed job's whole log: the body never asks.
+        app.ci_body = CiBody::Log;
+        assert!(app.claim_ci_details(now, settled).is_empty());
+
+        // A run whose jobs no poll read: the jobs body asks once.
+        app.ci_body = CiBody::Jobs;
+        app.set_detail_selected(1);
+        assert!(
+            app.claim_ci_details(now, settled).is_empty(),
+            "dwell restarts"
+        );
+        let later = settled + crate::ci::DWELL;
+        let wants: Vec<DetailWant> = app
+            .claim_ci_details(now, later)
+            .into_iter()
+            .map(|r| r.want)
+            .collect();
+        assert_eq!(
+            wants,
+            vec![DetailWant::Jobs {
+                run_id: runs()[1].id
+            }]
+        );
+        assert!(app.claim_ci_details(now, later).is_empty(), "loading");
+
+        // The failed run's script: once per commit and path, the clone
+        // named; a failure is asked again a minute on.
+        app.set_detail_selected(FAILED_RUN);
+        app.repos[0].path = Some("/tmp/fleetz".to_string());
+        app.ci_body = CiBody::Script;
+        let at = later + crate::ci::DWELL * 2;
+        let requests = app.claim_ci_details(now, at);
+        assert_eq!(requests.len(), 1, "{requests:#?}");
+        let sha = runs()[FAILED_RUN].head_sha.clone().unwrap();
+        assert_eq!(
+            requests[0].want,
+            DetailWant::Script {
+                sha: sha.clone(),
+                path: WORKFLOW.to_string(),
+                clone: Some(std::path::PathBuf::from("/tmp/fleetz")),
+            }
+        );
+        assert!(app.claim_ci_details(now, at).is_empty());
+        app.apply_ci_detail(
+            crate::ci::DetailAnswer {
+                key: key(),
+                got: crate::ci::DetailGot::Script {
+                    sha: sha.clone(),
+                    path: WORKFLOW.to_string(),
+                    result: Err(crate::github::Failure::new(
+                        crate::github::FailureKind::Offline,
+                        "no route",
+                    )),
+                },
+                budget: None,
+            },
+            now,
+        );
+        assert!(
+            app.claim_ci_details(now + chrono::Duration::seconds(59), at)
+                .is_empty()
+        );
+        assert_eq!(
+            app.claim_ci_details(now + chrono::Duration::seconds(60), at)
+                .len(),
+            1,
+            "again after a minute"
+        );
+    }
+
+    /// A job's whole log the body is reading carries its tail, so the poll
+    /// does not download the same log for the tail.
+    #[test]
+    fn a_log_the_body_reads_is_not_read_again_by_the_poll() {
+        let mut app = app();
+        landed(&mut app, runs(), Local::now());
+        app.set_detail_selected(FAILED_RUN);
+        let run_id = runs()[FAILED_RUN].id;
+        app.ci.get_mut(&key()).unwrap().jobs.insert(
+            run_id,
+            crate::app::CiJobs {
+                etag: None,
+                jobs: jobs(),
+            },
+        );
+        app.ci_body = CiBody::Log;
+        let t0 = std::time::Instant::now();
+        app.claim_ci_details(Local::now(), t0);
+        let requests = app.claim_ci_details(Local::now(), t0 + crate::ci::DWELL);
+        let want = &requests[0].want;
+        let crate::ci::DetailWant::Log { job_id, step } = want else {
+            panic!("a log request: {want:?}")
+        };
+        assert_eq!(*job_id, FAILED_JOB);
+        assert!(step.is_some(), "the tail is owed, so the step rides along");
+        app.sync_ci_inspector(t0);
+        let poll = app.claim_ci_poll(key(), "gaurgle".into(), "fleetz".into());
+        assert_eq!(poll.expanded.unwrap().logs_held, vec![FAILED_JOB]);
+    }
+
     // --- The `info` section ---
 
     /// Four branches: `latest_per_branch` picks one run for each of the
@@ -926,7 +1790,7 @@ mod tests {
     }
 
     /// The section is drawn in `info` between `branches` and `recent
-    /// commits`, and drawing it polls nothing.
+    /// commits`, ahead of `worktrees`, and drawing it polls nothing.
     #[test]
     fn info_draws_the_ci_section_and_polls_nothing() {
         let mut app = app();
@@ -939,6 +1803,14 @@ mod tests {
             is_head: true,
             tip: "abc1234".to_string(),
         }];
+        app.repos[0].worktrees = vec![crate::model::Worktree {
+            path: "~/repos/fleetz/.claude/worktrees/feat".to_string(),
+            branch: "feature".to_string(),
+            detached: false,
+            head: "abc1234".to_string(),
+            dirty: Some(0),
+            head_at: None,
+        }];
         app.repos[0].ci_status = CiStatus::Passed;
         assert!(!app.ci_wanted());
         let rows = detail_rows(&app);
@@ -949,6 +1821,8 @@ mod tests {
         let branches = at("branches").expect("branches label");
         let ci = at("ci").expect("ci label");
         assert!(branches < ci, "{rows:#?}");
+        let worktrees = at("worktrees").expect("worktrees label");
+        assert!(ci < worktrees, "ci precedes worktrees: {rows:#?}");
         assert!(rows[ci + 1].contains("default branch passed"));
         assert!(rows[ci + 2].contains(RUNS_HINT));
         assert!(app.ci.is_empty(), "nothing claimed");

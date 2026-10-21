@@ -2313,16 +2313,42 @@ pub struct App {
     /// The CI target the cursor rests on (`None` for a row without one) and
     /// since when, for the dwell (`ci::DWELL`).
     pub ci_cursor: Option<(Option<RemoteKey>, std::time::Instant)>,
+    /// The inspector body shown for the highlighted run (FZ-30f).
+    pub ci_body: CiBody,
+    /// Scroll offset per body, indexed by `CiBody::index`; reset when the
+    /// highlighted run changes.
+    pub ci_body_scrolls: [u16; 3],
+    /// The job the `jobs` body marks, which the `log` body shows, once `j`
+    /// or `k` moved it; `None` is the first failed job, else the first.
+    pub ci_job_mark: Option<usize>,
+    /// The run the scrolls and the mark belong to, and since when it is
+    /// highlighted, for the dwell before the inspector fetches anything.
+    pub ci_inspected: Option<(u64, std::time::Instant)>,
+    /// The `log` body's whole log as last wrapped, written by the renderer
+    /// (`RefCell` for the reason `detail_row_tops` is one). A held log never
+    /// changes, so its job id and the width are the whole key.
+    pub ci_log_wrap: std::cell::RefCell<Option<CiLogWrap>>,
 }
 
-/// The CI pane's data for one repo (FZ-30b).
+/// A whole job log wrapped for one pane width, so a 5000-line log is not
+/// re-wrapped on every redraw (FZ-30f).
+#[derive(Debug, Clone)]
+pub struct CiLogWrap {
+    pub job_id: u64,
+    pub width: u16,
+    pub lines: Vec<ratatui::text::Line<'static>>,
+}
+
+/// The `ci` view's data for one repo (FZ-30b).
 #[derive(Debug, Clone, Default)]
 pub struct CiState {
     /// The newest list, newest run first.
     pub runs: Vec<crate::ci::WorkflowRun>,
     /// The list's `ETag`, sent back as `If-None-Match`.
     pub runs_etag: Option<String>,
-    /// The run whose jobs are read on each poll; set by FZ-30d's `Enter`.
+    /// The run whose jobs are read on each poll: the highlighted run while
+    /// the `ci` view shows and the inspector is open
+    /// (`App::sync_ci_inspector`).
     pub expanded: Option<u64>,
     /// Each read run's jobs with their `ETag`, by run id.
     pub jobs: std::collections::HashMap<u64, CiJobs>,
@@ -2330,6 +2356,17 @@ pub struct CiState {
     pub gone: std::collections::HashSet<u64>,
     /// Failed jobs' log tails by job id, each read once.
     pub logs: std::collections::HashMap<u64, crate::ci::LogTail>,
+    /// Whole job logs by job id for the inspector's `log` body, each read
+    /// once, by the poll that reads a failed job's tail or by the body
+    /// (FZ-30f).
+    pub full_logs: std::collections::HashMap<u64, crate::ci::Detail<Vec<String>>>,
+    /// Workflow files by commit and path for the `script` body, each read
+    /// once.
+    pub scripts: std::collections::HashMap<(String, String), crate::ci::Detail<String>>,
+    /// The inspector's own `/jobs` fetch per run, for a highlighted run no
+    /// poll has read yet. The jobs land in `jobs`; this holds the fetch's
+    /// state until they do, and its failure after.
+    pub jobs_fetch: std::collections::HashMap<u64, crate::ci::Detail<()>>,
     /// The three freshness facts, for this repo's CI alone. A 304 is a
     /// successful attempt; the fleet header never reads this.
     pub freshness: GithubFreshness,
@@ -2383,6 +2420,86 @@ impl CiState {
         }
         if let Some((job_id, tail)) = answer.log {
             self.logs.insert(job_id, tail);
+        }
+        if let Some((job_id, lines)) = answer.full_log {
+            self.full_logs
+                .insert(job_id, crate::ci::Detail::Ready(lines));
+        }
+    }
+
+    /// Land an inspector fetch's answer at `now` (FZ-30f).
+    fn land_detail(&mut self, got: crate::ci::DetailGot, now: DateTime<Local>) {
+        use crate::ci::{Detail, DetailGot, Fetched, JobsAnswer};
+        match got {
+            DetailGot::Jobs { run_id, result } => match result {
+                Ok(JobsAnswer::Fetched(Fetched::Fresh { data, etag })) => {
+                    self.jobs_fetch.remove(&run_id);
+                    self.jobs.insert(run_id, CiJobs { etag, jobs: data });
+                }
+                Ok(JobsAnswer::Fetched(Fetched::NotModified)) => {
+                    self.jobs_fetch.remove(&run_id);
+                }
+                Ok(JobsAnswer::Gone) => {
+                    self.jobs_fetch.remove(&run_id);
+                    self.jobs.remove(&run_id);
+                    self.gone.insert(run_id);
+                }
+                Err(failure) => {
+                    let held = Detail::from_result(Err::<(), _>(failure), now);
+                    self.jobs_fetch.insert(run_id, held);
+                }
+            },
+            DetailGot::Log {
+                job_id,
+                result,
+                tail,
+            } => {
+                if let Some(tail) = tail {
+                    self.logs.entry(job_id).or_insert(tail);
+                }
+                self.full_logs
+                    .insert(job_id, Detail::from_result(result, now));
+            }
+            DetailGot::Script { sha, path, result } => {
+                self.scripts
+                    .insert((sha, path), Detail::from_result(result, now));
+            }
+        }
+    }
+}
+
+/// The three bodies the inspector shows for the highlighted run while pane 2
+/// shows `ci` (FZ-30f), cycled with `[` and `]` while the inspector has
+/// focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CiBody {
+    /// Each job with its lamp, duration and steps; a failed job's log tail.
+    #[default]
+    Jobs,
+    /// The marked job's whole log.
+    Log,
+    /// The workflow file the run ran, the failing step highlighted.
+    Script,
+}
+
+impl CiBody {
+    pub const ALL: [Self; 3] = [Self::Jobs, Self::Log, Self::Script];
+
+    /// Index into `App::ci_body_scrolls`.
+    pub fn index(self) -> usize {
+        match self {
+            Self::Jobs => 0,
+            Self::Log => 1,
+            Self::Script => 2,
+        }
+    }
+
+    /// The word the inspector's title names it by.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Jobs => "jobs",
+            Self::Log => "log",
+            Self::Script => "script",
         }
     }
 }
@@ -2505,6 +2622,11 @@ impl App {
             ci: std::collections::HashMap::new(),
             ci_budget: ApiBudget::default(),
             ci_cursor: None,
+            ci_body: CiBody::default(),
+            ci_body_scrolls: [0; 3],
+            ci_job_mark: None,
+            ci_inspected: None,
+            ci_log_wrap: std::cell::RefCell::new(None),
         }
     }
 
@@ -2564,7 +2686,7 @@ impl App {
         limit.max(exhausted)
     }
 
-    /// The selected repo's CI target and state, as the pane draws them:
+    /// The selected repo's CI target and state, as the `ci` view draws them:
     /// `None` when the row has no GitHub identity, and a `None` state while
     /// nothing was ever claimed for it.
     pub fn selected_ci(&self) -> Option<(RemoteKey, Option<&CiState>)> {
@@ -2652,7 +2774,20 @@ impl App {
                 run_id,
                 jobs_etag: held.and_then(|j| j.etag.clone()),
                 held_jobs: held.map(|j| j.jobs.clone()).unwrap_or_default(),
-                logs_held: state.logs.keys().copied().collect(),
+                // A whole log the inspector holds or is reading brings its
+                // tail with it, so the poll does not download it again.
+                logs_held: state
+                    .logs
+                    .keys()
+                    .chain(state.full_logs.iter().filter_map(|(id, held)| {
+                        matches!(
+                            held,
+                            crate::ci::Detail::Loading | crate::ci::Detail::Ready(_)
+                        )
+                        .then_some(id)
+                    }))
+                    .copied()
+                    .collect(),
             }
         });
         crate::ci::CiRequest {
@@ -2675,7 +2810,7 @@ impl App {
     /// clock; a 304 is a success that keeps the data. A list that answered
     /// (fresh or 304) advances the data time even when a later `/jobs` or log
     /// call failed the attempt: the runs on screen are that current, and the
-    /// failure still marks the pane and climbs the ladder.
+    /// failure still marks the view and climbs the ladder.
     pub fn apply_ci(&mut self, answer: crate::ci::CiAnswer, now: DateTime<Local>) {
         self.needs_redraw = true;
         let Some(state) = self.ci.get_mut(&answer.key) else {
@@ -2728,7 +2863,236 @@ impl App {
             let runs = self.ci.get(&key).map_or(0, |s| s.runs.len());
             let slot = &mut self.detail_selections[HistoryView::Ci.index()];
             *slot = (*slot).min(runs.saturating_sub(1));
+            self.sync_ci_inspector(std::time::Instant::now());
         }
+    }
+
+    /// Land an inspector fetch's answer (`AppEvent::CiDetail`) at `now`, and
+    /// ask for a redraw. Its budget reading is taken like a poll's.
+    pub fn apply_ci_detail(&mut self, answer: crate::ci::DetailAnswer, now: DateTime<Local>) {
+        self.needs_redraw = true;
+        if let Some(reading) = &answer.budget
+            && self
+                .ci_budget
+                .observe(reading, true, now, self.jitter.as_mut())
+                == Observed::Switched
+        {
+            for state in self.ci.values_mut() {
+                state.backoff.account_switched();
+            }
+        }
+        if let Some(state) = self.ci.get_mut(&answer.key) {
+            state.land_detail(answer.got, now);
+        }
+    }
+
+    /// The run the `ci` view's cursor is on for the selected repo, which the
+    /// inspector details: read from the view's own selection slot, so it
+    /// holds while another view is on screen.
+    pub fn ci_highlighted_run(&self) -> Option<&crate::ci::WorkflowRun> {
+        let runs = &self.selected_ci()?.1?.runs;
+        let last = runs.len().checked_sub(1)?;
+        runs.get(self.detail_selections[HistoryView::Ci.index()].min(last))
+    }
+
+    /// The highlighted run's jobs, once read.
+    pub fn ci_highlighted_jobs(&self) -> Option<&[crate::ci::Job]> {
+        let run = self.ci_highlighted_run()?;
+        let state = self.selected_ci()?.1?;
+        state.jobs.get(&run.id).map(|j| &j.jobs[..])
+    }
+
+    /// Whether the scrolls and the mark belong to the highlighted run. Until
+    /// `sync_ci_inspector` catches up with a change, they read as reset.
+    fn ci_run_is_inspected(&self) -> bool {
+        let run = self.ci_highlighted_run().map(|r| r.id);
+        run.is_some() && run == self.ci_inspected.map(|(id, _)| id)
+    }
+
+    /// The index of the job the `jobs` body marks: where `j`/`k` left it,
+    /// else the first failed job, else the first.
+    pub fn ci_marked_job_index(&self) -> Option<usize> {
+        let jobs = self.ci_highlighted_jobs()?;
+        let last = jobs.len().checked_sub(1)?;
+        let moved = self.ci_job_mark.filter(|_| self.ci_run_is_inspected());
+        Some(match moved {
+            Some(i) => i.min(last),
+            None => jobs
+                .iter()
+                .position(|j| j.conclusion.as_deref() == Some("failure"))
+                .unwrap_or(0),
+        })
+    }
+
+    /// The marked job, whose log the `log` body shows.
+    pub fn ci_marked_job(&self) -> Option<&crate::ci::Job> {
+        self.ci_highlighted_jobs()?.get(self.ci_marked_job_index()?)
+    }
+
+    /// The shown body's scroll offset: zero for a run just highlighted.
+    pub fn ci_body_scroll(&self) -> u16 {
+        if self.ci_run_is_inspected() {
+            self.ci_body_scrolls[self.ci_body.index()]
+        } else {
+            0
+        }
+    }
+
+    /// Catch up with the highlighted run at `instant`: a new run resets every
+    /// body's scroll and the job mark and restarts the dwell. While the `ci`
+    /// view shows, the selected repo's poll reads the highlighted run's jobs
+    /// when the inspector is open, and no run's when it is folded.
+    pub fn sync_ci_inspector(&mut self, instant: std::time::Instant) {
+        let run = self.ci_highlighted_run().map(|r| r.id);
+        if run != self.ci_inspected.map(|(id, _)| id) {
+            self.ci_inspected = run.map(|id| (id, instant));
+            self.ci_body_scrolls = [0; 3];
+            self.ci_job_mark = None;
+        }
+        if !self.ci_wanted() {
+            return;
+        }
+        let expanded = run.filter(|_| !self.inspector_folded);
+        if let Some((key, _)) = self.selected_ci()
+            && let Some(state) = self.ci.get_mut(&key)
+        {
+            state.expanded = expanded;
+        }
+    }
+
+    /// Whether the inspector shows a run body: pane 2 shows `ci` and the
+    /// inspector is open.
+    pub fn inspects_ci_run(&self) -> bool {
+        self.ci_wanted() && !self.inspector_folded
+    }
+
+    /// `[` or `]`: the next inspector body while the inspector has focus on
+    /// a run, else pane 2's next view as always.
+    pub fn press_bracket(&mut self, back: bool) {
+        if self.focused_panel != FocusedPanel::Inspector || !self.inspects_ci_run() {
+            self.cycle_history_view(back);
+            return;
+        }
+        self.sync_ci_inspector(std::time::Instant::now());
+        let n = CiBody::ALL.len();
+        let i = self.ci_body.index();
+        let next = if back { (i + n - 1) % n } else { (i + 1) % n };
+        self.ci_body = CiBody::ALL[next];
+        self.needs_redraw = true;
+    }
+
+    /// `j`/`k` on the focused inspector: in the `jobs` body they move the
+    /// job mark, anywhere else they scroll.
+    pub fn inspector_nav(&mut self, delta: i32) {
+        if !self.inspects_ci_run() || self.ci_body != CiBody::Jobs {
+            self.scroll_inspector(delta);
+            return;
+        }
+        self.sync_ci_inspector(std::time::Instant::now());
+        let Some(current) = self.ci_marked_job_index() else {
+            return;
+        };
+        let last = self.ci_highlighted_jobs().map_or(0, |j| j.len() - 1);
+        let next = (current as i64 + i64::from(delta)).clamp(0, last as i64) as usize;
+        self.ci_job_mark = Some(next);
+        self.needs_redraw = true;
+    }
+
+    /// The inspector fetches the shown body needs for the highlighted run,
+    /// each claimed (marked loading) so it starts once: the run's jobs when
+    /// no poll has read them, the marked job's whole log once the job has
+    /// finished, the workflow file at the run's commit (and the jobs, for
+    /// the failing step's highlight, when the run failed). Nothing outside
+    /// the `ci` view, under `-d`, with the inspector folded, before the run
+    /// has been highlighted for `ci::DWELL`, or while the `core` budget's
+    /// pace is paused (at or below the reserve, or spent).
+    pub fn claim_ci_details(
+        &mut self,
+        now: DateTime<Local>,
+        instant: std::time::Instant,
+    ) -> Vec<crate::ci::DetailRequest> {
+        use crate::ci::{Detail, DetailRequest, DetailWant};
+        if !self.inspects_ci_run() || self.dirty_mode {
+            return Vec::new();
+        }
+        self.sync_ci_inspector(instant);
+        let Some((_, since)) = self.ci_inspected else {
+            return Vec::new();
+        };
+        if instant.saturating_duration_since(since) < crate::ci::DWELL {
+            return Vec::new();
+        }
+        // The poll's own pace: at or below the reserve, or with too little
+        // left for one call (spent), paused until the resume.
+        if let Pace::Paused { until } = self.ci_budget.pace(crate::ci::CALL_COST, now)
+            && now < until
+        {
+            return Vec::new();
+        }
+        let Some((key, owner, name)) = self.selected_repo().and_then(crate::ci::target) else {
+            return Vec::new();
+        };
+        let Some(run) = self.ci_highlighted_run().cloned() else {
+            return Vec::new();
+        };
+        let clone = self
+            .selected_repo()
+            .and_then(|r| r.path.as_deref())
+            .map(|p| std::path::PathBuf::from(shellexpand::tilde(p).to_string()));
+        let marked = self.ci_marked_job().cloned();
+        let Some(state) = self.ci.get_mut(&key) else {
+            return Vec::new();
+        };
+        let mut wants = Vec::new();
+        let failed = crate::ui::ci::run_status(&run) == crate::model::CiStatus::Failed;
+        let needs_jobs = match self.ci_body {
+            CiBody::Jobs | CiBody::Log => true,
+            CiBody::Script => failed,
+        };
+        if needs_jobs
+            && !state.jobs.contains_key(&run.id)
+            && !state.gone.contains(&run.id)
+            && Detail::wants_fetch(state.jobs_fetch.get(&run.id), now)
+        {
+            state.jobs_fetch.insert(run.id, Detail::Loading);
+            wants.push(DetailWant::Jobs { run_id: run.id });
+        }
+        match self.ci_body {
+            CiBody::Jobs => {}
+            CiBody::Log => {
+                if let Some(job) = marked
+                    && job.status == "completed"
+                    && Detail::wants_fetch(state.full_logs.get(&job.id), now)
+                {
+                    let step = crate::ci::failing_step(&job)
+                        .filter(|_| !state.logs.contains_key(&job.id))
+                        .cloned();
+                    state.full_logs.insert(job.id, Detail::Loading);
+                    wants.push(DetailWant::Log {
+                        job_id: job.id,
+                        step,
+                    });
+                }
+            }
+            CiBody::Script => {
+                if let (Some(sha), Some(path)) = (run.head_sha.clone(), run.path.clone()) {
+                    let held = (sha.clone(), path.clone());
+                    if Detail::wants_fetch(state.scripts.get(&held), now) {
+                        state.scripts.insert(held, Detail::Loading);
+                        wants.push(DetailWant::Script { sha, path, clone });
+                    }
+                }
+            }
+        }
+        wants
+            .into_iter()
+            .map(|want| DetailRequest {
+                key: key.clone(),
+                owner: owner.clone(),
+                name: name.clone(),
+                want,
+            })
+            .collect()
     }
 
     /// Whether `repo` carries GitHub fields the last poll did not return, so
@@ -3322,8 +3686,8 @@ impl App {
                 }
                 .filter(|h| !h.is_empty())
             }
-            // A run is not a commit of the loaded history; the inspector's
-            // run bodies are FZ-30f.
+            // A run is not a commit of the loaded history; the inspector
+            // details the run itself (`ci_highlighted_run`).
             HistoryView::Ci => None,
         }
     }
@@ -3379,8 +3743,15 @@ impl App {
 
     /// Scroll the inspector by `delta` lines, clamped to the content the last
     /// frame actually measured.
+    /// On a run (`inspects_ci_run`) it scrolls the shown body's own offset.
     pub fn scroll_inspector(&mut self, delta: i32) {
         let max = self.inspector_max_scroll.get() as i32;
+        if self.inspects_ci_run() {
+            self.sync_ci_inspector(std::time::Instant::now());
+            let slot = &mut self.ci_body_scrolls[self.ci_body.index()];
+            *slot = (i32::from(*slot) + delta).clamp(0, max) as u16;
+            return;
+        }
         let current = self.inspector_scroll as i32;
         self.inspector_scroll = (current + delta).clamp(0, max) as u16;
     }
@@ -3994,6 +4365,10 @@ impl App {
 
     pub fn set_detail_selected(&mut self, value: usize) {
         self.detail_selections[self.history_view.index()] = value;
+        // Every way the highlighted run can change passes here (a run step,
+        // a click, a repo change), so the inspector's offsets cannot outlive
+        // their run and come back when the cursor returns to it.
+        self.sync_ci_inspector(std::time::Instant::now());
         // Stepping a commit in the graph view moves the row cursor to that
         // commit's own row, and the view is nudged around it here rather than
         // by `follow_selection`: bring-into-view puts the row hard against an
