@@ -362,6 +362,35 @@ first (from `git log --merges main`).
   `relay-sweep` needs the port (his). Branch CI green; combined check
   1231 tests; `main` CI green. Swept.
   FZ-39: review changes 1; fix cycles 2; owner decisions 1; worker 6; review 12; usage not read
+- **#91 (FZ-30c), the CI pane band.** Merged `a0526eb` at 15:08 CEST;
+  ticket commit `393c110` (tracked diff `9b127a87`, new `src/ui/ci.rs`
+  `0ad64249`), branch `feat/91-ci-pane-band` from `d3816ca`. Spec
+  sections A, B, D, E (run list): `ui::ci::split_docks` over
+  `contributions::dock_bottom` as the one bottom-dock carve that
+  `panel_rects` and `render` both call, `CI_HEIGHT = 10`, the band
+  folds to its row before the strip gives way and never vanishes while
+  the strip stays (pinned over heights 15 to 30); `FocusedPanel::Ci`,
+  `CI_NUM = 4`, the `4` key, fold tag, focus cycle list/detail/
+  inspector/ci/strip (compact list/ci/strip), `J`/`K` skip it; title
+  `[4] ci` with `as of HH:MM` or `⚠ HH:MM` (the attempt time), status
+  line states, run rows (lamp through `badges::ci_display`, workflow,
+  branch, event, title, live duration, age), `j`/`k` with scroll,
+  footer segment `[j/k] run  [4] fold`; `ci_pane = true` default, a
+  config-less launch opens it, `App::new` folded so tests poll nothing;
+  the #90 follow-ups (stuck expiry at 120 s, `ci::TokenCache` dropped on
+  Auth/Refused, redraw on `AppEvent::Ci`, per-repo backoff, `data_time`
+  advances on a fresh list). Rulings: seven at assignment, four in chat
+  (title time, short-terminal order, `-d` wording, `dock_bottom`),
+  option (A) on six existing tests (his, 14:47: one deletion of
+  FZ-30a's placeholder, two `detail.rs` heights, two geometry asserts,
+  one focus walk) plus the Tab walks and compile-forced fixture edits.
+  Review accepted first (seven mutations caught). His look: "this looks
+  great!" (15:07). Follow-ups to #92: cursor clamp test, wheel
+  re-entry, divider grab zone over the band, polling keyed off the
+  config fold, token across `gh auth switch`; `CLAUDE.md` invariant
+  line (coordinator). Branch CI green; combined check 1256 tests;
+  `main` CI green. Swept.
+  FZ-30c: review accepted first; fix cycles 0; owner decisions 3; worker 42; review 8; usage not read
 
 ### Merged on 2026-10-20
 

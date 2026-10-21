@@ -41,6 +41,15 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-21, 15:07.** "this looks great! i feature, can we use the
+  inspector for inspecting the CI's ? so say im highlighting a branch
+  in pane 2, details for that is viewed in inspector. and if i switch
+  focus to pane 4/ci, and highlight a certain CI there, the inspector
+  can detail that instead?" Read as: #91 accepted and merged
+  (`a0526eb`); FZ-30d (#92) redesigned so the inspector details the
+  selected run (jobs, steps, the failing log) while pane 4 is focused,
+  replacing the inline expansion of spec section E; the spec is amended
+  and #92 updated before dispatch, under the standing batch 3 approval.
 - **2026-10-21, about 14:15.** "great. lets continue? we'll could
   probably also look at a claude rule or something that cleans, i cant
   have the disk filling up like this", then "what do you think is good
@@ -213,11 +222,11 @@ inside the scratchpad and remove it when done.
   placeholder test deleted; `src/ui/detail.rs` joined the allowed files
   for two height edits). Review accepted 14:58 (tracked diff
   `9b127a87`, `src/ui/ci.rs` `0ad64249`; 1256 tests; seven mutations
-  caught). Committed as `393c110`, pushed 14:59; branch CI green;
-  combined check with `main` green (1256 tests). **Ready to integrate
-  since 15:01, waiting for his look** (a new pane). On his OK: merge
-  under the safe-merge rule, sweep, log, fix the `CLAUDE.md` invariant
-  line, dispatch #92. Five optional follow-ups carried to #92 (cursor clamp
+  caught). Committed as `393c110`, pushed 14:59. **Done: merged
+  `a0526eb` at 15:08 on his "this looks great!"** (record in the log);
+  `main` CI watched, sweep after; the `CLAUDE.md` invariant line
+  updated by the coordinator. Next: amend spec section E for the
+  inspector design (his 15:07 request), update #92, dispatch it. Five optional follow-ups carried to #92 (cursor clamp
   test; wheel re-entry; divider grab zone over the band; polling keyed
   off the config fold, not the drawn one; token kept across
   `gh auth switch`); `CLAUDE.md`'s panel_rects invariant must name
