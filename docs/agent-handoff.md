@@ -41,6 +41,15 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-21, about 14:15.** "great. lets continue? we'll could
+  probably also look at a claude rule or something that cleans, i cant
+  have the disk filling up like this", then "what do you think is good
+  AND safe?" and, to the two-layer proposal, "ok. use an agent to set
+  this up then? as we continue the work on fleetz in parallel?". Read
+  as: create and run FZ-39 (#94, the Relay layer) now, and prepare the
+  global `SessionStart` hook in `~/claude-config` with a general agent
+  for his commit. Also "yes, delete those" (13:45) to the listed
+  scratch builds and clones (done, 22 GB freed).
 - **2026-10-21, 13:05.** "1, think option a for workflow pane. 3. fine as
   proposed. #79 go with your recommended option. #81 yes.": the CI pane
   spec is accepted on every point (layout A, keys as proposed); #79 takes
@@ -194,10 +203,25 @@ inside the scratchpad and remove it when done.
 - **#91 FZ-30c** (the CI pane band): `fz-worker` (`claude-opus-5-5`,
   medium) dispatched 13:53 in `.claude/worktrees/issue-91`, branch
   `feat/91-ci-pane-band`, base `d3816ca`; seven rulings in the
-  assignment comment (layout A, pane 4, `ci_pane`, the run list, the
-  footer segment, the #90 follow-ups, the Tab-walk test edits; any
-  other existing test stops the worker). Reviewer next, then Ready to
-  integrate for his look (a new pane). #92 and #93 follow.
+  assignment comment. **Stopped since 14:09 on six existing tests**
+  (stop comment on the issue: (A) all six as proposed, one a deletion
+  of FZ-30a's placeholder test; (B) all but the deletion; (C) other;
+  recommended (A)). Worker revision `65af480e` plus untracked
+  `src/ui/ci.rs` `0ad64249` has the chat rulings in (title `⚠` is the
+  attempt time; the band never vanishes on a short terminal; 1251
+  passed, the six failing). On his answer: the worker edits those tests
+  (`src/ui/detail.rs` joins the allowed files), review, commit, push,
+  CI, combined check, Ready to integrate for his look. #92 and #93
+  follow.
+- **#94 FZ-39** (relay-sweep prunes dead scratch builds; the discipline
+  rule in the workflow doc): created 14:20 as P1 in M5 under his "ok.
+  use an agent to set this up then?" (about 14:15); `fz-small`
+  dispatched 14:23 in `.claude/worktrees/issue-94`, branch
+  `chore/94-relay-sweep-prune`, base `d3816ca`. Reviewer next; merges
+  under the safe-merge rule. The other layer, a global `SessionStart`
+  hook that deletes scratchpads older than two days, is being prepared
+  in `~/claude-config` by a general agent outside Relay, for his own
+  commit (not fleetz state; its report goes to him in chat).
 
 ## Next step, and the order after it
 
