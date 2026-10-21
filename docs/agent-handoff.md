@@ -209,11 +209,18 @@ inside the scratchpad and remove it when done.
   recommended (A)). Worker revision `65af480e` plus untracked
   `src/ui/ci.rs` `0ad64249` has the chat rulings in (title `⚠` is the
   attempt time; the band never vanishes on a short terminal; 1251
-  passed, the six failing). **His answer 14:47: "A"** (all six edits,
-  the placeholder test deleted; `src/ui/detail.rs` joined the allowed
-  files for two height edits). Worker resumed 14:48; then review,
-  commit, push, CI, combined check, Ready to integrate for his look.
-  #92 and #93 follow.
+  passed, the six failing). His answer 14:47: "A" (all six edits, the
+  placeholder test deleted; `src/ui/detail.rs` joined the allowed files
+  for two height edits). Review accepted 14:58 (tracked diff
+  `9b127a87`, `src/ui/ci.rs` `0ad64249`; 1256 tests; seven mutations
+  caught). Committed as `393c110`, pushed 14:59; branch CI and the
+  combined check in progress; then **Ready to integrate for his look**
+  (a new pane). Five optional follow-ups carried to #92 (cursor clamp
+  test; wheel re-entry; divider grab zone over the band; polling keyed
+  off the config fold, not the drawn one; token kept across
+  `gh auth switch`); `CLAUDE.md`'s panel_rects invariant must name
+  `ui::ci::split_docks` after the merge (coordinator). #92 and #93
+  follow.
 - **#94 FZ-39** (relay-sweep prunes dead scratch builds; the discipline
   rule in the workflow doc): created 14:20 as P1 in M5 under his "ok.
   use an agent to set this up then?" (about 14:15); `fz-small`
