@@ -1103,7 +1103,8 @@ const TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// The one client every request goes through. It used to be built per
 /// request with no timeout at all, so a request that never answered was
 /// only ever ended by the give-up, and every poll paid a fresh TLS handshake.
-fn client() -> &'static reqwest::Client {
+/// The CI pane's REST calls (`ci.rs`) share it.
+pub(crate) fn client() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| build_client(CONNECT_TIMEOUT, TOTAL_TIMEOUT))
 }
@@ -1192,7 +1193,7 @@ async fn exchange(
 /// A request that got no complete answer. A connect failure, a connect
 /// timeout included, is `Offline`; a deadline reached after connecting,
 /// during the body read included, is `TimedOut` (A5).
-fn transport_failure(error: &reqwest::Error, context: &str) -> Failure {
+pub(crate) fn transport_failure(error: &reqwest::Error, context: &str) -> Failure {
     Failure::new(
         transport_kind(error.is_connect(), error.is_timeout()),
         format!("{context}: {error}"),
@@ -1215,7 +1216,7 @@ fn transport_kind(is_connect: bool, is_timeout: bool) -> FailureKind {
 /// Classify a non-2xx answer by the table in `docs/api-budget-design.md` 4.3.
 /// The rows are checked in order: a `retry-after` names a secondary limit
 /// even beside `x-ratelimit-remaining: 0`.
-fn classify_refusal(
+pub(crate) fn classify_refusal(
     status: reqwest::StatusCode,
     headers: &reqwest::header::HeaderMap,
     body: &str,
@@ -1284,7 +1285,10 @@ fn refusal_message(status: reqwest::StatusCode, body: &str) -> String {
 /// limit, remaining, used and reset are there and numeric: half a window is
 /// nothing to pace on. `Date` is optional; without it the caller falls back
 /// to the local clock.
-fn read_budget(headers: &reqwest::header::HeaderMap, token_id: &str) -> Option<BudgetReading> {
+pub(crate) fn read_budget(
+    headers: &reqwest::header::HeaderMap,
+    token_id: &str,
+) -> Option<BudgetReading> {
     Some(BudgetReading {
         limit: header_number(headers, "x-ratelimit-limit")?,
         remaining: header_number(headers, "x-ratelimit-remaining")?,
@@ -1617,7 +1621,7 @@ const GH_TOKEN_ARGS: [&str; 4] = ["auth", "token", "--hostname", HOST];
 
 /// Get the GitHub auth token from the `gh` CLI. The child is killed if the
 /// lookup is dropped, so one cut off by the launch bound leaves no process.
-async fn get_gh_token() -> Result<String, String> {
+pub(crate) async fn get_gh_token() -> Result<String, String> {
     let output = tokio::process::Command::new("gh")
         .args(GH_TOKEN_ARGS)
         .kill_on_drop(true)
