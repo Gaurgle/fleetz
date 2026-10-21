@@ -339,7 +339,15 @@ Nothing starts until Andreas opens the next session.
 2. **#93 FZ-30e, the handoffs** (`l`, `a`, `x`, `O` on the highlighted
    run), after #95 or beside it in the second slot (they share
    `src/main.rs` by region: the key arms).
-3. **Follow-up from #92:** the default branch's name in the `info`
+3. **His feature of 16:12, not yet ticketed (ask before creating):**
+   "how are we doing on the worktree page? it should also review how
+   much space each worktree is taking up, as we ll as the collective
+   amount, and their location on disk". The `info` worktrees section
+   (#72) shows branch, state and path but no size. Ticket shape: per
+   worktree size and the total, measured off the UI thread per sweep
+   and cached (a `du` on a big tree is slow), the path shown as it is
+   today; spec not needed, a ticket body with the measurement rule is.
+4. **Follow-up from #92:** the default branch's name in the `info`
    line needs `name` on `defaultBranchRef` (free field, payload change,
    cached payloads must parse without it); ask before creating.
 4. **Batch 3 after FZ-30:** FZ-14 attention view, FZ-15 changes since
