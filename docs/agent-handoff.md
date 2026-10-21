@@ -1,7 +1,7 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-20 14:40 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `08f5d4fe-31ad-4813-8535-0abfc0844250`) at the
+Last written 2026-10-21 10:50 CEST by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `6c0bef32-e39d-4d66-98b4-edcb6d119773`) on takeover; the previous lead closed 2026-10-20 at the
 close Andreas asked for ("the last tweak on fleetz for today, so when
 that's done. finish eligible and running tickets, and close for today").
 **Nothing is running: no worker, no reviewer, no build, no background
@@ -16,9 +16,14 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Released** 2026-10-20 14:40 CEST by `claude-fable-5-1` (session
-`08f5d4fe-31ad-4813-8535-0abfc0844250`), which held it from 11:26 CEST.
-Six tickets went Done today (#83 FZ-34, #86 FZ-36, #45 FZ-26, #84 FZ-35a,
+**Held** since 2026-10-21 10:50 CEST by `claude-fable-5-1` (`claude
+--agent fz-coordinator`, session
+`6c0bef32-e39d-4d66-98b4-edcb6d119773`), taken on Andreas's "continue"
+after the file showed the baton released and nothing running (previous
+holder: the same model, session
+`08f5d4fe-31ad-4813-8535-0abfc0844250`, released 2026-10-20 14:40 CEST).
+No dispatch is authorized by the takeover; the next step waits on his
+word ("Next step" below). Six tickets went Done on 2026-10-20 (#83 FZ-34, #86 FZ-36, #45 FZ-26, #84 FZ-35a,
 #87 FZ-37, #85 FZ-35b; records in the log, "Merged on 2026-10-20"); the
 day's lead record is in the log, "Earlier leads". Next lead records its
 own session and takeover time here after confirming with Andreas.
