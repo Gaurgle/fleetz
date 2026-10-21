@@ -280,6 +280,25 @@ first (from `git log --merges main`).
   follow-up, review 2 accepted. His look: "looks good" (13:11). Branch
   CI green; combined check 1181 tests; `main` CI green. Swept.
   FZ-30a: review accepted first; fix cycles 0; owner decisions 2; worker 12; review 6; usage not read
+- **#79 (FZ-03a), the header dates the failed GitHub attempt.** Merged
+  `b69ad37` at 13:27 CEST; ticket commit `fb9a21c` (reviewed diff
+  `b5998cd8`), branch `feat/79-date-the-failed-attempt` from `4b958c1`
+  (a fresh worker; the 2026-10-17 worktree was lost). Form (a) of
+  2026-10-17, always shown: `⚠ github offline at 12:02, as of 11:02`;
+  the stamp goes through `swept_label` so another day's attempt carries
+  its date; a rate limit that still lasts keeps `until HH:MM` with no
+  stamp; `failed_segment` gains an `attempt` parameter;
+  `github_freshness_segment` keeps its signature. Freshness contract
+  amendment 12 ("What the user sees: the attempt time"), README lines
+  45 to 51, the `last_attempt` doc comment (already false on the base:
+  `github_pace` reads it). Four existing tests changed one expected
+  string each under his option (A) of 2026-10-21; six new tests, five
+  failing on the base. Review accepted first with two optional notes
+  (the State table row superseded by the amendment; the unknown-age
+  example uses the rate-limited form), left as written. His look waved
+  through ("i dont need to check small things as that"). Branch CI
+  green; combined check 1187 tests; `main` CI green. Swept.
+  FZ-03a: review accepted first; fix cycles 0; owner decisions 2; worker 5; review 3; usage not read
 
 ### Merged on 2026-10-20
 

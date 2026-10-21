@@ -168,19 +168,15 @@ it). `issue-89` was swept after the merge.
   the spec is accepted, so they run in plan order as slots free up
   (FZ-30b next, then FZ-30c, now that #89 is in). Authority: his "sure"
   (11:05) to creating FZ-30a to e and the 2026-10-17 batch 3 approval.
-- **#79 FZ-03a**: **Ready to integrate** since 13:20, waiting for his
-  look at the header. Worktree `.claude/worktrees/issue-79`, branch
-  `feat/79-date-the-failed-attempt`, base `4b958c1`, reviewed revision
-  `b5998cd8` committed as `fb9a21c`, pushed, branch CI green, combined
-  check with `main` (`f9c2804`) green, 1187 tests. On his OK: merge
-  under the safe-merge rule, then sweep.
-- **#81 FZ-13n**: worker done (revision `92954df9`, `src/ui/footer.rs`
-  and `README.md`, the three authorized test edits, 1187 tests);
-  `fz-reviewer` (`claude-opus-5-5`, medium) running since 13:18.
-  Worktree `.claude/worktrees/issue-81`, branch
-  `feat/81-footer-hints-follow-focus`, base `4b958c1`. Then commit,
-  push, CI, combined check, Ready to integrate for his look at the
-  footer.
+- **#79 FZ-03a** Done: merged `b69ad37` at 13:27 on his "i dont need
+  to check small things as that" (record in the log).
+- **#81 FZ-13n**: reviewed and accepted (revision `92954df9`),
+  committed as `c540b36` on `feat/81-footer-hints-follow-focus`, pushed,
+  branch CI green; combined check rerun against `main` with #79 in
+  (`b69ad37`) in progress. Then **Ready to integrate for his look at the
+  footer** (his "lets try it out" of 2026-10-17; he may reject it, in
+  which case the branch is discarded and `docs/ideas.md` "Header noise"
+  records why). Worktree `.claude/worktrees/issue-81`, base `4b958c1`.
 - **#90 FZ-30b** (CI data layer, no screen change): `fz-worker`
   (`claude-opus-5-5`, medium) dispatched 13:16 in
   `.claude/worktrees/issue-90`, branch `feat/90-ci-data-layer`, base
