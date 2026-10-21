@@ -138,8 +138,8 @@ integrate. Everything sits in one header segment where `⚠ github` is today.
 |---|---|---|
 | Fresh | Nothing, as today | |
 | Cached, attempt on its way | Quiet, says cached and how old | `github cached 3h` |
-| Stale | Marker, failure kind, age of the data | `⚠ github offline, data 12m` |
-| Stale, data time unknown | Same, age stated as unknown | `⚠ github rate limited, age unknown` |
+| Stale | Marker, failure kind, attempt time, age of the data | `⚠ github offline at 12:02, as of 11:02` |
+| Stale, data time unknown | Same, age stated as unknown | `⚠ github rate limited at 12:02, age unknown` |
 
 - The segment keeps today's rule that it is never dropped by the header's fit
   loop; a narrow header gets a shorter form, not no form.
@@ -339,6 +339,28 @@ look the same evening ("fz09d is fine").
       the detail pane says "GitHub data from an earlier refresh: not in the
       last poll"; the account rebuild reports "Rebuilt locally" when it
       lands. The look is provisional until Andreas has seen it on `main`.
+
+Amendment 12 was accepted by Andreas on 2026-10-17 (form (a), shown always)
+and 2026-10-21 (the existing tests take the stamp), and takes effect with
+FZ-03a ([#79](https://github.com/Gaurgle/fleetz/issues/79)).
+
+12. **What the user sees: the attempt time.** A failure is dated by the
+    attempt that failed as well as by the data on screen, so an hour-old
+    verdict no longer reads like one from this minute. The failure words are
+    followed by ` at ` and `last_attempt`, written like the `swept` time:
+    `⚠ github offline at 12:02, as of 11:02`, `⚠ github offline at 12:02,
+    age unknown`, or `⚠ github offline at 12:02` with no data. The stamp is
+    shown always while `outcome` is `Failed`, however recent the attempt;
+    there is no interval threshold. A failure with no `last_attempt` (no real
+    path produces one) keeps the unstamped form. While a rate limit lasts the
+    form keeps its resume time and drops the stamp
+    (`⚠ github rate limited until 15:00, as of 14:02`); once the limit has
+    passed it takes the stamped form. The short form `⚠ github` is
+    unchanged and the segment is still never dropped by the fit loop.
+    `last_attempt` thereby gains a reader beside the retry clock (and the
+    budget's pace, FZ-10b): the State table's "drives the retry clock and
+    nothing else" no longer holds. The look is provisional until Andreas has
+    seen it on the branch build.
 
 ## Not in this contract
 

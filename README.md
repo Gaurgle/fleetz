@@ -42,13 +42,14 @@ current, in one segment beside the watch eye:
 - `github cached 14:02` (dim), when launch painted from the disk cache and the
   request that confirms it is still on its way. One request follows a cached
   launch even with watch off;
-- `⚠ github offline, as of 14:02` (orange), when the last request failed. The
-  word says how (`offline`, `rate limited`, `server error`, `access refused`,
-  `http error`, `api error`, `not signed in`, `bad response`, `timed out`)
-  and the time is when the data on screen left GitHub, written like the
-  `swept` time. A cache whose age cannot be read says `age unknown` instead.
-  While a rate limit lasts it also says when polling resumes:
-  `⚠ github rate limited until 15:00, as of 14:02`;
+- `⚠ github offline at 14:30, as of 14:02` (orange), when the last request
+  failed. The word says how (`offline`, `rate limited`, `server error`,
+  `access refused`, `http error`, `api error`, `not signed in`,
+  `bad response`, `timed out`), the first time is when that request failed
+  and the second is when the data on screen left GitHub, both written like
+  the `swept` time. A cache whose age cannot be read says `age unknown`
+  instead. While a rate limit lasts it says when polling resumes in place of
+  when it failed: `⚠ github rate limited until 15:00, as of 14:02`;
 - `github slowed, allowance low` (dim), with watch on, when the account's
   hourly GitHub allowance is running low and polls come further apart than
   `github_poll_interval`;
