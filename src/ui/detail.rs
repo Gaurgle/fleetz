@@ -886,6 +886,18 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
     }
 
+    // CI at a glance, from what is in hand: the default branch's check state
+    // and any runs a visit to `ci` left held. Drawing it polls nothing; the
+    // full list is one `]` away. No section for a row with no GitHub
+    // identity.
+    if view == HistoryView::Info
+        && let Some(rows) = crate::ui::ci::info_rows(app, repo, width, chrono::Local::now())
+    {
+        lines.push(Line::from(section_label("ci")));
+        lines.extend(rows);
+        lines.push(Line::from(""));
+    }
+
     // Not pinned: the local branches are, because the behind count is their
     // sum; this list is bounded by the checkouts you made and sits just below.
     if view == HistoryView::Info {
@@ -1081,6 +1093,22 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             lines.push(Line::from(spans));
         }
         lines.push(Line::from(""));
+    }
+
+    // The `ci` view: the freshness line, pinned with the header so it stays
+    // in sight while the runs scroll, then one row per held run.
+    if view == HistoryView::Ci {
+        lines.push(crate::ui::ci::first_line(app, chrono::Local::now()));
+        pinned_rows = lines.len();
+        let count = app.selected_commit_count();
+        let selected = app.detail_selected().min(count.saturating_sub(1));
+        let base = lines.len();
+        let rows = crate::ui::ci::run_rows(app, width, chrono::Local::now(), selected, focused);
+        if !rows.is_empty() {
+            selected_block = Some((base + selected, base + selected));
+        }
+        block_tops.extend(base..base + rows.len());
+        lines.extend(rows);
     }
 
     // PRs
@@ -2821,6 +2849,43 @@ mod tests {
         r
     }
 
+    /// `pane_text` for the `ci` view, with the recorded runs fixture landed
+    /// for the fixture repo.
+    fn ci_view_text(width: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), width, 44);
+        app.history_view = HistoryView::Ci;
+        let (key, owner, name) = crate::ci::target(&app.repos[0]).expect("a GitHub repo");
+        let request = app.claim_ci_poll(key.clone(), owner, name);
+        let runs =
+            crate::ci::parse_runs(include_str!("../ci/fixtures/runs.json")).expect("fixture");
+        app.apply_ci(
+            crate::ci::CiAnswer {
+                key,
+                attempt: request.attempt,
+                runs: Some(crate::ci::Fetched::Fresh {
+                    data: runs,
+                    etag: None,
+                }),
+                jobs: None,
+                log: None,
+                failure: None,
+                budget: None,
+            },
+            chrono::Local::now(),
+        );
+        let mut term = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..30u16)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn pane_text(view: HistoryView, width: u16) -> String {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
@@ -3569,7 +3634,7 @@ mod tests {
             .join("\n");
 
         assert_eq!(
-            text.matches("CI ").count(),
+            text.matches("CI ◉").count(),
             1,
             "the pane draws CI more than once:\n{text}"
         );
@@ -4325,7 +4390,11 @@ mod tests {
     #[test]
     fn every_view_marks_its_selection_the_same_way() {
         for view in HistoryView::ALL {
-            let text = pane_text(view, 92);
+            // `ci` lists runs, so it is drawn with the recorded runs held.
+            let text = match view {
+                HistoryView::Ci => ci_view_text(92),
+                _ => pane_text(view, 92),
+            };
             assert!(
                 text.contains("▸ "),
                 "{} view has no selection caret:\n{text}",
@@ -4690,9 +4759,14 @@ mod tests {
         for view in HistoryView::ALL {
             let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), 92, 44);
             app.history_view = view;
+            // A run is not a commit; FZ-30f details runs.
+            let expected = match view {
+                HistoryView::Ci => None,
+                _ => Some("a1b2c3d"),
+            };
             assert_eq!(
                 app.inspected_hash(),
-                Some("a1b2c3d"),
+                expected,
                 "{} resolved nothing",
                 view.label()
             );
@@ -4816,7 +4890,7 @@ mod tests {
             .collect();
 
         assert!(
-            !rows[0].contains("CI"),
+            !rows[0].contains("CI ◉"),
             "frame should not name CI: {:?}",
             rows[0]
         );
@@ -5884,7 +5958,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let (w, h) = (120u16, 42u16);
+        let (w, h) = (120u16, 40u16);
         let mut repo = busy_repo();
         let hashes: Vec<String> = (0..12).map(|i| format!("a1b2c{i:02x}")).collect();
         repo.graph_expanded = hashes
@@ -6014,7 +6088,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let (w, h) = (120u16, 32u16);
+        let (w, h) = (120u16, 30u16);
         let mut repo = list_repo(3);
         // One long paragraph of long words. Broken at spaces every word takes a
         // row of its own and most of that row's width goes unused, so a

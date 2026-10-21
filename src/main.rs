@@ -406,9 +406,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(app::DEFAULT_CONTRIBUTIONS),
     ));
     app.contrib_author = config.contributions_author.clone();
-    // Open unless the config says `ci_pane = false`: a first launch opens
-    // every pane. `4` folds it for the session.
-    app.ci_folded = !config.ci_pane;
     app.github_poll_secs = configured_poll_secs(&config);
     app.github_poll_cost = github::poll_cost(config.repo_limit);
     app.fetch_max_bytes = config.fetch_cap_bytes();
@@ -952,12 +949,12 @@ async fn run_event_loop(
                 // animation reads as a slow stutter rather than a spin. A
                 // silent watch sweep draws no spinner, so it buys no repaints
                 // either: it just updates the rows when it lands.
-                let spinning = app.loading || app.is_refreshing() || app.ci_pane_loading();
+                let spinning = app.loading || app.is_refreshing() || app.ci_view_loading();
                 // Everything else that moves on its own (the swept-ago clock,
                 // the CI blink, a running CI run's duration) only needs about
                 // one repaint a second.
                 let slow_animated =
-                    app.watch_mode || app.apply_progress.is_some() || app.ci_pane_live();
+                    app.watch_mode || app.apply_progress.is_some() || app.ci_view_live();
                 if spinning
                     || (slow_animated && app.spinner_frame.is_multiple_of(SLOW_REPAINT_TICKS))
                 {
@@ -988,13 +985,7 @@ async fn run_event_loop(
                     app.push_detected = false;
                     start_github_poll(app, &tx, config);
                 }
-                app.expire_stuck_ci_polls(
-                    CI_POLL_STUCK_AFTER,
-                    std::time::Instant::now(),
-                    chrono::Local::now(),
-                );
-                if let Some(request) =
-                    ci_poll_request(app, chrono::Local::now(), std::time::Instant::now())
+                if let Some(request) = ci_tick(app, chrono::Local::now(), std::time::Instant::now())
                 {
                     spawn_ci_poll(&tx, request);
                 }
@@ -1193,8 +1184,8 @@ fn handle_mouse_input(
         return;
     }
 
-    // A click on the inspector's, the CI pane's or the strip's `[N]` tag
-    // folds or unfolds it. Ahead of the divider, whose grab zone covers the inspector's tag.
+    // A click on the inspector's or the strip's `[N]` tag folds or unfolds
+    // it. Ahead of the divider, whose grab zone covers the inspector's tag.
     if m.kind == MouseEventKind::Down(MouseButton::Left)
         && let Some(panel) = rects.fold_tag_at(m.column, m.row)
     {
@@ -1240,13 +1231,6 @@ fn handle_mouse_input(
             if panel == FocusedPanel::Detail {
                 click_detail(app, m.column, m.row, clipboard::copy);
             }
-            // A click on a run row of the CI pane puts its cursor there.
-            if let Some(band) = rects.ci
-                && !rects.ci_folded
-                && let Some(index) = ui::ci::run_at(band, app, m.column, m.row)
-            {
-                app.select_ci_run(index);
-            }
         }
         // Scroll the panel under the cursor without changing focus.
         //
@@ -1269,14 +1253,12 @@ fn handle_mouse_input(
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.scroll_detail(DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(1),
-            FocusedPanel::Ci => app.scroll_ci(1),
             FocusedPanel::Contributions => {}
         },
         MouseEventKind::ScrollUp => match panel {
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.scroll_detail(-DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
-            FocusedPanel::Ci => app.scroll_ci(-1),
             FocusedPanel::Contributions => {}
         },
         _ => {}
@@ -1637,7 +1619,7 @@ async fn handle_normal_input(
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.should_quit = true;
         }
-        // `[` and `]` step the repo pane's body between its five views --
+        // `[` and `]` step the repo pane's body between its six views --
         // lazygit's own binding for the same gesture, and unlike a shifted
         // letter it gives backwards for free.
         KeyCode::Char(']') => app.cycle_history_view(false),
@@ -1656,7 +1638,7 @@ async fn handle_normal_input(
                 start_sweep(app, tx, false, args.author.clone(), true);
             }
         }
-        KeyCode::Char('5') => app.press_panel_key(FocusedPanel::Contributions),
+        KeyCode::Char('4') => app.press_panel_key(FocusedPanel::Contributions),
         // Left/right walk columns (weeks), up/down walk rows (weekdays),
         // which is how the grid reads on screen. They used to be swapped, so
         // the arrow keys moved at right angles to what the eye expected.
@@ -1676,7 +1658,6 @@ async fn handle_normal_input(
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
             FocusedPanel::Inspector => app.scroll_inspector(1),
-            FocusedPanel::Ci => app.move_ci_cursor(1),
             FocusedPanel::Contributions => {
                 app.move_contrib_cursor(0, 1, chrono::Local::now().date_naive())
             }
@@ -1685,7 +1666,6 @@ async fn handle_normal_input(
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.detail_nav_up(),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
-            FocusedPanel::Ci => app.move_ci_cursor(-1),
             FocusedPanel::Contributions => {
                 app.move_contrib_cursor(0, -1, chrono::Local::now().date_naive())
             }
@@ -1746,14 +1726,13 @@ async fn handle_normal_input(
         KeyCode::Char('G') => {
             app.clear_group();
         }
-        // Panel focus: 1 = repo list, 2 = detail pane, 3 = inspector, 4 = CI
-        // pane, 5 = strip, and on the focused inspector, CI pane or strip its
-        // number folds it. Quick filters moved to `#tag` words typed into
-        // search (see app::parse_query) so plain digits are free for this.
+        // Panel focus: 1 = repo list, 2 = detail pane, 3 = inspector, and on
+        // the focused inspector or strip its number folds it. Quick
+        // filters moved to `#tag` words typed into search (see
+        // app::parse_query) so plain digits are free for this.
         KeyCode::Char('1') => app.press_panel_key(FocusedPanel::RepoList),
         KeyCode::Char('2') => app.press_panel_key(FocusedPanel::Detail),
         KeyCode::Char('3') => app.press_panel_key(FocusedPanel::Inspector),
-        KeyCode::Char('4') => app.press_panel_key(FocusedPanel::Ci),
         KeyCode::Char('0') => app.clear_filters(),
         // Branches overlay: switch (Enter) or clean up merged branches
         // (space to mark, d to delete). `b` and `s` both open it -- `s` for
@@ -2625,16 +2604,32 @@ fn start_github_poll(
     }
 }
 
+/// The tick's CI work: give up on a stuck poll, then start the one that is
+/// due. Both only while pane 2 shows `ci` (`App::ci_wanted`); elsewhere,
+/// `info` included, the CI data layer is left alone, and what it holds
+/// stays for the next visit.
+fn ci_tick(
+    app: &mut App,
+    now: chrono::DateTime<chrono::Local>,
+    instant: std::time::Instant,
+) -> Option<ci::CiRequest> {
+    if !app.ci_wanted() {
+        return None;
+    }
+    app.expire_stuck_ci_polls(CI_POLL_STUCK_AFTER, instant, now);
+    ci_poll_request(app, now, instant)
+}
+
 /// The CI poll the tick should start for the selected repo, with its lock
-/// taken, or `None`. Nothing while the pane is folded (`ci_pane = false`, or
-/// `4`), under `-d`, or on a row without a GitHub identity; otherwise
-/// `ci::poll_due` decides, from the cursor's dwell and the repo's cadence.
+/// taken, or `None`. Nothing unless pane 2 shows `ci`, nothing under `-d`
+/// or on a row without a GitHub identity; otherwise `ci::poll_due` decides,
+/// from the cursor's dwell and the repo's cadence.
 fn ci_poll_request(
     app: &mut App,
     now: chrono::DateTime<chrono::Local>,
     instant: std::time::Instant,
 ) -> Option<ci::CiRequest> {
-    if app.ci_folded || app.dirty_mode {
+    if !app.ci_wanted() || app.dirty_mode {
         return None;
     }
     let target = app.selected_repo().and_then(ci::target);
@@ -9183,11 +9178,12 @@ mod tests {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
     }
 
-    /// FZ-30a (#89): `5` is the strip's key. From another pane it focuses a
-    /// folded strip and unfolds it; on the focused strip it folds it and
-    /// keeps focus. Fails if the handler binds the strip to any other key.
+    /// `4` is the strip's key (back from `5`, FZ-30d). From another pane it
+    /// focuses a folded strip and unfolds it; on the focused strip it folds
+    /// it and keeps focus. Fails if the handler binds the strip to any other
+    /// key.
     #[tokio::test]
-    async fn the_5_key_reaches_and_folds_the_strip() {
+    async fn the_4_key_reaches_and_folds_the_strip() {
         let args = Args::parse_from(["fleetz"]);
         let config = config::Config::default();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -9205,7 +9201,7 @@ mod tests {
         handle_normal_input(
             &mut app,
             &mut terminal,
-            press('5'),
+            press('4'),
             &tx,
             &args,
             &config,
@@ -9223,7 +9219,7 @@ mod tests {
         handle_normal_input(
             &mut app,
             &mut terminal,
-            press('5'),
+            press('4'),
             &tx,
             &args,
             &config,
@@ -11366,9 +11362,9 @@ mod tests {
     }
 
     #[test]
-    fn the_ci_pane_starts_folded_and_polls_nothing() {
+    fn the_ci_poll_waits_for_the_ci_view() {
         let mut app = ci_app();
-        assert!(app.ci_folded, "folded until FZ-30c reads `ci_pane`");
+        assert!(!app.ci_wanted(), "pane 2 opens on info");
         let start = std::time::Instant::now();
         for ms in [0, 300, 60_000] {
             let instant = start + std::time::Duration::from_millis(ms);
@@ -11380,7 +11376,8 @@ mod tests {
     #[test]
     fn an_unfolded_pane_polls_the_selected_repo_once_the_cursor_dwells() {
         let mut app = ci_app();
-        app.ci_folded = false;
+        app.history_view = app::HistoryView::Ci;
+        app.view = app::View::Detail;
         let start = std::time::Instant::now();
         let after = |ms| start + std::time::Duration::from_millis(ms);
         assert_eq!(ci_poll_request(&mut app, at(12, 0, 0), after(0)), None);
@@ -11398,7 +11395,8 @@ mod tests {
     #[test]
     fn a_row_without_a_github_identity_sends_no_ci_poll() {
         let mut app = ci_app();
-        app.ci_folded = false;
+        app.history_view = app::HistoryView::Ci;
+        app.view = app::View::Detail;
         app.repos[0].owner = None;
         let start = std::time::Instant::now();
         ci_poll_request(&mut app, at(12, 0, 0), start);
@@ -11409,7 +11407,8 @@ mod tests {
     #[test]
     fn the_ci_poll_follows_the_cadence_of_the_shown_runs() {
         let mut app = ci_app();
-        app.ci_folded = false;
+        app.history_view = app::HistoryView::Ci;
+        app.view = app::View::Detail;
         ci_landed(&mut app, at(12, 0, 0));
         let start = std::time::Instant::now();
         let settled = start + std::time::Duration::from_secs(1);
@@ -11514,7 +11513,8 @@ mod tests {
         let resume = reset + secs(7);
         assert_eq!(app.ci[&ci_key()].backoff.limit_until(60), Some(resume));
         assert_eq!(app.ci_budget.known(at(12, 0, 10)).unwrap().remaining, 0);
-        app.ci_folded = false;
+        app.history_view = app::HistoryView::Ci;
+        app.view = app::View::Detail;
         let start = std::time::Instant::now();
         let settled = start + std::time::Duration::from_secs(1);
         ci_poll_request(&mut app, at(12, 0, 10), start);
@@ -11620,7 +11620,8 @@ mod tests {
             owner: Some("Gaurgle".to_string()),
             ..test_repo()
         });
-        app.ci_folded = false;
+        app.history_view = app::HistoryView::Ci;
+        app.view = app::View::Detail;
         let server = github::Failure::new(github::FailureKind::Server, "502");
         for n in 0..3 {
             let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
@@ -11718,44 +11719,13 @@ mod tests {
         assert!(app.needs_redraw);
     }
 
-    /// FZ-30c: `4` is the CI pane's key. From another pane it focuses a
-    /// folded pane and unfolds it; on the focused pane it folds it and keeps
-    /// focus. Fails while `4` is unbound.
-    #[tokio::test]
-    async fn the_4_key_reaches_and_folds_the_ci_pane() {
-        let args = Args::parse_from(["fleetz"]);
-        let config = config::Config::default();
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let backend = CrosstermBackend::new(io::stdout());
-        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
-        let mut terminal =
-            Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
-        let repo_dir = Path::new("/nonexistent");
-        for view in [app::View::Detail, app::View::Compact] {
-            let mut app = App::new(Vec::new(), String::new(), 120, 44);
-            app.view = view;
-            app.ci_folded = true;
-            for (folded, case) in [(false, "unfolds"), (true, "folds")] {
-                handle_normal_input(
-                    &mut app,
-                    &mut terminal,
-                    press('4'),
-                    &tx,
-                    &args,
-                    &config,
-                    repo_dir,
-                )
-                .await
-                .unwrap();
-                assert_eq!(app.focused_panel, FocusedPanel::Ci, "{view:?}: {case}");
-                assert_eq!(app.ci_folded, folded, "{view:?}: {case}");
-            }
-        }
-    }
+    // FZ-30d: the `ci` view in pane 2 is the only thing that polls.
 
-    /// The `j`/`k` keys move the CI pane's run cursor while it has focus.
+    /// `]` from `branches` reaches `ci`, and there `j`/`k` walk its runs in
+    /// the view's own selection slot, never the repo list. Fails while `ci`
+    /// is not a pane 2 view.
     #[tokio::test]
-    async fn j_and_k_move_the_ci_cursor_when_the_pane_is_focused() {
+    async fn j_and_k_walk_the_runs_in_the_ci_view() {
         let args = Args::parse_from(["fleetz"]);
         let config = config::Config::default();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -11764,10 +11734,27 @@ mod tests {
         let mut terminal =
             Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
         let mut app = ci_app();
-        app.ci_folded = false;
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Branches;
         ci_landed(&mut app, at(12, 0, 0));
-        app.focused_panel = FocusedPanel::Ci;
-        for (key, cursor) in [('j', 1), ('j', 2), ('j', 2), ('k', 1)] {
+        app.focused_panel = FocusedPanel::Detail;
+        let repo_dir = Path::new("/nonexistent");
+        handle_normal_input(
+            &mut app,
+            &mut terminal,
+            press(']'),
+            &tx,
+            &args,
+            &config,
+            repo_dir,
+        )
+        .await
+        .unwrap();
+        assert_eq!(app.history_view, app::HistoryView::Ci);
+        assert!(app.ci_wanted());
+        let runs = app.ci[&ci_key()].runs.len();
+        assert!(runs >= 3, "fixture has {runs} runs");
+        for (key, cursor) in [('j', 1), ('j', 2), ('k', 1)] {
             handle_normal_input(
                 &mut app,
                 &mut terminal,
@@ -11775,12 +11762,83 @@ mod tests {
                 &tx,
                 &args,
                 &config,
-                Path::new("/nonexistent"),
+                repo_dir,
             )
             .await
             .unwrap();
-            assert_eq!(app.ci[&ci_key()].cursor, cursor, "after {key}");
+            assert_eq!(app.detail_selected(), cursor, "after {key}");
         }
         assert_eq!(app.selected, 0, "the repo list did not move");
+    }
+
+    /// The tick polls only while pane 2 shows `ci`: never on `info` (whose
+    /// `ci` section draws what is held), never in Compact, and switching the
+    /// view away stops it. The held runs survive the switch. Fails while the
+    /// trigger ignores the view.
+    #[test]
+    fn the_ci_tick_polls_only_while_pane_2_shows_ci() {
+        let mut app = ci_app();
+        app.view = app::View::Detail;
+        let start = std::time::Instant::now();
+        let after = |s| start + std::time::Duration::from_secs(s);
+        for view in app::HistoryView::ALL {
+            if view == app::HistoryView::Ci {
+                continue;
+            }
+            app.history_view = view;
+            ci_tick(&mut app, at(12, 0, 0), start);
+            assert_eq!(ci_tick(&mut app, at(12, 0, 1), after(1)), None, "{view:?}");
+        }
+        assert!(app.ci.is_empty(), "nothing was claimed outside `ci`");
+
+        app.history_view = app::HistoryView::Ci;
+        app.view = app::View::Compact;
+        assert_eq!(ci_tick(&mut app, at(12, 0, 2), after(2)), None, "compact");
+        app.view = app::View::Detail;
+        // The cursor's dwell starts on the first tick that wants CI.
+        assert_eq!(ci_tick(&mut app, at(12, 0, 3), after(3)), None, "dwell");
+        let request = ci_tick(&mut app, at(12, 0, 4), after(4)).expect("ci polls");
+        let answer = ci::CiAnswer {
+            runs: fresh_runs("W/\"6b13\""),
+            ..ci_answer(&request)
+        };
+        app.apply_ci(answer, at(12, 0, 5));
+
+        app.history_view = app::HistoryView::Info;
+        assert_eq!(
+            ci_tick(&mut app, at(12, 5, 0), after(300)),
+            None,
+            "info stops it"
+        );
+        assert_eq!(app.ci[&ci_key()].runs, ci_runs(), "held runs survive");
+        app.history_view = app::HistoryView::Ci;
+        assert!(
+            ci_tick(&mut app, at(12, 5, 0), after(300)).is_some(),
+            "back in `ci`, the overdue poll goes at once"
+        );
+    }
+
+    /// A stuck CI poll is given up on by the tick only while `ci` is on
+    /// screen, like the trigger; back in the view the expiry runs first, so
+    /// the lock never holds the view's next poll.
+    #[test]
+    fn the_ci_tick_expires_a_stuck_poll_only_in_the_ci_view() {
+        let mut app = ci_app();
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Info;
+        app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
+        let late = std::time::Instant::now() + CI_POLL_STUCK_AFTER * 2;
+        ci_tick(&mut app, at(12, 5, 0), late);
+        assert!(app.ci[&ci_key()].inflight, "info leaves the CI layer alone");
+        app.history_view = app::HistoryView::Ci;
+        ci_tick(&mut app, at(12, 5, 0), late);
+        assert!(
+            app.ci[&ci_key()].freshness.last_attempt.is_some(),
+            "expired as a failed attempt"
+        );
+        assert!(matches!(
+            &app.ci[&ci_key()].freshness.outcome,
+            app::Outcome::Failed(f) if f.kind == github::FailureKind::TimedOut
+        ));
     }
 }

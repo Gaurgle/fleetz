@@ -21,10 +21,6 @@ pub enum FocusedPanel {
     /// The inspector pane (full detail of the selected commit). j/k here
     /// scrolls its content.
     Inspector,
-    /// The CI pane (pane 4, FZ-30c): the selected repo's workflow runs, in
-    /// a band docked above the strip. Like the strip it exists in Compact
-    /// view too, and j/k here move its run cursor.
-    Ci,
     /// The contribution strip. Unlike the other three it exists in Compact
     /// view too, and only while the pane is open, so both `focus_panel` and
     /// `toggle_panel_focus` special-case it.
@@ -45,16 +41,21 @@ pub enum HistoryView {
     Reflog,
     Graph,
     Branches,
+    /// The selected repo's recent workflow runs (FZ-30d). The only view that
+    /// polls: the CI data layer asks GitHub only while this one is on
+    /// screen (`App::ci_wanted`).
+    Ci,
 }
 
 impl HistoryView {
     /// Every view, in the order the tab strip draws them and `V` cycles them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Info,
         Self::Commits,
         Self::Reflog,
         Self::Graph,
         Self::Branches,
+        Self::Ci,
     ];
     pub const COUNT: usize = Self::ALL.len();
 
@@ -66,6 +67,7 @@ impl HistoryView {
             Self::Reflog => 2,
             Self::Graph => 3,
             Self::Branches => 4,
+            Self::Ci => 5,
         }
     }
 
@@ -76,6 +78,7 @@ impl HistoryView {
             Self::Reflog => "reflog",
             Self::Graph => "graph",
             Self::Branches => "branches",
+            Self::Ci => "ci",
         }
     }
 }
@@ -2127,7 +2130,7 @@ pub struct App {
     /// (`apply_contributions_setting`).
     pub contributions: ContributionsMode,
     /// Whether the inspector and the strip are folded to an empty frame. A
-    /// folded pane stays on screen and can hold focus, so its `[3]`/`[5]` tag
+    /// folded pane stays on screen and can hold focus, so its `[3]`/`[4]` tag
     /// is still there to click and its number still reaches it. Neither is
     /// ever removed outright. Only these two fold: the repo list and the
     /// detail pane are the dashboard itself.
@@ -2299,13 +2302,10 @@ pub struct App {
     /// Progress of an in-flight window apply, or None when idle. Drives the
     /// footer gauge; set when the apply is spawned, cleared when it lands.
     pub apply_progress: Option<ApplyProgress>,
-    /// The CI pane's data per remote identity, held for the session and
-    /// never written to disk (FZ-30b). See `ci.rs`.
+    /// The `ci` view's data per remote identity, held for the session and
+    /// never written to disk (FZ-30b). See `ci.rs`. Polled only while the
+    /// view is on screen (`ci_wanted`); what an earlier visit read stays.
     pub ci: std::collections::HashMap<RemoteKey, CiState>,
-    /// The CI pane is folded: nothing polls. Launch sets it from the
-    /// `ci_pane` config key (open unless `false`); `App::new` starts folded,
-    /// so an app built without a config polls nothing.
-    pub ci_folded: bool,
     /// The `core` budget the CI calls bill, apart from `api_budget`, which
     /// is the GraphQL one the fleet poll paces on. One per session: the
     /// allowance is the account's, whichever repo spends it.
@@ -2342,11 +2342,6 @@ pub struct CiState {
     /// from every other repo's, so one repo's failures never delay another
     /// repo's first poll.
     pub backoff: GithubBackoff,
-    /// The run the pane's cursor is on, an index into `runs`.
-    pub cursor: usize,
-    /// The first run row drawn. `j`/`k` keep the cursor in view; the wheel
-    /// moves this alone.
-    pub scroll: usize,
 }
 
 /// One run's jobs as last read.
@@ -2375,7 +2370,6 @@ impl CiState {
             if self.expanded.is_some_and(|id| !listed.contains(&id)) {
                 self.expanded = None;
             }
-            self.cursor = self.cursor.min(self.runs.len().saturating_sub(1));
         }
         match answer.jobs {
             Some((run_id, JobsAnswer::Fetched(Fetched::Fresh { data, etag }))) => {
@@ -2509,7 +2503,6 @@ impl App {
             dirty_mode: false,
             apply_progress: None,
             ci: std::collections::HashMap::new(),
-            ci_folded: true,
             ci_budget: ApiBudget::default(),
             ci_cursor: None,
         }
@@ -2543,7 +2536,7 @@ impl App {
         let last_attempt = state.and_then(|s| s.freshness.last_attempt);
         let cost = state.map_or(crate::ci::CALL_COST, CiState::poll_cost);
         crate::ci::Cadence {
-            folded: self.ci_folded,
+            folded: !self.ci_wanted(),
             has_identity: true,
             settled_for,
             inflight: state.is_some_and(|s| s.inflight),
@@ -2580,55 +2573,19 @@ impl App {
         Some((key, state))
     }
 
-    fn selected_ci_mut(&mut self) -> Option<&mut CiState> {
-        let (key, ..) = self.selected_repo().and_then(crate::ci::target)?;
-        self.ci.get_mut(&key)
+    /// Whether the CI data layer may poll: pane 2 is on screen showing the
+    /// `ci` view. The one gate the poll trigger, the loading spinner and
+    /// the stuck-poll expiry read. Never true for `info`, whose `ci` section
+    /// draws only what is already held.
+    pub fn ci_wanted(&self) -> bool {
+        self.view == View::Detail && self.history_view == HistoryView::Ci
     }
 
-    /// `j`/`k` on the CI pane: move the run cursor by `delta`, clamped to
-    /// the runs, and scroll the band just enough to keep it in view.
-    pub fn move_ci_cursor(&mut self, delta: i32) {
-        let Some(state) = self.selected_ci_mut() else {
-            return;
-        };
-        let last = state.runs.len().saturating_sub(1) as i64;
-        state.cursor = (state.cursor as i64 + delta as i64).clamp(0, last) as usize;
-        let rows = crate::ui::ci::RUN_ROWS;
-        if state.cursor < state.scroll {
-            state.scroll = state.cursor;
-        } else if state.cursor >= state.scroll + rows {
-            state.scroll = state.cursor + 1 - rows;
-        }
-        self.needs_redraw = true;
-    }
-
-    /// The wheel over the CI pane: move the view by `delta` rows, never the
-    /// cursor, clamped so the last run stays on the bottom row.
-    pub fn scroll_ci(&mut self, delta: i32) {
-        let Some(state) = self.selected_ci_mut() else {
-            return;
-        };
-        let max = state.runs.len().saturating_sub(crate::ui::ci::RUN_ROWS) as i64;
-        state.scroll = (state.scroll as i64 + delta as i64).clamp(0, max) as usize;
-        self.needs_redraw = true;
-    }
-
-    /// A click on the CI pane's run row `index`: put the cursor there.
-    pub fn select_ci_run(&mut self, index: usize) {
-        let Some(state) = self.selected_ci_mut() else {
-            return;
-        };
-        if index < state.runs.len() {
-            state.cursor = index;
-            self.needs_redraw = true;
-        }
-    }
-
-    /// Whether the open CI pane draws the loading spinner, which repaints on
+    /// Whether the `ci` view draws the loading spinner, which repaints on
     /// every tick: the selected repo has a GitHub identity and no answer
     /// has landed for it yet.
-    pub fn ci_pane_loading(&self) -> bool {
-        if self.ci_folded || self.dirty_mode {
+    pub fn ci_view_loading(&self) -> bool {
+        if !self.ci_wanted() || self.dirty_mode {
             return false;
         }
         match self.selected_ci() {
@@ -2638,10 +2595,10 @@ impl App {
         }
     }
 
-    /// Whether the open CI pane shows a run still moving, whose duration
+    /// Whether the `ci` view shows a run still moving, whose duration
     /// ticks and whose lamp pulses: about one repaint a second.
-    pub fn ci_pane_live(&self) -> bool {
-        !self.ci_folded
+    pub fn ci_view_live(&self) -> bool {
+        self.ci_wanted()
             && self
                 .selected_ci()
                 .and_then(|(_, state)| state)
@@ -2760,7 +2717,18 @@ impl App {
                 state.backoff.succeeded();
             }
         }
+        let key = answer.key.clone();
         state.land(answer);
+        // A shorter list for the repo on screen pulls the `ci` cursor onto
+        // its last run rather than leaving it past the end.
+        if self
+            .selected_ci()
+            .is_some_and(|(selected, _)| selected == key)
+        {
+            let runs = self.ci.get(&key).map_or(0, |s| s.runs.len());
+            let slot = &mut self.detail_selections[HistoryView::Ci.index()];
+            *slot = (*slot).min(runs.saturating_sub(1));
+        }
     }
 
     /// Whether `repo` carries GitHub fields the last poll did not return, so
@@ -2998,13 +2966,12 @@ impl App {
     fn fold_flag(&mut self, panel: FocusedPanel) -> Option<&mut bool> {
         match panel {
             FocusedPanel::Inspector => Some(&mut self.inspector_folded),
-            FocusedPanel::Ci => Some(&mut self.ci_folded),
             FocusedPanel::Contributions => Some(&mut self.contributions_folded),
             FocusedPanel::RepoList | FocusedPanel::Detail => None,
         }
     }
 
-    /// A pane's number key (`1`-`5`). On a pane that is not focused it
+    /// A pane's number key (`1`-`4`). On a pane that is not focused it
     /// focuses it, unfolding it if folded. On the focused pane it folds or
     /// unfolds it in place, keeping focus, so the same key both reaches a
     /// pane and gets it out of the way.
@@ -3017,18 +2984,14 @@ impl App {
             return;
         }
         if let Some(folded) = self.fold_flag(panel) {
-            let was = *folded;
             *folded = focused && !*folded;
-            if was && !*folded {
-                self.ci_unfolded(panel);
-            }
         }
         self.contributions_unfolded(panel, chrono::Local::now().date_naive());
         self.needs_redraw = true;
     }
 
     /// Fold `panel` to an empty frame, or unfold it: the click on a pane's
-    /// `[3]`/`[4]`/`[5]` tag. Unfolding focuses the pane, since opening it is
+    /// `[3]`/`[4]` tag. Unfolding focuses the pane, since opening it is
     /// asking to look at it; folding leaves focus where it is, the same as
     /// the number key does.
     pub fn toggle_fold(&mut self, panel: FocusedPanel) {
@@ -3038,25 +3001,12 @@ impl App {
         *folded = !*folded;
         if !*folded {
             self.focus_panel(panel);
-            self.ci_unfolded(panel);
         }
         self.contributions_unfolded(panel, chrono::Local::now().date_naive());
         self.needs_redraw = true;
     }
 
-    /// The CI pane just unfolded: its cursor starts on the first (newest)
-    /// run, scrolled to the top, whatever it was left on.
-    fn ci_unfolded(&mut self, panel: FocusedPanel) {
-        if panel != FocusedPanel::Ci {
-            return;
-        }
-        if let Some(state) = self.selected_ci_mut() {
-            state.cursor = 0;
-            state.scroll = 0;
-        }
-    }
-
-    /// The one unfold entry point the `5` key and the `[5]` tag click share:
+    /// The one unfold entry point the `4` key and the `[4]` tag click share:
     /// a strip on screen with no day marked yet (launched with the setting
     /// off, so never opened) stands on `today`, with today's column in view,
     /// exactly as opening it does (#66). A strip that was travelled keeps its
@@ -3273,6 +3223,11 @@ impl App {
             HistoryView::Graph => graph_commits(),
             // Local branches then remotes, in the order the view draws them.
             HistoryView::Branches => repo.branches.len() + repo.remote_branches.len(),
+            // The runs held for the repo, as the view draws them.
+            HistoryView::Ci => self
+                .selected_ci()
+                .and_then(|(_, state)| state)
+                .map_or(0, |s| s.runs.len()),
         }
     }
 
@@ -3367,6 +3322,9 @@ impl App {
                 }
                 .filter(|h| !h.is_empty())
             }
+            // A run is not a commit of the loaded history; the inspector's
+            // run bodies are FZ-30f.
+            HistoryView::Ci => None,
         }
     }
 
@@ -3453,11 +3411,7 @@ impl App {
             // list instead would spend the only line-by-line gesture the graph
             // has on moving to a different repo.
             FocusedPanel::Detail => FocusedPanel::Detail,
-            // The CI pane is never a target either, like the strip: from
-            // either, as from the inspector, the keys wrap to the list.
-            FocusedPanel::Inspector | FocusedPanel::Ci | FocusedPanel::Contributions => {
-                FocusedPanel::RepoList
-            }
+            FocusedPanel::Inspector | FocusedPanel::Contributions => FocusedPanel::RepoList,
         })
     }
 
@@ -3497,8 +3451,8 @@ impl App {
                 }
             }
             FocusedPanel::Inspector => self.scroll_inspector(delta),
-            // Never selected as targets, but the match has to be total.
-            FocusedPanel::Ci | FocusedPanel::Contributions => {}
+            // Never selected as a target, but the match has to be total.
+            FocusedPanel::Contributions => {}
         }
     }
 
@@ -3517,54 +3471,48 @@ impl App {
         self.set_detail_scroll(0);
     }
 
-    /// Cycle keyboard focus: repo list -> detail -> inspector -> ci -> strip
-    /// -> repo list, skipping a hidden inspector. Compact has no detail or
-    /// inspector, so there it walks list -> ci -> strip.
+    /// Cycle keyboard focus: repo list -> detail -> inspector -> strip ->
+    /// repo list.
+    /// Only meaningful in `Detail` view.
     pub fn toggle_panel_focus(&mut self) {
         if self.view != View::Detail {
-            // Compact has one flat grid, but the two bands are real targets.
+            // Compact has one flat grid, but the strip is still a real target.
             self.focused_panel = match self.focused_panel {
-                FocusedPanel::Ci => FocusedPanel::Contributions,
                 FocusedPanel::Contributions => FocusedPanel::RepoList,
-                _ => FocusedPanel::Ci,
+                _ => FocusedPanel::Contributions,
             };
             return;
         }
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             FocusedPanel::Detail if self.shows_inspector() => FocusedPanel::Inspector,
-            FocusedPanel::Detail | FocusedPanel::Inspector => FocusedPanel::Ci,
-            FocusedPanel::Ci => FocusedPanel::Contributions,
+            FocusedPanel::Detail | FocusedPanel::Inspector => FocusedPanel::Contributions,
             FocusedPanel::Contributions => FocusedPanel::RepoList,
         };
     }
 
-    /// `toggle_panel_focus` in reverse (Shift-Tab): repo list -> strip -> ci
-    /// -> inspector -> detail -> repo list, skipping a hidden inspector the
-    /// same way; in Compact, list -> strip -> ci.
+    /// `toggle_panel_focus` in reverse (Shift-Tab): repo list -> strip ->
+    /// inspector -> detail -> repo list, skipping a hidden inspector the same
+    /// way.
     pub fn toggle_panel_focus_back(&mut self) {
         if self.view != View::Detail {
-            self.focused_panel = match self.focused_panel {
-                FocusedPanel::Contributions => FocusedPanel::Ci,
-                FocusedPanel::Ci => FocusedPanel::RepoList,
-                _ => FocusedPanel::Contributions,
-            };
+            // Two targets, so the reverse is the same toggle.
+            self.toggle_panel_focus();
             return;
         }
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Contributions,
-            FocusedPanel::Contributions => FocusedPanel::Ci,
-            FocusedPanel::Ci if self.shows_inspector() => FocusedPanel::Inspector,
-            FocusedPanel::Ci | FocusedPanel::Inspector => FocusedPanel::Detail,
+            FocusedPanel::Contributions if self.shows_inspector() => FocusedPanel::Inspector,
+            FocusedPanel::Contributions | FocusedPanel::Inspector => FocusedPanel::Detail,
             FocusedPanel::Detail => FocusedPanel::RepoList,
         };
     }
 
-    /// Jump keyboard focus directly to `panel` (the number keys).
-    /// The list, detail and inspector only in `Detail` view.
+    /// Jump keyboard focus directly to `panel` (the `1`/`2` bindings).
+    /// Only meaningful in `Detail` view.
     pub fn focus_panel(&mut self, panel: FocusedPanel) {
-        // The two bands are the panels that exist in both views.
-        if matches!(panel, FocusedPanel::Ci | FocusedPanel::Contributions) {
+        // The strip is the one panel that exists in both views.
+        if panel == FocusedPanel::Contributions {
             self.focused_panel = panel;
             return;
         }
@@ -4067,7 +4015,7 @@ impl App {
     /// Step to the next history view, wrapping, or the previous one.
     ///
     /// `[` and `]`, which is lazygit's own binding for the same gesture and
-    /// leaves `1`-`3` and `5` to go on focusing panes.
+    /// leaves `1`-`4` to go on focusing panes.
     pub fn cycle_history_view(&mut self, back: bool) {
         let n = HistoryView::COUNT;
         let i = self.history_view.index();
@@ -4434,9 +4382,9 @@ mod tests {
 
         // And backwards, which a shifted letter could not have given us.
         app.cycle_history_view(true);
-        assert_eq!(app.history_view, HistoryView::Branches, "wraps backward");
+        assert_eq!(app.history_view, HistoryView::Ci, "wraps backward");
         app.cycle_history_view(true);
-        assert_eq!(app.history_view, HistoryView::Graph);
+        assert_eq!(app.history_view, HistoryView::Branches);
     }
 
     /// Scroll and selection are per view. A shared offset is wrong the moment
@@ -5402,7 +5350,6 @@ mod tests {
         for next in [
             FocusedPanel::Detail,
             FocusedPanel::Inspector,
-            FocusedPanel::Ci,
             FocusedPanel::Contributions,
             FocusedPanel::RepoList,
         ] {
@@ -5412,15 +5359,17 @@ mod tests {
         app.history_view = HistoryView::Graph;
         app.focused_panel = FocusedPanel::Detail;
         app.toggle_panel_focus();
-        assert_eq!(app.focused_panel, FocusedPanel::Ci, "no inspector");
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::Contributions,
+            "no inspector"
+        );
     }
 
     #[test]
     fn tab_in_compact_toggles_between_the_list_and_the_pane() {
         let mut app = make_app(1);
         app.view = View::Compact;
-        app.toggle_panel_focus();
-        assert_eq!(app.focused_panel, FocusedPanel::Ci);
         app.toggle_panel_focus();
         assert_eq!(app.focused_panel, FocusedPanel::Contributions);
         app.toggle_panel_focus();
@@ -5435,7 +5384,6 @@ mod tests {
         app.view = View::Detail;
         for next in [
             FocusedPanel::Contributions,
-            FocusedPanel::Ci,
             FocusedPanel::Inspector,
             FocusedPanel::Detail,
             FocusedPanel::RepoList,
@@ -5447,7 +5395,6 @@ mod tests {
             FocusedPanel::RepoList,
             FocusedPanel::Detail,
             FocusedPanel::Inspector,
-            FocusedPanel::Ci,
             FocusedPanel::Contributions,
         ] {
             app.focused_panel = start;
@@ -5463,8 +5410,6 @@ mod tests {
         app.view = View::Compact;
         app.toggle_panel_focus_back();
         assert_eq!(app.focused_panel, FocusedPanel::Contributions);
-        app.toggle_panel_focus_back();
-        assert_eq!(app.focused_panel, FocusedPanel::Ci);
         app.toggle_panel_focus_back();
         assert_eq!(app.focused_panel, FocusedPanel::RepoList);
     }
@@ -6407,13 +6352,13 @@ mod tests {
     }
 
     /// The reverse walk has the same trap from the other side: back from the
-    /// CI pane is the inspector, unless the graph view hides it.
+    /// strip is the inspector, unless the graph view hides it.
     #[test]
     fn reverse_focus_cycling_skips_a_hidden_inspector() {
         let mut app = make_app(1);
         app.history_view = HistoryView::Graph;
         app.view = View::Detail;
-        app.focused_panel = FocusedPanel::Ci;
+        app.focused_panel = FocusedPanel::Contributions;
         app.toggle_panel_focus_back();
         assert_eq!(
             app.focused_panel,

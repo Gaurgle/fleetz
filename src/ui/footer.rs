@@ -255,11 +255,10 @@ const SEGMENT_GAP: &str = "   ";
 /// except the strip's `[c]`, which is that pane's own key; it is drawn plain
 /// here, since the global `[c]` is the one that lights in the strip's colour.
 /// The compact view has one grid that takes keys, so it hints the list's
-/// keys unless the CI pane or the strip is focused.
+/// keys unless the strip is focused.
 fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
     let pane = match (app.view, app.focused_panel) {
         (_, FocusedPanel::Contributions) => FocusedPanel::Contributions,
-        (_, FocusedPanel::Ci) => FocusedPanel::Ci,
         (View::Compact, _) => FocusedPanel::RepoList,
         (View::Detail, pane) => pane,
     };
@@ -273,7 +272,14 @@ fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
             ("[o]".into(), "shell"),
         ],
         FocusedPanel::Detail => vec![
-            ("[j/k]".into(), "commit"),
+            // The `ci` view's cursor walks runs, not commits.
+            (
+                "[j/k]".into(),
+                match app.history_view {
+                    HistoryView::Ci => "run",
+                    _ => "commit",
+                },
+            ),
             ("[[ ]]".into(), "view"),
             ("[J/K]".into(), "inspector"),
         ],
@@ -281,10 +287,6 @@ fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
             ("[j/k]".into(), "scroll"),
             ("[+/-]".into(), "size"),
             (format!("[{}]", crate::ui::INSPECTOR_NUM), "fold"),
-        ],
-        FocusedPanel::Ci => vec![
-            ("[j/k]".into(), "run"),
-            (format!("[{}]", crate::ui::CI_NUM), "fold"),
         ],
         FocusedPanel::Contributions => vec![
             ("[h/l]".into(), "week"),
@@ -712,18 +714,20 @@ mod tests {
         );
     }
 
-    /// FZ-30c: the CI pane's segment, in either view.
+    /// FZ-30d: in the `ci` view the pane's cursor walks runs, and the
+    /// segment says so. Fails while it reads `commit` there.
     #[test]
-    fn the_focused_ci_pane_opens_the_row_with_its_keys() {
-        for view in [View::Detail, View::Compact] {
-            let mut app = app_in(view);
-            app.focused_panel = crate::app::FocusedPanel::Ci;
-            assert_eq!(
-                hint_row(&app, WIDE),
-                format!("[j/k] run  [4] fold   {}", global_row(&app)),
-                "{view:?}"
-            );
-        }
+    fn the_ci_view_hints_its_cursor_as_a_run() {
+        let mut app = app_in(View::Detail);
+        app.focused_panel = crate::app::FocusedPanel::Detail;
+        app.history_view = HistoryView::Ci;
+        assert_eq!(
+            hint_row(&app, WIDE),
+            format!(
+                "[j/k] run  [[ ]] view  [J/K] inspector   {}",
+                global_row(&app)
+            )
+        );
     }
 
     /// `B` folds `info`'s remote branch summary and does nothing elsewhere,
