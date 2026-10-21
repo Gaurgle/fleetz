@@ -2122,7 +2122,7 @@ pub struct App {
     /// (`apply_contributions_setting`).
     pub contributions: ContributionsMode,
     /// Whether the inspector and the strip are folded to an empty frame. A
-    /// folded pane stays on screen and can hold focus, so its `[3]`/`[4]` tag
+    /// folded pane stays on screen and can hold focus, so its `[3]`/`[5]` tag
     /// is still there to click and its number still reaches it. Neither is
     /// ever removed outright. Only these two fold: the repo list and the
     /// detail pane are the dashboard itself.
@@ -2654,7 +2654,7 @@ impl App {
         }
     }
 
-    /// A pane's number key (`1`-`4`). On a pane that is not focused it
+    /// A pane's number key (`1`-`3`, `5`). On a pane that is not focused it
     /// focuses it, unfolding it if folded. On the focused pane it folds or
     /// unfolds it in place, keeping focus, so the same key both reaches a
     /// pane and gets it out of the way.
@@ -2674,7 +2674,7 @@ impl App {
     }
 
     /// Fold `panel` to an empty frame, or unfold it: the click on a pane's
-    /// `[3]`/`[4]` tag. Unfolding focuses the pane, since opening it is
+    /// `[3]`/`[5]` tag. Unfolding focuses the pane, since opening it is
     /// asking to look at it; folding leaves focus where it is, the same as
     /// the number key does.
     pub fn toggle_fold(&mut self, panel: FocusedPanel) {
@@ -2689,7 +2689,7 @@ impl App {
         self.needs_redraw = true;
     }
 
-    /// The one unfold entry point the `4` key and the `[4]` tag click share:
+    /// The one unfold entry point the `5` key and the `[5]` tag click share:
     /// a strip on screen with no day marked yet (launched with the setting
     /// off, so never opened) stands on `today`, with today's column in view,
     /// exactly as opening it does (#66). A strip that was travelled keeps its
@@ -3690,7 +3690,7 @@ impl App {
     /// Step to the next history view, wrapping, or the previous one.
     ///
     /// `[` and `]`, which is lazygit's own binding for the same gesture and
-    /// leaves `1`-`4` to go on focusing panes.
+    /// leaves `1`-`3` and `5` to go on focusing panes.
     pub fn cycle_history_view(&mut self, back: bool) {
         let n = HistoryView::COUNT;
         let i = self.history_view.index();

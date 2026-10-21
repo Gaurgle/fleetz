@@ -812,9 +812,9 @@ pub fn divider_line(width: usize) -> Line<'static> {
 }
 
 /// The panel numbers of the two foldable panes, which are also the keys that
-/// focus them.
+/// focus them. The strip is 5, not 4: 4 is held for the CI pane (FZ-30).
 pub const INSPECTOR_NUM: u8 = 3;
-pub const CONTRIBUTIONS_NUM: u8 = 4;
+pub const CONTRIBUTIONS_NUM: u8 = 5;
 
 /// The number half of a panel title, spaces included: the cells a click has
 /// to land on to fold the pane.
@@ -2575,7 +2575,7 @@ mod tests {
                 (
                     rects.contributions,
                     FocusedPanel::Contributions,
-                    "[4]",
+                    "[5]",
                     "contributions",
                 ),
             ] {
@@ -2675,7 +2675,7 @@ mod tests {
             (
                 rects.contributions,
                 FocusedPanel::Contributions,
-                "[4]",
+                "[5]",
                 colors::OVERLAY,
                 colors::SURFACE,
             ),
