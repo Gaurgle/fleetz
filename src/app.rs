@@ -2573,6 +2573,14 @@ impl App {
         Some((key, state))
     }
 
+    /// The run under the `ci` view's cursor, clamped onto the last run as the
+    /// view draws it; `None` while the selected repo holds no runs.
+    pub fn highlighted_ci_run(&self) -> Option<&crate::ci::WorkflowRun> {
+        let runs = &self.selected_ci()?.1?.runs;
+        let at = self.detail_selections[HistoryView::Ci.index()];
+        runs.get(at.min(runs.len().saturating_sub(1)))
+    }
+
     /// Whether the CI data layer may poll: pane 2 is on screen showing the
     /// `ci` view. The one gate the poll trigger, the loading spinner and
     /// the stuck-poll expiry read. Never true for `info`, whose `ci` section

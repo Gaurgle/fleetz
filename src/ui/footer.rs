@@ -271,15 +271,18 @@ fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
             ("[e]".into(), "edit"),
             ("[o]".into(), "shell"),
         ],
+        // The `ci` view's cursor walks runs, and its handoffs act on the
+        // highlighted one (FZ-30e).
+        FocusedPanel::Detail if app.history_view == HistoryView::Ci => vec![
+            ("[j/k]".into(), "run"),
+            ("[[ ]]".into(), "view"),
+            ("[l]".into(), "log"),
+            ("[a]".into(), "rerun"),
+            ("[x]".into(), "cancel"),
+            ("[O]".into(), "open"),
+        ],
         FocusedPanel::Detail => vec![
-            // The `ci` view's cursor walks runs, not commits.
-            (
-                "[j/k]".into(),
-                match app.history_view {
-                    HistoryView::Ci => "run",
-                    _ => "commit",
-                },
-            ),
+            ("[j/k]".into(), "commit"),
             ("[[ ]]".into(), "view"),
             ("[J/K]".into(), "inspector"),
         ],
@@ -724,7 +727,7 @@ mod tests {
         assert_eq!(
             hint_row(&app, WIDE),
             format!(
-                "[j/k] run  [[ ]] view  [J/K] inspector   {}",
+                "[j/k] run  [[ ]] view  [l] log  [a] rerun  [x] cancel  [O] open   {}",
                 global_row(&app)
             )
         );

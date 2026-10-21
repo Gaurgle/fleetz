@@ -1771,6 +1771,11 @@ async fn handle_normal_input(
         KeyCode::Char(',') => {
             app.overlay = Overlay::Settings(settings_overlay(app, config));
         }
+        // The `ci` view's handoffs on the highlighted run (FZ-30e). Ahead of
+        // `O`, which keeps opening the first PR everywhere else.
+        KeyCode::Char('l' | 'a' | 'x' | 'O') if ci_handoff_applies(app) => {
+            ci_handoff_key(app, terminal, tx, key.code)?;
+        }
         KeyCode::Char('O') => {
             // Open first PR in browser (Shift+O)
             if let Some(repo) = app.selected_repo() {
@@ -1874,6 +1879,144 @@ fn suspend_and_run_in_dir(
     enable_raw_mode().map_err(|e| e.to_string())?;
     terminal.clear().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// A `ci` view handoff key, acting on the highlighted run (FZ-30e).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunKey {
+    /// `l`: the run's log in `gh`.
+    Log,
+    /// `a`: rerun it ("again").
+    Rerun,
+    /// `x`: cancel it.
+    Cancel,
+    /// `O`: its page in the browser.
+    Open,
+}
+
+impl RunKey {
+    fn from_code(code: KeyCode) -> Option<Self> {
+        match code {
+            KeyCode::Char('l') => Some(Self::Log),
+            KeyCode::Char('a') => Some(Self::Rerun),
+            KeyCode::Char('x') => Some(Self::Cancel),
+            KeyCode::Char('O') => Some(Self::Open),
+            _ => None,
+        }
+    }
+}
+
+/// What a handoff key does with a run it allows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RunHandoff {
+    /// Suspend fleetz and run `gh` with these arguments.
+    Gh(Vec<String>),
+    /// Open this URL with `OPENER`, as `O` opens a PR.
+    Open(String),
+}
+
+/// Whether the handoff keys act: pane 2 focused and showing `ci`. Anywhere
+/// else they keep their other meanings.
+fn ci_handoff_applies(app: &App) -> bool {
+    app.focused_panel == FocusedPanel::Detail && app.ci_wanted()
+}
+
+/// What `key` does to `run` of `owner`/`name`, or the status line note when
+/// the run does not allow it. `gh` has no log for a run that has not
+/// finished and will not rerun one, and cancels only a run in progress or
+/// queued. Every `gh` call names the repo with `-R`, so it works from any
+/// directory.
+fn run_handoff_for(
+    run: &ci::WorkflowRun,
+    key: RunKey,
+    owner: &str,
+    name: &str,
+) -> Result<RunHandoff, &'static str> {
+    let finished = run.status.as_deref() == Some("completed");
+    let failed = run.conclusion.as_deref() == Some("failure");
+    let (verb, flag) = match key {
+        RunKey::Open => return Ok(RunHandoff::Open(run.url.clone())),
+        RunKey::Log if !finished => return Err("run has not finished"),
+        RunKey::Rerun if !finished => return Err("run has not finished"),
+        RunKey::Cancel if !run.is_live() => return Err("run is not in progress"),
+        RunKey::Log => ("view", Some(if failed { "--log-failed" } else { "--log" })),
+        RunKey::Rerun => ("rerun", failed.then_some("--failed")),
+        RunKey::Cancel => ("cancel", None),
+    };
+    let mut args = vec!["run".to_string(), verb.to_string(), run.id.to_string()];
+    args.extend(flag.map(str::to_string));
+    args.extend(["-R".to_string(), format!("{owner}/{name}")]);
+    Ok(RunHandoff::Gh(args))
+}
+
+/// The handoff `key` asks for on the highlighted run, with the repo's CI
+/// target; `None` on an empty view or a row with no GitHub identity, and
+/// `None` with the reason on the status line when the run does not allow it.
+fn resolve_run_handoff(
+    app: &mut App,
+    key: RunKey,
+) -> Option<(RunHandoff, (app::RemoteKey, String, String))> {
+    let target = app.selected_repo().and_then(ci::target)?;
+    let run = app.highlighted_ci_run()?;
+    match run_handoff_for(run, key, &target.1, &target.2) {
+        Ok(handoff) => Some((handoff, target)),
+        Err(note) => {
+            app.set_status(note.to_string(), false);
+            None
+        }
+    }
+}
+
+/// Run a `ci` view handoff key. Back from `gh`, the run's repo polls at
+/// once (`ci_poll_after_handoff`) so the rerun or cancel shows.
+fn ci_handoff_key(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    code: KeyCode,
+) -> Result<(), String> {
+    let Some(key) = RunKey::from_code(code) else {
+        return Ok(());
+    };
+    let Some((handoff, target)) = resolve_run_handoff(app, key) else {
+        return Ok(());
+    };
+    match handoff {
+        RunHandoff::Gh(args) => {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            suspend_and_run(terminal, "gh", &args)?;
+            if let Some(request) = ci_poll_after_handoff(app, target, chrono::Local::now()) {
+                spawn_ci_poll(tx, request);
+            }
+        }
+        RunHandoff::Open(url) => {
+            let _ = StdCommand::new(OPENER).arg(&url).status();
+        }
+    }
+    Ok(())
+}
+
+/// The CI poll to start for `target` back from a `gh` handoff, with its
+/// lock taken: due at once, skipping the 10 s or 60 s interval and the
+/// dwell, but never under `-d`, with a poll already out, or while a rate
+/// limit, the budget or a backoff holds the repo (`ci::poll_due`). It skips
+/// the interval and the budget pace's stretch of it, but never a pause or a
+/// backoff.
+fn ci_poll_after_handoff(
+    app: &mut App,
+    target: (app::RemoteKey, String, String),
+    now: chrono::DateTime<chrono::Local>,
+) -> Option<ci::CiRequest> {
+    let (key, owner, name) = target;
+    if app.dirty_mode {
+        return None;
+    }
+    let due = {
+        let mut cadence = app.ci_cadence(&key, ci::DWELL, now);
+        cadence.last_attempt = None;
+        ci::poll_due(&cadence)
+    };
+    due.then(|| app.claim_ci_poll(key, owner, name))
 }
 
 /// Hand the terminal to a child process: mouse capture off, then the
@@ -11840,5 +11983,338 @@ mod tests {
             &app.ci[&ci_key()].freshness.outcome,
             app::Outcome::Failed(f) if f.kind == github::FailureKind::TimedOut
         ));
+    }
+
+    // FZ-30e: the `ci` view's handoffs to `gh` and the browser.
+
+    /// `ci_app` with its runs landed, pane 2 focused on `ci`, the cursor on
+    /// run `index` of the fixture (in progress, success, failure).
+    fn handoff_app(index: usize) -> App {
+        let mut app = ci_app();
+        ci_landed(&mut app, at(12, 0, 0));
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Ci;
+        app.focused_panel = FocusedPanel::Detail;
+        app.detail_selections[app::HistoryView::Ci.index()] = index;
+        app
+    }
+
+    fn argv(args: &[&str]) -> RunHandoff {
+        RunHandoff::Gh(args.iter().map(|a| a.to_string()).collect())
+    }
+
+    #[test]
+    fn the_highlighted_run_is_the_one_the_ci_cursor_is_on() {
+        let app = handoff_app(1);
+        assert_eq!(app.highlighted_ci_run(), Some(&ci_runs()[1]));
+        let past = handoff_app(9);
+        assert_eq!(
+            past.highlighted_ci_run(),
+            Some(&ci_runs()[2]),
+            "clamped onto the last run, as the view draws the cursor"
+        );
+        assert_eq!(ci_app().highlighted_ci_run(), None, "nothing held");
+    }
+
+    #[test]
+    fn l_reads_the_full_log_of_a_finished_run_and_the_failed_part_of_a_failed_one() {
+        let runs = ci_runs();
+        assert_eq!(
+            run_handoff_for(&runs[1], RunKey::Log, "gaurgle", "fleetz"),
+            Ok(argv(&[
+                "run",
+                "view",
+                "39590683935",
+                "--log",
+                "-R",
+                "gaurgle/fleetz"
+            ]))
+        );
+        assert_eq!(
+            run_handoff_for(&runs[2], RunKey::Log, "gaurgle", "fleetz"),
+            Ok(argv(&[
+                "run",
+                "view",
+                "37958308363",
+                "--log-failed",
+                "-R",
+                "gaurgle/fleetz"
+            ]))
+        );
+    }
+
+    #[test]
+    fn a_reruns_a_finished_run_and_only_the_failed_jobs_of_a_failed_one() {
+        let runs = ci_runs();
+        assert_eq!(
+            run_handoff_for(&runs[1], RunKey::Rerun, "gaurgle", "fleetz"),
+            Ok(argv(&[
+                "run",
+                "rerun",
+                "39590683935",
+                "-R",
+                "gaurgle/fleetz"
+            ]))
+        );
+        assert_eq!(
+            run_handoff_for(&runs[2], RunKey::Rerun, "gaurgle", "fleetz"),
+            Ok(argv(&[
+                "run",
+                "rerun",
+                "37958308363",
+                "--failed",
+                "-R",
+                "gaurgle/fleetz"
+            ]))
+        );
+    }
+
+    /// Only `failure` means failed: a run that timed out or was cancelled
+    /// gets the full log and a whole rerun.
+    #[test]
+    fn a_timed_out_or_cancelled_run_gets_the_full_log_and_a_whole_rerun() {
+        for conclusion in ["timed_out", "cancelled"] {
+            let run = ci::WorkflowRun {
+                conclusion: Some(conclusion.to_string()),
+                ..ci_runs()[1].clone()
+            };
+            assert_eq!(
+                run_handoff_for(&run, RunKey::Log, "gaurgle", "fleetz"),
+                Ok(argv(&[
+                    "run",
+                    "view",
+                    "39590683935",
+                    "--log",
+                    "-R",
+                    "gaurgle/fleetz"
+                ])),
+                "{conclusion}"
+            );
+            assert_eq!(
+                run_handoff_for(&run, RunKey::Rerun, "gaurgle", "fleetz"),
+                Ok(argv(&[
+                    "run",
+                    "rerun",
+                    "39590683935",
+                    "-R",
+                    "gaurgle/fleetz"
+                ])),
+                "{conclusion}"
+            );
+        }
+    }
+
+    #[test]
+    fn x_cancels_only_a_run_in_progress_or_queued() {
+        let runs = ci_runs();
+        assert_eq!(
+            run_handoff_for(&runs[0], RunKey::Cancel, "gaurgle", "fleetz"),
+            Ok(argv(&[
+                "run",
+                "cancel",
+                "39590684061",
+                "-R",
+                "gaurgle/fleetz"
+            ]))
+        );
+        let queued = ci::WorkflowRun {
+            status: Some("queued".to_string()),
+            ..runs[0].clone()
+        };
+        assert_eq!(
+            run_handoff_for(&queued, RunKey::Cancel, "gaurgle", "fleetz"),
+            Ok(argv(&[
+                "run",
+                "cancel",
+                "39590684061",
+                "-R",
+                "gaurgle/fleetz"
+            ]))
+        );
+        for finished in [&runs[1], &runs[2]] {
+            assert_eq!(
+                run_handoff_for(finished, RunKey::Cancel, "gaurgle", "fleetz"),
+                Err("run is not in progress")
+            );
+        }
+    }
+
+    /// `gh` has no log for a run still going and will not rerun one, so
+    /// fleetz says so rather than handing over a command that only fails.
+    #[test]
+    fn a_run_still_going_has_no_log_or_rerun_yet() {
+        let live = &ci_runs()[0];
+        for key in [RunKey::Log, RunKey::Rerun] {
+            assert_eq!(
+                run_handoff_for(live, key, "gaurgle", "fleetz"),
+                Err("run has not finished"),
+                "{key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn capital_o_opens_the_run_page_whatever_its_state() {
+        for run in ci_runs() {
+            assert_eq!(
+                run_handoff_for(&run, RunKey::Open, "gaurgle", "fleetz"),
+                Ok(RunHandoff::Open(run.url.clone()))
+            );
+        }
+    }
+
+    #[test]
+    fn the_handoff_keys_are_l_a_x_and_capital_o() {
+        let keys: Vec<Option<RunKey>> = ['l', 'a', 'x', 'O', 'o', 'L', 'X']
+            .into_iter()
+            .map(|c| RunKey::from_code(KeyCode::Char(c)))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                Some(RunKey::Log),
+                Some(RunKey::Rerun),
+                Some(RunKey::Cancel),
+                Some(RunKey::Open),
+                None,
+                None,
+                None
+            ]
+        );
+    }
+
+    /// Only pane 2, focused, showing `ci`: anywhere else the keys keep
+    /// their old meaning (`O` the first PR, `l` the strip's day cursor).
+    #[test]
+    fn the_handoffs_apply_only_with_pane_2_focused_on_ci() {
+        assert!(ci_handoff_applies(&handoff_app(0)));
+        for view in app::HistoryView::ALL {
+            if view == app::HistoryView::Ci {
+                continue;
+            }
+            let mut app = handoff_app(0);
+            app.history_view = view;
+            assert!(!ci_handoff_applies(&app), "{view:?}");
+        }
+        for panel in [
+            FocusedPanel::RepoList,
+            FocusedPanel::Inspector,
+            FocusedPanel::Contributions,
+        ] {
+            let mut app = handoff_app(0);
+            app.focused_panel = panel;
+            assert!(!ci_handoff_applies(&app), "{panel:?}");
+        }
+        let mut compact = handoff_app(0);
+        compact.view = app::View::Compact;
+        assert!(!ci_handoff_applies(&compact), "compact draws no pane 2");
+    }
+
+    #[test]
+    fn a_handoff_targets_the_rows_repo_and_the_highlighted_run() {
+        let mut app = handoff_app(2);
+        let (handoff, (key, owner, name)) = resolve_run_handoff(&mut app, RunKey::Rerun).unwrap();
+        assert_eq!(
+            handoff,
+            argv(&[
+                "run",
+                "rerun",
+                "37958308363",
+                "--failed",
+                "-R",
+                "gaurgle/fleetz"
+            ])
+        );
+        assert_eq!(
+            (key, owner.as_str(), name.as_str()),
+            (ci_key(), "gaurgle", "fleetz")
+        );
+        assert_eq!(yank_status(&app), None, "nothing to note");
+    }
+
+    #[test]
+    fn an_empty_ci_view_does_nothing() {
+        let mut app = ci_app();
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Ci;
+        app.focused_panel = FocusedPanel::Detail;
+        for key in [RunKey::Log, RunKey::Rerun, RunKey::Cancel, RunKey::Open] {
+            assert_eq!(resolve_run_handoff(&mut app, key), None, "{key:?}");
+        }
+        assert_eq!(yank_status(&app), None);
+        let mut no_runs = handoff_app(0);
+        no_runs.ci.get_mut(&ci_key()).unwrap().runs.clear();
+        assert_eq!(resolve_run_handoff(&mut no_runs, RunKey::Open), None);
+    }
+
+    #[test]
+    fn a_row_without_a_github_identity_hands_nothing_off() {
+        let mut app = handoff_app(0);
+        app.repos[0].owner = None;
+        assert_eq!(resolve_run_handoff(&mut app, RunKey::Open), None);
+        assert_eq!(yank_status(&app), None);
+    }
+
+    #[test]
+    fn a_refused_handoff_says_why_on_the_status_line() {
+        let mut app = handoff_app(1);
+        assert_eq!(resolve_run_handoff(&mut app, RunKey::Cancel), None);
+        assert_eq!(
+            yank_status(&app),
+            Some(("run is not in progress".to_string(), false))
+        );
+        let mut live = handoff_app(0);
+        assert_eq!(resolve_run_handoff(&mut live, RunKey::Log), None);
+        assert_eq!(
+            yank_status(&live),
+            Some(("run has not finished".to_string(), false))
+        );
+    }
+
+    /// Back from `gh`, the repo polls at once rather than at its next 10 or
+    /// 60 s slot, so a rerun or a cancel shows up without waiting.
+    #[test]
+    fn back_from_gh_the_runs_repo_polls_at_once() {
+        let mut app = handoff_app(1);
+        let start = std::time::Instant::now();
+        let settled = start + std::time::Duration::from_secs(1);
+        ci_poll_request(&mut app, at(12, 0, 0), start);
+        assert_eq!(
+            ci_poll_request(&mut app, at(12, 0, 5), settled),
+            None,
+            "not due on its own until 12:00:10"
+        );
+        let target = ci::target(&app.repos[0]).unwrap();
+        let request =
+            ci_poll_after_handoff(&mut app, target.clone(), at(12, 0, 5)).expect("polled at once");
+        assert_eq!(request.key, ci_key());
+        assert!(app.ci[&ci_key()].inflight);
+        assert_eq!(
+            ci_poll_after_handoff(&mut app, target, at(12, 0, 6)),
+            None,
+            "one poll out at a time"
+        );
+    }
+
+    /// The immediate poll skips the interval, nothing else: a rate limit or
+    /// `-d` still sends nothing.
+    #[test]
+    fn back_from_gh_a_rate_limited_or_dirty_mode_repo_does_not_poll() {
+        let failure = github::Failure::rate_limit("API rate limit exceeded");
+        let budget = reading("tok", 0, at(12, 40, 0), at(12, 0, 10));
+        let mut limited = ci_failure_lands(failure, Some(budget));
+        limited.view = app::View::Detail;
+        limited.history_view = app::HistoryView::Ci;
+        let target = ci::target(&limited.repos[0]).unwrap();
+        assert_eq!(
+            ci_poll_after_handoff(&mut limited, target.clone(), at(12, 1, 0)),
+            None
+        );
+        let mut dirty = handoff_app(1);
+        dirty.dirty_mode = true;
+        assert_eq!(
+            ci_poll_after_handoff(&mut dirty, target, at(12, 1, 0)),
+            None
+        );
     }
 }

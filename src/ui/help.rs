@@ -160,6 +160,10 @@ const GROUPS: [Group; 6] = [
                 desc: &["first PR in the browser"],
             },
             Row {
+                key: "l a x O",
+                desc: &["ci: log rerun cancel open"],
+            },
+            Row {
                 key: "y",
                 desc: &["copy hash (or click it)"],
             },
@@ -170,9 +174,8 @@ const GROUPS: [Group; 6] = [
             Row {
                 key: ",",
                 desc: &[
-                    "settings: sweep and poll",
-                    "intervals, watch, view,",
-                    "work hours, pane sizes,",
+                    "settings: sweep, poll,",
+                    "watch, view, work, panes,",
                     "contrib, loading, icons",
                 ],
             },
