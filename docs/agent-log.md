@@ -929,6 +929,126 @@ covered are Done.
 - **2026-10-02.** "Retired, take over" about two older sessions; "Both
   hold" to the standing instructions in the handoff.
 
+### Owner authority of 2026-10-17 to 2026-10-20 (moved from the handoff 2026-10-21)
+
+Spent entries, verbatim as the handoff carried them; the dispatches they
+covered are Done, released or parked. The live parts of the 2026-10-17
+16:58 answers stay in the handoff.
+
+- **2026-10-20, about 12:05.** "no safety question, F keeps the cap, 200
+  is fine": the FZ-35 spec is approved with its three points closed
+  (recorded in the spec's "Decisions" and on #84 and #85, both Ready).
+  Creation and the spec were his "1. yes" of about 11:50 ("Create FZ-35
+  (a and b) as P1 in M1, spec first?"), "200mb is good" and "yes apply it
+  everywhere" (the cap on every automatic fetch, launch included). Not
+  yet given: the word to run FZ-35a; it follows FZ-34's integration.
+- **2026-10-20, about 14:40.** "tag it, and ship it", after the close
+  report presented the 0.6.0 commands. Read as a one-time, explicit
+  release of the tag rule by the owner: the coordinator makes the bump
+  commit (the last before the tag), pushes, tags `v0.6.0`, pushes the
+  tag (which runs `release.yml`), and installs the tagged build. Not a
+  standing permission; tags stay his after this. Done: bump `192a838`,
+  tag `v0.6.0`, `release.yml` run 39424548876.
+- **2026-10-20, about 14:30.** "lets go with a": the six Nerd-mode
+  assertions in `src/ui/badges.rs` named in the FZ-38 stop comment may
+  go through the glyph-choice functions; nothing else in existing tests
+  changes. Recorded on #88; worker resumed.
+- **2026-10-20, about 14:25 (clock read 14:24).** "you may ship it and
+  install it when this is done" and "should be the last tweak on fleetz
+  for today, so when that's done. finish eligible and running tickets,
+  and close for today". Read as: FZ-38 (#88) merges under the safe-merge
+  rule once he has picked the glyphs on the branch build and the review
+  accepts, then the coordinator runs `cargo install --path` (a second
+  one-time release of that rule today); no new ticket after it; then the
+  hand-back with the 0.6.0 commands. "Ship it" grants no tag or release
+  (house rule); the tag commands are presented. FZ-38 was then parked on
+  his "skip the glyphs".
+- **2026-10-20, about 14:15 (clock).** "can we add nerdfont icons for the error
+  messages in the pane 1 list? like this [U+F1616] for connection error
+  [U+EBFB] for general error or this [U+E654] and for worktrees: [U+EC7D]
+  or [U+EC7E] etc". Read, under the 13:05 "lets do some more tickets", as
+  create and run: FZ-38 (#88) created at 14:28, P1, M3, Ready; dispatch
+  after FZ-35b merges (same badge code). It stops at Ready to integrate
+  for his pick of the glyphs on the branch build (a temporary cycle key,
+  as the coordinator's memory note on comparing visual options says).
+- **2026-10-20, about 13:05.** "feature: hash's should be copyble easily
+  from all pane 2 which shows a commit hash. click to copy, and or
+  something when 'standing' on a commit (y for yank?)" and "ok. so lets
+  do some more tickets then, and get back to me when we are stable
+  again". Read as a standing scope replacing the 12:48 "dont start any
+  more": create and run the copy-hash ticket (FZ-37 #87, rulings in its
+  body), run FZ-35a (#84) and then FZ-35b (#85); cap: these three; stop
+  and report when every started ticket is merged and nothing is in
+  flight, or at the first safe-merge failure, two-cycle blocker or usage
+  limit. `y` and click are his own interaction choice, so FZ-37 merges
+  under the safe-merge rule with the status wording as a small look
+  change; he can override. Slots: #84 and #87 in the two worker slots,
+  #85 after #84 lands.
+- **2026-10-20, about 12:48.** "why is fz-13n still in progress?
+  integrate fz-26 too but dont start any more. let me know if fleetz
+  really is in a state of usefulness right now. are the fetching bug
+  fixed?" Read as: #81 moved to Ready (no work exists for it; comment on
+  the issue); #45 (FZ-26) approved to merge now as a CI change, redone
+  from scratch since its worktree was lost (`fz-small` then
+  `fz-reviewer`, base `ecab6c4`, branch `ci/45-pull-request-trigger`,
+  worktree `.claude/worktrees/issue-45`; ruling on criterion 1 on the
+  issue); **no further dispatch after #86 and #45**, FZ-35a included.
+  Install done: `fleetz 0.6.0` from the working tree at about 12:45.
+- **2026-10-20, about 12:40.** "do it, you can install it as well", to
+  the coordinator's option (b) on the release notes (skip coordination
+  `docs:` commits before tagging) with the 0.6.0 commands presented. Read
+  as: do the script change (issue #86 FZ-36 created for it, since every
+  commit traces to a ticket; `fz-small` dispatched in
+  `.claude/worktrees/issue-86`, branch
+  `chore/86-release-notes-skip-coordination`, base `ecab6c4`), and a
+  one-time release of the `cargo install` rule for this build: the
+  coordinator ran `cargo install --path ~/repos/fleetz` from the working
+  tree with the uncommitted 0.6.0 bump. The bump commit, push and tag
+  stay his; not read as a commit or tag instruction.
+- **2026-10-20, about 12:25.** "let me know when all is done so i can
+  install": he installs himself once told.
+- **2026-10-20, about 11:32.** "ok, well lets go with libc option then?":
+  `libc` approved as a direct dependency for FZ-34 (#83).
+- **2026-10-20, about 11:20.** Session opened with: "i added a priority 0
+  ticket that needs to be taken care of asap; Ticket: FZ-34 (#83)". Read
+  as dispatch of #83 now, one worker and one reviewer, merge under the
+  safe-merge rule (no screen change). Nothing else is authorized by it.
+- **2026-10-17, about 16:58.** Answers to the coordinator's numbered list
+  (the list is below, "Questions of 2026-10-17"): "1. yes" (retitle #70
+  to #79 under their epics and keep the FZ ids going; done at 17:00:
+  FZ-04a #70, FZ-13v #71, FZ-13w #72, FZ-05h #73, FZ-13x #75, FZ-04b #76,
+  FZ-09g #77, FZ-13y #78, FZ-03a #79; #74 stays plain as a one-off); "2 i
+  think look at thr branch build first? always use "ago" even if 0
+  minutes", then a paste of option (a) alone, then "yes" to the
+  coordinator's reading: #79 takes form (a) `⚠ github offline at 12:02,
+  as of 11:02`, shown always with no threshold, and stops at Ready to
+  integrate for his look; "3. yes, you decide order" (batch 3 may start:
+  #67, FZ-14, FZ-15, FZ-16, order the coordinator's); "4. the last saved
+  config would be restored, if possible." (FZ-13m restore target); "5.
+  lets try it out, yes." (FZ-13n hints follow focus); "6. yes,
+  economical" (FZ-13o); "7-10. ok with me, i trust." (issues may be
+  created for the `o` shell mouse capture, one measure for width, the
+  ref query cost, and the small review follow-ups; how to cut them is
+  the coordinator's); "11. close it, but note it if something would
+  break later on." (#46 closed 17:03 with the note); "12. yes" (#45
+  parked, #56 unprioritized, #61 unpromoted); "13. ok" (the #77 ruling
+  stands); "14. lets do this later." (release scope).
+- **2026-10-17, about 16:47.** "ok to create the header issue too", then
+  "give me all questions that needs to be answered". The coordinator
+  reads the first as create and run, like #78 ("too"): issue #79 created
+  and dispatched in the second worker slot. The header wording is still
+  his: #79 stops at Ready to integrate unless he accepts the example
+  (`⚠ github offline 2h ago, as of 3h`) in chat first. He may correct
+  the reading; nothing merges without the wording answer.
+- **2026-10-17, about 16:45.** Andreas reported the GitHub contribution
+  strip not adding the new day's square across midnight, then "i was
+  wrong, it did update" (a poll had run). The coordinator offered (1)
+  leave it, (2) ticket it as a filler for a free slot, not ahead of
+  batch 3, and asked whether to create the issue. Andreas: "yeah, lets
+  go with 2." The coordinator reads it as: create the issue (#78) and
+  run it in a free slot; all slots were free, so it was dispatched at
+  once. A small look change under the 2026-10-02 standing instruction.
+
 ### Rulings and one-time releases on finished tickets
 
 Owner releases here were given for single tickets that are Done; they do
@@ -1155,6 +1275,24 @@ the owner", 16:58) are in brackets.
   section label itself is not clipped below 9 columns, like the other labels.
 
 ### Follow-ups found and not ticketed
+
+Found 2026-10-20 (moved from the handoff 2026-10-21; each needs his yes
+before an issue is created):
+
+- **Pane 1 wheel coalescing:** his terminal delivers several events per
+  notch and the code moves one row per event, so the list jumps; one
+  ticket to coalesce the events of a notch into one row.
+- **FZ-35 test seams:** retarget the existing tests so the nine
+  `#[cfg(test)]` seams from FZ-35a and FZ-35b can go (an assertion edit,
+  his call).
+- **Terminal-free core for the `y` and mouse handlers** so their wiring is
+  testable (#87 review).
+- **`fetch over N MB`** should name the bytes at the cut rather than the cap.
+- **Two weakened negative guards in Nerd mode** (`badges.rs` line 649,
+  `ui/mod.rs` line 2171) if FZ-38 lands.
+- **`core.quotePath=false`** in `scripts/release-notes.sh`.
+
+Earlier:
 
 - **One key for "same remote"** (done, #73). Five sites lowercase an owner and a name:
   `main.rs::remote_key`, `main.rs::names_remote`, discovery's `repo_key`,
