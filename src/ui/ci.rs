@@ -412,20 +412,42 @@ pub fn run_line(
 
 // --- The inspector's run bodies (FZ-30f) ---
 
+/// `inspector_lines` without the marked job's lines, as the tests read it.
+#[cfg(test)]
+pub fn inspector_body(app: &App, now: DateTime<Local>) -> Vec<Line<'static>> {
+    inspector_lines(app, now).0
+}
+
 /// The inspector's lines for the highlighted run in the shown body
 /// (`App::ci_body`), unwrapped: the pane wraps and scrolls them. A held
-/// whole log is not among them; `shown_log` hands it over apart.
-pub fn inspector_body(app: &App, now: DateTime<Local>) -> Vec<Line<'static>> {
+/// whole log is not among them; `shown_log` hands it over apart. In the
+/// `jobs` body, also the lines the marked job takes (its row, and its steps
+/// and tail beneath), which the pane keeps in view as the job cursor moves.
+pub fn inspector_lines(
+    app: &App,
+    now: DateTime<Local>,
+) -> (Vec<Line<'static>>, Option<std::ops::Range<usize>>) {
     let Some(run) = app.ci_highlighted_run() else {
-        return vec![dim_line("no run selected")];
+        return (vec![dim_line("no run selected")], None);
     };
     let mut lines = run_masthead(run);
-    lines.extend(match app.ci_body {
-        CiBody::Jobs => jobs_body(app, run, now),
-        CiBody::Log => log_body(app, run),
-        CiBody::Script => script_body(app, run),
-    });
-    lines
+    let head = lines.len();
+    let marked = match app.ci_body {
+        CiBody::Jobs => {
+            let (body, marked) = jobs_body(app, run, now);
+            lines.extend(body);
+            marked.map(|m| m.start + head..m.end + head)
+        }
+        CiBody::Log => {
+            lines.extend(log_body(app, run));
+            None
+        }
+        CiBody::Script => {
+            lines.extend(script_body(app, run));
+            None
+        }
+    };
+    (lines, marked)
 }
 
 fn dim_line(text: &str) -> Line<'static> {
@@ -510,23 +532,28 @@ fn job_duration(job: &Job, now: DateTime<Local>) -> String {
     duration_text((end - start).num_seconds())
 }
 
-/// The `jobs` body: each job with its lamp, name and duration, the marked
-/// one carrying `▸`, its steps on one line beneath, and under a failed job
-/// its failing step's name and the dimmed tail of its log.
-fn jobs_body(app: &App, run: &WorkflowRun, now: DateTime<Local>) -> Vec<Line<'static>> {
+/// The `jobs` body: a list, one row per job with its lamp, name and
+/// duration, the marked one carrying `▸`. Only the marked job shows its
+/// steps beneath, one per line, and when it failed the dimmed tail of its
+/// log under the failing step, once the log is in hand: the list never
+/// waits for it.
+/// Also returns the lines the marked job takes.
+fn jobs_body(
+    app: &App,
+    run: &WorkflowRun,
+    now: DateTime<Local>,
+) -> (Vec<Line<'static>>, Option<std::ops::Range<usize>>) {
     let state = app.selected_ci().and_then(|(_, state)| state);
     let Some(jobs) = app.ci_highlighted_jobs() else {
-        return vec![jobs_missing(state, run)];
+        return (vec![jobs_missing(state, run)], None);
     };
     if jobs.is_empty() {
-        return vec![dim_line("no jobs")];
+        return (vec![dim_line("no jobs")], None);
     }
     let marked = app.ci_marked_job_index();
     let mut lines = Vec::new();
+    let mut marked_lines = None;
     for (i, job) in jobs.iter().enumerate() {
-        if i > 0 {
-            lines.push(Line::from(""));
-        }
         let status = verdict(Some(job.status.as_str()), job.conclusion.as_deref());
         let (glyph, color, _) = badges::ci_display(&status, false);
         let glyph = if glyph.is_empty() { "◉" } else { glyph };
@@ -545,42 +572,45 @@ fn jobs_body(app: &App, run: &WorkflowRun, now: DateTime<Local>) -> Vec<Line<'st
                 Style::default().fg(colors::OVERLAY),
             ),
         ]));
-        if !job.steps.is_empty() {
-            let mut spans = vec![Span::raw("    ")];
-            for (n, step) in job.steps.iter().enumerate() {
-                let (glyph, color) = step_glyph(step);
-                if n > 0 {
-                    spans.push(Span::raw("  "));
-                }
-                spans.push(Span::styled(
-                    format!("{glyph} "),
-                    Style::default().fg(color),
-                ));
-                spans.push(Span::styled(
-                    step.name.clone(),
-                    Style::default().fg(colors::SUBTEXT),
-                ));
-            }
-            lines.push(Line::from(spans));
-        }
-        if status != CiStatus::Failed {
+        if marked != Some(i) {
             continue;
         }
-        if let Some(step) = crate::ci::failing_step(job) {
-            lines.push(Line::from(Span::styled(
-                format!("    ✗ {}", step.name),
-                Style::default().fg(colors::RED),
-            )));
-        }
-        match state.and_then(|s| s.logs.get(&job.id)) {
-            Some(LogTail::Lines(tail)) => {
-                lines.extend(tail.iter().map(|l| dim_line(&format!("    {l}"))));
+        let start = lines.len() - 1;
+        let failing = (status == CiStatus::Failed)
+            .then(|| crate::ci::failing_step(job))
+            .flatten();
+        for step in &job.steps {
+            let (glyph, color) = step_glyph(step);
+            lines.push(Line::from(vec![
+                Span::styled(format!("    {glyph} "), Style::default().fg(color)),
+                Span::styled(step.name.clone(), Style::default().fg(colors::SUBTEXT)),
+            ]));
+            if failing == Some(step) {
+                lines.extend(failed_tail(state, job));
             }
-            Some(LogTail::Unavailable(message)) => lines.push(dim_line(&format!("    {message}"))),
-            None => lines.push(dim_line("    loading log")),
         }
+        marked_lines = Some(start..lines.len());
     }
-    lines
+    (lines, marked_lines)
+}
+
+/// A failed job's tail as the jobs body shows it: the dimmed lines once
+/// read, why there are none, or nothing while the log is still to come.
+fn failed_tail(state: Option<&CiState>, job: &Job) -> Vec<Line<'static>> {
+    let Some(state) = state else {
+        return Vec::new();
+    };
+    match (state.logs.get(&job.id), state.full_logs.get(&job.id)) {
+        (Some(LogTail::Lines(tail)), _) => tail
+            .iter()
+            .map(|l| dim_line(&format!("      {l}")))
+            .collect(),
+        (Some(LogTail::Unavailable(message)), _) | (None, Some(Detail::Unavailable(message))) => {
+            vec![dim_line(&format!("      {message}"))]
+        }
+        (None, Some(Detail::Failed { message, .. })) => vec![warn_line(message)],
+        (None, _) => Vec::new(),
+    }
 }
 
 /// The `log` body: the marked job's whole log, `##[error]` lines in the
@@ -1291,8 +1321,8 @@ mod tests {
     }
 
     /// FZ-30f: the `jobs` body from recorded payloads: the run, each job
-    /// with its lamp and duration, its steps on one line, and under the
-    /// failed job its failing step and the dimmed log tail. Fails while the
+    /// with its lamp and duration, its steps one per line, and under the
+    /// failed job's failing step the dimmed log tail. Fails while the
     /// inspector says `no commit selected` on a run.
     #[test]
     fn the_jobs_body_draws_the_jobs_steps_and_the_failing_tail() {
@@ -1307,23 +1337,24 @@ mod tests {
             "16:19:46 to 16:20:40: {}",
             text[job]
         );
-        let steps = &text[job + 1];
-        assert!(steps.contains("✓ Set up job"), "{steps}");
-        assert!(steps.contains("✗ Run cargo clippy"), "{steps}");
-        assert!(steps.contains("· Run cargo test"), "skipped: {steps}");
-        assert_eq!(
-            text[job + 2],
-            "    ✗ Run cargo clippy --all-targets -- -D warnings"
-        );
-        let tail = &text[job + 3..];
-        assert_eq!(tail.len(), crate::ci::LOG_TAIL_LINES);
+        assert_eq!(text[job + 1], "    ✓ Set up job");
+        let failing = text
+            .iter()
+            .position(|l| l == "    ✗ Run cargo clippy --all-targets -- -D warnings")
+            .expect("the failing step on its own line");
+        let tail = &text[failing + 1..failing + 1 + crate::ci::LOG_TAIL_LINES];
         assert_eq!(
             tail.last().unwrap(),
-            "    ##[error]Process completed with exit code 101."
+            "      ##[error]Process completed with exit code 101."
+        );
+        assert_eq!(
+            text[failing + 1 + crate::ci::LOG_TAIL_LINES],
+            "    · Run cargo test",
+            "skipped, and the steps go on under the tail"
         );
         let lines = inspector_body(&app, Local::now());
         assert_eq!(
-            lines[job + 3].spans[0].style.fg,
+            lines[failing + 1].spans[0].style.fg,
             Some(colors::OVERLAY),
             "the tail is dimmed"
         );
@@ -1738,6 +1769,267 @@ mod tests {
         app.sync_ci_inspector(t0);
         let poll = app.claim_ci_poll(key(), "gaurgle".into(), "fleetz".into());
         assert_eq!(poll.expanded.unwrap().logs_held, vec![FAILED_JOB]);
+    }
+
+    /// The inspector's rows as drawn at 160 by 50.
+    fn inspector_rows(app: &App) -> Vec<String> {
+        let (rects, buffer) = draw(app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        (inspector.y..inspector.y + inspector.height)
+            .map(|y| {
+                (inspector.x..inspector.x + inspector.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The first drawn row of the inspector's content that contains
+    /// `needle`, or `None` when it is not on screen.
+    fn drawn_row_of(app: &App, needle: &str) -> Option<usize> {
+        inspector_rows(app).iter().position(|r| r.contains(needle))
+    }
+
+    /// `j`/`k` on the focused inspector and the wheel over it scroll the
+    /// shown `log` and `script` bodies as drawn, through the frame's own
+    /// measure. Pins the scroll path the fix cycle 3 look reported; it
+    /// already held on the base for these two bodies.
+    #[test]
+    fn j_k_and_the_wheel_scroll_the_log_and_script_bodies() {
+        let mut app = on_failed_run();
+        let sha = runs()[FAILED_RUN].head_sha.clone().unwrap();
+        app.ci.get_mut(&key()).unwrap().scripts.insert(
+            (sha, WORKFLOW.to_string()),
+            Detail::Ready(CI_YML.to_string()),
+        );
+        app.focused_panel = FocusedPanel::Inspector;
+        for (body, needle) in [
+            (CiBody::Log, "Current runner version"),
+            (CiBody::Script, "name: ci"),
+        ] {
+            app.ci_body = body;
+            let at = drawn_row_of(&app, needle).expect("drawn at the top");
+            app.inspector_nav(2);
+            assert_eq!(drawn_row_of(&app, needle), Some(at - 2), "j: {body:?}");
+            app.inspector_nav(-1);
+            assert_eq!(drawn_row_of(&app, needle), Some(at - 1), "k: {body:?}");
+            app.focused_panel = FocusedPanel::Detail;
+            app.scroll_inspector(-1);
+            assert_eq!(drawn_row_of(&app, needle), Some(at), "wheel: {body:?}");
+            app.focused_panel = FocusedPanel::Inspector;
+        }
+    }
+
+    /// A failed run whose jobs the inspector read from `/jobs` and no log
+    /// yet, highlighted in `ci`.
+    fn on_failed_run_without_log() -> App {
+        let mut app = app();
+        landed(&mut app, runs_with_path(), Local::now());
+        app.set_detail_selected(FAILED_RUN);
+        let run_id = runs()[FAILED_RUN].id;
+        app.ci.get_mut(&key()).unwrap().jobs.insert(
+            run_id,
+            crate::app::CiJobs {
+                etag: None,
+                jobs: jobs(),
+            },
+        );
+        app
+    }
+
+    /// FZ-30f fix cycle 3: the jobs body paints from `/jobs` at once, and
+    /// after the dwell reads the selected failed job's log itself, once per
+    /// job id. Fails while the body claims no log and says `loading log`
+    /// until the repo's next poll, up to a minute on.
+    #[test]
+    fn the_jobs_body_reads_the_selected_failed_jobs_log_after_the_dwell() {
+        use crate::ci::DetailWant;
+        let mut app = on_failed_run_without_log();
+        let text = body_text(&app);
+        assert!(
+            text.iter().any(|l| l.contains("check")),
+            "painted: {text:#?}"
+        );
+        assert!(text.iter().all(|l| !l.contains("loading log")), "{text:#?}");
+
+        let now = Local::now();
+        let t0 = std::time::Instant::now();
+        assert!(app.claim_ci_details(now, t0).is_empty(), "the dwell first");
+        let settled = t0 + crate::ci::DWELL;
+        let wants: Vec<DetailWant> = app
+            .claim_ci_details(now, settled)
+            .into_iter()
+            .map(|r| r.want)
+            .collect();
+        let step = crate::ci::failing_step(&jobs()[0]).cloned();
+        assert_eq!(
+            wants,
+            vec![DetailWant::Log {
+                job_id: FAILED_JOB,
+                step: step.clone(),
+            }]
+        );
+        assert!(app.claim_ci_details(now, settled).is_empty(), "loading");
+
+        app.apply_ci_detail(
+            crate::ci::DetailAnswer {
+                key: key(),
+                got: crate::ci::DetailGot::Log {
+                    job_id: FAILED_JOB,
+                    result: Ok(crate::ci::log_lines(LOG_FAILED)),
+                    tail: Some(LogTail::Lines(crate::ci::log_tail(
+                        LOG_FAILED,
+                        &step.unwrap(),
+                    ))),
+                },
+                budget: None,
+            },
+            now,
+        );
+        assert!(
+            body_text(&app)
+                .iter()
+                .any(|l| l.ends_with("##[error]Process completed with exit code 101.")),
+            "the tail landed"
+        );
+        assert!(app.claim_ci_details(now, settled).is_empty(), "held");
+    }
+
+    /// Only the selected job's log: a passing job the cursor moved to has
+    /// no tail to show, so nothing is read for it.
+    #[test]
+    fn the_jobs_body_reads_no_log_for_a_selected_passing_job() {
+        let mut app = on_failed_run_without_log();
+        let mut passing = jobs()[0].clone();
+        passing.id = 7;
+        passing.conclusion = Some("success".to_string());
+        let run_id = runs()[FAILED_RUN].id;
+        let held = app.ci.get_mut(&key()).unwrap();
+        held.jobs.get_mut(&run_id).unwrap().jobs.insert(0, passing);
+        app.focused_panel = FocusedPanel::Inspector;
+        let t0 = std::time::Instant::now();
+        app.claim_ci_details(Local::now(), t0);
+        app.inspector_nav(-1);
+        assert_eq!(app.ci_marked_job().map(|j| j.id), Some(7));
+        assert!(
+            app.claim_ci_details(Local::now(), t0 + crate::ci::DWELL)
+                .is_empty()
+        );
+    }
+
+    /// A poll in flight reads the failed job's log with the jobs, so the
+    /// body waits for it rather than download the same log twice; once the
+    /// poll landed without it, the body asks.
+    #[test]
+    fn the_jobs_body_leaves_the_log_to_a_poll_in_flight() {
+        let mut app = on_failed_run_without_log();
+        let t0 = std::time::Instant::now();
+        app.claim_ci_details(Local::now(), t0);
+        app.claim_ci_poll(key(), "gaurgle".into(), "fleetz".into());
+        let settled = t0 + crate::ci::DWELL;
+        assert!(app.claim_ci_details(Local::now(), settled).is_empty());
+        failed(
+            &mut app,
+            crate::github::Failure::new(crate::github::FailureKind::Offline, "no route"),
+            Local::now(),
+        );
+        assert_eq!(app.claim_ci_details(Local::now(), settled).len(), 1);
+    }
+
+    /// Jobs as a list: one row per job, and only the selected job's steps
+    /// and tail beneath it. Fails while every job draws its steps.
+    #[test]
+    fn only_the_selected_job_shows_its_steps() {
+        let mut app = on_failed_run();
+        let mut passing = jobs()[0].clone();
+        passing.id = 7;
+        passing.name = "docs".to_string();
+        passing.conclusion = Some("success".to_string());
+        let run_id = runs()[FAILED_RUN].id;
+        let held = app.ci.get_mut(&key()).unwrap();
+        held.jobs.get_mut(&run_id).unwrap().jobs.push(passing);
+        let text = body_text(&app);
+        let docs = text.iter().position(|l| l.contains("docs")).unwrap();
+        assert!(
+            text[docs..].iter().all(|l| !l.contains("Set up job")),
+            "the unselected job draws no steps: {text:#?}"
+        );
+        app.focused_panel = FocusedPanel::Inspector;
+        app.inspector_nav(1);
+        let text = body_text(&app);
+        let docs = text.iter().position(|l| l.contains("docs")).unwrap();
+        assert!(text[docs].starts_with("▸"), "{text:#?}");
+        assert!(text[docs..].iter().any(|l| l.contains("Set up job")));
+        assert!(
+            text.iter().all(|l| !l.contains("##[error]")),
+            "the failed job, unselected, drops its tail: {text:#?}"
+        );
+    }
+
+    /// A run with `n` passing jobs and the recorded failed one last.
+    fn on_long_run(n: u64) -> App {
+        let mut app = on_failed_run();
+        let run_id = runs()[FAILED_RUN].id;
+        let held = app.ci.get_mut(&key()).unwrap();
+        let list = &mut held.jobs.get_mut(&run_id).unwrap().jobs;
+        for i in 0..n {
+            let mut passing = jobs()[0].clone();
+            passing.id = 1000 + i;
+            passing.name = format!("job {i:02}");
+            passing.conclusion = Some("success".to_string());
+            list.insert(i as usize, passing);
+        }
+        app
+    }
+
+    /// The jobs body follows its cursor: a failed job below the fold is
+    /// brought into view on arrival, `k` back to the first job scrolls up
+    /// to it, and the wheel goes on from where the body followed to. Fails
+    /// while the body never scrolls to the marked job.
+    #[test]
+    fn the_jobs_body_follows_the_job_cursor() {
+        let mut app = on_long_run(30);
+        app.focused_panel = FocusedPanel::Inspector;
+        app.sync_ci_inspector(std::time::Instant::now());
+        let row = drawn_row_of(&app, "▸").expect("the failed job is in view");
+        assert!(inspector_rows(&app)[row].contains("check"));
+
+        app.inspector_nav(-30);
+        let row = drawn_row_of(&app, "▸").expect("the first job is in view");
+        assert!(inspector_rows(&app)[row].contains("job 00"));
+        let followed = app.ci_body_scroll();
+        assert!(followed > 0, "it scrolled up to the job, not to the top");
+
+        app.scroll_inspector(1);
+        assert_eq!(app.ci_body_scroll(), followed + 1, "on from there");
+        inspector_rows(&app);
+        assert_eq!(app.ci_body_scroll(), followed + 1, "the wheel holds");
+    }
+
+    /// `]` on the focused inspector in `branches` enters `ci` and goes on
+    /// cycling pane 2's views, held runs or not: the streak is the views'.
+    /// Fails while the second `]` steps the bodies.
+    #[test]
+    fn brackets_from_the_inspector_in_branches_cycle_on_through_ci() {
+        let mut app = on_failed_run();
+        app.history_view = HistoryView::Branches;
+        app.focused_panel = FocusedPanel::Inspector;
+        app.press_bracket(false);
+        assert_eq!(app.history_view, HistoryView::Ci);
+        app.press_bracket(false);
+        assert_eq!(app.history_view, HistoryView::Info, "on through ci");
+        assert_eq!(app.ci_body, CiBody::Jobs, "no body stepped");
+    }
+
+    /// Without a run in the inspector, `]` cycles pane 2's views: there is
+    /// no body to step. Fails while `ci` traps the focused inspector.
+    #[test]
+    fn brackets_cycle_views_while_the_inspector_holds_no_run() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.press_bracket(false);
+        assert_eq!(app.history_view, HistoryView::Info);
+        assert_eq!(app.ci_body, CiBody::Jobs);
     }
 
     // --- The `info` section ---

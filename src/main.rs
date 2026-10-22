@@ -1215,6 +1215,10 @@ fn handle_mouse_input(
     let Some(panel) = rects.at(m.column, m.row) else {
         return;
     };
+    // A click or a wheel ends a bracket streak, as a key does.
+    if m.kind != MouseEventKind::Moved {
+        app.brackets_cycling_views = false;
+    }
 
     match m.kind {
         MouseEventKind::Down(MouseButton::Left) => {
@@ -1604,6 +1608,10 @@ async fn handle_normal_input(
     config: &config::Config,
     repo_dir: &Path,
 ) -> Result<(), String> {
+    // Any key but a bracket ends a streak of them (`App::press_bracket`).
+    if !matches!(key.code, KeyCode::Char('[' | ']')) {
+        app.brackets_cycling_views = false;
+    }
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         // A leftover search query (set, then Enter'd out of edit mode) is
@@ -11843,6 +11851,54 @@ mod tests {
         assert_eq!(app.ci_body, app::CiBody::Log, "] stepped the body");
         assert_eq!(app.history_view, app::HistoryView::Ci, "not the view");
         assert_eq!(app.detail_selected(), 2, "not the run");
+    }
+
+    /// FZ-30f fix cycle 3: `]` from the focused inspector in `branches`
+    /// enters `ci` with its runs held and the next `]` goes on to `info`;
+    /// back in `ci`, any other key ends the streak and `]` steps the bodies.
+    /// Fails while the second `]` sticks on the bodies.
+    #[tokio::test]
+    async fn a_bracket_streak_cycles_views_through_ci_until_another_key() {
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let backend = CrosstermBackend::new(io::stdout());
+        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
+        let mut terminal =
+            Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
+        let mut app = ci_app();
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Ci;
+        ci_landed(&mut app, at(12, 0, 0));
+        app.history_view = app::HistoryView::Branches;
+        app.focused_panel = FocusedPanel::Inspector;
+        let repo_dir = Path::new("/nonexistent");
+        let mut views = Vec::new();
+        for key in [']', ']', '[', 'j', ']'] {
+            handle_normal_input(
+                &mut app,
+                &mut terminal,
+                press(key),
+                &tx,
+                &args,
+                &config,
+                repo_dir,
+            )
+            .await
+            .unwrap();
+            views.push((app.history_view, app.ci_body));
+        }
+        use app::{CiBody, HistoryView};
+        assert_eq!(
+            views,
+            vec![
+                (HistoryView::Ci, CiBody::Jobs),
+                (HistoryView::Info, CiBody::Jobs),
+                (HistoryView::Ci, CiBody::Jobs),
+                (HistoryView::Ci, CiBody::Jobs),
+                (HistoryView::Ci, CiBody::Log),
+            ]
+        );
     }
 
     /// The tick polls only while pane 2 shows `ci`: never on `info` (whose

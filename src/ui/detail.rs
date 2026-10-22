@@ -1671,10 +1671,16 @@ fn render_ci_inspector(frame: &mut Frame, area: Rect, app: &App) {
             focused,
         ));
     let inner = block.inner(area);
-    let head: Vec<Line> = crate::ui::ci::inspector_body(app, chrono::Local::now())
-        .iter()
-        .flat_map(|l| wrap_line(l, inner.width as usize))
-        .collect();
+    let (body, marked) = crate::ui::ci::inspector_lines(app, chrono::Local::now());
+    // Each body line's first wrapped row, and one past the last, so the
+    // marked job's lines map to the rows they take at this width.
+    let mut row_starts = Vec::with_capacity(body.len() + 1);
+    let mut head: Vec<Line> = Vec::new();
+    for line in &body {
+        row_starts.push(head.len());
+        head.extend(wrap_line(line, inner.width as usize));
+    }
+    row_starts.push(head.len());
     // A held whole log is wrapped once per job and width and kept, and only
     // the rows on screen are handed to the paragraph: up to 5000 lines
     // (`ci::LOG_LINE_CAP`) were re-wrapped and copied on every frame.
@@ -1704,6 +1710,13 @@ fn render_ci_inspector(frame: &mut Frame, area: Rect, app: &App) {
         .unwrap_or(u16::MAX)
         .saturating_sub(inner.height);
     app.inspector_max_scroll.set(max_scroll);
+    if let Some(lines) = marked
+        && app.ci_job_follow.get() == crate::app::JobFollow::Due
+    {
+        let rows = row_starts[lines.start]..row_starts[lines.end];
+        let followed = follow_rows(app.ci_body_scroll(), rows, inner.height).min(max_scroll);
+        app.ci_job_follow.set(crate::app::JobFollow::At(followed));
+    }
     let scroll = app.ci_body_scroll().min(max_scroll);
     let visible: Vec<Line> = head
         .iter()
@@ -1714,6 +1727,20 @@ fn render_ci_inspector(frame: &mut Frame, area: Rect, app: &App) {
         .collect();
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(visible), inner);
+}
+
+/// The least scroll from `scroll` that shows `rows` in a pane `height` rows
+/// tall, or its first row when they are taller than the pane.
+fn follow_rows(scroll: u16, rows: std::ops::Range<usize>, height: u16) -> u16 {
+    let top = u16::try_from(rows.start).unwrap_or(u16::MAX);
+    let bottom = u16::try_from(rows.end).unwrap_or(u16::MAX);
+    if top < scroll {
+        top
+    } else if bottom > scroll.saturating_add(height) {
+        bottom.saturating_sub(height).min(top)
+    } else {
+        scroll
+    }
 }
 
 /// One "changed file" row for the inspector: a fixed-width +A/-B stat column

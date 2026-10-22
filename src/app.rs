@@ -2321,6 +2321,14 @@ pub struct App {
     /// The job the `jobs` body marks, which the `log` body shows, once `j`
     /// or `k` moved it; `None` is the first failed job, else the first.
     pub ci_job_mark: Option<usize>,
+    /// Whether the `jobs` body's next frame brings the marked job into
+    /// view, and the offset it chose (`JobFollow`). Written by the renderer,
+    /// which alone knows where the job's rows fall.
+    pub ci_job_follow: std::cell::Cell<JobFollow>,
+    /// `[`/`]` pressed on the focused inspector cycled pane 2's views, and
+    /// no other key came since: the streak keeps cycling views on arriving
+    /// in `ci` rather than stepping the run bodies there.
+    pub brackets_cycling_views: bool,
     /// The run the scrolls and the mark belong to, and since when it is
     /// highlighted, for the dwell before the inspector fetches anything.
     pub ci_inspected: Option<(u64, std::time::Instant)>,
@@ -2504,6 +2512,17 @@ impl CiBody {
     }
 }
 
+/// The `jobs` body's scroll against its job cursor: `j`/`k` and a new run
+/// ask the next frame to bring the marked job into view (`Due`), the frame
+/// records the offset it chose (`At`), and a scroll by the wheel or a page
+/// key goes on from there and leaves the cursor behind (`Free`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobFollow {
+    Free,
+    Due,
+    At(u16),
+}
+
 /// Below this width or height, `Detail`'s list+detail split doesn't have
 /// enough room to be useful, so `Compact`'s dense single-line-per-repo grid
 /// is the better default. `v` still lets the user override it either way.
@@ -2625,6 +2644,8 @@ impl App {
             ci_body: CiBody::default(),
             ci_body_scrolls: [0; 3],
             ci_job_mark: None,
+            ci_job_follow: std::cell::Cell::new(JobFollow::Free),
+            brackets_cycling_views: false,
             ci_inspected: None,
             ci_log_wrap: std::cell::RefCell::new(None),
         }
@@ -2929,25 +2950,31 @@ impl App {
         self.ci_highlighted_jobs()?.get(self.ci_marked_job_index()?)
     }
 
-    /// The shown body's scroll offset: zero for a run just highlighted.
+    /// The shown body's scroll offset: zero for a run just highlighted. The
+    /// `jobs` body's is where it last followed its cursor to, until a scroll
+    /// moves it on.
     pub fn ci_body_scroll(&self) -> u16 {
-        if self.ci_run_is_inspected() {
-            self.ci_body_scrolls[self.ci_body.index()]
-        } else {
-            0
+        if !self.ci_run_is_inspected() {
+            return 0;
+        }
+        match (self.ci_body, self.ci_job_follow.get()) {
+            (CiBody::Jobs, JobFollow::At(followed)) => followed,
+            _ => self.ci_body_scrolls[self.ci_body.index()],
         }
     }
 
     /// Catch up with the highlighted run at `instant`: a new run resets every
-    /// body's scroll and the job mark and restarts the dwell. While the `ci`
-    /// view shows, the selected repo's poll reads the highlighted run's jobs
-    /// when the inspector is open, and no run's when it is folded.
+    /// body's scroll and the job mark, brings the marked job into view and
+    /// restarts the dwell. While the `ci` view shows, the selected repo's
+    /// poll reads the highlighted run's jobs when the inspector is open, and
+    /// no run's when it is folded.
     pub fn sync_ci_inspector(&mut self, instant: std::time::Instant) {
         let run = self.ci_highlighted_run().map(|r| r.id);
         if run != self.ci_inspected.map(|(id, _)| id) {
             self.ci_inspected = run.map(|id| (id, instant));
             self.ci_body_scrolls = [0; 3];
             self.ci_job_mark = None;
+            self.ci_job_follow.set(JobFollow::Due);
         }
         if !self.ci_wanted() {
             return;
@@ -2966,11 +2993,16 @@ impl App {
         self.ci_wanted() && !self.inspector_folded
     }
 
-    /// `[` or `]`: the next inspector body while the inspector has focus on
-    /// a run, else pane 2's next view as always.
+    /// `[` or `]`: the next inspector body while the inspector has focus and
+    /// holds a run, else pane 2's next view as always. A streak of them
+    /// begun on the focused inspector in another view cycles on through
+    /// `ci` (`brackets_cycling_views`); any other key ends it.
     pub fn press_bracket(&mut self, back: bool) {
-        if self.focused_panel != FocusedPanel::Inspector || !self.inspects_ci_run() {
+        let on_inspector = self.focused_panel == FocusedPanel::Inspector;
+        let holds_run = self.inspects_ci_run() && self.ci_highlighted_run().is_some();
+        if !on_inspector || !holds_run || self.brackets_cycling_views {
             self.cycle_history_view(back);
+            self.brackets_cycling_views = on_inspector;
             return;
         }
         self.sync_ci_inspector(std::time::Instant::now());
@@ -2982,7 +3014,7 @@ impl App {
     }
 
     /// `j`/`k` on the focused inspector: in the `jobs` body they move the
-    /// job mark, anywhere else they scroll.
+    /// job mark, and the body follows it; anywhere else they scroll.
     pub fn inspector_nav(&mut self, delta: i32) {
         if !self.inspects_ci_run() || self.ci_body != CiBody::Jobs {
             self.scroll_inspector(delta);
@@ -2995,6 +3027,10 @@ impl App {
         let last = self.ci_highlighted_jobs().map_or(0, |j| j.len() - 1);
         let next = (current as i64 + i64::from(delta)).clamp(0, last as i64) as usize;
         self.ci_job_mark = Some(next);
+        // The follow starts from where the body stands, not where it was
+        // last scrolled by hand.
+        self.ci_body_scrolls[CiBody::Jobs.index()] = self.ci_body_scroll();
+        self.ci_job_follow.set(JobFollow::Due);
         self.needs_redraw = true;
     }
 
@@ -3057,11 +3093,25 @@ impl App {
             state.jobs_fetch.insert(run.id, Detail::Loading);
             wants.push(DetailWant::Jobs { run_id: run.id });
         }
+        // The jobs body needs the marked job's log only for a failed job's
+        // tail; the log body needs any finished job's. A poll in flight may
+        // bring a failed job's log with its jobs, so a claim waits for it
+        // rather than download the same log twice.
+        let wants_log = |job: &crate::ci::Job| match self.ci_body {
+            CiBody::Jobs => {
+                job.conclusion.as_deref() == Some("failure")
+                    && crate::ci::failing_step(job).is_some()
+                    && !state.logs.contains_key(&job.id)
+            }
+            CiBody::Log => true,
+            CiBody::Script => false,
+        };
         match self.ci_body {
-            CiBody::Jobs => {}
-            CiBody::Log => {
+            CiBody::Jobs | CiBody::Log => {
                 if let Some(job) = marked
+                    && wants_log(&job)
                     && job.status == "completed"
+                    && !state.inflight
                     && Detail::wants_fetch(state.full_logs.get(&job.id), now)
                 {
                     let step = crate::ci::failing_step(&job)
@@ -3748,8 +3798,11 @@ impl App {
         let max = self.inspector_max_scroll.get() as i32;
         if self.inspects_ci_run() {
             self.sync_ci_inspector(std::time::Instant::now());
-            let slot = &mut self.ci_body_scrolls[self.ci_body.index()];
-            *slot = (i32::from(*slot) + delta).clamp(0, max) as u16;
+            let from = i32::from(self.ci_body_scroll());
+            self.ci_body_scrolls[self.ci_body.index()] = (from + delta).clamp(0, max) as u16;
+            if self.ci_body == CiBody::Jobs {
+                self.ci_job_follow.set(JobFollow::Free);
+            }
             return;
         }
         let current = self.inspector_scroll as i32;
