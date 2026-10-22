@@ -1903,7 +1903,7 @@ fn suspend_and_run_in_dir(
 /// A `ci` view handoff key, acting on the highlighted run (FZ-30e).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RunKey {
-    /// `l`: the run's log in `gh`.
+    /// `l`: the run's log in the inspector.
     Log,
     /// `a`: rerun it ("again").
     Rerun,
@@ -1928,6 +1928,8 @@ impl RunKey {
 /// What a handoff key does with a run it allows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RunHandoff {
+    /// Show the run's `log` body in the inspector, without leaving fleetz.
+    Inspect,
     /// Suspend fleetz and run `gh` with these arguments.
     Gh(Vec<String>),
     /// Open this URL with `OPENER`, as `O` opens a PR.
@@ -1941,8 +1943,9 @@ fn ci_handoff_applies(app: &App) -> bool {
 }
 
 /// What `key` does to `run` of `owner`/`name`, or the status line note when
-/// the run does not allow it. `gh` has no log for a run that has not
-/// finished and will not rerun one, and cancels only a run in progress or
+/// the run does not allow it. The inspector's `log` body reads a job's log
+/// only once it has finished and `gh` will not rerun a run still going, so
+/// both wait for a finished run; `gh` cancels only a run in progress or
 /// queued. Every `gh` call names the repo with `-R`, so it works from any
 /// directory.
 fn run_handoff_for(
@@ -1958,7 +1961,7 @@ fn run_handoff_for(
         RunKey::Log if !finished => return Err("run has not finished"),
         RunKey::Rerun if !finished => return Err("run has not finished"),
         RunKey::Cancel if !run.is_live() => return Err("run is not in progress"),
-        RunKey::Log => ("view", Some(if failed { "--log-failed" } else { "--log" })),
+        RunKey::Log => return Ok(RunHandoff::Inspect),
         RunKey::Rerun => ("rerun", failed.then_some("--failed")),
         RunKey::Cancel => ("cancel", None),
     };
@@ -1986,8 +1989,9 @@ fn resolve_run_handoff(
     }
 }
 
-/// Run a `ci` view handoff key. Back from `gh`, the run's repo polls at
-/// once (`ci_poll_after_handoff`) so the rerun or cancel shows.
+/// Run a `ci` view key: `l` shows the run's log in the inspector, the
+/// others hand off. Back from `gh`, the run's repo polls at once
+/// (`ci_poll_after_handoff`) so the rerun or cancel shows.
 fn ci_handoff_key(
     app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -2011,6 +2015,7 @@ fn ci_handoff_key(
         RunHandoff::Open(url) => {
             let _ = StdCommand::new(OPENER).arg(&url).status();
         }
+        RunHandoff::Inspect => app.inspect_ci_log(),
     }
     Ok(())
 }
@@ -12146,31 +12151,44 @@ mod tests {
         assert_eq!(ci_app().highlighted_ci_run(), None, "nothing held");
     }
 
+    /// `l` stays in fleetz: a finished run, failed or not, is shown in the
+    /// inspector, and no `gh run view --log` is built. Fails while `l`
+    /// hands the terminal to `gh`.
     #[test]
-    fn l_reads_the_full_log_of_a_finished_run_and_the_failed_part_of_a_failed_one() {
-        let runs = ci_runs();
+    fn l_shows_a_finished_run_in_the_inspector_with_no_gh_command() {
+        for (index, conclusion) in [(1, "success"), (2, "failure")] {
+            let mut app = handoff_app(index);
+            let (handoff, target) = resolve_run_handoff(&mut app, RunKey::Log).unwrap();
+            assert_eq!(handoff, RunHandoff::Inspect, "{conclusion}");
+            assert_eq!(target, (ci_key(), "gaurgle".into(), "fleetz".into()));
+            assert_eq!(yank_status(&app), None, "{conclusion}");
+        }
+    }
+
+    /// The inspector opens if folded, takes focus and shows the `log`
+    /// body of the run under the cursor, whose failed job is the marked one.
+    #[test]
+    fn l_focuses_the_inspector_on_the_runs_log_body() {
+        let mut app = handoff_app(2);
+        app.inspector_folded = true;
+        app.inspect_ci_log();
+        assert_eq!(app.focused_panel, FocusedPanel::Inspector);
+        assert!(!app.inspector_folded, "a folded inspector opens");
+        assert_eq!(app.ci_body, app::CiBody::Log);
+        assert!(app.inspects_ci_run());
         assert_eq!(
-            run_handoff_for(&runs[1], RunKey::Log, "gaurgle", "fleetz"),
-            Ok(argv(&[
-                "run",
-                "view",
-                "39590683935",
-                "--log",
-                "-R",
-                "gaurgle/fleetz"
-            ]))
+            app.ci_inspected.map(|(id, _)| id),
+            Some(ci_runs()[2].id),
+            "the highlighted run"
         );
         assert_eq!(
-            run_handoff_for(&runs[2], RunKey::Log, "gaurgle", "fleetz"),
-            Ok(argv(&[
-                "run",
-                "view",
-                "37958308363",
-                "--log-failed",
-                "-R",
-                "gaurgle/fleetz"
-            ]))
+            app.selected_ci()
+                .and_then(|(_, s)| s)
+                .and_then(|s| s.expanded),
+            Some(ci_runs()[2].id),
+            "the poll reads the run's jobs now the inspector is open"
         );
+        assert!(app.needs_redraw);
     }
 
     #[test]
@@ -12200,26 +12218,14 @@ mod tests {
     }
 
     /// Only `failure` means failed: a run that timed out or was cancelled
-    /// gets the full log and a whole rerun.
+    /// gets a whole rerun.
     #[test]
-    fn a_timed_out_or_cancelled_run_gets_the_full_log_and_a_whole_rerun() {
+    fn a_timed_out_or_cancelled_run_gets_a_whole_rerun() {
         for conclusion in ["timed_out", "cancelled"] {
             let run = ci::WorkflowRun {
                 conclusion: Some(conclusion.to_string()),
                 ..ci_runs()[1].clone()
             };
-            assert_eq!(
-                run_handoff_for(&run, RunKey::Log, "gaurgle", "fleetz"),
-                Ok(argv(&[
-                    "run",
-                    "view",
-                    "39590683935",
-                    "--log",
-                    "-R",
-                    "gaurgle/fleetz"
-                ])),
-                "{conclusion}"
-            );
             assert_eq!(
                 run_handoff_for(&run, RunKey::Rerun, "gaurgle", "fleetz"),
                 Ok(argv(&[

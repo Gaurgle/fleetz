@@ -2995,6 +2995,19 @@ impl App {
         }
     }
 
+    /// `l` on the highlighted run in the `ci` view (FZ-30e, amended
+    /// 2026-10-22): the inspector, opened if folded and focused as the
+    /// pane's number key does, on the run's `log` body, which shows the
+    /// marked job (the failed one, until `j`/`k` move it). Stays in fleetz
+    /// rather than suspending into `gh run view --log`.
+    pub fn inspect_ci_log(&mut self) {
+        self.inspector_folded = false;
+        self.focus_panel(FocusedPanel::Inspector);
+        self.sync_ci_inspector(std::time::Instant::now());
+        self.ci_body = CiBody::Log;
+        self.needs_redraw = true;
+    }
+
     /// Whether the inspector shows a run body: pane 2 shows `ci` and the
     /// inspector is open.
     pub fn inspects_ci_run(&self) -> bool {
