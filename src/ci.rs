@@ -1,7 +1,9 @@
-//! The CI pane's data (FZ-30b): the selected repo's recent workflow runs, an
-//! expanded run's jobs and steps, and a failed job's log tail, read from the
-//! REST Actions API. See `docs/superpowers/specs/2026-10-21-ci-pane-design.md`,
-//! sections C and D.
+//! The `ci` view's data (FZ-30b): the selected repo's recent workflow runs,
+//! the highlighted run's jobs and steps, and a failed job's log tail, read
+//! from the REST Actions API; and the inspector's own fetches for that run, a
+//! job's whole log and the workflow file (FZ-30f). See
+//! `docs/superpowers/specs/2026-10-21-ci-pane-design.md`, sections C and D
+//! and "Amendment 2026-10-21".
 //!
 //! REST, not GraphQL: no GraphQL connection lists a repo's runs across
 //! branches by recency. The calls bill the `core` resource, which the fleet
@@ -22,7 +24,7 @@ use crate::github::{BudgetReading, Failure, FailureKind};
 /// Where the REST API lives.
 pub const API_ROOT: &str = "https://api.github.com";
 /// Runs per list call. `per_page=20` measured 234 KB, since each run embeds
-/// two repository objects; 10 is half that and fills the pane's eight lines.
+/// two repository objects; 10 is half that and fills the view's first rows.
 pub const RUNS_PER_PAGE: u32 = 10;
 /// How long the cursor must rest on a repo before its first poll, so a `j`
 /// run through the list sends nothing.
@@ -33,6 +35,11 @@ pub const LIVE_SECS: i64 = 10;
 pub const SETTLED_SECS: i64 = 60;
 /// Log lines kept from the failing step.
 pub const LOG_TAIL_LINES: usize = 12;
+/// Lines of a whole job log held for the `log` body, the last ones kept, so
+/// one runaway log cannot hold the session's memory (FZ-30f).
+pub const LOG_LINE_CAP: usize = 5000;
+/// The first line of a log cut to `LOG_LINE_CAP`.
+pub const LOG_TRUNCATED: &str = "log truncated to the last 5000 lines; l opens the whole log in gh";
 /// What one REST call costs on `core`. A 304 costs nothing, but the pace is
 /// judged before the answer is known.
 pub const CALL_COST: u32 = 1;
@@ -71,6 +78,13 @@ pub struct WorkflowRun {
     pub updated: DateTime<Utc>,
     #[serde(rename = "html_url")]
     pub url: String,
+    /// The commit the run ran on, at which the `script` body reads the
+    /// workflow file (FZ-30f).
+    #[serde(default)]
+    pub head_sha: Option<String>,
+    /// The workflow file, `.github/workflows/ci.yml`.
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 fn first_attempt() -> u32 {
@@ -198,6 +212,25 @@ pub fn log_tail(log: &str, step: &Step) -> Vec<String> {
     window.split_off(skip)
 }
 
+/// A job's whole log as the inspector's `log` body shows it: one entry per
+/// line, the runner's timestamps and the terminal colour codes stripped.
+/// Past `LOG_LINE_CAP` lines only the last ones are kept, the end being
+/// where a failure is, under a first line that says so (`LOG_TRUNCATED`).
+pub fn log_lines(log: &str) -> Vec<String> {
+    let all: Vec<&str> = log.trim_start_matches('\u{feff}').lines().collect();
+    let skip = all.len().saturating_sub(LOG_LINE_CAP);
+    let mut lines = Vec::with_capacity(all.len() - skip + 1);
+    if skip > 0 {
+        lines.push(LOG_TRUNCATED.to_string());
+    }
+    lines.extend(
+        all[skip..]
+            .iter()
+            .map(|raw| strip_ansi(split_stamp(raw.trim_end_matches('\r')).1)),
+    );
+    lines
+}
+
 /// A log line's leading `2026-10-09T16:20:37.5048777Z ` and the rest.
 fn split_stamp(line: &str) -> (Option<DateTime<Utc>>, &str) {
     let (head, rest) = line.split_once(' ').unwrap_or((line, ""));
@@ -243,7 +276,7 @@ pub enum Fetched<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobsAnswer {
     Fetched(Fetched<Vec<Job>>),
-    /// A 404: the run was deleted. The pane says `run gone` until the next
+    /// A 404: the run was deleted. The inspector says `run gone` until the next
     /// list poll drops it.
     Gone,
 }
@@ -289,6 +322,9 @@ pub struct CiAnswer {
     pub runs: Option<Fetched<Vec<WorkflowRun>>>,
     pub jobs: Option<(u64, JobsAnswer)>,
     pub log: Option<(u64, LogTail)>,
+    /// The same log whole (`log_lines`), for the inspector's `log` body, so
+    /// a job's log is downloaded once for both (FZ-30f).
+    pub full_log: Option<(u64, Vec<String>)>,
     /// What failed the attempt, if anything did. Whatever answered before it
     /// is still applied.
     pub failure: Option<Failure>,
@@ -330,7 +366,7 @@ pub fn interval_secs(runs: &[WorkflowRun], pace: Pace) -> i64 {
 /// Everything the poll decision reads, so it is a pure function.
 #[derive(Debug, Clone)]
 pub struct Cadence<'a> {
-    /// The pane is folded: nothing polls.
+    /// Pane 2 is not showing `ci` (`App::ci_wanted`): nothing polls.
     pub folded: bool,
     /// The selected row has a GitHub identity (`target`).
     pub has_identity: bool,
@@ -403,10 +439,13 @@ impl TokenCache {
     /// (`Auth`), or GitHub refused it (`Refused`, a 401 or a 403 that is not
     /// a limit). A token `gh` refreshed or re-issued is then picked up.
     pub fn forget_after(&self, answer: &CiAnswer) {
-        let refused = answer
-            .failure
-            .as_ref()
-            .is_some_and(|f| matches!(f.kind, FailureKind::Auth | FailureKind::Refused));
+        self.forget_on(answer.failure.as_ref());
+    }
+
+    /// `forget_after` for any call's failure, the inspector's fetches too.
+    pub fn forget_on(&self, failure: Option<&Failure>) {
+        let refused =
+            failure.is_some_and(|f| matches!(f.kind, FailureKind::Auth | FailureKind::Refused));
         if refused {
             *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
         }
@@ -457,23 +496,14 @@ where
         runs: None,
         jobs: None,
         log: None,
+        full_log: None,
         failure: None,
         budget: None,
     };
-    let token = match tokio::time::timeout(TOKEN_BOUND, token_source()).await {
-        Ok(Ok(token)) => token,
-        Ok(Err(message)) => {
-            answer.failure = Some(Failure::new(FailureKind::Auth, message));
-            return answer;
-        }
-        Err(_) => {
-            answer.failure = Some(Failure::new(
-                FailureKind::Auth,
-                format!(
-                    "`gh auth token` did not answer within {} s",
-                    TOKEN_BOUND.as_secs()
-                ),
-            ));
+    let token = match token_within(token_source).await {
+        Ok(token) => token,
+        Err(failure) => {
+            answer.failure = Some(failure);
             return answer;
         }
     };
@@ -557,6 +587,7 @@ where
     match result {
         Ok(Answer::Fresh { body, .. }) => {
             answer.log = Some((job_id, LogTail::Lines(log_tail(&body, step))));
+            answer.full_log = Some((job_id, log_lines(&body)));
         }
         Ok(Answer::NotModified) => {}
         Ok(Answer::NotFound) => {
@@ -571,6 +602,426 @@ where
         Err(failure) => answer.failure = Some(failure),
     }
     answer
+}
+
+/// The token from `source`, bounded by `TOKEN_BOUND`; an `Auth` failure when
+/// `gh` has none or does not answer in time.
+async fn token_within<S, F>(source: S) -> Result<String, Failure>
+where
+    S: FnOnce() -> F,
+    F: std::future::Future<Output = Result<String, String>>,
+{
+    match tokio::time::timeout(TOKEN_BOUND, source()).await {
+        Ok(Ok(token)) => Ok(token),
+        Ok(Err(message)) => Err(Failure::new(FailureKind::Auth, message)),
+        Err(_) => Err(Failure::new(
+            FailureKind::Auth,
+            format!(
+                "`gh auth token` did not answer within {} s",
+                TOKEN_BOUND.as_secs()
+            ),
+        )),
+    }
+}
+
+// --- The inspector's fetches (FZ-30f) ---
+
+/// Something the inspector shows for the highlighted run, fetched once and
+/// held for the session: a run's jobs, a job's whole log, a workflow file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Detail<T> {
+    /// A fetch is out.
+    Loading,
+    Ready(T),
+    /// GitHub said for good there is none (a 404, an expired log, a file
+    /// too large for the contents API). Not asked again.
+    Unavailable(String),
+    /// The fetch failed in a way that may clear (offline, a limit, a 5xx).
+    /// Asked again `SETTLED_SECS` after `at`, never sooner.
+    Failed {
+        message: String,
+        at: DateTime<Local>,
+    },
+}
+
+impl<T> Detail<T> {
+    /// Whether a fetch for `held` should start at `now`: when nothing was
+    /// asked yet, or a failed one has waited out `SETTLED_SECS`. Never while
+    /// one is out, once it is held, or once it is unavailable.
+    pub fn wants_fetch(held: Option<&Self>, now: DateTime<Local>) -> bool {
+        match held {
+            None => true,
+            Some(Self::Failed { at, .. }) => (now - *at).num_seconds() >= SETTLED_SECS,
+            Some(Self::Loading | Self::Ready(_) | Self::Unavailable(_)) => false,
+        }
+    }
+
+    /// A finished fetch's result as held: a client error that is not a limit
+    /// is GitHub's final word, everything else may clear.
+    pub fn from_result(result: Result<T, Failure>, now: DateTime<Local>) -> Self {
+        match result {
+            Ok(data) => Self::Ready(data),
+            Err(f) if f.kind == FailureKind::Http && !f.rate_limited => {
+                Self::Unavailable(f.message)
+            }
+            Err(f) => Self::Failed {
+                message: f.message,
+                at: now,
+            },
+        }
+    }
+}
+
+/// What one inspector fetch asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetailWant {
+    /// The highlighted run's jobs, when no poll has read them yet.
+    Jobs { run_id: u64 },
+    /// A job's whole log. `step` is its failing step while its tail is not
+    /// held yet, so the one download fills both.
+    Log { job_id: u64, step: Option<Step> },
+    /// The workflow file at `path` in commit `sha`: from `clone` when it has
+    /// the commit, else from the contents API.
+    Script {
+        sha: String,
+        path: String,
+        clone: Option<std::path::PathBuf>,
+    },
+}
+
+/// One inspector fetch to run, built by `App::claim_ci_details`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailRequest {
+    pub key: RemoteKey,
+    pub owner: String,
+    pub name: String,
+    pub want: DetailWant,
+}
+
+/// What an inspector fetch brought back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetailGot {
+    Jobs {
+        run_id: u64,
+        result: Result<JobsAnswer, Failure>,
+    },
+    Log {
+        job_id: u64,
+        result: Result<Vec<String>, Failure>,
+        tail: Option<LogTail>,
+    },
+    Script {
+        sha: String,
+        path: String,
+        result: Result<String, Failure>,
+    },
+}
+
+/// One inspector fetch's answer, carried by `AppEvent::CiDetail`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailAnswer {
+    pub key: RemoteKey,
+    pub got: DetailGot,
+    /// The `core` reading the answer's headers carried, if a request went.
+    pub budget: Option<BudgetReading>,
+}
+
+/// Run one inspector fetch with the session's `gh` token.
+pub async fn fetch_detail(request: DetailRequest) -> DetailAnswer {
+    let answer = fetch_detail_with(
+        request,
+        || SESSION_TOKEN.token(crate::github::get_gh_token),
+        crate::github::client(),
+        API_ROOT,
+    )
+    .await;
+    let failure = match &answer.got {
+        DetailGot::Jobs { result, .. } => result.as_ref().err(),
+        DetailGot::Log { result, .. } => result.as_ref().err(),
+        DetailGot::Script { result, .. } => result.as_ref().err(),
+    };
+    SESSION_TOKEN.forget_on(failure);
+    answer
+}
+
+/// `fetch_detail` with the token source, client and API root passed in.
+/// A script asks the clone first and touches neither the token nor the
+/// network when the clone has the commit.
+async fn fetch_detail_with<S, F>(
+    request: DetailRequest,
+    token_source: S,
+    client: &reqwest::Client,
+    root: &str,
+) -> DetailAnswer
+where
+    S: FnOnce() -> F,
+    F: std::future::Future<Output = Result<String, String>>,
+{
+    let repo = format!("{root}/repos/{}/{}", request.owner, request.name);
+    let mut budget = None;
+    let got = match request.want {
+        DetailWant::Jobs { run_id } => {
+            let result = match token_within(token_source).await {
+                Ok(token) => {
+                    let url = format!("{repo}/actions/runs/{run_id}/jobs");
+                    let (result, reading) = get(client, &url, &token, None).await;
+                    budget = reading;
+                    match result {
+                        Ok(Answer::Fresh { body, etag }) => parse_jobs(&body)
+                            .map(|data| JobsAnswer::Fetched(Fetched::Fresh { data, etag })),
+                        Ok(Answer::NotModified) => Ok(JobsAnswer::Fetched(Fetched::NotModified)),
+                        Ok(Answer::NotFound) => Ok(JobsAnswer::Gone),
+                        Err(failure) => Err(failure),
+                    }
+                }
+                Err(failure) => Err(failure),
+            };
+            DetailGot::Jobs { run_id, result }
+        }
+        DetailWant::Log { job_id, step } => {
+            let (result, tail) = match token_within(token_source).await {
+                Ok(token) => {
+                    let url = format!("{repo}/actions/jobs/{job_id}/logs");
+                    let (result, reading) = get(client, &url, &token, None).await;
+                    budget = reading;
+                    match result {
+                        Ok(Answer::Fresh { body, .. }) => {
+                            let tail = step.map(|s| LogTail::Lines(log_tail(&body, &s)));
+                            (Ok(log_lines(&body)), tail)
+                        }
+                        Ok(Answer::NotModified) | Ok(Answer::NotFound) => {
+                            (Err(not_found("log not found")), None)
+                        }
+                        Err(failure) => (Err(failure), None),
+                    }
+                }
+                Err(failure) => (Err(failure), None),
+            };
+            DetailGot::Log {
+                job_id,
+                result,
+                tail,
+            }
+        }
+        DetailWant::Script { sha, path, clone } => {
+            let local = async {
+                match &clone {
+                    Some(dir) => crate::git::show_file(dir, &sha, &path).await,
+                    None => None,
+                }
+            };
+            let remote = || async {
+                let token = token_within(token_source).await?;
+                let url = contents_url(&repo, &path, &sha);
+                let (result, reading) = get(client, &url, &token, None).await;
+                budget = reading;
+                match result? {
+                    Answer::Fresh { body, .. } => parse_contents(&body),
+                    Answer::NotModified | Answer::NotFound => {
+                        Err(not_found("workflow file not found at this commit"))
+                    }
+                }
+            };
+            let result = local_first(local, remote).await;
+            DetailGot::Script { sha, path, result }
+        }
+    };
+    DetailAnswer {
+        key: request.key,
+        got,
+        budget,
+    }
+}
+
+/// A 404 in the words the inspector shows: `Http` and not a limit, so it is
+/// held as unavailable rather than asked again.
+fn not_found(message: &str) -> Failure {
+    Failure::new(FailureKind::Http, message)
+}
+
+/// The script decision: the clone's copy when `local` finds one, else
+/// whatever `remote` fetches. `remote` is not started when the clone answers.
+pub async fn local_first<L, R, RF>(local: L, remote: R) -> Result<String, Failure>
+where
+    L: std::future::Future<Output = Option<String>>,
+    R: FnOnce() -> RF,
+    RF: std::future::Future<Output = Result<String, Failure>>,
+{
+    match local.await {
+        Some(text) => Ok(text),
+        None => remote().await,
+    }
+}
+
+/// `GET /repos/{o}/{r}/contents/{path}?ref={sha}`, the path percent-encoded
+/// segment by segment.
+fn contents_url(repo: &str, path: &str, sha: &str) -> String {
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    format!("{repo}/contents/{encoded}?ref={sha}")
+}
+
+#[derive(Deserialize)]
+struct Contents {
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    encoding: String,
+}
+
+/// The file text a contents body carries, base64-decoded. GitHub sends no
+/// content (`encoding: none`) for a file over 1 MB, which is unavailable
+/// rather than empty.
+fn parse_contents(body: &str) -> Result<String, Failure> {
+    let contents: Contents = serde_json::from_str(body).map_err(|e| malformed("contents", &e))?;
+    if contents.encoding != "base64" {
+        return Err(not_found("workflow file too large for the contents API"));
+    }
+    let bytes = decode_base64(&contents.content).ok_or_else(|| {
+        Failure::new(
+            FailureKind::Malformed,
+            "the contents API sent a body that is not base64",
+        )
+    })?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Standard base64 (RFC 4648, `+` and `/`) to bytes, ignoring the line
+/// breaks GitHub wraps it in. `None` on any other character. By hand, since
+/// a dependency for twenty lines is not worth its weight.
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    let value = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let mut acc: u32 = 0;
+    let mut bits = 0;
+    for c in text.bytes() {
+        if c.is_ascii_whitespace() {
+            continue;
+        }
+        if c == b'=' {
+            break;
+        }
+        acc = (acc << 6) | value(c)?;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+/// The lines (0-based, end exclusive) of the step `step` names in workflow
+/// file `yaml`, for the `script` body's highlight. YAML read as text, no
+/// parser: a step is a list item, from its `- ` line to the next line at
+/// its indent or less.
+///
+/// Matched on the step's `name:` first, then, for a step without one, on
+/// the `run:` or `uses:` text GitHub built the name from (`Run cargo test`
+/// for `- run: cargo test`, the first line for a `run: |` block). `None`
+/// when nothing matches, or the match is not inside a list item (the
+/// workflow's or a job's own `name:`).
+pub fn step_block(yaml: &str, step: &str) -> Option<std::ops::Range<usize>> {
+    let lines: Vec<&str> = yaml.lines().collect();
+    let command = step.strip_prefix("Run ").unwrap_or(step);
+    let found = (0..lines.len())
+        .filter_map(|i| item_start(&lines, i).map(|start| (i, start)))
+        .find(|&(i, _)| key_value(lines[i], "name").is_some_and(|v| v == step))
+        .or_else(|| {
+            (0..lines.len())
+                .filter_map(|i| item_start(&lines, i).map(|start| (i, start)))
+                .find(|&(i, _)| {
+                    if key_value(lines[i], "uses").is_some_and(|v| strip_comment(&v) == command) {
+                        return true;
+                    }
+                    match key_value(lines[i], "run") {
+                        Some(v) if is_block_scalar(&v) => lines[i + 1..]
+                            .iter()
+                            .find(|l| !l.trim().is_empty())
+                            .is_some_and(|l| l.trim() == command),
+                        Some(v) => v == command,
+                        None => false,
+                    }
+                })
+        });
+    let (_, start) = found?;
+    let item_indent = indent(lines[start]);
+    let mut end = start + 1;
+    while end < lines.len() {
+        let line = lines[end];
+        if !line.trim().is_empty() && indent(line) <= item_indent {
+            break;
+        }
+        end += 1;
+    }
+    while end > start + 1 && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    Some(start..end)
+}
+
+fn indent(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// The `- ` line of the list item line `i` belongs to as one of its keys:
+/// `i` itself, or the nearest item line above at a smaller indent, with
+/// nothing between them that ends the item.
+fn item_start(lines: &[&str], i: usize) -> Option<usize> {
+    if lines[i].trim_start().starts_with("- ") {
+        return Some(i);
+    }
+    let key_indent = indent(lines[i]);
+    for j in (0..i).rev() {
+        let line = lines[j];
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') || indent(line) >= key_indent {
+            continue;
+        }
+        return trimmed.starts_with("- ").then_some(j);
+    }
+    None
+}
+
+/// The value of `key:` on `line`, which may open a list item (`- key:`),
+/// with surrounding quotes removed.
+fn key_value(line: &str, key: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let trimmed = trimmed.strip_prefix("- ").unwrap_or(trimmed).trim_start();
+    let value = trimmed.strip_prefix(key)?.strip_prefix(':')?.trim();
+    let unquoted = value
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+        .unwrap_or(value);
+    Some(unquoted.to_string())
+}
+
+/// `value` without a trailing ` # comment`.
+fn strip_comment(value: &str) -> &str {
+    value.split_once(" #").map_or(value, |(v, _)| v).trim_end()
+}
+
+/// `|`, `>` and their chomping forms: the text starts on the next line.
+fn is_block_scalar(value: &str) -> bool {
+    matches!(value, "|" | ">" | "|-" | ">-" | "|+" | ">+")
 }
 
 /// One REST call's answer before parsing.
@@ -1227,9 +1678,338 @@ mod tests {
             runs: None,
             jobs: None,
             log: None,
+            full_log: None,
             failure: None,
             budget: None,
         }
+    }
+
+    // --- The inspector's fetches (FZ-30f) ---
+
+    const CI_YML: &str = include_str!("ci/fixtures/ci.yml");
+
+    #[test]
+    fn the_whole_log_is_every_line_without_stamps_or_colours() {
+        let lines = log_lines(LOG_FAILED);
+        assert_eq!(lines.len(), LOG_FAILED.lines().count());
+        assert!(lines.iter().all(|l| !l.starts_with("2026-")), "stamps");
+        assert!(lines.iter().all(|l| !l.contains('\u{1b}')), "colours");
+        assert!(lines.iter().all(|l| !l.starts_with('\u{feff}')), "BOM");
+        assert!(lines.contains(&"##[error]Process completed with exit code 101.".to_string()));
+        assert!(
+            lines.iter().any(|l| l.contains("Post job cleanup")),
+            "the whole log, past the failing step"
+        );
+    }
+
+    /// A runaway log is held as its last `LOG_LINE_CAP` lines under a line
+    /// that says so; one at the cap is held whole.
+    #[test]
+    fn a_whole_log_past_the_cap_keeps_its_last_lines() {
+        let log = |n: usize| {
+            (1..=n)
+                .map(|i| format!("2026-10-09T16:20:37.5Z line {i}\n"))
+                .collect::<String>()
+        };
+        let held = log_lines(&log(LOG_LINE_CAP + 3));
+        assert_eq!(held.len(), LOG_LINE_CAP + 1);
+        assert_eq!(held[0], LOG_TRUNCATED);
+        assert_eq!(held[1], "line 4", "the first lines go");
+        assert_eq!(held.last().unwrap(), &format!("line {}", LOG_LINE_CAP + 3));
+        assert_eq!(
+            LOG_TRUNCATED,
+            format!("log truncated to the last {LOG_LINE_CAP} lines; l opens the whole log in gh")
+        );
+        let whole = log_lines(&log(LOG_LINE_CAP));
+        assert_eq!(whole.len(), LOG_LINE_CAP);
+        assert_eq!(whole[0], "line 1", "no note at the cap");
+    }
+
+    #[tokio::test]
+    async fn the_poll_that_reads_a_tail_keeps_the_whole_log_too() {
+        let (root, _seen) = serve(vec![
+            response("304 Not Modified", &BUDGET, ""),
+            response("200 OK", &[], JOBS_FAILED),
+            response("200 OK", &[], LOG_FAILED),
+        ])
+        .await;
+        let answer = run(
+            request(Some("W/\"6b13\""), Some(expanded(37958308363))),
+            &root,
+        )
+        .await;
+        assert_eq!(
+            answer.full_log,
+            Some((113914377501, log_lines(LOG_FAILED))),
+            "one download serves the tail and the log body"
+        );
+    }
+
+    /// The failing step of the recorded failed run, matched in the
+    /// workflow file recorded at its commit (`93f4c8e`).
+    #[test]
+    fn the_failing_steps_block_is_found_by_its_run_text() {
+        let lines: Vec<&str> = CI_YML.lines().collect();
+        let jobs = parse_jobs(JOBS_FAILED).unwrap();
+        let step = failing_step(&jobs[0]).unwrap();
+        let block = step_block(CI_YML, &step.name).expect("matched");
+        assert_eq!(block.len(), 1);
+        assert_eq!(
+            lines[block.start].trim(),
+            "- run: cargo clippy --all-targets -- -D warnings"
+        );
+    }
+
+    #[test]
+    fn a_uses_step_matches_past_its_comment_and_takes_its_with_block() {
+        let lines: Vec<&str> = CI_YML.lines().collect();
+        let name = "Run dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87";
+        let block = step_block(CI_YML, name).expect("matched");
+        assert!(lines[block.start].contains("- uses: dtolnay/rust-toolchain"));
+        assert_eq!(block.len(), 4, "uses, with and its two keys");
+        let checkout = step_block(CI_YML, "Run actions/checkout@v4").expect("matched");
+        assert_eq!(
+            checkout.len(),
+            1,
+            "the comment after it opens the next step"
+        );
+    }
+
+    #[test]
+    fn a_named_step_matches_by_name_first_and_a_block_run_by_its_first_line() {
+        let yaml = "name: Build\n\
+                    jobs:\n  \
+                      build:\n    \
+                        name: Build\n    \
+                        steps:\n      \
+                          - uses: actions/upload-artifact@v4\n        \
+                            with:\n          \
+                              name: Build\n      \
+                          - name: \"Build\"\n        \
+                            run: make\n\n      \
+                          - run: |\n          \
+                              cargo test\n          \
+                              cargo doc\n";
+        let lines: Vec<&str> = yaml.lines().collect();
+        let named = step_block(yaml, "Build").expect("the step named Build");
+        assert_eq!(lines[named.start].trim(), "- name: \"Build\"");
+        assert_eq!(named.len(), 2, "trailing blank lines are not the block's");
+        let block = step_block(yaml, "Run cargo test").expect("the block run");
+        assert_eq!(lines[block.start].trim(), "- run: |");
+        assert_eq!(block.end, lines.len());
+        assert_eq!(
+            step_block(yaml, "Run cargo bench"),
+            None,
+            "no match, no highlight"
+        );
+        assert_eq!(
+            step_block("name: ci\n", "ci"),
+            None,
+            "the workflow's own name"
+        );
+    }
+
+    #[test]
+    fn base64_is_decoded_by_hand_across_line_breaks() {
+        assert_eq!(decode_base64("Zm9vYmFy").unwrap(), b"foobar");
+        assert_eq!(decode_base64("Zm9v\nYg==\n").unwrap(), b"foob");
+        assert_eq!(decode_base64("Zm8=").unwrap(), b"fo");
+        assert_eq!(decode_base64("Zm9v!"), None);
+        let body = r#"{"content":"bmFtZTog\nY2kK\n","encoding":"base64"}"#;
+        assert_eq!(parse_contents(body).unwrap(), "name: ci\n");
+        let large = parse_contents(r#"{"content":"","encoding":"none"}"#).unwrap_err();
+        assert_eq!(
+            Detail::<String>::from_result(Err(large), local("2026-10-21T12:00:00+02:00")),
+            Detail::Unavailable("workflow file too large for the contents API".to_string())
+        );
+    }
+
+    #[test]
+    fn a_detail_is_fetched_once_and_a_failed_one_again_after_a_minute() {
+        let now = local("2026-10-21T12:00:00+02:00");
+        let failed = Detail::<()>::Failed {
+            message: "offline".to_string(),
+            at: now,
+        };
+        assert!(Detail::<()>::wants_fetch(None, now));
+        assert!(!Detail::wants_fetch(Some(&Detail::<()>::Loading), now));
+        assert!(!Detail::wants_fetch(Some(&Detail::Ready(())), now));
+        let gone = Detail::<()>::Unavailable("log not found".to_string());
+        assert!(!Detail::wants_fetch(
+            Some(&gone),
+            now + chrono::Duration::days(1)
+        ));
+        assert!(!Detail::wants_fetch(
+            Some(&failed),
+            now + chrono::Duration::seconds(59)
+        ));
+        assert!(Detail::wants_fetch(
+            Some(&failed),
+            now + chrono::Duration::seconds(60)
+        ));
+        let offline = Failure::new(FailureKind::Offline, "no route");
+        assert!(matches!(
+            Detail::<()>::from_result(Err(offline), now),
+            Detail::Failed { .. }
+        ));
+        let limited = Failure::rate_limit("API rate limit exceeded");
+        assert!(matches!(
+            Detail::<()>::from_result(Err(limited), now),
+            Detail::Failed { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_script_comes_from_the_clone_and_github_only_without_it() {
+        let asked = std::sync::atomic::AtomicBool::new(false);
+        let remote = || async {
+            asked.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok::<_, Failure>("from GitHub".to_string())
+        };
+        let local = async { Some("from the clone".to_string()) };
+        assert_eq!(local_first(local, remote).await.unwrap(), "from the clone");
+        assert!(
+            !asked.load(std::sync::atomic::Ordering::SeqCst),
+            "not asked"
+        );
+        let lacking = async { None };
+        assert_eq!(local_first(lacking, remote).await.unwrap(), "from GitHub");
+        assert!(asked.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    fn script_request(sha: &str, clone: Option<std::path::PathBuf>) -> DetailRequest {
+        DetailRequest {
+            key: (Some("gaurgle".to_string()), "fleetz".to_string()),
+            owner: "gaurgle".to_string(),
+            name: "fleetz".to_string(),
+            want: DetailWant::Script {
+                sha: sha.to_string(),
+                path: ".github/workflows/ci.yml".to_string(),
+                clone,
+            },
+        }
+    }
+
+    /// A clone with the commit answers from git and asks nothing of
+    /// GitHub, the token included; a sha the clone lacks goes to the
+    /// contents API at that ref.
+    #[tokio::test]
+    async fn a_script_falls_back_to_the_contents_api_on_a_sha_the_clone_lacks() {
+        use std::process::Command as StdCommand;
+        let dir = std::env::temp_dir().join(format!("fleetz_ci_script_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".github/workflows")).unwrap();
+        let git = |args: &[&str]| {
+            let out = StdCommand::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "t"]);
+        std::fs::write(dir.join(".github/workflows/ci.yml"), CI_YML).unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "ci"]);
+        let sha = git(&["rev-parse", "HEAD"]);
+
+        let answer = fetch_detail_with(
+            script_request(&sha, Some(dir.clone())),
+            || async { panic!("the clone had it: no token lookup") },
+            &test_client(),
+            "http://127.0.0.1:9",
+        )
+        .await;
+        let DetailGot::Script { result, .. } = answer.got else {
+            panic!("a script answer")
+        };
+        assert_eq!(result.unwrap(), CI_YML);
+        assert_eq!(answer.budget, None, "no request went");
+
+        let lacking = "93f4c8edaf3438b5413579aaa1b65f5c6c228b87";
+        let body = r#"{"content":"bmFtZTog\nY2kK\n","encoding":"base64"}"#;
+        let (root, mut seen) = serve(vec![response("200 OK", &BUDGET, body)]).await;
+        let answer = fetch_detail_with(
+            script_request(lacking, Some(dir.clone())),
+            || async { Ok("tok".to_string()) },
+            &test_client(),
+            &root,
+        )
+        .await;
+        let head = seen.recv().await.unwrap();
+        assert!(
+            head.starts_with(&format!(
+                "GET /repos/gaurgle/fleetz/contents/.github/workflows/ci.yml?ref={lacking} "
+            )),
+            "{head}"
+        );
+        let DetailGot::Script { result, .. } = answer.got else {
+            panic!("a script answer")
+        };
+        assert_eq!(result.unwrap(), "name: ci\n");
+        assert!(answer.budget.is_some(), "the contents call bills core");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn the_log_body_reads_a_jobs_whole_log_and_its_tail_in_one_call() {
+        let (root, mut seen) = serve(vec![response("200 OK", &BUDGET, LOG_FAILED)]).await;
+        let jobs = parse_jobs(JOBS_FAILED).unwrap();
+        let request = DetailRequest {
+            want: DetailWant::Log {
+                job_id: jobs[0].id,
+                step: failing_step(&jobs[0]).cloned(),
+            },
+            ..script_request("", None)
+        };
+        let answer = fetch_detail_with(
+            request,
+            || async { Ok("tok".to_string()) },
+            &test_client(),
+            &root,
+        )
+        .await;
+        let head = seen.recv().await.unwrap();
+        assert!(
+            head.starts_with("GET /repos/gaurgle/fleetz/actions/jobs/113914377501/logs "),
+            "{head}"
+        );
+        let DetailGot::Log { result, tail, .. } = answer.got else {
+            panic!("a log answer")
+        };
+        assert_eq!(result.unwrap(), log_lines(LOG_FAILED));
+        let Some(LogTail::Lines(tail)) = tail else {
+            panic!("the tail rides along")
+        };
+        assert_eq!(tail.len(), LOG_TAIL_LINES);
+    }
+
+    #[tokio::test]
+    async fn an_expired_log_is_unavailable_for_good() {
+        let body = r#"{"message":"Gone"}"#;
+        let (root, _seen) = serve(vec![response("410 Gone", &BUDGET, body)]).await;
+        let request = DetailRequest {
+            want: DetailWant::Log {
+                job_id: 1,
+                step: None,
+            },
+            ..script_request("", None)
+        };
+        let answer = fetch_detail_with(
+            request,
+            || async { Ok("tok".to_string()) },
+            &test_client(),
+            &root,
+        )
+        .await;
+        let DetailGot::Log { result, .. } = answer.got else {
+            panic!("a log answer")
+        };
+        let held = Detail::from_result(result, local("2026-10-21T12:00:00+02:00"));
+        assert!(matches!(held, Detail::Unavailable(_)), "{held:?}");
     }
 
     #[tokio::test]

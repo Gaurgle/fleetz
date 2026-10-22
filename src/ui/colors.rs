@@ -7,7 +7,7 @@ pub const YELLOW: Color = Color::Rgb(249, 226, 175); // uncommitted
 pub const SAPPHIRE: Color = Color::Rgb(116, 199, 236); // repo names
 pub const LAVENDER: Color = Color::Rgb(180, 190, 254); // headers
 pub const MAUVE: Color = Color::Rgb(203, 166, 247); // section labels
-pub const SKY: Color = Color::Rgb(137, 220, 235); // the `ci` view's tab
+pub const MAROON: Color = Color::Rgb(235, 160, 172); // the `ci` view's tab
 
 /// Open pull requests, everywhere one is counted or listed.
 ///
@@ -232,8 +232,9 @@ pub const TEAL: Color = Color::Rgb(148, 226, 213);
 /// the mauve of its own action words. `graph` is the odd one out and is
 /// picked for contrast rather than echo: its lanes cycle six colours, so
 /// there is nothing for it to echo, and its natural first-lane sky sat right
-/// on top of `info`'s blue. `ci` wears sky, a tab colour only, since the
-/// lamp colours it could echo are verdicts.
+/// on top of `info`'s blue. `ci` wears maroon, a tab colour only: red's
+/// family without the failing lamp's `RED`, so the tab never reads as a
+/// verdict.
 ///
 /// These are not new meanings, so the one-colour-per-concept rule holds. The
 /// tab strip is also its own context: a peach `graph` tab cannot be mistaken
@@ -250,9 +251,11 @@ pub fn history_view_color(view: crate::app::HistoryView) -> Color {
         // `reflog` tab by peach in the strip order, so the two purples never
         // sit side by side.
         HistoryView::Branches => LAVENDER,
-        // Sky: none of the CI lamp's own colours (green, red, peach) is free
-        // here, and a lamp colour on the tab would read as a verdict.
-        HistoryView::Ci => SKY,
+        // Maroon (his "perhaps red", FZ-30f): none of the CI lamp's own
+        // colours (green, red, peach) is free here, and a lamp colour on the
+        // tab would read as a verdict. `WATCH_OFF` holds the same value and
+        // is deliberately not this constant.
+        HistoryView::Ci => MAROON,
     }
 }
 
