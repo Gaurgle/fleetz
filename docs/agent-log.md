@@ -16,6 +16,32 @@ instead; a note marks each place.
 Lead records older than the most recent session, newest first, as they stood
 in the handoff's "Baton" section.
 
+**The 2026-10-21 session** (`claude-fable-5-1`, `claude --agent
+fz-coordinator`, session `6c0bef32-e39d-4d66-98b4-edcb6d119773`, held
+10:50 to 16:10 CEST and again 18:55 to 20:35 as an unattended run).
+Takeover on his "continue" with the baton released and nothing
+running. Seven tickets Done: #89 FZ-30a, #79 FZ-03a, #81 FZ-13n, #90
+FZ-30b, #94 FZ-39, #91 FZ-30c, #92 FZ-30d (records under "Merged on
+2026-10-21"); two at Ready to integrate for his look: #93 FZ-30e and
+#95 FZ-30f. The CI pane spec was drafted, accepted on every point
+(layout A, keys, tests, `ci_pane`), built as a band (#91), then
+amended the same afternoon on his decision after using it: CI as a
+pane 2 page with lazy polling, an `info` section and the inspector for
+details (#92, #95). The FZ-14 attention view spec was drafted. The
+disk filled at about 13:38 (a closed session's 14 GB scratchpad, this
+session's clones, a reviewer's scratch build; ENOSPC at 505 MB free);
+freed on his "yes, delete those" (22 GB); two cleanup layers landed: a
+global `SessionStart` hook in `~/claude-config` (`e751f06`, prunes
+scratchpads older than two days, skips live sessions) and FZ-39's
+`relay-sweep` prune. Lessons: scratch clones and reviewer builds live
+under the session scratchpad with their own `CARGO_TARGET_DIR` and are
+removed by the command that used them; the coordinator's "HH:MM"
+stamps ran up to ten minutes ahead of the clock at times (corrected
+where found; commit dates are authoritative); a ticket's acceptance
+criterion written as a bare grep must target the thing meant, not the
+syntax (#89's `[4]`); the help overlay is exactly full at 80x24, so a
+new row needs a reflow. Released 20:33 at the unattended run's cap.
+
 **The 2026-10-20 session** (`claude-fable-5-1`, `claude --agent
 fz-coordinator`, session `08f5d4fe-31ad-4813-8535-0abfc0844250`, held
 11:26 to 14:40 CEST). Takeover evidence: the 2026-10-17 record said
@@ -391,6 +417,34 @@ first (from `git log --merges main`).
   line (coordinator). Branch CI green; combined check 1256 tests;
   `main` CI green. Swept.
   FZ-30c: review accepted first; fix cycles 0; owner decisions 3; worker 42; review 8; usage not read
+- **#92 (FZ-30d), CI as a pane 2 view; the band removed, the strip
+  back to 4.** Merged `69c1b5b` at 16:07 CEST; ticket commit `fa6fbfc`
+  (reviewed diff `b16aa538`), branch `feat/92-ci-pane2-view` from
+  `f51c20f`. The spec's "Amendment 2026-10-21" (his 15:12 and 15:20
+  decision after using the band: a pane 2 page, lazy loading, an `info`
+  section, the inspector for details): `HistoryView::Ci` sixth view
+  (tab in sky, index 5), rows via `ui::ci::run_line`, selection and
+  scroll in the per-view slots over pane 2's shared code, a pinned
+  first line with the freshness mark and the empty states, the clamp
+  on a shorter list; `App::ci_wanted()` (`Detail` view and `ci`
+  showing) gates the trigger, cadence, loading and live states and the
+  stuck expiry through `main.rs::ci_tick`; held runs survive leaving
+  the view; `info` gains a `ci` section after `branches` (`◉ default
+  branch passed` from the pane 1 lamp's fact, static, then the latest
+  run of the three newest branches or `] for runs`; nothing polls);
+  the band, `FocusedPanel::Ci`, `CI_NUM`, `split_docks`, `ci_folded`,
+  `ci_pane` and the band footer segment removed, `CONTRIBUTIONS_NUM`
+  back to 4 with #89's wording, `dock_bottom` kept under
+  `split_main_area`. Fifteen rulings (the #89 and #91 test changes
+  followed the band out; `colors.rs` for the tab; two more existing
+  tests on his "sound sgood to me"; four `detail.rs` tests narrowed or
+  made explicit, the caret test landing the runs fixture; `◉ default
+  branch` wording since the payload holds no branch name, follow-up).
+  Fourteen new tests. Review accepted first (five mutations caught on
+  assertions). His look: "looks great." with the tab colour to change
+  (FZ-30f). Branch CI green; combined check 1256 tests; `main` CI
+  green. Swept.
+  FZ-30d: review accepted first; fix cycles 0; owner decisions 3; worker 25; review 7; usage not read
 
 ### Merged on 2026-10-20
 

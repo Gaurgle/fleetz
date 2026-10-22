@@ -133,9 +133,8 @@ uses.
 **`ui::panel_rects` must produce the same rectangles `render` draws.** It exists
 so mouse clicks can be hit-tested against what is on screen. Shared geometry
 lives in one function called by both (`detail::split_inspector`, and
-`ui::ci::split_docks` for the CI band and the strip, which carves both off
-the bottom through `contributions::dock_bottom`); never reintroduce a second
-copy of that arithmetic. Drift here misroutes clicks silently, with nothing
+`ui::contributions::split_main_area` for the strip, over `dock_bottom`); never
+reintroduce a second copy of that arithmetic. Drift here misroutes clicks silently, with nothing
 failing.
 
 **`App::visible_repos` order must match the order the repo list draws.** The
