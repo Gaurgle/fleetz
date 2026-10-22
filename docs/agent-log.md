@@ -289,6 +289,31 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-10-22
+
+- **#92 hotfix, the ci view's test times from wall-clock components.**
+  Merged `bd0e4ee` at 11:05 CEST; ticket commit `fdc53ed` (reviewed
+  diff `94d25845`), branch `fix/92-ci-tests-utc` from `6a6de99`. Found
+  at the takeover: the `ci` workflow was red on `main` at the #92 merge
+  (`69c1b5b`, run 39614008453) and on the #93 and #95 branches, while
+  the handoff recorded them green. Three `ui::ci` tests parsed
+  `"...12:02+02:00"` into `Local` and asserted the local-time string,
+  so they held in CEST and failed in CI's UTC (`TZ=UTC cargo test
+  ui::ci::tests`, 3 failed). The helper `local()` keeps its signature
+  and builds the time from the string's wall-clock components (as the
+  header tests' `at()` does); two closures wanting real UTC instants
+  parse those directly. No assertion changed; existing-test edit under
+  his "yes, you know what to do, go" (10:53). `fz-small` then
+  `fz-reviewer` (accepted first; six zones checked, the base
+  reproduced). Branch CI 39752115913 green; combined check 1256 tests
+  under UTC; `main` CI 39752691318 green. Swept. Reviewer's low
+  follow-up, not ticketed: two row tests (`a_run_row_has_every_column_
+  and_the_title_takes_the_slack`, `the_lamp_takes_the_ci_colours_and_
+  pulses_while_running`) take `now` from `local()` against fixture UTC
+  instants, so the modelled age is now zone-dependent (still passing
+  everywhere); fix by parsing the instant with `Z`.
+  #92 hotfix: review accepted first; fix cycles 0; owner decisions 1; worker 3; review 2; usage not read
+
 ### Merged on 2026-10-21
 
 - **#89 (FZ-30a), the contributions strip becomes pane 5.** Merged

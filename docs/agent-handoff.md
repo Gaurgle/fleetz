@@ -14,7 +14,19 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Released** 2026-10-21 20:33 CEST by `claude-fable-5-1` (session
+**Held** since 2026-10-22 10:50 CEST by `claude-fable-5-1` (`claude
+--agent fz-coordinator`, session
+`2e4524bf-8172-4d7c-8bd5-966212f13452`), taken over on Andreas's
+"give me a brief status, then lets continue" after reading the released
+baton below. Nothing was running at the takeover. First finding: the
+`ci` workflow was **red on `main` (`69c1b5b`) and on both ticket
+branches**, contrary to yesterday's "branch CI green": three `ui::ci`
+tests from #92 were timezone-dependent. Fixed and merged as `bd0e4ee`
+on his word (log, "Merged on 2026-10-22"); `main` CI green again.
+Lesson for every lead: "branch CI green" means the `ci` workflow, not
+`docs`; confirm with `gh run list --branch <b> --workflow ci`.
+
+Previous record: **Released** 2026-10-21 20:33 CEST by `claude-fable-5-1` (session
 `6c0bef32-e39d-4d66-98b4-edcb6d119773`) at the end of the unattended
 run he asked for at 18:52 ("keep going for 2 hours without me
 interweining", stop at 21:30): the run ended early at its cap, with
@@ -51,6 +63,15 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-22, 10:53.** "yes, you know what to do, go", to the
+  takeover report's proposal: fix the three UTC-dependent `ui::ci`
+  tests from #92 by swapping the test helper to wall-clock components
+  (an existing-test edit, assertions unchanged), through `fz-small`
+  and `fz-reviewer` on `fix/92-ci-tests-utc` from `6a6de99`, merge
+  under the safe-merge rule once CI is green, then re-verify #93 and
+  #95 against the new `main`. Not read as the merge word for #93 or
+  #95: both are look changes with new keys and still wait for his
+  look (the report's question 2 had no explicit answer).
 - **2026-10-21, 18:52.** "we can continue. I will be on a party for a
   while tho, can you keep going for 2 hours without me interweining?"
   Read as an unattended run under "Unattended runs" in
@@ -220,10 +241,9 @@ are written into the repository.
 
 ## State of `main`
 
-`main` is `69c1b5b` (the merge of #92) plus docs commits, 1256 tests
-passing and 1 ignored; CI on `main` for `69c1b5b` was still running at
-the release (runs 39614008453 and 39614007922; confirm, then sweep
-`issue-92`). Since `v0.6.0` it carries #79 (header dates the failed
+`main` is `bd0e4ee` (the #92 UTC test hotfix over the merge of #92 and
+docs commits), 1256 tests passing and 1 ignored, CI green (run
+39752691318). Since `v0.6.0` it carries #79 (header dates the failed
 attempt), #81 (footer hints follow focus), #90 (CI data layer), #94
 (relay-sweep prunes scratch builds), #89 and #91 (the band, later
 undone) and #92 (CI as a pane 2 view with an `info` section). The next
@@ -231,15 +251,22 @@ release is `0.7.0`. Local toolchain rustc 1.99.0, same as CI's.
 
 ## Worktrees
 
-Under `.claude/worktrees/`: `issue-92` (merged, sweep once `main` CI is
-confirmed green), `issue-95` (created from `69c1b5b`, empty, no worker
-started), `issue-88` (FZ-38, parked, uncommitted, see "Baton"; the
-sweep keeps it).
+Under `.claude/worktrees/`: `issue-93` and `issue-95` (committed,
+pushed, `main` merged in on 2026-10-22, see "In flight"), `issue-88`
+(FZ-38, parked, uncommitted, see "Baton"; the sweep keeps it).
 
 ## In flight
 
 Nothing running. Two tickets wait at **Ready to integrate for his
-look**; both are look changes, so nothing merged unattended:
+look**; both are look changes, so nothing merges unattended. On
+2026-10-22 `main` (`bd0e4ee`) was merged into each branch so their CI
+could run green: #93 is now `9f4c9e5`, #95 is `1b3d8ad`; the ticket
+diffs against `main` are unchanged (the merge-in brought only the test
+helper and docs). Re-verified under `TZ=UTC` against `bd0e4ee`: #93
+alone 1271 tests, #95 alone 1287, both together 1302, fmt and clippy
+clean, no conflicts. Branch CI green on both merge-in commits (#93 run
+39753644365, #95 run 39753864666, 11:16). Every safe-merge condition
+holds except his look. The records below predate the merge-in and name the earlier tips:
 
 - **#95 FZ-30f** (the inspector's jobs, log and script bodies; the
   `ci` tab in maroon): review 1 changes requested (four contract
