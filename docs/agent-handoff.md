@@ -280,24 +280,40 @@ sweep keeps it).
 Two workers running since 13:30 (both slots; the `fz-small` slot is
 free):
 
-- **#93 FZ-30e (`l`/`a`/`x`/`O` on the highlighted run): In progress,
-  rework.** `main` `91bba9f` (with #95) merged into the branch as
-  `f300b0a`, pushed; a fresh `fz-worker` reworks `l` to focus the
-  inspector's log body with no suspend (ruling, comment 6337744715;
-  assignment comment on the issue), help, footer, README. Allowed
-  files `src/main.rs`, `src/app.rs`, `src/ui/footer.rs`,
-  `src/ui/help.rs`, `README.md`. Earlier: accepted `7d39d52d`
-  committed `8a5bdac` (2026-10-21), merge-in `9f4c9e5` (CI green). His
-  look 2026-10-22: help and footer "yes", `O` fine (he had pressed
-  `0`), `a`/`x` as built. Next: review, commit, push, CI, combined,
-  his look (a key's meaning changes), merge.
-- **#96 FZ-40 (the `ci` view's headline row and width budget): In
-  progress.** `fz-worker` on `feat/96-ci-view-width` from `91bba9f`,
-  worktree `.claude/worktrees/issue-96`, allowed `src/ui/ci.rs` (run
-  list), `src/ui/detail.rs` (row placement), `README.md`. Run on his
-  "i trust you" (13:05) to the proposed order. Next: review, commit,
-  push, CI, combined, his look, merge. Whichever of the two merges
-  second is re-verified against the new `main`.
+- **#93 FZ-30e (`l`/`a`/`x`/`O` on the highlighted run): Ready to
+  integrate since 13:57, for his look.** Rework reviewed and accepted
+  (diff `3da63a19`, six mutations caught), committed `1e9ccde` on
+  `feat/93-ci-handoffs` (over the merge-in `f300b0a`), pushed; branch
+  CI 39774103522 green; combined with `main` `6fcd337` 1312 tests
+  under UTC, fmt and clippy clean. `l` opens and focuses the inspector
+  on the run's `log` body (completed runs only), the `gh run view`
+  builder is gone, `LOG_TRUNCATED` points at the run's page (one
+  existing-test string edit, ruled in, comment "Rework rulings"); `a`
+  and `x` still take the terminal over for `gh run rerun`/`cancel`
+  (background variant a candidate follow-up). Earlier: accepted
+  `7d39d52d` committed `8a5bdac` (2026-10-21); his look 2026-10-22:
+  help and footer "yes", `O` fine. Next: his look (`l`), merge under
+  the safe-merge rule, sweep, log.
+- **#96 FZ-40 (the `ci` view's headline row and width budget): Ready
+  to integrate since 14:05, for his look.** Reviewed and accepted
+  (diff `16bb0848`, seven mutations caught), committed `19a21d6` on
+  `feat/96-ci-view-width` (base `91bba9f`), pushed; branch CI
+  39775176164 green; combined with `main` 1303 tests under UTC, with
+  #93 on top 1319 (README auto-merged), fmt and clippy clean. Rulings
+  on #96 (14:00): the one existing-test index edit, OVERLAY headline,
+  `TITLE_MIN` 20, all flagged for his look. Reviewer's low follow-ups:
+  rows wrap below 23 pane columns (as before); three `Local::now()`
+  reads in the `ci` block of `detail.rs` could share one `now`. Next:
+  his look, merge, sweep, log; the second of #93/#96 to merge is
+  re-verified against the new `main` (already checked together).
+
+**Release:** he asked at 14:03 "remember to bump versions soon too, is
+there a installable version soon". Since `v0.6.0` `main` carries
+features, so the next release is `0.7.0`; the bump is one commit, last
+before the tag, on his word, with What's Changed notes prepared by the
+coordinator and the tag and `cargo install` his. Proposed: after #93
+and #96 merge, prepare the `0.7.0` bump and notes and present the
+commands.
 
 Today's earlier trail (the seven merged tickets, the disk pause, the
 rulings) is in the log: "Merged on 2026-10-21" and the lead record

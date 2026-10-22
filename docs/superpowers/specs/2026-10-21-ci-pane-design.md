@@ -361,8 +361,10 @@ From his look at the branch builds (11:30 to 11:45, screenshots on
   run (FZ-30f bug, his item 8).
 - **No suspend** (FZ-30e): `l` no longer suspends into `gh run view
   --log`; it focuses the inspector on the highlighted run's `log` body
-  (FZ-30f's). `a`, `x` and `O` stay as built: background `gh`, no
-  suspend. "it'd be better to always stay in this tool."
+  (FZ-30f's). `a`, `x` and `O` stay as built: `O` opens the browser,
+  `a` and `x` take the terminal over for the moment `gh run rerun` or
+  `gh run cancel` runs (a background variant with a status line is a
+  candidate follow-up). "it'd be better to always stay in this tool."
 - **Pane 2 `ci` view width** (new, FZ-40): a headline row above the
   runs naming the columns, as the `branches` view has; columns lamp,
   workflow, branch, event, title, duration, age; the title takes the
