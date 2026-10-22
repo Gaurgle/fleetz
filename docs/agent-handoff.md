@@ -267,13 +267,15 @@ pushed, `main` merged in on 2026-10-22, see "In flight"), `issue-88`
 
 ## In flight
 
-- **#95 FZ-30f, fix cycle 3 (In progress since 11:52):** `fz-worker`
-  in `.claude/worktrees/issue-95` on `feat/95-ci-inspector-bodies`
-  from the tip `1b3d8ad` (main `bd0e4ee` merged in 11:10, branch CI
-  39753864666 green, 1287 tests under UTC). Scope: the ruling on #95
-  (comment 6337744383): jobs as a selectable list, lazy log tail, the
-  bodies scroll, `]` routing. Next: review, commit, push, branch CI,
-  combined check, then his look again (it stays a look change).
+- **#95 FZ-30f, fix cycle 3 committed (12:19):** review accepted diff
+  `d5e9dcb6` (14 of 16 mutations caught; two low test gaps and the
+  detail-claim stuck expiry noted as follow-ups); committed as
+  `08d0ef1` on `feat/95-ci-inspector-bodies` (over `1b3d8ad`), pushed;
+  branch CI 39762234343 green (12:22); board Ready to integrate. Combined
+  with `main` `837e2f9` under UTC: 1296 tests, with #93 on top 1311,
+  fmt and clippy clean. Next: his look (rulings 1 and 2 of comment
+  6338262868 flagged: steps one per line with the test edit, the `]`
+  streak rule), then merge under the safe-merge rule, sweep, log.
 - **#93 FZ-30e: Ready to integrate, blocked on #95.** Tip `9f4c9e5`
   (main merged in, branch CI 39753644365 green, 1271 tests under UTC;
   both branches together 1302, no conflicts). Ruling on #93 (comment
