@@ -14,15 +14,17 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Released** 2026-10-22 16:20 CEST by `claude-fable-5-1` (`claude
+**Released** 2026-10-22 17:58 CEST by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
-`2e4524bf-8172-4d7c-8bd5-966212f13452`) on his "is this a good place
-to stop for today?": yes. **Nothing is running: no worker, no
-reviewer, no build, no background job.** Held 10:50 to 16:20 (his
-"give me a brief status, then lets continue"). Done today: the #92
-UTC hotfix (`bd0e4ee`) and #95 FZ-30f (`db04b56`); #93 and #96 at
-Ready to integrate for his look; FZ-41 to FZ-44 designed in the spec,
-not created. The next lead records its own session and takeover time
+`2e4524bf-8172-4d7c-8bd5-966212f13452`) on his "can i close this
+session?": yes. **Nothing is running: no worker, no reviewer, no
+build, no background job.** Held 10:50 to 17:58 (his "give me a brief
+status, then lets continue"; the baton was first released at 16:20,
+then held again for his dotfiles and claude-config shipping, outside
+fleetz, and for the FZ-41 to FZ-45 tickets). Done today: the #92 UTC
+hotfix (`bd0e4ee`) and #95 FZ-30f (`db04b56`); #93 and #96 at Ready to
+integrate for his look; FZ-41 to FZ-45 (#97 to #101) created in
+Backlog with their specs, not dispatched. The next lead records its own session and takeover time
 here after confirming with Andreas. Chore for the next quiet moment:
 this file is 420 lines against the 150 cap; move the 2026-10-21
 records and the spent authority entries to the log. First finding at
