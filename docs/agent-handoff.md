@@ -63,6 +63,16 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-22, 11:45.** "ah, my bad. Capital O for that is good!
+  yes to all." after his look at #93 and #95 (findings and screenshots
+  on #95; neither accepted). Read as: #95 fix cycle 3 (jobs as a
+  selectable list in the inspector, option (a); lazy log tail; the
+  bodies scroll; `]` routing), #93's `l` retargeted to the inspector's
+  log body with no suspend, after #95 merges; FZ-40 (#96) created for
+  the pane 2 `ci` view's headline and width budget, after #95; the
+  run's facts stay the inspector's header. All in the spec's
+  "Amendment 2026-10-22". Both tickets and FZ-40 remain look changes
+  for his look; nothing merges unattended.
 - **2026-10-22, 10:53.** "yes, you know what to do, go", to the
   takeover report's proposal: fix the three UTC-dependent `ui::ci`
   tests from #92 by swapping the test helper to wall-clock components
@@ -257,16 +267,23 @@ pushed, `main` merged in on 2026-10-22, see "In flight"), `issue-88`
 
 ## In flight
 
-Nothing running. Two tickets wait at **Ready to integrate for his
-look**; both are look changes, so nothing merges unattended. On
-2026-10-22 `main` (`bd0e4ee`) was merged into each branch so their CI
-could run green: #93 is now `9f4c9e5`, #95 is `1b3d8ad`; the ticket
-diffs against `main` are unchanged (the merge-in brought only the test
-helper and docs). Re-verified under `TZ=UTC` against `bd0e4ee`: #93
-alone 1271 tests, #95 alone 1287, both together 1302, fmt and clippy
-clean, no conflicts. Branch CI green on both merge-in commits (#93 run
-39753644365, #95 run 39753864666, 11:16). Every safe-merge condition
-holds except his look. The records below predate the merge-in and name the earlier tips:
+- **#95 FZ-30f, fix cycle 3 (In progress since 11:52):** `fz-worker`
+  in `.claude/worktrees/issue-95` on `feat/95-ci-inspector-bodies`
+  from the tip `1b3d8ad` (main `bd0e4ee` merged in 11:10, branch CI
+  39753864666 green, 1287 tests under UTC). Scope: the ruling on #95
+  (comment 6337744383): jobs as a selectable list, lazy log tail, the
+  bodies scroll, `]` routing. Next: review, commit, push, branch CI,
+  combined check, then his look again (it stays a look change).
+- **#93 FZ-30e: Ready to integrate, blocked on #95.** Tip `9f4c9e5`
+  (main merged in, branch CI 39753644365 green, 1271 tests under UTC;
+  both branches together 1302, no conflicts). Ruling on #93 (comment
+  6337744715): `l` is retargeted to the inspector's log body with no
+  suspend, after #95 merges; then the branch takes `main` in and a
+  worker reworks `l`, help, footer, README.
+- **FZ-40 (#96), Backlog P2:** the `ci` view's headline row and width
+  budget; after #95 merges (same `src/ui/ci.rs` region).
+
+The earlier records below name the tips before the merge-in:
 
 - **#95 FZ-30f** (the inspector's jobs, log and script bodies; the
   `ci` tab in maroon): review 1 changes requested (four contract
@@ -312,12 +329,13 @@ for 2026-10-21 under "Earlier leads".
 
 Nothing starts until Andreas opens the next session.
 
-1. **#95 FZ-30f and #93 FZ-30e: his look, then merge** (see "In
-   flight"). Try: `cargo run --release --manifest-path
-   /Users/at-a/Repos/fleetz/.claude/worktrees/issue-95/Cargo.toml` and
-   the same with `issue-93`. After both merge: `main` CI, sweep, log
-   records, and the `ci` view's selection wash only with focus (from
-   the #92 review) is still his call.
+1. **#95 fix cycle 3, then his look, then merge** (see "In flight").
+   Try: `cargo run --release --manifest-path
+   /Users/at-a/Repos/fleetz/.claude/worktrees/issue-95/Cargo.toml`.
+   Then, in order: #93's `l` rework (merge `main` in, fresh worker,
+   review, his look, merge), FZ-40 (#96) from the new `main`. After
+   each merge: `main` CI, sweep, log record. The `ci` view's selection
+   wash only with focus (from the #92 review) is still his call.
 2. **FZ-30 is then complete** (a to f). The `0.7.0` release is ready
    to prepare on his word (the CI view, the hints, the header stamp,
    the handoffs are features).

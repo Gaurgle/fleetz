@@ -333,3 +333,51 @@ fourth focus for what pane 2 and the inspector already do.
   places for the same list; he decided from use already.
 - Jobs expanded inline under the run row: the band is gone and pane 2
   has the inspector for exactly this.
+
+## Amendment 2026-10-22: his look at FZ-30e and FZ-30f
+
+From his look at the branch builds (11:30 to 11:45, screenshots on
+#95), "yes to all" to the coordinator's proposal at 11:45.
+
+### What changes
+
+- **Jobs are a list, not a wrapped line** (FZ-30f, replaces the wrapped
+  steps line of section E): the inspector's `jobs` body is one row per
+  job (lamp, name, duration), `j`/`k` move a job cursor, and only the
+  selected job shows its steps (one per line, `✓ ✗ ● ·`) and, when it
+  failed, the failing step's log tail. The wrapped line "doesn't read
+  linearly, just looks like text" and gave no way to say which job you
+  look at. Option (b), the job list in pane 2 under the run list, was
+  not taken: pane 2 stays one list, the inspector is the detail of the
+  highlighted thing.
+- **The log tail is lazy** (FZ-30f): the jobs body paints at once from
+  `/jobs`; a job's log is fetched after the dwell, only for the selected
+  job (first the failed one), cached per job id. Highlighting a run must
+  never show `loading log` for the jobs body.
+- **The inspector's CI bodies scroll** (FZ-30f bug): `j`/`k` and the
+  wheel scroll the shown body as the other inspector bodies do.
+- **`]` from a focused inspector in `branches`** enters `ci` and then
+  cycles pane 2's views; the bodies cycle only once the inspector holds a
+  run (FZ-30f bug, his item 8).
+- **No suspend** (FZ-30e): `l` no longer suspends into `gh run view
+  --log`; it focuses the inspector on the highlighted run's `log` body
+  (FZ-30f's). `a`, `x` and `O` stay as built: background `gh`, no
+  suspend. "it'd be better to always stay in this tool."
+- **Pane 2 `ci` view width** (new, FZ-40): a headline row above the
+  runs naming the columns, as the `branches` view has; columns lamp,
+  workflow, branch, event, title, duration, age; the title takes the
+  slack; at narrow widths drop event first, then title, then truncate
+  the workflow name, branch last; duration and age always. His screenshot
+  at 170 columns showed the workflow cut at 18 characters beside 60
+  empty columns.
+- **The run's own facts** (name, branch, event, commit, when, how long)
+  stay the inspector's header; not repeated in pane 2.
+
+### Tickets, amended
+
+- **FZ-30f (#95):** fix cycle 3 under the amendment; still a look change
+  for his look.
+- **FZ-30e (#93):** `l` retargeted to the inspector's log body; after
+  #95 merges, since it uses its body state.
+- **FZ-40 (new):** the pane 2 `ci` view's headline and width budget.
+  After #95 merges (same file region in `src/ui/ci.rs`).
