@@ -291,6 +291,38 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-22
 
+- **#95 (FZ-30f), the inspector details the highlighted run: jobs,
+  log and script.** Merged `db04b56` at 12:32 CEST; ticket commits
+  `fa4f14a` (reviewed `43fe030d` plus fixture `9e8a089a`, 2026-10-21,
+  base `69c1b5b`), the `main` merge-in `1b3d8ad` (the UTC hotfix) and
+  `08d0ef1` (fix cycle 3, reviewed `d5e9dcb6`), branch
+  `feat/95-ci-inspector-bodies`. Three inspector bodies cycled by
+  `[`/`]` while the inspector holds a run: jobs, the job's full log
+  (5000-line cap, wrap cached per job and width), the workflow file at
+  the run's sha (local `git show` first, the contents API as fallback)
+  with the failing step highlighted; the `ci` tab in maroon. His look
+  at 11:30: not accepted (the wrapped steps line "just looks like
+  text", `loading log` on every highlight, the jobs body did not
+  scroll, `]` from `branches` stuck on the bodies); the spec's
+  "Amendment 2026-10-22" and comment 6337744383. Fix cycle 3: one row
+  per job with a cursor the body follows, only the selected job's
+  steps one per line with the tail under the failing step, the log
+  read lazily after the dwell for the selected failed job and cached
+  per job id, a bracket streak that keeps cycling views through `ci`.
+  Rulings: the ticket's own never-merged test
+  `the_jobs_body_draws_the_jobs_steps_and_the_failing_tail` updated to
+  the amended layout (comment 6338262868). Reviews: 1 changes
+  requested, cycles 1 and 2 accepted on 2026-10-21, cycle 3 accepted
+  first (14 of 16 mutations caught). His look at 12:30: "good!".
+  Branch CI 39762234343 green; combined 1296 tests under UTC, 1311
+  with #93; `main` CI 39763821838 green. Swept. Follow-ups, not
+  ticketed: `inspector_nav` keeps the followed offset untested;
+  the mouse clear of the bracket streak untested; the footer says
+  `[[ ]] body` on a focused inspector in `ci` with no run; detail
+  claims have no stuck expiry; `J`/`K` from pane 2 route to
+  `scroll_inspector`, not the job cursor (goes into the split
+  inspector ticket).
+  FZ-30f: review changes 1; fix cycles 3; owner decisions 4; worker 55; review 20; usage not read
 - **#92 hotfix, the ci view's test times from wall-clock components.**
   Merged `bd0e4ee` at 11:05 CEST; ticket commit `fdc53ed` (reviewed
   diff `94d25845`), branch `fix/92-ci-tests-utc` from `6a6de99`. Found

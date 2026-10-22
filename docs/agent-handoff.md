@@ -251,9 +251,9 @@ are written into the repository.
 
 ## State of `main`
 
-`main` is `bd0e4ee` (the #92 UTC test hotfix over the merge of #92 and
-docs commits), 1256 tests passing and 1 ignored, CI green (run
-39752691318). Since `v0.6.0` it carries #79 (header dates the failed
+`main` is `db04b56` (the merge of #95) plus docs commits, 1296 tests
+passing and 1 ignored, CI green (run 39763821838). Since `v0.6.0` it
+carries #95 (the inspector's jobs, log and script bodies), #79 (header dates the failed
 attempt), #81 (footer hints follow focus), #90 (CI data layer), #94
 (relay-sweep prunes scratch builds), #89 and #91 (the band, later
 undone) and #92 (CI as a pane 2 view with an `info` section). The next
@@ -261,67 +261,29 @@ release is `0.7.0`. Local toolchain rustc 1.99.0, same as CI's.
 
 ## Worktrees
 
-Under `.claude/worktrees/`: `issue-93` and `issue-95` (committed,
-pushed, `main` merged in on 2026-10-22, see "In flight"), `issue-88`
-(FZ-38, parked, uncommitted, see "Baton"; the sweep keeps it).
+Under `.claude/worktrees/`: `issue-93` (committed, pushed, see "In
+flight"), `issue-88` (FZ-38, parked, uncommitted, see "Baton"; the
+sweep keeps it).
 
 ## In flight
 
-- **#95 FZ-30f, fix cycle 3 committed (12:19):** review accepted diff
-  `d5e9dcb6` (14 of 16 mutations caught; two low test gaps and the
-  detail-claim stuck expiry noted as follow-ups); committed as
-  `08d0ef1` on `feat/95-ci-inspector-bodies` (over `1b3d8ad`), pushed;
-  branch CI 39762234343 green (12:22); board Ready to integrate. Combined
-  with `main` `837e2f9` under UTC: 1296 tests, with #93 on top 1311,
-  fmt and clippy clean. Next: his look (rulings 1 and 2 of comment
-  6338262868 flagged: steps one per line with the test edit, the `]`
-  streak rule), then merge under the safe-merge rule, sweep, log.
-- **#93 FZ-30e: Ready to integrate, blocked on #95.** Tip `9f4c9e5`
-  (main merged in, branch CI 39753644365 green, 1271 tests under UTC;
-  both branches together 1302, no conflicts). Ruling on #93 (comment
-  6337744715): `l` is retargeted to the inspector's log body with no
-  suspend, after #95 merges; then the branch takes `main` in and a
-  worker reworks `l`, help, footer, README.
+Nothing running. One ticket waits:
+
+- **#93 FZ-30e (`l`/`a`/`x`/`O` on the highlighted run): Ready to
+  integrate, rework pending.** Tip `9f4c9e5` on `feat/93-ci-handoffs`
+  (base `7c03cff`, `main bd0e4ee` merged in 11:10; branch CI
+  39753644365 green; 1311 tests with #95 under UTC, no conflicts).
+  Worktree `.claude/worktrees/issue-93`. Reviews on 2026-10-21:
+  accepted 19:10 (rulings 5 to 10 on the issue), re-review accepted
+  `7d39d52d`, committed `8a5bdac`. His look 2026-10-22: help and
+  footer "yes", `O` fine (he had pressed `0`), `a`/`x` as built;
+  ruling on #93 (comment 6337744715): `l` no longer suspends into `gh
+  run view --log` but focuses the inspector on the run's `log` body
+  (now on `main` through #95). Next: merge `main` (`db04b56`) into the
+  branch, a fresh worker reworks `l`, help row, footer segment and
+  README, review, his look, merge.
 - **FZ-40 (#96), Backlog P2:** the `ci` view's headline row and width
-  budget; after #95 merges (same `src/ui/ci.rs` region).
-
-The earlier records below name the tips before the merge-in:
-
-- **#95 FZ-30f** (the inspector's jobs, log and script bodies; the
-  `ci` tab in maroon): review 1 changes requested (four contract
-  guards untested), fix cycle 1 (gate tests, the hex-sha pin, the
-  budget reserve honoured, a 5000-line log cap with the wrap cached
-  per job and width), fix cycle 2 (one test pinning the cache's job
-  id); accepted `43fe030d` plus fixture `9e8a089a`; committed as
-  `fa4f14a` on `feat/95-ci-inspector-bodies` (base `69c1b5b`), pushed
-  19:36; branch CI green; combined with `main` 1287 tests, with #93 on
-  top 1302 tests, no conflicts. For his look: `[`/`]` cycle the bodies
-  instead of pane 2's views only while the inspector is focused on a
-  run; from a focused inspector in `branches`, `]` enters `ci` and
-  then sticks on the bodies; the maroon tab (his "perhaps red"). On
-  his OK: merge under the safe-merge rule, sweep, log; follow-ups to
-  note: a stuck expiry for detail claims, a possible duplicate `/jobs`
-  read, `LOG_TRUNCATED` names `l` (lands with #93).
-- **#93 FZ-30e** (`l`/`a`/`x`/`O` on the highlighted run): accepted
-  `7d39d52d`, committed as `8a5bdac` (base `7c03cff`), pushed 19:13,
-  branch CI green, combined 1271 tests. On his OK: merge, sweep, log.
-  Whichever merges second is re-verified against the new `main` (the
-  pair was checked together: 1302 tests).
-
-Worktrees: `issue-93` and `issue-95` (both committed and pushed),
-`issue-88` (parked). The FZ-14 spec is drafted (next step 3).
-- **#93 FZ-30e** (handoffs `l`/`a`/`x`/`O`): review accepted 19:10
-  (rulings 5 to 10 on the issue: the `,` help row reflowed, the `ci`
-  footer segment carries the keys and keeps `[[ ]] view`, `l`/`a` gated
-  on completed runs, the `timed_out`/`cancelled` test ruled in);
-  re-review accepted `7d39d52d`; committed as `8a5bdac`, pushed 19:13;
-  branch CI green; combined check with `main` green (1271 tests).
-  **Ready to integrate since 19:15, waiting for his look** (new keys;
-  nothing merges unattended). Worktree `.claude/worktrees/issue-93`,
-  base `7c03cff`. Both tickets touch `src/main.rs` (by region),
-  `README.md` and `src/ui/footer.rs` (different arms); the second to
-  integrate is re-verified against the new `main` and may need a
-  rebase of the help/README rows.
+  budget; can run now from `main`.
 
 Today's earlier trail (the seven merged tickets, the disk pause, the
 rulings) is in the log: "Merged on 2026-10-21" and the lead record
