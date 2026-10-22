@@ -1,0 +1,28 @@
+# The same gates release.yml applies before a tag, run on every branch push
+# that touches more than prose, so a ticket branch is green before it merges.
+name: ci
+
+on:
+  push:
+    # Naming branches keeps tag pushes out: release.yml runs the gates there.
+    branches: ['**']
+    # Skipped only when every changed file matches. docs.yml checks these.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.claude/**'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned to a commit, not the moving `stable` branch. The ref used to
+      # name the toolchain, so it is now stated in `toolchain`.
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, 2026-09-03
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test

@@ -14,7 +14,19 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Released** 2026-10-21 20:33 CEST by `claude-fable-5-1` (session
+**Held** since 2026-10-22 10:50 CEST by `claude-fable-5-1` (`claude
+--agent fz-coordinator`, session
+`2e4524bf-8172-4d7c-8bd5-966212f13452`), taken over on Andreas's
+"give me a brief status, then lets continue" after reading the released
+baton below. Nothing was running at the takeover. First finding: the
+`ci` workflow was **red on `main` (`69c1b5b`) and on both ticket
+branches**, contrary to yesterday's "branch CI green": three `ui::ci`
+tests from #92 were timezone-dependent. Fixed and merged as `bd0e4ee`
+on his word (log, "Merged on 2026-10-22"); `main` CI green again.
+Lesson for every lead: "branch CI green" means the `ci` workflow, not
+`docs`; confirm with `gh run list --branch <b> --workflow ci`.
+
+Previous record: **Released** 2026-10-21 20:33 CEST by `claude-fable-5-1` (session
 `6c0bef32-e39d-4d66-98b4-edcb6d119773`) at the end of the unattended
 run he asked for at 18:52 ("keep going for 2 hours without me
 interweining", stop at 21:30): the run ended early at its cap, with
@@ -51,6 +63,25 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-22, 11:45.** "ah, my bad. Capital O for that is good!
+  yes to all." after his look at #93 and #95 (findings and screenshots
+  on #95; neither accepted). Read as: #95 fix cycle 3 (jobs as a
+  selectable list in the inspector, option (a); lazy log tail; the
+  bodies scroll; `]` routing), #93's `l` retargeted to the inspector's
+  log body with no suspend, after #95 merges; FZ-40 (#96) created for
+  the pane 2 `ci` view's headline and width budget, after #95; the
+  run's facts stay the inspector's header. All in the spec's
+  "Amendment 2026-10-22". Both tickets and FZ-40 remain look changes
+  for his look; nothing merges unattended.
+- **2026-10-22, 10:53.** "yes, you know what to do, go", to the
+  takeover report's proposal: fix the three UTC-dependent `ui::ci`
+  tests from #92 by swapping the test helper to wall-clock components
+  (an existing-test edit, assertions unchanged), through `fz-small`
+  and `fz-reviewer` on `fix/92-ci-tests-utc` from `6a6de99`, merge
+  under the safe-merge rule once CI is green, then re-verify #93 and
+  #95 against the new `main`. Not read as the merge word for #93 or
+  #95: both are look changes with new keys and still wait for his
+  look (the report's question 2 had no explicit answer).
 - **2026-10-21, 18:52.** "we can continue. I will be on a party for a
   while tho, can you keep going for 2 hours without me interweining?"
   Read as an unattended run under "Unattended runs" in
@@ -220,10 +251,9 @@ are written into the repository.
 
 ## State of `main`
 
-`main` is `69c1b5b` (the merge of #92) plus docs commits, 1256 tests
-passing and 1 ignored; CI on `main` for `69c1b5b` was still running at
-the release (runs 39614008453 and 39614007922; confirm, then sweep
-`issue-92`). Since `v0.6.0` it carries #79 (header dates the failed
+`main` is `db04b56` (the merge of #95) plus docs commits, 1296 tests
+passing and 1 ignored, CI green (run 39763821838). Since `v0.6.0` it
+carries #95 (the inspector's jobs, log and script bodies), #79 (header dates the failed
 attempt), #81 (footer hints follow focus), #90 (CI data layer), #94
 (relay-sweep prunes scratch builds), #89 and #91 (the band, later
 undone) and #92 (CI as a pane 2 view with an `info` section). The next
@@ -231,51 +261,29 @@ release is `0.7.0`. Local toolchain rustc 1.99.0, same as CI's.
 
 ## Worktrees
 
-Under `.claude/worktrees/`: `issue-92` (merged, sweep once `main` CI is
-confirmed green), `issue-95` (created from `69c1b5b`, empty, no worker
-started), `issue-88` (FZ-38, parked, uncommitted, see "Baton"; the
+Under `.claude/worktrees/`: `issue-93` (committed, pushed, see "In
+flight"), `issue-88` (FZ-38, parked, uncommitted, see "Baton"; the
 sweep keeps it).
 
 ## In flight
 
-Nothing running. Two tickets wait at **Ready to integrate for his
-look**; both are look changes, so nothing merged unattended:
+Nothing running. One ticket waits:
 
-- **#95 FZ-30f** (the inspector's jobs, log and script bodies; the
-  `ci` tab in maroon): review 1 changes requested (four contract
-  guards untested), fix cycle 1 (gate tests, the hex-sha pin, the
-  budget reserve honoured, a 5000-line log cap with the wrap cached
-  per job and width), fix cycle 2 (one test pinning the cache's job
-  id); accepted `43fe030d` plus fixture `9e8a089a`; committed as
-  `fa4f14a` on `feat/95-ci-inspector-bodies` (base `69c1b5b`), pushed
-  19:36; branch CI green; combined with `main` 1287 tests, with #93 on
-  top 1302 tests, no conflicts. For his look: `[`/`]` cycle the bodies
-  instead of pane 2's views only while the inspector is focused on a
-  run; from a focused inspector in `branches`, `]` enters `ci` and
-  then sticks on the bodies; the maroon tab (his "perhaps red"). On
-  his OK: merge under the safe-merge rule, sweep, log; follow-ups to
-  note: a stuck expiry for detail claims, a possible duplicate `/jobs`
-  read, `LOG_TRUNCATED` names `l` (lands with #93).
-- **#93 FZ-30e** (`l`/`a`/`x`/`O` on the highlighted run): accepted
-  `7d39d52d`, committed as `8a5bdac` (base `7c03cff`), pushed 19:13,
-  branch CI green, combined 1271 tests. On his OK: merge, sweep, log.
-  Whichever merges second is re-verified against the new `main` (the
-  pair was checked together: 1302 tests).
-
-Worktrees: `issue-93` and `issue-95` (both committed and pushed),
-`issue-88` (parked). The FZ-14 spec is drafted (next step 3).
-- **#93 FZ-30e** (handoffs `l`/`a`/`x`/`O`): review accepted 19:10
-  (rulings 5 to 10 on the issue: the `,` help row reflowed, the `ci`
-  footer segment carries the keys and keeps `[[ ]] view`, `l`/`a` gated
-  on completed runs, the `timed_out`/`cancelled` test ruled in);
-  re-review accepted `7d39d52d`; committed as `8a5bdac`, pushed 19:13;
-  branch CI green; combined check with `main` green (1271 tests).
-  **Ready to integrate since 19:15, waiting for his look** (new keys;
-  nothing merges unattended). Worktree `.claude/worktrees/issue-93`,
-  base `7c03cff`. Both tickets touch `src/main.rs` (by region),
-  `README.md` and `src/ui/footer.rs` (different arms); the second to
-  integrate is re-verified against the new `main` and may need a
-  rebase of the help/README rows.
+- **#93 FZ-30e (`l`/`a`/`x`/`O` on the highlighted run): Ready to
+  integrate, rework pending.** Tip `9f4c9e5` on `feat/93-ci-handoffs`
+  (base `7c03cff`, `main bd0e4ee` merged in 11:10; branch CI
+  39753644365 green; 1311 tests with #95 under UTC, no conflicts).
+  Worktree `.claude/worktrees/issue-93`. Reviews on 2026-10-21:
+  accepted 19:10 (rulings 5 to 10 on the issue), re-review accepted
+  `7d39d52d`, committed `8a5bdac`. His look 2026-10-22: help and
+  footer "yes", `O` fine (he had pressed `0`), `a`/`x` as built;
+  ruling on #93 (comment 6337744715): `l` no longer suspends into `gh
+  run view --log` but focuses the inspector on the run's `log` body
+  (now on `main` through #95). Next: merge `main` (`db04b56`) into the
+  branch, a fresh worker reworks `l`, help row, footer segment and
+  README, review, his look, merge.
+- **FZ-40 (#96), Backlog P2:** the `ci` view's headline row and width
+  budget; can run now from `main`.
 
 Today's earlier trail (the seven merged tickets, the disk pause, the
 rulings) is in the log: "Merged on 2026-10-21" and the lead record
@@ -285,12 +293,13 @@ for 2026-10-21 under "Earlier leads".
 
 Nothing starts until Andreas opens the next session.
 
-1. **#95 FZ-30f and #93 FZ-30e: his look, then merge** (see "In
-   flight"). Try: `cargo run --release --manifest-path
-   /Users/at-a/Repos/fleetz/.claude/worktrees/issue-95/Cargo.toml` and
-   the same with `issue-93`. After both merge: `main` CI, sweep, log
-   records, and the `ci` view's selection wash only with focus (from
-   the #92 review) is still his call.
+1. **#95 fix cycle 3, then his look, then merge** (see "In flight").
+   Try: `cargo run --release --manifest-path
+   /Users/at-a/Repos/fleetz/.claude/worktrees/issue-95/Cargo.toml`.
+   Then, in order: #93's `l` rework (merge `main` in, fresh worker,
+   review, his look, merge), FZ-40 (#96) from the new `main`. After
+   each merge: `main` CI, sweep, log record. The `ci` view's selection
+   wash only with focus (from the #92 review) is still his call.
 2. **FZ-30 is then complete** (a to f). The `0.7.0` release is ready
    to prepare on his word (the CI view, the hints, the header stamp,
    the handoffs are features).

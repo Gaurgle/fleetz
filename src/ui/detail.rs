@@ -1490,6 +1490,10 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
         );
         return;
     }
+    if app.inspects_ci_run() {
+        render_ci_inspector(frame, area, app);
+        return;
+    }
     let focused = app.focused_panel == FocusedPanel::Inspector;
     let border_color = if focused {
         colors::LAVENDER
@@ -1637,6 +1641,105 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(block, area);
     for (rect, lines) in wrapped {
         frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), rect);
+    }
+}
+
+/// The inspector's title on a run: `inspector  jobs`, `log` or `script`.
+pub fn ci_inspector_label(app: &App) -> String {
+    format!("inspector  {}", app.ci_body.label())
+}
+
+/// The inspector while pane 2 shows `ci` (FZ-30f): the highlighted run in
+/// the shown body (`ui::ci::inspector_body`), wrapped here so one line is
+/// one row, and scrolled by that body's own offset, clamped to what this
+/// frame measured.
+fn render_ci_inspector(frame: &mut Frame, area: Rect, app: &App) {
+    let focused = app.focused_panel == FocusedPanel::Inspector;
+    let border_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .padding(Padding::new(2, 2, 1, 0))
+        .title_top(crate::ui::panel_title(
+            crate::ui::INSPECTOR_NUM,
+            &ci_inspector_label(app),
+            focused,
+        ));
+    let inner = block.inner(area);
+    let (body, marked) = crate::ui::ci::inspector_lines(app, chrono::Local::now());
+    // Each body line's first wrapped row, and one past the last, so the
+    // marked job's lines map to the rows they take at this width.
+    let mut row_starts = Vec::with_capacity(body.len() + 1);
+    let mut head: Vec<Line> = Vec::new();
+    for line in &body {
+        row_starts.push(head.len());
+        head.extend(wrap_line(line, inner.width as usize));
+    }
+    row_starts.push(head.len());
+    // A held whole log is wrapped once per job and width and kept, and only
+    // the rows on screen are handed to the paragraph: up to 5000 lines
+    // (`ci::LOG_LINE_CAP`) were re-wrapped and copied on every frame.
+    let mut cache = app.ci_log_wrap.borrow_mut();
+    let log: &[Line<'static>] = match crate::ui::ci::shown_log(app) {
+        Some((job_id, log)) => {
+            let fresh = cache
+                .as_ref()
+                .is_some_and(|w| w.job_id == job_id && w.width == inner.width);
+            if !fresh {
+                let lines = log
+                    .iter()
+                    .flat_map(|l| wrap_line(&crate::ui::ci::log_line(l), inner.width as usize))
+                    .collect();
+                *cache = Some(crate::app::CiLogWrap {
+                    job_id,
+                    width: inner.width,
+                    lines,
+                });
+            }
+            cache.as_ref().map_or(&[][..], |w| &w.lines[..])
+        }
+        None => &[],
+    };
+    let total = head.len() + log.len();
+    let max_scroll = u16::try_from(total)
+        .unwrap_or(u16::MAX)
+        .saturating_sub(inner.height);
+    app.inspector_max_scroll.set(max_scroll);
+    if let Some(lines) = marked
+        && app.ci_job_follow.get() == crate::app::JobFollow::Due
+    {
+        let rows = row_starts[lines.start]..row_starts[lines.end];
+        let followed = follow_rows(app.ci_body_scroll(), rows, inner.height).min(max_scroll);
+        app.ci_job_follow.set(crate::app::JobFollow::At(followed));
+    }
+    let scroll = app.ci_body_scroll().min(max_scroll);
+    let visible: Vec<Line> = head
+        .iter()
+        .chain(log.iter())
+        .skip(scroll as usize)
+        .take(inner.height as usize)
+        .cloned()
+        .collect();
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(visible), inner);
+}
+
+/// The least scroll from `scroll` that shows `rows` in a pane `height` rows
+/// tall, or its first row when they are taller than the pane.
+fn follow_rows(scroll: u16, rows: std::ops::Range<usize>, height: u16) -> u16 {
+    let top = u16::try_from(rows.start).unwrap_or(u16::MAX);
+    let bottom = u16::try_from(rows.end).unwrap_or(u16::MAX);
+    if top < scroll {
+        top
+    } else if bottom > scroll.saturating_add(height) {
+        bottom.saturating_sub(height).min(top)
+    } else {
+        scroll
     }
 }
 
@@ -2871,6 +2974,7 @@ mod tests {
                 }),
                 jobs: None,
                 log: None,
+                full_log: None,
                 failure: None,
                 budget: None,
             },
