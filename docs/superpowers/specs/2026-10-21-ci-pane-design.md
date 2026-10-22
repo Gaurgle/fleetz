@@ -381,3 +381,84 @@ From his look at the branch builds (11:30 to 11:45, screenshots on
   #95 merges, since it uses its body state.
 - **FZ-40 (new):** the pane 2 `ci` view's headline and width budget.
   After #95 merges (same file region in `src/ui/ci.rs`).
+
+## Amendment 2026-10-22, second: what a run is inspected for
+
+After his look at the merged FZ-30f (12:30, "good!" with "it feels
+incomplete. have a good thinker") and "i trudst you, do research and
+think a little, what is useful for the CI workflows to inspect?"
+(13:05). The coordinator's reading, presented in chat at 13:20;
+tickets FZ-41 to FZ-44 wait for his word to create.
+
+### The questions a run is asked, in order
+
+1. Is something red that I care about: pane 1's lamp, pane 2's list.
+2. Which job, which step, what did it say: the jobs list, the failing
+   step, the tail (FZ-30f). The three bodies hide each other, which the
+   split below fixes.
+3. Is this new or has it failed for a week: a strip of the last eight
+   runs of the same workflow on the same branch (`✓✓✓✗✗`), from the run
+   list already in hand, no request.
+4. Is it stuck or just slow: elapsed against the median of that
+   workflow's completed runs ("2m 05s, usually 1m 20s") and a queued
+   time while no runner has it; same data.
+5. Where in my code: the job's check-run annotations (file, line,
+   message; GitHub caps them at 10 errors and 10 warnings per step),
+   one request per failed job, cached per job id, budget-gated like the
+   log. Drawn under the failing step above the tail.
+6. Rerun, cancel, open: FZ-30e.
+
+Not built: artifacts, matrix management, dispatching workflows. "stay
+in this tool" is for looking, not operating CI. Research: the terminal
+tools for Actions (lazyactions, GAMA) stop at `gh run view --log`;
+GitHub's own advice for a failure is to grep the log for `##[error]`.
+
+### The split inspector (FZ-41)
+
+```
+[3] inspector  ci  fix: keep the carrier mark  main  push  ✓✓✓✗✗  2m 05s (usually 1m 20s)
+ ● check     1m 02s │ steps                                       [[ ]] log script
+ ✓ docs          8s │  ✓ Set up job
+ ✗ release   2m 03s │  ✗ Run cargo clippy -- -D warnings
+                    │     src/app.rs:3042  no method named `foo` found
+                    │     error[E0599]: no method named `foo` ...
+                    │     ...tail...
+```
+
+- Header: the run's facts, the history strip (FZ-40 draws the same
+  strip in pane 2's row) and the duration against the usual (FZ-44).
+- Left: the jobs list, one row per job (lamp, name, duration), fixed
+  width from the longest name, clamped to about a quarter of the
+  pane. The cursor lives here: `j`/`k` in the inspector, `J`/`K` from
+  pane 2 (today `scroll_next_panel` routes to `scroll_inspector`, which
+  the following jobs body ignores; it routes to `inspector_nav`). A
+  click on a job row selects it.
+- Right: the selected job's detail, three bodies cycled by `[`/`]`:
+  `steps` (with the tail, and FZ-43's annotations), `log` (that job's
+  full log), `script` (the workflow file, failing step highlighted).
+  `J`/`K` scroll the right side while the inspector is focused; PgUp,
+  PgDn and the wheel scroll the column under the mouse. `l` (FZ-30e)
+  jumps the right side to `log`.
+- Under about 100 columns the list collapses to one column: the
+  selected job expanded in `steps`, as FZ-30f draws it today. No new
+  config key.
+- Geometry through one function the renderer and `panel_rects` share
+  (the house invariant), so the job rows are click targets.
+
+### Tickets (ids from `scripts/relay-board next`; not created)
+
+- **FZ-41** the split inspector and its nav: the `J`/`K` routing, the
+  follow, click to select. Geometry and keys only, no new data. Look
+  change.
+- **FZ-42** log navigation: `##[error]` and `##[warning]` lines in the
+  failing colour, `n`/`N` jump between them, `##[group]` headers folded
+  by default and opened with `Enter`. Small.
+- **FZ-43** annotations under the failing step: `GET
+  /repos/{o}/{r}/check-runs/{job_id}/annotations`, once per failed job,
+  cached per job id, gated on the `core` budget as the log is; `path:line
+  message` rows, dimmed when the run passed.
+- **FZ-44** "usually 1m 20s" and the queued time in the header: the
+  median of the same workflow's completed runs in the list; nothing
+  fetched.
+
+Order: FZ-30e rework, FZ-41 beside FZ-40, then FZ-42, FZ-43, FZ-44.

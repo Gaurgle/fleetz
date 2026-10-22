@@ -63,6 +63,16 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-22, 13:05.** "i trudst you, do research and think a
+  little, what is useful for the CI workflows to inspect? what do i
+  need? etc", after "good!" to the #95 build at 12:30 (read as the
+  look OK; merged `db04b56`) with three fixes named: the pane 2 `ci`
+  view's width and headlines (FZ-40), a split inspector (jobs list
+  left, log or script right), and `j`/`k` plus shift `J`/`K` from pane
+  2 for the jobs list. Read as: the design is the coordinator's
+  (spec, "Amendment 2026-10-22, second"), FZ-40 runs now beside the
+  #93 rework. Not read as the word to create FZ-41 to FZ-44 (asked at
+  13:20).
 - **2026-10-22, 11:45.** "ah, my bad. Capital O for that is good!
   yes to all." after his look at #93 and #95 (findings and screenshots
   on #95; neither accepted). Read as: #95 fix cycle 3 (jobs as a
@@ -267,23 +277,27 @@ sweep keeps it).
 
 ## In flight
 
-Nothing running. One ticket waits:
+Two workers running since 13:30 (both slots; the `fz-small` slot is
+free):
 
-- **#93 FZ-30e (`l`/`a`/`x`/`O` on the highlighted run): Ready to
-  integrate, rework pending.** Tip `9f4c9e5` on `feat/93-ci-handoffs`
-  (base `7c03cff`, `main bd0e4ee` merged in 11:10; branch CI
-  39753644365 green; 1311 tests with #95 under UTC, no conflicts).
-  Worktree `.claude/worktrees/issue-93`. Reviews on 2026-10-21:
-  accepted 19:10 (rulings 5 to 10 on the issue), re-review accepted
-  `7d39d52d`, committed `8a5bdac`. His look 2026-10-22: help and
-  footer "yes", `O` fine (he had pressed `0`), `a`/`x` as built;
-  ruling on #93 (comment 6337744715): `l` no longer suspends into `gh
-  run view --log` but focuses the inspector on the run's `log` body
-  (now on `main` through #95). Next: merge `main` (`db04b56`) into the
-  branch, a fresh worker reworks `l`, help row, footer segment and
-  README, review, his look, merge.
-- **FZ-40 (#96), Backlog P2:** the `ci` view's headline row and width
-  budget; can run now from `main`.
+- **#93 FZ-30e (`l`/`a`/`x`/`O` on the highlighted run): In progress,
+  rework.** `main` `91bba9f` (with #95) merged into the branch as
+  `f300b0a`, pushed; a fresh `fz-worker` reworks `l` to focus the
+  inspector's log body with no suspend (ruling, comment 6337744715;
+  assignment comment on the issue), help, footer, README. Allowed
+  files `src/main.rs`, `src/app.rs`, `src/ui/footer.rs`,
+  `src/ui/help.rs`, `README.md`. Earlier: accepted `7d39d52d`
+  committed `8a5bdac` (2026-10-21), merge-in `9f4c9e5` (CI green). His
+  look 2026-10-22: help and footer "yes", `O` fine (he had pressed
+  `0`), `a`/`x` as built. Next: review, commit, push, CI, combined,
+  his look (a key's meaning changes), merge.
+- **#96 FZ-40 (the `ci` view's headline row and width budget): In
+  progress.** `fz-worker` on `feat/96-ci-view-width` from `91bba9f`,
+  worktree `.claude/worktrees/issue-96`, allowed `src/ui/ci.rs` (run
+  list), `src/ui/detail.rs` (row placement), `README.md`. Run on his
+  "i trust you" (13:05) to the proposed order. Next: review, commit,
+  push, CI, combined, his look, merge. Whichever of the two merges
+  second is re-verified against the new `main`.
 
 Today's earlier trail (the seven merged tickets, the disk pause, the
 rulings) is in the log: "Merged on 2026-10-21" and the lead record
