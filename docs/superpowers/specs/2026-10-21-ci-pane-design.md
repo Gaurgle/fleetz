@@ -447,7 +447,7 @@ GitHub's own advice for a failure is to grep the log for `##[error]`.
 - Geometry through one function the renderer and `panel_rects` share
   (the house invariant), so the job rows are click targets.
 
-### Tickets (ids from `scripts/relay-board next`; not created)
+### Tickets (created 2026-10-22 17:55 on his "write them up and ship it": FZ-41 #97, FZ-42 #98, FZ-43 #99, FZ-44 #100; the slot digest FZ-45 #101 queues between FZ-41 and FZ-42)
 
 - **FZ-41** the split inspector and its nav: the `J`/`K` routing, the
   follow, click to select. Geometry and keys only, no new data. Look

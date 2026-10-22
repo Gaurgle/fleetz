@@ -71,6 +71,13 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-22, 17:50 and 17:53.** "yes on all" to the slot digest
+  proposal (headers as cursor stops, local-first numbers, spec and
+  ticket), then "write them up and ship it. no need to work on this
+  right now". Read as: create FZ-41 to FZ-45 (#97 to #101) with the
+  spec `2026-10-22-slot-digest-design.md` and commit the docs; **no
+  dispatch**. Queue after #93 and #96: FZ-41, FZ-45, then FZ-42 to
+  FZ-44, each a look change for his look.
 - **2026-10-22, 13:05.** "i trudst you, do research and think a
   little, what is useful for the CI workflows to inspect? what do i
   need? etc", after "good!" to the #95 build at 12:30 (read as the
@@ -344,8 +351,12 @@ Nothing starts until Andreas opens the next session.
    `scripts/release-notes.sh`, the release checks, commands presented;
    the tag and `cargo install` are his. Asked at 14:03 ("remember to
    bump versions soon too, is there a installable version soon").
-3. **FZ-41 to FZ-44** (spec, "Amendment 2026-10-22, second"): need his
-   word to create; then FZ-41 (the split inspector) first.
+3. **FZ-41 to FZ-45 created, Backlog** (#97 split inspector P1, #98
+   log navigation P2, #99 annotations P2, #100 usual duration P2, #101
+   slot digest P1; specs "Amendment 2026-10-22, second" and
+   `2026-10-22-slot-digest-design.md`). Dispatch order on his word
+   to run them: FZ-41, FZ-45, then FZ-42 to FZ-44. Not dispatched:
+   "no need to work on this right now" (17:53).
 4. **His feature of 20:38, not yet ticketed (ask before creating):**
    "per script, see the actual code (linting, lsp and highlight might
    be needed?) to watch the actual CI script code". Coordinator's
