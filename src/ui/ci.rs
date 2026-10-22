@@ -404,6 +404,7 @@ pub fn run_line(
 mod tests {
     use super::*;
     use crate::app::{FocusedPanel, HistoryView, View};
+    use chrono::{Datelike, TimeZone, Timelike};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
@@ -415,10 +416,20 @@ mod tests {
         crate::ci::parse_runs(RUNS).unwrap()
     }
 
+    // Wall-clock components, not the offset: CI runs in UTC, and the tests assert local-time strings.
     fn local(text: &str) -> DateTime<Local> {
-        DateTime::parse_from_rfc3339(text)
-            .unwrap()
-            .with_timezone(&Local)
+        let wall = DateTime::parse_from_rfc3339(text).unwrap().naive_local();
+        Local
+            .with_ymd_and_hms(
+                wall.year(),
+                wall.month(),
+                wall.day(),
+                wall.hour(),
+                wall.minute(),
+                wall.second(),
+            )
+            .single()
+            .expect("unambiguous local time")
     }
 
     fn key() -> crate::app::RemoteKey {
@@ -740,7 +751,7 @@ mod tests {
     fn the_duration_ticks_while_the_run_is_live_and_holds_once_done() {
         let runs = runs();
         let live = &runs[0];
-        let at = |t: &str| local(t).with_timezone(&Utc);
+        let at = |t: &str| DateTime::parse_from_rfc3339(t).unwrap().with_timezone(&Utc);
         // Started 11:16:07Z.
         assert_eq!(run_duration(live, at("2026-10-21T11:16:15Z")), "8s");
         assert_eq!(run_duration(live, at("2026-10-21T11:18:10Z")), "2m 03s");
@@ -755,7 +766,7 @@ mod tests {
     #[test]
     fn the_age_always_says_ago() {
         let run = &runs()[0];
-        let at = |t: &str| local(t).with_timezone(&Utc);
+        let at = |t: &str| DateTime::parse_from_rfc3339(t).unwrap().with_timezone(&Utc);
         assert_eq!(run_age(run, at("2026-10-21T11:16:30Z")), "1m ago");
         assert_eq!(run_age(run, at("2026-10-21T11:19:07Z")), "3m ago");
         assert_eq!(run_age(run, at("2026-10-21T14:16:07Z")), "3h ago");
