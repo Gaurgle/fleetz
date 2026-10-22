@@ -14,11 +14,19 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Held** since 2026-10-22 10:50 CEST by `claude-fable-5-1` (`claude
+**Released** 2026-10-22 16:20 CEST by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
-`2e4524bf-8172-4d7c-8bd5-966212f13452`), taken over on Andreas's
-"give me a brief status, then lets continue" after reading the released
-baton below. Nothing was running at the takeover. First finding: the
+`2e4524bf-8172-4d7c-8bd5-966212f13452`) on his "is this a good place
+to stop for today?": yes. **Nothing is running: no worker, no
+reviewer, no build, no background job.** Held 10:50 to 16:20 (his
+"give me a brief status, then lets continue"). Done today: the #92
+UTC hotfix (`bd0e4ee`) and #95 FZ-30f (`db04b56`); #93 and #96 at
+Ready to integrate for his look; FZ-41 to FZ-44 designed in the spec,
+not created. The next lead records its own session and takeover time
+here after confirming with Andreas. Chore for the next quiet moment:
+this file is 420 lines against the 150 cap; move the 2026-10-21
+records and the spent authority entries to the log. First finding at
+the takeover: the
 `ci` workflow was **red on `main` (`69c1b5b`) and on both ticket
 branches**, contrary to yesterday's "branch CI green": three `ui::ci`
 tests from #92 were timezone-dependent. Fixed and merged as `bd0e4ee`
@@ -323,17 +331,22 @@ for 2026-10-21 under "Earlier leads".
 
 Nothing starts until Andreas opens the next session.
 
-1. **#95 fix cycle 3, then his look, then merge** (see "In flight").
-   Try: `cargo run --release --manifest-path
-   /Users/at-a/Repos/fleetz/.claude/worktrees/issue-95/Cargo.toml`.
-   Then, in order: #93's `l` rework (merge `main` in, fresh worker,
-   review, his look, merge), FZ-40 (#96) from the new `main`. After
-   each merge: `main` CI, sweep, log record. The `ci` view's selection
-   wash only with focus (from the #92 review) is still his call.
-2. **FZ-30 is then complete** (a to f). The `0.7.0` release is ready
-   to prepare on his word (the CI view, the hints, the header stamp,
-   the handoffs are features).
-3. **His feature of 20:38, not yet ticketed (ask before creating):**
+1. **#93 and #96: his look, then merge** (see "In flight"). Try:
+   `cargo run --release --manifest-path
+   /Users/at-a/Repos/fleetz/.claude/worktrees/issue-96/Cargo.toml` and
+   the same with `issue-93`. On "merge both": merge #96 first, then
+   #93 re-verified against the new `main` (already checked together,
+   1319 tests), `main` CI, sweep, log records. The `ci` view's
+   selection wash only with focus (from the #92 review) is still his
+   call.
+2. **Prepare `0.7.0`** on his word after those merges: one bump commit
+   (`Cargo.toml`, `Cargo.lock`), What's Changed notes from
+   `scripts/release-notes.sh`, the release checks, commands presented;
+   the tag and `cargo install` are his. Asked at 14:03 ("remember to
+   bump versions soon too, is there a installable version soon").
+3. **FZ-41 to FZ-44** (spec, "Amendment 2026-10-22, second"): need his
+   word to create; then FZ-41 (the split inspector) first.
+4. **His feature of 20:38, not yet ticketed (ask before creating):**
    "per script, see the actual code (linting, lsp and highlight might
    be needed?) to watch the actual CI script code". Coordinator's
    reading, offered in chat: (a) syntax colour for the inspector's
