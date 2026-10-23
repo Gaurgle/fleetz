@@ -11,6 +11,7 @@ mod git;
 mod github;
 mod graph;
 mod model;
+mod report;
 mod time;
 mod ui;
 mod window_state;
