@@ -374,6 +374,17 @@ fn tilde_display(path: &Path) -> String {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    // Print mode returns here, before every terminal call below (the size
+    // query, raw mode, the alternate screen, the input thread): it writes
+    // text to stdout and exits (D1, pinned by `report::tests`).
+    if args.print {
+        let mut stdout = io::stdout().lock();
+        let status = report::print(&args, &mut stdout).await?;
+        if status != 0 {
+            std::process::exit(status);
+        }
+        return Ok(());
+    }
     let config = config::Config::load();
     let repo_dir = std::env::var("REPO_CHECK_DIR")
         .map(std::path::PathBuf::from)

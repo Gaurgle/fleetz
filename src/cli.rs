@@ -53,6 +53,10 @@ pub struct Args {
     /// Watch refresh interval in seconds (default: config refresh_interval)
     #[arg(long)]
     pub interval: Option<u64>,
+
+    /// Print a one-shot report, as repoz does, instead of opening the TUI
+    #[arg(long)]
+    pub print: bool,
 }
 
 /// Resolved operating mode from the CLI args.
