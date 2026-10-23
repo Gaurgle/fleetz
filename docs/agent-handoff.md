@@ -14,7 +14,17 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Released** 2026-10-22 17:58 CEST by `claude-fable-5-1` (`claude
+**Held** since 2026-10-23 15:00 CEST by `claude-fable-5-1` (`claude
+--agent fz-coordinator`, session
+`d55ed60b-66ae-4198-a152-2c5eb3c46433`) on his "you can be the lead."
+The previous baton was released (below); nothing was running at the
+takeover. Done so far this session: the repoz convergence plan written
+and agreed, the design accepted with the name decided, FZ-46 to FZ-52
+filed (#102 to #108, milestone `repoz convergence`, Backlog, not
+dispatched). **Nothing is running: no worker, no reviewer, no build, no
+background job.**
+
+Previous record: **Released** 2026-10-22 17:58 CEST by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
 `2e4524bf-8172-4d7c-8bd5-966212f13452`) on his "can i close this
 session?": yes. **Nothing is running: no worker, no reviewer, no
@@ -72,6 +82,23 @@ Andreas.
 Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
+
+- **2026-10-23, 14:58 to 15:00, lead takeover.** "i see. but i want the
+  name for the TUI (fleetz) to actually be repoz, its just a better name.
+  and (current) wont need it's own name, since it'll be a command version
+  of fleetz"; "repoz-sh is a good name for it, if we want to keep it still
+  as its own repo/"; then "you can be the lead. i agree on all these. as
+  long as we dont touch the code of fleetz, except renaming it" to the
+  plan `docs/superpowers/plans/2026-10-23-repoz-convergence-plan.md` and
+  the four asks under it (takeover; design D1 to D9 with O2 to O5
+  defaults; file FZ-46 to FZ-52 and the milestone, Backlog, not
+  dispatched, and commit the docs; P1 is his). Read as: takeover; design
+  accepted; O1, O6, O8 decided as the design now records; issues #102 to
+  #108 and milestone 7 created; the docs committed to `main`. **Not**
+  read as dispatch of any ticket, nor as the word for FZ-52 ("do NOT
+  start on any name changing right now" stands). Standing constraint:
+  fleetz's existing code is not changed except where print mode's wiring
+  needs it, and by FZ-52 for the name.
 
 - **2026-10-23, advisor session (not a lead; the baton stayed
   released).** "yes. but remember to use relay. set it up, and i can
@@ -352,18 +379,18 @@ for 2026-10-21 under "Earlier leads".
 
 Nothing starts until Andreas opens the next session.
 
-0. **repoz print mode, queued 2026-10-23** (authority entry of that
-   date). Bash repoz becomes a print mode of this binary with repoz's
-   look kept byte for byte; names and renames are his, later. Design:
-   [repoz-print-design.md](repoz-print-design.md), proposed. On
-   takeover: walk him through its decisions D1 to D9 and owner items
-   O1 to O8 (O2 to O5 decide behaviour inside the tickets), and on his
-   acceptance file FZ-46 to FZ-51 from its ticket bodies with ids from
-   `scripts/relay-board next`, Backlog, milestone per O8. FZ-46 needs
-   prerequisite P1 (a fixture hook in `~/repos/repoz`, outside this
-   repo) before it can pass. Where it sits against items 1 to 7 is his
-   call. Bash repoz stopgap fixes wait for his commit on
-   `fix/fleetz-lessons` in `~/repos/repoz`.
+0. **repoz convergence, accepted 2026-10-23** (authority entry of
+   15:00). Design [repoz-print-design.md](repoz-print-design.md)
+   accepted, plan
+   [2026-10-23-repoz-convergence-plan.md](superpowers/plans/2026-10-23-repoz-convergence-plan.md)
+   agreed, FZ-46 to FZ-52 filed (#102 to #108), Backlog, milestone
+   `repoz convergence`. **Waiting on:** P1, his commit of the fixture
+   hook (`REPOZ_GRAPHQL_FIXTURE`, `REPOZ_GH_LOGIN`) in `~/repos/repoz`
+   on `fix/fleetz-lessons` (at `9f69654`, clean), and his word to
+   dispatch FZ-46 (one `fz-worker`, new files only, can run beside
+   items 1 and 2). Then FZ-47 to FZ-51 one at a time. FZ-52 not before
+   0.8.0 and his explicit word. Phase 0 check done: `repoz` is free on
+   crates.io (API lookup, 2026-10-23 15:10).
 
 1. **#93 and #96: his look, then merge** (see "In flight"). Try:
    `cargo run --release --manifest-path

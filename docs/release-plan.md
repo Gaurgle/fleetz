@@ -250,15 +250,20 @@ not needed to keep building.
 Three slots are in force: two `fz-worker` plus one `fz-small`, each with its
 own reviewer, merges one at a time.
 
-## repoz convergence: queued 2026-10-23
+## repoz convergence: accepted 2026-10-23
 
-Andreas's direction (2026-10-23): bash repoz becomes a quick command
-version of fleetz, built on fleetz's code, with repoz's look unchanged;
-the command name and any repository renames come last and are his. The
-proposed design, its tickets (FZ-46 to FZ-51, not yet filed) and owner
-items are in [repoz-print-design.md](repoz-print-design.md). Its place
-against the batches above is his call. Publishing fleetz, which replacing
-the public repoz needs, belongs to the release row.
+Andreas's direction (2026-10-23): bash repoz becomes a print mode of this
+binary, built on fleetz's code, with repoz's look unchanged; the binary
+then takes the name `repoz` (print mode is a flag of it), and repository
+renames come last and are his. Design accepted:
+[repoz-print-design.md](repoz-print-design.md); phases and order:
+[2026-10-23-repoz-convergence-plan.md](superpowers/plans/2026-10-23-repoz-convergence-plan.md).
+Tickets FZ-46 to FZ-52 (#102 to #108), milestone `repoz convergence`,
+Backlog, none dispatched. FZ-46 to FZ-51 run one at a time in a worker
+slot beside the batches above once P1 (the fixture hook in bash repoz)
+lands and he says go; FZ-52 (the rename) waits for 0.8.0 and his explicit
+word. Publishing, which replacing the public repoz needs, belongs to the
+release row (FZ-20, #3).
 
 ## Completion rule
 

@@ -1,9 +1,16 @@
 # repoz print mode design
 
-Status: **proposed 2026-10-23, waiting for Andreas's acceptance.** Written
-in an advisor session against `main` at `4b47f18`; line numbers drift,
-follow the symbols. No ticket below is filed or dispatched yet: filing them
-is the lead's job once this is accepted (see the handoff).
+Status: **accepted 2026-10-23 15:00 CEST** ("i agree on all these. as long
+as we dont touch the code of fleetz, except renaming it"), with the name
+decided: the whole binary becomes `repoz` and print mode is a flag of it
+(O1). Written in an advisor session against `main` at `4b47f18`; line
+numbers drift, follow the symbols. Tickets filed the same day as #102 to
+#108 (FZ-46 to FZ-52), Backlog, milestone `repoz convergence`, none
+dispatched. The phased order is in
+[2026-10-23-repoz-convergence-plan.md](superpowers/plans/2026-10-23-repoz-convergence-plan.md).
+Standing constraint from the acceptance: fleetz's existing code is not
+changed beyond the wiring print mode needs (the branch in `main`,
+visibility of reused functions); only FZ-52 touches it, for the name.
 
 ## Decision so far
 
@@ -69,9 +76,9 @@ size </dev/tty`, then `COLUMNS`, then `tput cols`, never under 40, else 80.
 **D1. One crate, one binary, entered by a flag.** Print mode is a new
 `report` module under `src/`, entered by `fleetz --print` until O1 names the
 command. `main` branches before any terminal setup: no raw mode, no
-alternate screen, no input thread. The TUI path is untouched. A second
-`[[bin]]` or an `argv[0]` check can give it its final name later at no
-architectural cost. Rejected: a separate crate or a library split now (two
+alternate screen, no input thread. The TUI path is untouched. Decided 2026-10-23: there is no second
+binary; the whole binary takes the name `repoz` in FZ-52 and print mode
+stays a flag of it. Rejected: a separate crate or a library split now (two
 build units to keep in step, which is the drift this removes); a separate
 reimplementation in Rust (same problem, new language).
 
@@ -207,8 +214,11 @@ fetches due, recorded in `docs/performance-baseline.md`. Measurement only.
 
 ## Owner items
 
-- **O1. The command name and the rename order.** Decided later. When it is:
-  GitHub keeps a redirect from a renamed repository's old name only until a
+- **O1. The command name and the rename order.** Decided 2026-10-23: the
+  Rust TUI itself is named `repoz` ("it's just a better name"); print mode
+  is `repoz --print` and needs no name of its own. Rename order (plan
+  phase 6): `Gaurgle/repoz` to `repoz-sh` first, then `Gaurgle/fleetz` to
+  `repoz`, after the public install story exists. Background: GitHub keeps a redirect from a renamed repository's old name only until a
   new repository takes that name, so renaming `Gaurgle/repoz` away and then
   `Gaurgle/fleetz` to `repoz` breaks every `git clone .../repoz` that meant
   the bash script. `rz` collides with lrzsz's ZMODEM receive command.
@@ -223,14 +233,16 @@ fetches due, recorded in `docs/performance-baseline.md`. Measurement only.
 - **O5. The `~/.config/repoz/config` file.** Migrate its keys into
   `config.toml` by hand at switchover, or have print mode read it as a
   fallback.
-- **O6. Bash repoz after the switch, and `--update`.** Archive it, or keep
-  it as a dependency-light script under another name. `--update` has no
+- **O6. Bash repoz after the switch, and `--update`.** Decided 2026-10-23:
+  it keeps its own repository as `Gaurgle/repoz-sh`, README pointing at
+  the Rust `repoz`; archived or not is his later call. `--update` has no
   meaning for a cargo-installed binary.
 - **O7. Publishing.** bash repoz is public and installs with a copy; fleetz
   is private and installs with `cargo install`. Replacing repoz in public
   needs fleetz public and release binaries (#3), which is release work.
-- **O8. Board placement.** No milestone fits; a new one ("repoz
-  convergence") or none.
+- **O8. Board placement.** Decided 2026-10-23: milestone `repoz
+  convergence` (GitHub milestone 7) for FZ-46 to FZ-52; the public switch
+  (O7) stays M5 work. O2 to O5 take the proposed defaults.
 
 ## Rejected
 
