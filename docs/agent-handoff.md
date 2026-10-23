@@ -73,6 +73,18 @@ Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
 
+- **2026-10-23, advisor session (not a lead; the baton stayed
+  released).** "yes. but remember to use relay. set it up, and i can
+  start a relay lead for it after.", answering the offer to write the
+  repoz print mode design, after "exactly this. the actual command can
+  be decided later. but i think this is the correct way to go." Spent
+  on: `docs/repoz-print-design.md` (proposed, not accepted), this entry,
+  "Next step" item 0, the CLAUDE.md index row and the release plan
+  section. Read as: the effort runs under this Relay; **not** read as
+  acceptance of the design, as the word to file FZ-46 to FZ-51, or to
+  dispatch. Earlier the same day: "do NOT start on any name changing
+  right now".
+
 - **2026-10-22, 17:50 and 17:53.** "yes on all" to the slot digest
   proposal (headers as cursor stops, local-first numbers, spec and
   ticket), then "write them up and ship it. no need to work on this
@@ -339,6 +351,19 @@ for 2026-10-21 under "Earlier leads".
 ## Next step, and the order after it
 
 Nothing starts until Andreas opens the next session.
+
+0. **repoz print mode, queued 2026-10-23** (authority entry of that
+   date). Bash repoz becomes a print mode of this binary with repoz's
+   look kept byte for byte; names and renames are his, later. Design:
+   [repoz-print-design.md](repoz-print-design.md), proposed. On
+   takeover: walk him through its decisions D1 to D9 and owner items
+   O1 to O8 (O2 to O5 decide behaviour inside the tickets), and on his
+   acceptance file FZ-46 to FZ-51 from its ticket bodies with ids from
+   `scripts/relay-board next`, Backlog, milestone per O8. FZ-46 needs
+   prerequisite P1 (a fixture hook in `~/repos/repoz`, outside this
+   repo) before it can pass. Where it sits against items 1 to 7 is his
+   call. Bash repoz stopgap fixes wait for his commit on
+   `fix/fleetz-lessons` in `~/repos/repoz`.
 
 1. **#93 and #96: his look, then merge** (see "In flight"). Try:
    `cargo run --release --manifest-path

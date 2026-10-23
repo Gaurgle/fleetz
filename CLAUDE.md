@@ -68,6 +68,7 @@ and blink, watch mode re-sweeps on an interval.
 | `docs/freshness-contract.md` | Accepted contract for GitHub data freshness: attempt, outcome, data time, header states, and the FZ-10 amendments |
 | `docs/fetch-outcome-contract.md` | Accepted contract for per-repo `git fetch` outcomes (FZ-04): last success, attempt, outcome |
 | `docs/api-budget-design.md` | Accepted design for the GitHub API budget, pacing and retry (FZ-10): decisions A1 to A7, owner items O1 to O5, tickets FZ-10a to c |
+| `docs/repoz-print-design.md` | Proposed design: bash repoz rebuilt as a print mode of this binary, repoz's look held by a golden test, decisions D1 to D9, tickets FZ-46 to FZ-51, owner items O1 to O8 (naming deferred) |
 | `docs/coverage-cache-design.md` | Design for GitHub coverage and cache isolation (FZ-09): what the payload covers, the cache keyed by account, host and version, decisions C1 to C9, tickets FZ-09a to f, owner items accepted 2026-10-02 |
 | `.claude/agents/` | Claude-native workforce: `fz-coordinator`, `fz-worker`, `fz-reviewer`, `fz-small` |
 | `docs/superpowers/` | Dated plans and specs, paired, for landed work |

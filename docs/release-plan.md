@@ -250,6 +250,16 @@ not needed to keep building.
 Three slots are in force: two `fz-worker` plus one `fz-small`, each with its
 own reviewer, merges one at a time.
 
+## repoz convergence: queued 2026-10-23
+
+Andreas's direction (2026-10-23): bash repoz becomes a quick command
+version of fleetz, built on fleetz's code, with repoz's look unchanged;
+the command name and any repository renames come last and are his. The
+proposed design, its tickets (FZ-46 to FZ-51, not yet filed) and owner
+items are in [repoz-print-design.md](repoz-print-design.md). Its place
+against the batches above is his call. Publishing fleetz, which replacing
+the public repoz needs, belongs to the release row.
+
 ## Completion rule
 
 An agent finishing a turn is not a completed ticket. Done requires accepted
