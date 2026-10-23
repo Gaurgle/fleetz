@@ -289,6 +289,30 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-10-23
+
+- **#102 (FZ-46), golden harness for print parity against bash
+  repoz.** Merged `36d1f20` at 15:40 CEST; ticket commit `7e6123f`
+  (base `5401eb6`, branch `feat/102-print-parity-harness`, worker
+  `fz-worker` `claude-opus-5-5` medium, reviewer `fz-reviewer`
+  `claude-opus-5-5` medium). New `src/report/` with the stub
+  `report::run`, `parity::Fixture` (temp HOME, scan roots, offline bare
+  remotes through `url.insteadOf`, four cases), one recorded payload
+  read by both queries, bash recordings for `-a` and `--since`, the
+  version-line normaliser, the golden test ignored until FZ-47 and a
+  live fixture check that skips loudly without repoz or without the
+  hook. Only `mod report;` outside the module. P1 (the
+  `REPOZ_GRAPHQL_FIXTURE` and `REPOZ_GH_LOGIN` hook) landed in
+  `~/repos/repoz` as `3fab42a` on `fix/fleetz-lessons` (applied on his
+  "its ok with me if it's safe", committed and pushed on "you may
+  commit and push as you need"). Review follow-ups, low, carried to
+  FZ-47: `REPOZ_BIN` naming a missing file reports the no-hook skip;
+  hook detection is a substring check; print mode needs its own
+  offline payload path before the golden test is un-ignored.
+  Dispatched 15:20, worker back 15:30, review accepted 15:33, branch
+  CI 39960806652 green, 1305 tests.
+  FZ-46: review accepted first; fix cycles 0; owner decisions 1 (P1 applied by the lead); worker 10; review 3; usage not read
+
 ### Merged on 2026-10-22
 
 - **#95 (FZ-30f), the inspector details the highlighted run: jobs,

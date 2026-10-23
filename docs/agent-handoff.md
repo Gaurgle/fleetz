@@ -21,8 +21,15 @@ The previous baton was released (below); nothing was running at the
 takeover. Done so far this session: the repoz convergence plan written
 and agreed, the design accepted with the name decided, FZ-46 to FZ-52
 filed (#102 to #108, milestone `repoz convergence`, Backlog, not
-dispatched). **Nothing is running: no worker, no reviewer, no build, no
-background job.**
+dispatched). FZ-46 #102 then ran 15:20 to 15:40 and merged as
+`36d1f20` (record in the log, "Merged on 2026-10-23"); P1 is committed
+in `~/repos/repoz` (`3fab42a`, `fix/fleetz-lessons`, pushed). **Nothing
+is running: no worker, no reviewer, no build, no background job.** His
+words: 15:18 "you may dispatch" (FZ-46 only); "#93, #96 and 0.7.0 can
+wait, until all is in place. if needed, go to 0.6.1 instead" (a patch
+release if only fixes land first); 15:38 "you may commit and push as
+you need" (read as: the P1 commit in repoz and the coordination docs;
+not as dispatch of FZ-47, which is asked below).
 
 Previous record: **Released** 2026-10-22 17:58 CEST by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
@@ -384,11 +391,14 @@ Nothing starts until Andreas opens the next session.
    accepted, plan
    [2026-10-23-repoz-convergence-plan.md](superpowers/plans/2026-10-23-repoz-convergence-plan.md)
    agreed, FZ-46 to FZ-52 filed (#102 to #108), Backlog, milestone
-   `repoz convergence`. **Waiting on:** P1, his commit of the fixture
-   hook (`REPOZ_GRAPHQL_FIXTURE`, `REPOZ_GH_LOGIN`) in `~/repos/repoz`
-   on `fix/fleetz-lessons` (at `9f69654`, clean), and his word to
-   dispatch FZ-46 (one `fz-worker`, new files only, can run beside
-   items 1 and 2). Then FZ-47 to FZ-51 one at a time. FZ-52 not before
+   `repoz convergence`. FZ-46 Done (`36d1f20`), P1 landed
+   (`~/repos/repoz` `3fab42a`). **Next: FZ-47 (#103) on his word**, one
+   `fz-worker` from a fresh worktree off `main`; expect to split it
+   (sections and rows, then commit lines). It must give print mode an
+   offline payload path (a `cfg(test)` seam reading
+   `REPOZ_GRAPHQL_FIXTURE`, or a seeded keyed cache in the fixture
+   HOME) before un-ignoring the golden test, and carry the two low
+   review follow-ups from FZ-46. Then FZ-48 to FZ-51 one at a time. FZ-52 not before
    0.8.0 and his explicit word. Phase 0 check done: `repoz` is free on
    crates.io (API lookup, 2026-10-23 15:10).
 
