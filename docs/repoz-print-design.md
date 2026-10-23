@@ -97,6 +97,13 @@ one of the two unless it is listed in D3.
 | Which clones fetch | every matched clone | only remotes GitHub says moved since the clone's last fetch (`stale_remotes`); unknowns fetch |
 | Archived repos | listed | filtered (O3) |
 | Glyph on a local-only row | looked up by folder name | only on a carrier row matched through its origin (house invariant: a local-only row is never matched by name); added 2026-10-23 at FZ-47 fix cycle 1 |
+| A pass 3 clone or linked worktree whose origin names a GitHub repo passes 1 and 2 did not find | a `not cloned` row for the repo, the clone shown without a glyph | the clone carries the repo (glyph, no `not cloned` row, not counted `not local`); a consequence of the matching row above; added at FZ-48 |
+| Target (`/owner/repo`) under a hidden `$HOME` path that is no configured root | found by bash's `find` | not found (house invariant: the `$HOME` sweep skips dot-directories; name it in `extra_dirs`); added at FZ-48 |
+
+Noted at FZ-48, not a D3 entry until checked: `discovery::find_all_local`
+may find repos one level deeper than bash's `find -maxdepth 4`; no fixture
+reaches that depth and `repoz_parity` has not caught it. A discovery
+question outside this effort.
 
 Fixtures for the golden test are built so these differences do not arise
 (one clone per repo, origins that agree with folder names, no archived

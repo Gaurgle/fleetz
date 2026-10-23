@@ -14,19 +14,22 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Held** since 2026-10-23 15:00 CEST by `claude-fable-5-1` (`claude
+**Released** 2026-10-23 18:35 CEST by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
-`d55ed60b-66ae-4198-a152-2c5eb3c46433`) on his "you can be the lead."
-The previous baton was released (below); nothing was running at the
-takeover. Done so far this session: the repoz convergence plan written
-and agreed, the design accepted with the name decided, FZ-46 to FZ-52
-filed (#102 to #108, milestone `repoz convergence`, Backlog, not
-dispatched). FZ-46 #102 then ran 15:20 to 15:40 and merged as
-`36d1f20` (record in the log, "Merged on 2026-10-23"); P1 is committed
-in `~/repos/repoz` (`3fab42a`, `fix/fleetz-lessons`, pushed). FZ-47
-#103 ran 15:50 to 17:05 on his "ok go ahead" and merged as `289a1bf`
-(record in the log). **Nothing is running: no worker, no reviewer, no
-build, no background job.** His ruling 16:05: the convergence is a
+`d55ed60b-66ae-4198-a152-2c5eb3c46433`) on his "i want to start
+closing down for tonight" and "start nothing new". Held from 15:00
+("you can be the lead."). **Nothing is running: no worker, no
+reviewer, no build, no background job.** Done this session: the repoz
+convergence plan written and agreed, the design accepted with the name
+decided (the binary becomes `repoz`; print mode is a flag of it),
+FZ-46 to FZ-52 filed (#102 to #108, milestone `repoz convergence`), P1
+committed in `~/repos/repoz` (`3fab42a`, `fix/fleetz-lessons`, pushed),
+and three tickets Done: FZ-46 `36d1f20`, FZ-47 `289a1bf`, FZ-48
+`06e5026` (records in the log, "Merged on 2026-10-23"; the clock note
+there applies to this session's stamps). He tried `--print` on the
+real fleet: "worked fine, and the print is perfect". His 7-day usage
+was at 83% at about 17:30; the next lead should expect the limit. His
+ruling 16:05: the convergence is a
 step toward the public release, not its trigger; M5 still needs its
 own tickets (worktree page in pane 2 and more); recorded in the plan.
 His words: 15:18 "you may dispatch" (FZ-46 only); "#93, #96 and 0.7.0 can
@@ -395,14 +398,18 @@ Nothing starts until Andreas opens the next session.
    accepted, plan
    [2026-10-23-repoz-convergence-plan.md](superpowers/plans/2026-10-23-repoz-convergence-plan.md)
    agreed, FZ-46 to FZ-52 filed (#102 to #108), Backlog, milestone
-   `repoz convergence`. FZ-46 Done (`36d1f20`), FZ-47 Done (`289a1bf`),
-   P1 landed (`~/repos/repoz` `3fab42a`). **Next: FZ-48 (#104) on his
-   word** (`-d` and the `/owner/repo` target), one `fz-worker` from a
-   fresh worktree off `main`, carrying the two FZ-47 follow-ups (a
-   pass 3 row carrying an active repo through its origin; the linked
-   worktree own-branch and no-stash rule) since it adds the linked
-   worktree fixture. Then FZ-49, FZ-50, FZ-51 one at a time. He can
-   try print mode from `main` now: `cargo run --release -- --print`. FZ-52 not before
+   `repoz convergence`. FZ-46, FZ-47, FZ-48 Done; P1 landed
+   (`~/repos/repoz` `3fab42a`). **Next: FZ-49 (#105) on his word**
+   (`-s`, `-r`, `-p`, `--author`, `--no-glyphs`; print-only flags
+   rejected without `--print`), one `fz-worker` from a fresh worktree
+   off `main`, same pattern as #103 and #104 (rulings and records on
+   those issues show the shape: bash `3fab42a` is the arbiter, record
+   through the harness copy-over path, new `Fixture::add_...` builders
+   rather than edits to existing cases). Then FZ-50, FZ-51. Ask before
+   creating: an issue for the flaky `clipboard::tests`
+   (`a_failing_command_is_reported`, `the_first_command_on_path_receives_the_hash`,
+   a write-then-exec race seen once in five runs at the FZ-48 review).
+   He can use print mode from `main`: `cargo run --release -- --print`. FZ-52 not before
    0.8.0 and his explicit word. Phase 0 check done: `repoz` is free on
    crates.io (API lookup, 2026-10-23 15:10).
 

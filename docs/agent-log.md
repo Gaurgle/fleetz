@@ -291,8 +291,33 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-23
 
+Clock note: this lead's chat and issue stamps ran up to 40 minutes
+ahead of the wall clock during the afternoon (FZ-47 "merged 17:05" was
+16:23; FZ-48's "18:40" review was before 18:26). Commit dates below
+are authoritative.
+
+- **#104 (FZ-48), print mode's local-only and target modes.** Merged
+  `06e5026` at 18:28 CEST; ticket commit `549f661` (base `28a2cfa`,
+  branch `feat/104-print-local-and-target`, worker `fz-worker`
+  `claude-opus-5-5` medium, fix cycle `fz-small` `sonnet` medium,
+  reviewer `fz-reviewer` `claude-opus-5-5` medium, two passes). `--print
+  -d` (bash's pass 3 with nothing claimed, `All clean.` or `N dirty`, no
+  request, no fetch) and `--print /owner/repo` or `/repo` (login via `gh
+  api user` bounded 10 s, `?` on failure; one row or `not cloned`),
+  byte for byte against bash `3fab42a` on nine recordings including a
+  linked worktree and a prefix-path repo; the positional is print-only
+  (`requires = "print"`). Review 1 changes requested (the no-request
+  test could not catch a poll that failed silently); fix cycle 1
+  strengthened the test, proven by the reviewer's mutant. Rulings:
+  login lookup accepted; a target under a hidden `$HOME` path and a
+  pass 3 clone carrying its repo through its origin are D3 entries;
+  scan depth versus bash's `-maxdepth 4` noted for discovery; bare `/`
+  rejected. Open: flaky `clipboard::tests` under parallel process starts
+  (an issue on his yes). Branch CI 39986741911 green, 1340 tests.
+  FZ-48: review changes 1; fix cycles 1; owner decisions 0; worker 13; review 9; usage not read
+
 - **#103 (FZ-47), print mode with repoz's time modes.** Merged
-  `289a1bf` at 17:05 CEST; ticket commit `05a6113` (base `1588edb`,
+  `289a1bf` at 16:23 CEST; ticket commit `05a6113` (base `1588edb`,
   branch `feat/103-print-mode-time-modes`, two `fz-worker` passes and
   two `fz-reviewer` passes, all `claude-opus-5-5` medium). `fleetz
   --print` with default slot, `-a`, `-t`, `--since`, `--before`: header,
@@ -310,13 +335,12 @@ first (from `git log --merges main`).
   rows is a D3 entry; counts stay bash's upstream-only rule. Follow-ups
   to FZ-48: a test for a pass 3 row carrying an active repo through its
   origin, and the linked worktree own-branch rule; to FZ-51: the double
-  probe of unclaimed repos. Dispatched 15:50, review 1 16:20, fix cycle
-  16:28 to 16:45, review 2 16:55, branch CI 39967262051 green, 1330
-  tests.
+  probe of unclaimed repos. Dispatched about 15:30, committed 16:09,
+  branch CI 39967262051 green, 1330 tests.
   FZ-47: review changes 1; fix cycles 1; owner decisions 0; worker 28; review 11; usage not read
 
 - **#102 (FZ-46), golden harness for print parity against bash
-  repoz.** Merged `36d1f20` at 15:40 CEST; ticket commit `7e6123f`
+  repoz.** Merged `36d1f20` at 15:26 CEST; ticket commit `7e6123f`
   (base `5401eb6`, branch `feat/102-print-parity-harness`, worker
   `fz-worker` `claude-opus-5-5` medium, reviewer `fz-reviewer`
   `claude-opus-5-5` medium). New `src/report/` with the stub
