@@ -291,6 +291,30 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-23
 
+- **#103 (FZ-47), print mode with repoz's time modes.** Merged
+  `289a1bf` at 17:05 CEST; ticket commit `05a6113` (base `1588edb`,
+  branch `feat/103-print-mode-time-modes`, two `fz-worker` passes and
+  two `fz-reviewer` passes, all `claude-opus-5-5` medium). `fleetz
+  --print` with default slot, `-a`, `-t`, `--since`, `--before`: header,
+  three sections, rows, commit lines, summary, byte for byte against
+  bash `3fab42a` for `-a`, `--since`, two `--before` cases and a local
+  changes case (dirty, stashed, mid-rebase); one test per D3
+  difference; `cfg(test)` payload seam on `REPOZ_GRAPHQL_FIXTURE`;
+  palette and width in `report/render.rs`; `--print` branch before any
+  terminal call; `pub(crate)` on `github::fetch_keyed`, `GRAPHQL_URL`,
+  `accept_response`. Review 1 changes requested (pass 3 followed
+  fleetz's `local_only_status` and dropped old dirty, stash-only and
+  mid-operation repos bash lists; cwd toplevel not a scan root; no test
+  pinned `Bypass`); fix cycle 1 fixed all three inside `src/report/`.
+  Rulings: concurrency stays 4 (D4 amended); glyph-by-name on local-only
+  rows is a D3 entry; counts stay bash's upstream-only rule. Follow-ups
+  to FZ-48: a test for a pass 3 row carrying an active repo through its
+  origin, and the linked worktree own-branch rule; to FZ-51: the double
+  probe of unclaimed repos. Dispatched 15:50, review 1 16:20, fix cycle
+  16:28 to 16:45, review 2 16:55, branch CI 39967262051 green, 1330
+  tests.
+  FZ-47: review changes 1; fix cycles 1; owner decisions 0; worker 28; review 11; usage not read
+
 - **#102 (FZ-46), golden harness for print parity against bash
   repoz.** Merged `36d1f20` at 15:40 CEST; ticket commit `7e6123f`
   (base `5401eb6`, branch `feat/102-print-parity-harness`, worker

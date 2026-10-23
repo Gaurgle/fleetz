@@ -30,6 +30,13 @@ end.
 | 5. Rename | FZ-52: crate, binary, config and cache dirs, docs, scripts, workflows become `repoz`; old config read as fallback | one `fz-worker` plus reviewer; CI edits need his yes | Fresh install as `repoz`, settings carried over |
 | 6. Public switch | Rename `Gaurgle/repoz` (bash) to `repoz-sh`; rename `Gaurgle/fleetz` to `repoz`; make it public; FZ-20 (crates.io, brew tap) and #3 release binaries; first public tag | Andreas, with the lead preparing text and commands | `brew install` or `cargo install repoz` works on a clean machine |
 
+Phase 6 is not "next after phase 5": it belongs to M5 and waits for the
+rest of the release readiness (the worktree page in pane 2, diagnostics,
+clean-machine install, whichever M4 items he picks). His ruling
+2026-10-23 16:05: the repoz convergence is "a step along the way",
+public release "needs many other tickets and milestones to be completed
+first". Phase 5 may still land while the repository is private.
+
 Phases 1 to 3 run under the existing Relay slots beside the queued work
 (#93, #96, 0.7.0, FZ-41 to FZ-45); FZ-46 touches only new files and can
 start as soon as P1 lands. Phase 5 starts only on his explicit word

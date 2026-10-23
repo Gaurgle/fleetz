@@ -95,14 +95,18 @@ one of the two unless it is listed in D3.
 | Matching | folder name only | origin and owner first, folder name only where the remote cannot decide (house invariant) |
 | Several clones of one repo | first in sorted order | `CheckoutRank` |
 | Which clones fetch | every matched clone | only remotes GitHub says moved since the clone's last fetch (`stale_remotes`); unknowns fetch |
-| Archived repos | listed | per O3 |
+| Archived repos | listed | filtered (O3) |
+| Glyph on a local-only row | looked up by folder name | only on a carrier row matched through its origin (house invariant: a local-only row is never matched by name); added 2026-10-23 at FZ-47 fix cycle 1 |
 
 Fixtures for the golden test are built so these differences do not arise
 (one clone per repo, origins that agree with folder names, no archived
 repos, every clone fetched); each difference gets its own Rust test instead.
 
 **D4. Fetching.** `stale_remotes` decides, with the empty-`FETCH_HEAD` rule
-(fetch outcome contract rule 7). Concurrency 8, as bash's `FETCH_CAP`. Each
+(fetch outcome contract rule 7). Concurrency is fleetz's
+`FETCH_CONCURRENCY` (4), not bash's `FETCH_CAP` of 8: amended 2026-10-23
+at the FZ-47 review, since print mode fetches only remotes that moved and
+raising it would touch TUI code; FZ-51 measures it. Each
 fetch has the FZ-35a stall limit and records its outcome; a failed one
 prints `fetch failed` in front of its counts and counts in the summary, as
 bash repoz now does. No retry.
