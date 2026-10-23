@@ -57,6 +57,20 @@ pub struct Args {
     /// Print a one-shot report, as repoz does, instead of opening the TUI
     #[arg(long)]
     pub print: bool,
+
+    /// With --print: report one repo, `/owner/repo`, or `/repo` for one of
+    /// your own
+    #[arg(requires = "print", value_parser = target_spec)]
+    pub target: Option<String>,
+}
+
+/// A print target as repoz spells it: a leading `/`, then `owner/repo` or
+/// `repo`.
+fn target_spec(value: &str) -> Result<String, String> {
+    match value.strip_prefix('/') {
+        Some(rest) if !rest.is_empty() => Ok(value.to_string()),
+        _ => Err("a target is /owner/repo or /repo".to_string()),
+    }
 }
 
 /// Resolved operating mode from the CLI args.
@@ -139,6 +153,27 @@ mod tests {
             Some(crate::ui::VERSION),
             "--version is missing or disagrees with the header"
         );
+    }
+
+    /// D7: the target positional is print-only, so the TUI's own argument
+    /// parsing is what it was.
+    #[test]
+    fn a_target_is_rejected_without_print() {
+        assert!(Args::try_parse_from(["fleetz", "/owner/repo"]).is_err());
+        assert!(Args::try_parse_from(["fleetz", "-a", "/repo"]).is_err());
+        let args = Args::try_parse_from(["fleetz", "--print", "/owner/repo"]).unwrap();
+        assert_eq!(args.target.as_deref(), Some("/owner/repo"));
+        let args = Args::try_parse_from(["fleetz", "--print", "/repo"]).unwrap();
+        assert_eq!(args.target.as_deref(), Some("/repo"));
+        assert_eq!(Args::parse_from(["fleetz"]).target, None);
+    }
+
+    /// bash repoz takes only a leading `/` as a target; anything else is an
+    /// unknown argument.
+    #[test]
+    fn a_target_needs_its_leading_slash() {
+        assert!(Args::try_parse_from(["fleetz", "--print", "owner/repo"]).is_err());
+        assert!(Args::try_parse_from(["fleetz", "--print", "/"]).is_err());
     }
 
     #[test]

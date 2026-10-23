@@ -70,6 +70,38 @@ pub const LOCAL_CASES: &[(&str, &[&str])] = &[("since-local", &["--since", "2026
 /// tree with one stash, and a clean tree stopped mid-rebase.
 pub const LOCAL_REPOS: [&str; 3] = ["olddirty", "stashonly", "midrebase"];
 
+/// The cases bash prints with no GitHub call and no summary, so no version
+/// line: `-d` and the single-repo target, on the plain fixture. They compare
+/// whole. `target-login` has one segment, resolved against [`LOGIN`]
+/// (`REPOZ_GH_LOGIN`); `target-unknown` names a repo the payload does not
+/// hold, which bash never reads in this mode.
+pub const UNVERSIONED_CASES: &[(&str, &[&str])] = &[
+    ("dirty-clean", &["-d"]),
+    ("target-cloned", &["/fixture-user/alpha-tool"]),
+    ("target-login", &["/alpha-tool"]),
+    ("target-elsewhere", &["/elsewhere-app"]),
+    ("target-not-cloned", &["/fixture-user/ghost-repo"]),
+    ("target-unknown", &["/fixture-user/no-such-repo"]),
+];
+
+/// The cases recorded on the fixture with [`Fixture::add_worktree_and_prefix`],
+/// and whether bash prints a version line for them (only the GitHub modes
+/// do).
+pub const WORKTREE_CASES: &[(&str, &[&str], bool)] = &[
+    ("worktree-dirty", &["-d"], false),
+    ("worktree-all", &["-a"], true),
+    ("worktree-target", &["/fixture-user/wtmain"], false),
+];
+
+/// What [`Fixture::add_worktree_and_prefix`] adds under `repo_dir`, none of
+/// it in the payload: a dirty remote-less repo whose path is a prefix of
+/// `alpha-tool`'s, a clone with an upstream, a stash and an unpushed side
+/// branch, and a linked worktree of that clone beside it, one unpushed
+/// commit on its own branch.
+pub const PREFIX_REPO: &str = "alpha";
+pub const WT_MAIN: &str = "wtmain";
+pub const WT_LINKED: &str = "wtmain-wt";
+
 const CHILD_OUT: &str = "FLEETZ_PRINT_CHILD_OUT";
 const CHILD_ARGS: &str = "FLEETZ_PRINT_CHILD_ARGS";
 const CHILD_TEST: &str = "report::parity::print_mode_child";
@@ -222,11 +254,23 @@ impl Fixture {
         cwd: &Path,
         args: &[&str],
     ) -> (Vec<u8>, std::process::Output) {
+        self.run_print_mode_with(cwd, &[], args)
+    }
+
+    /// [`Fixture::run_print_mode_from`] with `env` set over
+    /// [`Fixture::env`] in the child.
+    pub fn run_print_mode_with(
+        &self,
+        cwd: &Path,
+        env: &[(&str, &std::ffi::OsStr)],
+        args: &[&str],
+    ) -> (Vec<u8>, std::process::Output) {
         let out_path = self.root.join("print-mode.out");
         let _ = std::fs::remove_file(&out_path);
         let exe = std::env::current_exe().expect("test binary");
         let out = self
             .command(&exe)
+            .envs(env.iter().copied())
             .current_dir(cwd)
             .args([CHILD_TEST, "--exact", "--quiet", "--test-threads=1"])
             .env(CHILD_OUT, &out_path)
@@ -301,6 +345,52 @@ impl Fixture {
             midrebase.join(".git/rebase-merge").is_dir(),
             "midrebase is not mid-rebase"
         );
+    }
+
+    /// [`PREFIX_REPO`], [`WT_MAIN`] and [`WT_LINKED`] under `repo_dir`.
+    /// `alpha` has one uncommitted edit. `wtmain` is a clone of its own
+    /// remote, clean, with one stash and branches `side` and `feature` each
+    /// one commit past their upstreams; `feature` is checked out in the
+    /// linked worktree `wtmain-wt`, where its unpushed commit was made.
+    pub fn add_worktree_and_prefix(&self) {
+        let prefix = self.repo_dir.join(PREFIX_REPO);
+        self.init(&prefix);
+        self.commit(&prefix, "a.txt", "Start alpha", "2026-01-09T09:00:00Z");
+        std::fs::write(prefix.join("a.txt"), "Start alpha, edited\n").unwrap();
+
+        let main = self.repo_dir.join(WT_MAIN);
+        let linked = self.repo_dir.join(WT_LINKED);
+        self.publish(LOGIN, WT_MAIN, "2026-01-10T09:00:00Z");
+        self.clone_into(LOGIN, WT_MAIN, &main);
+        std::fs::remove_dir_all(self.root.join("seed")).unwrap();
+
+        self.git(&main, &["switch", "-q", "-c", "side"]);
+        self.commit(&main, "side.txt", "Side pushed", "2026-01-11T09:00:00Z");
+        self.git(&main, &["push", "-q", "-u", "origin", "side"]);
+        self.commit(&main, "side.txt", "Side unpushed", "2026-01-12T09:00:00Z");
+        self.git(&main, &["switch", "-q", "main"]);
+
+        self.git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feature",
+                linked.to_str().unwrap(),
+            ],
+        );
+        self.git(&linked, &["push", "-q", "-u", "origin", "feature"]);
+        self.commit(
+            &linked,
+            "feature.txt",
+            "Feature unpushed",
+            "2026-01-13T09:00:00Z",
+        );
+
+        std::fs::write(main.join("README.md"), "Put aside\n").unwrap();
+        self.git(&main, &["stash", "-q"]);
     }
 
     fn init(&self, dir: &Path) {
@@ -893,6 +983,100 @@ mod tests {
             String::from_utf8_lossy(&theirs),
             String::from_utf8_lossy(&ours)
         );
+    }
+
+    /// `live` against the recording for `case`: whole when `versioned` is
+    /// false (and then neither may carry a version line), else without it.
+    /// On a mismatch, leaves `live` in the temp directory to copy over the
+    /// recording.
+    fn check_recording(case: &str, live: &[u8], versioned: bool) {
+        let text = strip_ansi(&String::from_utf8_lossy(live));
+        let normal = |bytes: &[u8]| match versioned {
+            true => without_version_line(bytes),
+            false => without_version_line(bytes)
+                .is_none()
+                .then(|| bytes.to_vec()),
+        };
+        let live_normal = normal(live).unwrap_or_else(|| panic!("{case}: version line\n{text}"));
+        if recorded(case).and_then(|r| normal(&r)) != Some(live_normal) {
+            let fresh = std::env::temp_dir().join(format!("fleetz-parity-{case}.bash.out"));
+            std::fs::write(&fresh, live).unwrap();
+            panic!(
+                "{case}: bash repoz no longer prints {}; if the change is intended, \
+                 copy {} over it\n{text}",
+                recording_path(case).display(),
+                fresh.display()
+            );
+        }
+    }
+
+    /// Print mode's `ours` against the recording for `case`, as
+    /// [`check_recording`] compares.
+    fn assert_matches_recording(case: &str, ours: &[u8], versioned: bool) {
+        let theirs = recorded(case).unwrap_or_else(|| panic!("{case}: no recording"));
+        let (theirs, ours) = match versioned {
+            true => (
+                without_version_line(&theirs).expect("recording has no version line"),
+                without_version_line(ours).expect("print mode printed no version line"),
+            ),
+            false => {
+                assert!(without_version_line(&theirs).is_none(), "{case}: versioned");
+                (theirs, ours.to_vec())
+            }
+        };
+        assert!(
+            ours == theirs,
+            "{case}: print mode differs from bash repoz\n--- bash repoz\n{}\n--- print mode\n{}",
+            String::from_utf8_lossy(&theirs),
+            String::from_utf8_lossy(&ours)
+        );
+    }
+
+    /// [`UNVERSIONED_CASES`] against bash repoz: `-d` finds nothing to say
+    /// on the plain fixture, and each target prints one row.
+    #[test]
+    fn bash_repoz_renders_the_unversioned_cases() {
+        let Some(bin) = bash_with_hook() else {
+            return;
+        };
+        let fixture = Fixture::build("bash_unversioned");
+        for &(case, args) in UNVERSIONED_CASES {
+            let live = fixture.run_bash(&bin, args);
+            check_recording(case, &live, false);
+        }
+    }
+
+    #[test]
+    fn print_mode_matches_bash_repoz_unversioned() {
+        let fixture = Fixture::build("golden_unversioned");
+        for &(case, args) in UNVERSIONED_CASES {
+            assert_matches_recording(case, &fixture.run_print_mode(args), false);
+        }
+    }
+
+    /// [`WORKTREE_CASES`] against bash repoz.
+    #[test]
+    fn bash_repoz_renders_the_worktree_cases() {
+        let Some(bin) = bash_with_hook() else {
+            return;
+        };
+        let fixture = Fixture::build("bash_worktree");
+        fixture.add_worktree_and_prefix();
+        for &(case, args, versioned) in WORKTREE_CASES {
+            let live = fixture.run_bash(&bin, args);
+            check_recording(case, &live, versioned);
+        }
+    }
+
+    /// The linked worktree and the dirty prefix repo byte for byte, in `-d`,
+    /// `-a` and the target mode.
+    #[test]
+    fn print_mode_matches_bash_repoz_with_worktree_and_prefix() {
+        let fixture = Fixture::build("golden_worktree");
+        fixture.add_worktree_and_prefix();
+        for &(case, args, versioned) in WORKTREE_CASES {
+            assert_matches_recording(case, &fixture.run_print_mode(args), versioned);
+        }
     }
 
     #[test]

@@ -11,6 +11,11 @@
 //! bash's too (`with_bash_local_changes`): every unclaimed local repo with
 //! news, whatever the window, under roots that include the working
 //! directory's git toplevel.
+//!
+//! `-d` and the single-repo target (`/owner/repo`, `/repo`) are here too
+//! (FZ-48). Neither asks GitHub anything, as in bash: `-d` is that pass 3
+//! with nothing claimed (`print_local`), and a target is one clone found by
+//! fleetz's own matching for that one repo (`print_target`).
 
 pub mod render;
 
@@ -36,7 +41,10 @@ use render::{Counts, Glyph, Layout, palette};
 )]
 pub fn run(args: &[String], out: &mut dyn Write) -> io::Result<i32> {
     use clap::Parser;
-    let argv = std::iter::once("fleetz".to_string()).chain(args.iter().cloned());
+    let argv = ["fleetz", "--print"]
+        .into_iter()
+        .map(str::to_string)
+        .chain(args.iter().cloned());
     let args = Args::try_parse_from(argv).map_err(|e| invalid(e.to_string()))?;
     tokio::runtime::Runtime::new()?.block_on(print(&args, out))
 }
@@ -46,12 +54,6 @@ pub fn run(args: &[String], out: &mut dyn Write) -> io::Result<i32> {
 /// could not be reached, as bash repoz exits.
 pub async fn print(args: &Args, out: &mut dyn Write) -> io::Result<i32> {
     let mode = args.mode();
-    if mode == Mode::Dirty {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "print mode has no -d yet (FZ-48)",
-        ));
-    }
     let config = crate::config::Config::load();
     let repo_dir = std::env::var("REPO_CHECK_DIR")
         .map(PathBuf::from)
@@ -66,6 +68,15 @@ pub async fn print(args: &Args, out: &mut dyn Write) -> io::Result<i32> {
         width: render::term_width(),
         glyphs: !plain,
     };
+
+    // bash checks these two before it asks GitHub anything, `-d` first, and
+    // neither asks at all.
+    if mode == Mode::Dirty {
+        return print_local(layout, &scan_roots, &home, out).await;
+    }
+    if let Some(target) = &args.target {
+        return print_target(target, layout, &config, &scan_roots, &home, out).await;
+    }
 
     let (cutoff, header) = window(args, &mode, &config).map_err(invalid)?;
     let Ok(dataset) = poll(config.repo_limit).await else {
@@ -161,9 +172,36 @@ async fn with_bash_local_changes(
 
     let claimed: Vec<PathBuf> = shown.iter().map(|row| on_disk(home, row)).collect();
     let claimed: HashSet<&Path> = claimed.iter().map(PathBuf::as_path).collect();
+    let probed = local_with_news(scan_roots, &claimed).await;
+    let mut local: Vec<(&Path, RepoStatus)> = probed
+        .iter()
+        .map(|(path, row)| (path.as_path(), row.clone()))
+        .collect();
+    crate::mark_local_carriers(&mut local, dataset, scan_roots, &mut carried);
+    shown.extend(local.into_iter().map(|(_, row)| row));
+
+    for entry in active {
+        if carried.contains(&crate::remote_key(entry.owner.as_deref(), &entry.name)) {
+            continue;
+        }
+        let mut row = bare_row(entry.name.clone(), None, RepoLocation::NotCloned);
+        row.owner = entry.owner.clone();
+        row.apply_github(entry);
+        shown.push(row);
+    }
+    shown
+}
+
+/// bash's `scan_dirs_git_dirs` walk as its pass 3 and `-d` read it: every
+/// repo under the scan roots not in `claimed` (compared canonically,
+/// `unclaimed_local`) that has news (`local_news`), in walk order.
+async fn local_with_news(
+    scan_roots: &[PathBuf],
+    claimed: &HashSet<&Path>,
+) -> Vec<(PathBuf, RepoStatus)> {
     let candidates = crate::unclaimed_local(
         crate::discovery::find_all_local(scan_roots),
-        &claimed,
+        claimed,
         &HashSet::new(),
     );
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::probe_concurrency()));
@@ -183,24 +221,182 @@ async fn with_bash_local_changes(
         }
     }
     probed.sort_by_key(|(i, _, _)| *i);
-    let mut local: Vec<(&Path, RepoStatus)> = probed
-        .iter()
+    probed
+        .into_iter()
         .filter(|(_, path, row)| local_news(path, row).is_some())
-        .map(|(_, path, row)| (path.as_path(), row.clone()))
-        .collect();
-    crate::mark_local_carriers(&mut local, dataset, scan_roots, &mut carried);
-    shown.extend(local.into_iter().map(|(_, row)| row));
+        .map(|(_, path, row)| (path, row))
+        .collect()
+}
 
-    for entry in active {
-        if carried.contains(&crate::remote_key(entry.owner.as_deref(), &entry.name)) {
-            continue;
-        }
-        let mut row = bare_row(entry.name.clone(), None, RepoLocation::NotCloned);
-        row.owner = entry.owner.clone();
-        row.apply_github(entry);
-        shown.push(row);
+/// bash's `-d`: the scan roots' repos with news, as its pass 3 prints them
+/// but with nothing claimed, then `All clean.` or `N dirty`. No GitHub
+/// request, no fetch, no summary or version line.
+async fn print_local(
+    layout: Layout,
+    scan_roots: &[PathBuf],
+    home: &Path,
+    out: &mut dyn Write,
+) -> io::Result<i32> {
+    let mut rows: Vec<RepoStatus> = local_with_news(scan_roots, &HashSet::new())
+        .await
+        .into_iter()
+        .map(|(_, row)| row)
+        .collect();
+    sort_as_git_paths(home, &mut rows);
+    let mut report = Report {
+        layout,
+        home,
+        active: &[],
+        author: None,
+        counts: Counts::default(),
+    };
+    let mut text = layout.header("local changes");
+    text.push('\n');
+    for row in &rows {
+        text.push_str(&report.local_row(row));
     }
-    shown
+    text.push('\n');
+    text.push_str(&layout.divider());
+    text.push_str(&match report.counts.uncommitted {
+        0 => format!("  {}All clean.{}\n", palette::GREEN, palette::RESET),
+        n => format!("  {}{n} dirty{}\n", palette::YELLOW, palette::RESET),
+    });
+    text.push('\n');
+    out.write_all(text.as_bytes())?;
+    out.flush()?;
+    Ok(0)
+}
+
+/// bash's target mode: `/owner/repo`, or `/repo` for one of the login's,
+/// as one row with its path, or `not cloned`. The payload is never read, so
+/// a repo GitHub does not list prints the same way. The clone is found by
+/// fleetz's passes 1 and 2 for that one repo (D3, matching), fetched as an
+/// unknown must be (D4), and counted as bash counts it: every branch with
+/// an upstream and the clone's stashes, a linked worktree included.
+async fn print_target(
+    target: &str,
+    layout: Layout,
+    config: &crate::config::Config,
+    scan_roots: &[PathBuf],
+    home: &Path,
+    out: &mut dyn Write,
+) -> io::Result<i32> {
+    let spec = target.strip_prefix('/').unwrap_or(target);
+    // bash's `${spec%%/*}` and `${spec##*/}`.
+    let (owner, name) = match (spec.split_once('/'), spec.rsplit_once('/')) {
+        (Some((owner, _)), Some((_, name))) => (owner.to_string(), name),
+        _ => (login().await.unwrap_or_else(|| "?".to_string()), spec),
+    };
+    let full = format!("{owner}/{name}");
+
+    let mut text = layout.header(&full);
+    text.push('\n');
+    let line = match find_target(&owner, name, scan_roots, home) {
+        Some(path) => target_row(layout, name, &path, config.fetch_cap_bytes()).await,
+        None => layout.row(Glyph::None, &full, None, "not cloned", palette::RED),
+    };
+    text.push_str(&line);
+    text.push('\n');
+    out.write_all(text.as_bytes())?;
+    out.flush()?;
+    Ok(0)
+}
+
+/// The clone of `owner/name` fleetz's passes 1 and 2 would pick: under the
+/// scan roots first, then elsewhere under `home`.
+fn find_target(owner: &str, name: &str, scan_roots: &[PathBuf], home: &Path) -> Option<PathBuf> {
+    use crate::discovery;
+    let repo = [(Some(owner), name)];
+    let wanted = discovery::Wanted::with_full_dataset(repo, repo);
+    let (primary, _) = discovery::find_in_primary_with_ambiguities(scan_roots, &wanted);
+    let found = match primary.into_iter().next() {
+        Some(found) => Some(found),
+        None => {
+            discovery::find_elsewhere_with_ambiguities(home, scan_roots, &wanted, &HashSet::new())
+                .0
+                .into_iter()
+                .next()
+        }
+    };
+    found.map(|found| found.path)
+}
+
+/// The target's row after one fetch: its counts, a failed fetch in front,
+/// or `synced`. Named as the target spelled it, as bash names it.
+async fn target_row(layout: Layout, name: &str, path: &Path, max_bytes: Option<u64>) -> String {
+    let fetch = crate::git::fetch_reporting(path, max_bytes, |_| {}).await;
+    let fetch_failed = matches!(fetch, crate::git::FetchOutcome::Failed(_));
+    let dirty = crate::git::dirty_count(path).await;
+    let tracked: Vec<_> = crate::git::branch_statuses(path)
+        .await
+        .into_iter()
+        .filter(|b| b.upstream.is_some())
+        .collect();
+    let behind: u32 = tracked.iter().map(|b| b.behind).sum();
+    let ahead: u32 = tracked.iter().map(|b| b.ahead).sum();
+    let op = operation(path);
+    let stashes = stash_count(path);
+
+    let symbols = render::status_symbols(behind, ahead, dirty, stashes);
+    let noted = match fetch_failed {
+        true => render::with_op("fetch failed", &symbols),
+        false => symbols,
+    };
+    let status = render::with_op(op, &noted);
+    let shown = crate::tilde_display(path);
+    match status.is_empty() {
+        true => layout.row(Glyph::None, name, Some(&shown), "synced", palette::GREEN),
+        false => layout.row(
+            Glyph::None,
+            name,
+            Some(&shown),
+            &status,
+            row_color(&status, op, dirty, stashes),
+        ),
+    }
+}
+
+/// Names the login a one-segment target resolves against, in a test build
+/// only (the parity harness sets it for bash repoz and print mode).
+#[cfg(test)]
+const GH_LOGIN_FIXTURE: &str = "REPOZ_GH_LOGIN";
+
+/// How long the login lookup may take. It is a request to GitHub, unlike
+/// the token lookup `LAUNCH_LOOKUP_BOUND` covers, so it gets more room; a
+/// lookup that runs out reads as no login, as a failed one does.
+const LOGIN_LOOKUP_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The authenticated user's login, as bash's `gh_login` asks for it (`gh
+/// api user`), on the host every fleetz request goes to. None when `gh`
+/// fails, answers nothing or runs past [`LOGIN_LOOKUP_BOUND`].
+async fn login() -> Option<String> {
+    // Test seam: with `REPOZ_GH_LOGIN` set, a test build takes it as the
+    // answer. Compiled out of the binary; never a production flag.
+    #[cfg(test)]
+    if let Some(login) = std::env::var_os(GH_LOGIN_FIXTURE) {
+        let login = login.to_string_lossy().trim().to_string();
+        return (!login.is_empty()).then_some(login);
+    }
+    let lookup = tokio::process::Command::new("gh")
+        .args(["api", "user", "--hostname", github::HOST, "--jq", ".login"])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(LOGIN_LOOKUP_BOUND, lookup)
+        .await
+        .ok()?
+        .ok()?;
+    let login = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (output.status.success() && !login.is_empty()).then_some(login)
+}
+
+/// Pass 3 rows in bash's order: `LC_ALL=C sort` of their `.git` paths.
+fn sort_as_git_paths(home: &Path, rows: &mut [RepoStatus]) {
+    rows.sort_by_cached_key(|row| {
+        let mut key = on_disk(home, row).into_os_string().into_encoded_bytes();
+        key.extend_from_slice(b"/.git");
+        key
+    });
 }
 
 /// A pass 3 candidate with what bash's pass 3 reads: the uncommitted count,
@@ -415,11 +611,7 @@ impl Report<'_> {
         // bash lists pass 2 in push order, found and not cloned interleaved,
         // and pass 3 in `LC_ALL=C sort` order of the `.git` paths.
         also.sort_by_key(|row| self.activity_rank(row));
-        local.sort_by_cached_key(|row| {
-            let mut key = self.absolute(row).into_os_string().into_encoded_bytes();
-            key.extend_from_slice(b"/.git");
-            key
-        });
+        sort_as_git_paths(self.home, &mut local);
 
         let mut text = self.layout.header(header);
         if self.active.is_empty() {
@@ -894,6 +1086,137 @@ mod tests {
             row.contains("~/loose/scratch") && row.ends_with(" 1!"),
             "{row}"
         );
+    }
+
+    /// D5: `-d` and the target mode never enter the poll. The payload seam
+    /// names a file that does not exist, so a poll would end as `Failed to
+    /// reach GitHub` (and could not reach the network either), and a
+    /// successful one would leave a keyed cache behind.
+    #[test]
+    fn local_mode_and_a_target_send_no_request() {
+        let fixture = Fixture::build("no_request");
+        let missing = fixture.root.join("no-payload.json");
+        let env = [(GRAPHQL_FIXTURE, missing.as_os_str())];
+        for args in [&["-d"][..], &["/fixture-user/alpha-tool"], &["/alpha-tool"]] {
+            let (report, _) = fixture.run_print_mode_with(&fixture.root, &env, args);
+            let report = text(&report);
+            assert!(
+                !report.contains("Failed to reach GitHub"),
+                "{args:?}\n{report}"
+            );
+            assert!(
+                report.contains("repoz"),
+                "{args:?} printed nothing\n{report}"
+            );
+        }
+        for dir in ["Library/Caches/fleetz", ".cache/fleetz"] {
+            assert!(!fixture.home.join(dir).exists(), "a poll wrote {dir}");
+        }
+
+        // With the valid payload (no override) a stray poll would succeed
+        // and write a keyed cache, so each run is checked on its own.
+        for args in [&["-d"][..], &["/fixture-user/alpha-tool"], &["/alpha-tool"]] {
+            fixture.run_print_mode_with(&fixture.root, &[], args);
+            for dir in ["Library/Caches/fleetz", ".cache/fleetz"] {
+                assert!(
+                    !fixture.home.join(dir).exists(),
+                    "{args:?} polled and wrote {dir}"
+                );
+            }
+        }
+    }
+
+    /// The target's owner is the login when it has one segment, and the
+    /// row is the clone that login's repo matched, not a same-named clone of
+    /// another owner's (D3, matching).
+    #[test]
+    fn a_one_segment_target_resolves_against_the_login() {
+        let fixture = Fixture::build("target_login");
+        let login = std::ffi::OsString::from("someone-else");
+        let env = [(GH_LOGIN_FIXTURE, login.as_os_str())];
+        let (report, _) = fixture.run_print_mode_with(&fixture.root, &env, &["/alpha-tool"]);
+        let report = text(&report);
+        assert!(
+            report
+                .lines()
+                .any(|l| l.contains("someone-else/alpha-tool") && l.ends_with("not cloned")),
+            "{report}"
+        );
+
+        let report = text(&fixture.run_print_mode(&["/alpha-tool"]));
+        assert!(report.contains("fixture-user/alpha-tool"), "{report}");
+        assert!(line_of(&report, "alpha-tool").contains("~/repos/alpha-tool"));
+    }
+
+    /// A clone of the active `ghost-repo` outside `HOME`, with a dirty
+    /// linked worktree `ghost-wt` under `repo_dir`. The clone's origin is an
+    /// ssh URL the fixture's `insteadOf` leaves alone, so `git remote
+    /// get-url` reads it as GitHub's and the worktree can carry the repo.
+    fn ghost_worktree(fixture: &Fixture) {
+        use super::parity::{LOGIN, NOT_CLONED};
+        fixture.publish(LOGIN, NOT_CLONED, "2026-02-01T09:00:00Z");
+        let main = fixture.root.join("outside").join(NOT_CLONED);
+        fixture.clone_into(LOGIN, NOT_CLONED, &main);
+        let origin = format!("git@github.com:{LOGIN}/{NOT_CLONED}.git");
+        fixture.git(&main, &["remote", "set-url", "origin", &origin]);
+        let linked = fixture.repo_dir.join("ghost-wt");
+        fixture.git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "wip",
+                linked.to_str().unwrap(),
+            ],
+        );
+        std::fs::write(linked.join("wip.txt"), "wip\n").unwrap();
+    }
+
+    /// FZ-47 review follow-up 1: a pass 3 row carries an active repo
+    /// through its origin, its main clone outside the roots, so no
+    /// `not cloned` row is printed for that repo. bash repoz matches by
+    /// folder name only and prints both the worktree's row and
+    /// `ghost-repo ... not cloned`.
+    #[test]
+    fn a_pass_3_worktree_carries_its_repo_through_its_origin() {
+        let fixture = Fixture::build("wt_carrier");
+        ghost_worktree(&fixture);
+
+        let report = text(&fixture.run_print_mode(&["-a"]));
+        let (_, local) = report
+            .split_once("local changes")
+            .unwrap_or_else(|| panic!("no local changes section\n{report}"));
+        let row = line_of(local, "ghost-wt");
+        assert!(
+            row.contains("~/repos/ghost-wt") && row.ends_with(" 1!"),
+            "{row}"
+        );
+        assert!(!report.contains("not cloned"), "{report}");
+        assert!(!report.contains("not local"), "{report}");
+    }
+
+    /// FZ-47 review follow-up 2: a linked worktree in pass 3 counts only
+    /// its own branch's unpushed commit and no stashes, while its main clone
+    /// beside it counts every branch (its side branch and the worktree's)
+    /// and the shared stash. bash repoz prints the same
+    /// (`worktree-all.bash.out`).
+    #[test]
+    fn a_pass_3_worktree_counts_its_own_branch_and_no_stashes() {
+        use super::parity::{WT_LINKED, WT_MAIN};
+        let fixture = Fixture::build("wt_counts");
+        fixture.add_worktree_and_prefix();
+
+        let report = text(&fixture.run_print_mode(&["-a"]));
+        let (_, local) = report
+            .split_once("local changes")
+            .unwrap_or_else(|| panic!("no local changes section\n{report}"));
+        let linked = line_of(local, WT_LINKED);
+        assert!(linked.ends_with(" 1\u{2191}"), "{linked}");
+        let main = line_of(local, WT_MAIN);
+        assert!(main.ends_with(" 2\u{2191} 1\u{2691}"), "{main}");
+        assert!(report.contains("1 stashed"), "{report}");
     }
 
     /// A loopback listener answering one request with `body`, handing back
