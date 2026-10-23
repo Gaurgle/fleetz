@@ -955,7 +955,7 @@ pub async fn fetch_github(
 /// request's `Authorization` header, and that request's answer is written to
 /// that token's file. Two lookups could straddle an account switch and write
 /// one account's answer into the other's file.
-async fn fetch_keyed<S, F>(
+pub(crate) async fn fetch_keyed<S, F>(
     repo_limit: u32,
     cache: &crate::cache::KeyedCache,
     mode: CacheMode,
@@ -1088,7 +1088,7 @@ fn settle_attempt(
     })
 }
 
-const GRAPHQL_URL: &str = "https://api.github.com/graphql";
+pub(crate) const GRAPHQL_URL: &str = "https://api.github.com/graphql";
 
 /// How long opening the connection may take. A connect that runs out is
 /// `Offline`: the path to GitHub is not up (A5).
@@ -1347,7 +1347,7 @@ pub(crate) fn fnv1a_64(bytes: impl IntoIterator<Item = u8>) -> u64 {
 ///
 /// Split out of `fetch_repos` so the rule is reachable without a network:
 /// everything above it is transport, everything here is the payload.
-fn accept_response(
+pub(crate) fn accept_response(
     body_text: &str,
     cache: &crate::cache::ApiCache,
     today: chrono::NaiveDate,

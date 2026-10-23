@@ -50,6 +50,26 @@ pub const LOCALE: &str = "en_US.UTF-8";
 /// arguments it was recorded with.
 pub const CASES: &[(&str, &[&str])] = &[("all", &["-a"]), ("since", &["--since", "2026-03-01"])];
 
+/// The `--before` cases, recorded the same way. Kept apart from [`CASES`]
+/// because `--before 2026-03-11` drops `alpha-tool`, which the checks on
+/// [`CASES`] require; their own tests below check them.
+pub const BEFORE_CASES: &[(&str, &[&str])] = &[
+    ("all-before", &["-a", "--before", "2026-03-11"]),
+    (
+        "since-before",
+        &["--since", "2026-03-01", "--before", "2026-03-11"],
+    ),
+];
+
+/// The cases recorded on the fixture with [`Fixture::add_local_changes`]:
+/// bash's pass 3, which lists a local repo whatever the window.
+pub const LOCAL_CASES: &[(&str, &[&str])] = &[("since-local", &["--since", "2026-03-01"])];
+
+/// The repos [`Fixture::add_local_changes`] adds under `repo_dir`, none of
+/// them in the payload: uncommitted work dated before every window, a clean
+/// tree with one stash, and a clean tree stopped mid-rebase.
+pub const LOCAL_REPOS: [&str; 3] = ["olddirty", "stashonly", "midrebase"];
+
 const CHILD_OUT: &str = "FLEETZ_PRINT_CHILD_OUT";
 const CHILD_ARGS: &str = "FLEETZ_PRINT_CHILD_ARGS";
 const CHILD_TEST: &str = "report::parity::print_mode_child";
@@ -186,11 +206,28 @@ impl Fixture {
     /// of [`Fixture::env`] are the child's process environment, as they are
     /// for the real binary, and no test here changes its own.
     pub fn run_print_mode(&self, args: &[&str]) -> Vec<u8> {
+        self.run_print_mode_full(args).0
+    }
+
+    /// [`Fixture::run_print_mode`], with the child's own process output
+    /// beside what print mode wrote.
+    pub fn run_print_mode_full(&self, args: &[&str]) -> (Vec<u8>, std::process::Output) {
+        self.run_print_mode_from(&self.root, args)
+    }
+
+    /// [`Fixture::run_print_mode_full`] with the child's working directory
+    /// at `cwd` instead of `root`.
+    pub fn run_print_mode_from(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+    ) -> (Vec<u8>, std::process::Output) {
         let out_path = self.root.join("print-mode.out");
         let _ = std::fs::remove_file(&out_path);
         let exe = std::env::current_exe().expect("test binary");
         let out = self
             .command(&exe)
+            .current_dir(cwd)
             .args([CHILD_TEST, "--exact", "--quiet", "--test-threads=1"])
             .env(CHILD_OUT, &out_path)
             .env(CHILD_ARGS, args.join("\n"))
@@ -203,7 +240,72 @@ impl Fixture {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
-        std::fs::read(&out_path).expect("print mode wrote no output file")
+        let report = std::fs::read(&out_path).expect("print mode wrote no output file");
+        (report, out)
+    }
+
+    /// One more commit on `owner/name`'s remote, pushed from a scratch clone
+    /// so no fixture clone sees it until it fetches.
+    pub fn push_upstream(&self, owner: &str, name: &str, subject: &str) {
+        let scratch = self.seed(name);
+        self.git(
+            &self.root,
+            &[
+                "clone",
+                "-q",
+                &github_url(owner, name),
+                scratch.to_str().unwrap(),
+            ],
+        );
+        self.commit(&scratch, "upstream.txt", subject, "2026-03-13T09:00:00Z");
+        self.git(&scratch, &["push", "-q", "origin", "main"]);
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    /// The [`LOCAL_REPOS`], remote-less, under `repo_dir`: what bash's pass 3
+    /// lists and a window must not hide. `olddirty`'s last commit and its
+    /// uncommitted edit are both dated 2026-01-05, before every window;
+    /// `stashonly` is clean with one stash; `midrebase` is clean, stopped by
+    /// a failing `--exec` with its `rebase-merge` state on disk.
+    pub fn add_local_changes(&self) {
+        let [olddirty, stashonly, midrebase] = LOCAL_REPOS.map(|name| self.repo_dir.join(name));
+
+        self.init(&olddirty);
+        self.commit(&olddirty, "work.txt", "Old work", "2026-01-05T09:00:00Z");
+        let edited = olddirty.join("work.txt");
+        std::fs::write(&edited, "Old work, edited\n").unwrap();
+        let old = chrono::DateTime::parse_from_rfc3339("2026-01-05T10:00:00Z").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&edited)
+            .unwrap()
+            .set_modified(old.into())
+            .unwrap();
+
+        self.init(&stashonly);
+        self.commit(&stashonly, "draft.txt", "Draft", "2026-01-06T09:00:00Z");
+        std::fs::write(stashonly.join("draft.txt"), "Draft, put aside\n").unwrap();
+        self.git(&stashonly, &["stash", "-q"]);
+
+        self.init(&midrebase);
+        self.commit(&midrebase, "a.txt", "First", "2026-01-07T09:00:00Z");
+        self.commit(&midrebase, "b.txt", "Second", "2026-01-08T09:00:00Z");
+        // Stops after picking `Second`, as an unfinished rebase does; the
+        // non-zero exit is the point, so it is not asserted.
+        let _ = self
+            .git_command(&midrebase)
+            .args(["rebase", "-q", "--exec", "false", "HEAD~1"])
+            .output()
+            .expect("spawn git");
+        assert!(
+            midrebase.join(".git/rebase-merge").is_dir(),
+            "midrebase is not mid-rebase"
+        );
+    }
+
+    fn init(&self, dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        self.git(dir, &["init", "-q"]);
     }
 
     fn write_configs(&self) {
@@ -238,7 +340,7 @@ impl Fixture {
 
     /// A bare remote for `owner/name` holding one commit made at `date`,
     /// pushed from a seed checkout under `root/seed` (removed by `build`).
-    fn publish(&self, owner: &str, name: &str, date: &str) {
+    pub fn publish(&self, owner: &str, name: &str, date: &str) {
         let bare = self.remotes.join(owner).join(format!("{name}.git"));
         std::fs::create_dir_all(&bare).unwrap();
         self.git(&bare, &["init", "-q", "--bare"]);
@@ -260,7 +362,7 @@ impl Fixture {
     /// Clone `owner/name` through its GitHub URL, then fetch once so
     /// `FETCH_HEAD` exists: a clone alone leaves none, and fleetz reads a
     /// missing one as never fetched.
-    fn clone_into(&self, owner: &str, name: &str, dest: &Path) {
+    pub fn clone_into(&self, owner: &str, name: &str, dest: &Path) {
         let parent = dest.parent().unwrap();
         std::fs::create_dir_all(parent).unwrap();
         let dest = dest.to_str().unwrap();
@@ -281,7 +383,7 @@ impl Fixture {
         assert!(status.success(), "git commit in {dir:?} failed");
     }
 
-    fn git(&self, dir: &Path, args: &[&str]) {
+    pub fn git(&self, dir: &Path, args: &[&str]) {
         let status = self
             .git_command(dir)
             .args(args)
@@ -364,10 +466,12 @@ fn recording_path(case: &str) -> PathBuf {
 
 /// Bash repoz to compare against: `REPOZ_BIN` when set (a patched copy, say),
 /// else the sibling clone, so the repoz under development is the one checked,
-/// else whatever `repoz` is on `PATH`.
+/// else whatever `repoz` is on `PATH`. A `REPOZ_BIN` naming no file is no
+/// repoz at all, so it skips as "not found" rather than as hookless.
 fn repoz_bin() -> Option<PathBuf> {
     if let Some(bin) = std::env::var_os("REPOZ_BIN") {
-        return Some(PathBuf::from(bin));
+        let bin = PathBuf::from(bin);
+        return bin.is_file().then_some(bin);
     }
     let sibling = dirs::home_dir()?.join("repos/repoz/repoz");
     if sibling.is_file() {
@@ -388,6 +492,10 @@ fn bash_with_hook() -> Option<PathBuf> {
         eprintln!("SKIP: repoz not found, print parity recording unchecked");
         return None;
     };
+    // A substring check, deliberately loose: any script that names the
+    // variable counts as hooked, so a mention in a comment alone would pass.
+    // The recording comparison below is what catches a hook that does not
+    // work.
     let script = std::fs::read_to_string(&bin).unwrap_or_default();
     if !script.contains("REPOZ_GRAPHQL_FIXTURE") {
         eprintln!(
@@ -644,13 +752,156 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "print mode does not exist until FZ-47"]
     fn print_mode_matches_bash_repoz() {
         let fixture = Fixture::build("golden");
         for &(case, args) in CASES {
             let theirs = recorded(case).expect("no recording");
             let ours = fixture.run_print_mode(args);
             let theirs = without_version_line(&theirs).expect("recording has no version line");
+            let ours = without_version_line(&ours).expect("print mode printed no version line");
+            assert!(
+                ours == theirs,
+                "{case}: print mode differs from bash repoz\n--- bash repoz\n{}\n--- print mode\n{}",
+                String::from_utf8_lossy(&theirs),
+                String::from_utf8_lossy(&ours)
+            );
+        }
+    }
+
+    /// [`BEFORE_CASES`] against bash repoz: `alpha-tool`, pushed on the
+    /// 12th, is out of the window, and the recordings still match.
+    #[test]
+    fn bash_repoz_renders_the_before_cases() {
+        let Some(bin) = bash_with_hook() else {
+            return;
+        };
+        let fixture = Fixture::build("bash_before");
+        for &(case, args) in BEFORE_CASES {
+            let live = fixture.run_bash(&bin, args);
+            let text = strip_ansi(&String::from_utf8_lossy(&live));
+            assert!(
+                text.contains("orgproj") && !text.contains("alpha-tool"),
+                "{case}: --before kept the wrong rows\n{text}"
+            );
+            let live_normal = without_version_line(&live).expect("bash printed no version line");
+            if recorded(case).and_then(|r| without_version_line(&r)) != Some(live_normal) {
+                let fresh = std::env::temp_dir().join(format!("fleetz-parity-{case}.bash.out"));
+                std::fs::write(&fresh, &live).unwrap();
+                panic!(
+                    "{case}: bash repoz no longer prints {}; if the change is intended, \
+                     copy {} over it\n{text}",
+                    recording_path(case).display(),
+                    fresh.display()
+                );
+            }
+        }
+    }
+
+    /// [`LOCAL_CASES`] against bash repoz: every [`LOCAL_REPOS`] row is in
+    /// `local changes` under a window none of them is dated in, and the
+    /// recordings still match.
+    #[test]
+    fn bash_repoz_renders_the_local_cases() {
+        let Some(bin) = bash_with_hook() else {
+            return;
+        };
+        let fixture = Fixture::build("bash_local");
+        fixture.add_local_changes();
+        for &(case, args) in LOCAL_CASES {
+            let live = fixture.run_bash(&bin, args);
+            let text = strip_ansi(&String::from_utf8_lossy(&live));
+            let section = text
+                .split_once("local changes")
+                .unwrap_or_else(|| panic!("{case}: no local changes section\n{text}"))
+                .1;
+            for (name, status) in LOCAL_REPOS.iter().zip(["1!", "1\u{2691}", "rebasing"]) {
+                let row = section
+                    .lines()
+                    .find(|line| line.split_whitespace().next() == Some(name))
+                    .unwrap_or_else(|| panic!("{case}: no {name} row\n{text}"));
+                assert!(row.ends_with(status), "{case}: {row}");
+            }
+            let live_normal = without_version_line(&live).expect("bash printed no version line");
+            if recorded(case).and_then(|r| without_version_line(&r)) != Some(live_normal) {
+                let fresh = std::env::temp_dir().join(format!("fleetz-parity-{case}.bash.out"));
+                std::fs::write(&fresh, &live).unwrap();
+                panic!(
+                    "{case}: bash repoz no longer prints {}; if the change is intended, \
+                     copy {} over it\n{text}",
+                    recording_path(case).display(),
+                    fresh.display()
+                );
+            }
+        }
+    }
+
+    /// bash's pass 3 byte for byte: the window hides none of the
+    /// [`LOCAL_REPOS`], and their stash, operation and dirty counts read as
+    /// bash reads them.
+    #[test]
+    fn print_mode_matches_bash_repoz_with_local_changes() {
+        let fixture = Fixture::build("golden_local");
+        fixture.add_local_changes();
+        for &(case, args) in LOCAL_CASES {
+            let theirs = recorded(case).expect("no recording");
+            let theirs = without_version_line(&theirs).expect("recording has no version line");
+            let ours = fixture.run_print_mode(args);
+            let ours = without_version_line(&ours).expect("print mode printed no version line");
+            assert!(
+                ours == theirs,
+                "{case}: print mode differs from bash repoz\n--- bash repoz\n{}\n--- print mode\n{}",
+                String::from_utf8_lossy(&theirs),
+                String::from_utf8_lossy(&ours)
+            );
+        }
+    }
+
+    /// Run from a subdirectory of a dirty repo outside every root, both tools
+    /// scan its toplevel (bash's `add_scan_dir "$_toplevel"`) and print the
+    /// same bytes. Compared live, since the working directory is the input.
+    #[test]
+    fn print_mode_matches_bash_repoz_from_inside_a_repo() {
+        let Some(bin) = bash_with_hook() else {
+            return;
+        };
+        let fixture = Fixture::build("cwd_parity");
+        let loose = fixture.home.join("loose/scratch");
+        let inside = loose.join("src");
+        fixture.init(&loose);
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::write(inside.join("wip.txt"), "wip\n").unwrap();
+
+        let args = ["--since", "2026-03-01"];
+        let out = fixture
+            .command(&bin)
+            .current_dir(&inside)
+            .args(args)
+            .output()
+            .expect("run repoz");
+        assert!(out.status.success(), "repoz failed");
+        let text = strip_ansi(&String::from_utf8_lossy(&out.stdout));
+        assert!(
+            text.contains("~/loose/scratch"),
+            "bash skipped the cwd\n{text}"
+        );
+        let theirs = without_version_line(&out.stdout).expect("bash printed no version line");
+        let (ours, _) = fixture.run_print_mode_from(&inside, &args);
+        let ours = without_version_line(&ours).expect("print mode printed no version line");
+        assert!(
+            ours == theirs,
+            "print mode differs from bash repoz\n--- bash repoz\n{}\n--- print mode\n{}",
+            String::from_utf8_lossy(&theirs),
+            String::from_utf8_lossy(&ours)
+        );
+    }
+
+    #[test]
+    fn print_mode_matches_bash_repoz_with_before() {
+        let fixture = Fixture::build("golden_before");
+        for &(case, args) in BEFORE_CASES {
+            let theirs = recorded(case).expect("no recording");
+            let theirs = without_version_line(&theirs).expect("recording has no version line");
+            let ours = fixture.run_print_mode(args);
             let ours = without_version_line(&ours).expect("print mode printed no version line");
             assert!(
                 ours == theirs,
