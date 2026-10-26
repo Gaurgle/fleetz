@@ -14,18 +14,27 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Held** since 2026-10-26 15:11 CET by `claude-fable-5-1` (`claude
+**Released** 2026-10-26 16:12 CET by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
-`c47a5217-1276-4a26-b7a2-bceecc3c81fb`), taken on his "you can
-dispatch, choose what tickets to start on for now." The previous
-record below says the baton was released with nothing running;
-confirmed on start (no worker, no build, `main` `f2a9976` clean, CI
-green at `06e5026`). Before the takeover this session, as an advisor,
-agreed the notes view with him, filed FZ-53 (#109) and committed the
-docs on his "you may commit and push" (`27d750c`). **Running:** two
-`fz-worker` dispatched 15:20 CET, FZ-49 (#105) and FZ-53 (#109), see
-"In flight"; the `fz-small` slot is free. Stop conditions: his word,
-or the Fable usage limit (ask for routing, never switch billing).
+`c47a5217-1276-4a26-b7a2-bceecc3c81fb`) on his "ok on the tests,
+then close after FZ-50" and "id rather close it now". Held from
+15:11 ("you can dispatch, choose what tickets to start on for now").
+**Nothing is running: no worker, no reviewer, no build, no
+background job.** The FZ-53 reviewer was stopped mid-review at his
+word (its partial work is in this session's transcript only; the
+next lead re-runs the review from the handoff in "In flight"). Done
+this session: FZ-53 (#109) agreed and filed as an advisor before the
+takeover (`27d750c`); FZ-49 (#105) Done `0db0d32`; FZ-50 (#106) Done
+`4632ac5` (records in the log, "Merged on 2026-10-26", with the clock
+note: this session's issue and chat stamps ran up to 70 minutes ahead
+of the wall clock; commit dates are authoritative). One lesson,
+recorded on #109: the lead ruled seven existing-test assertion edits
+in under the standing exception and the worker correctly refused;
+that exception covers only a new struct field, every other test edit
+is his. He gave the word at 16:00 ("ok on the tests"). His standing
+scope ("choose what tickets to start on for now") was given to this
+session; the next lead asks before dispatching rather than inheriting
+it.
 
 Previous record: **Released** 2026-10-23 18:35 CEST by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
@@ -357,7 +366,10 @@ are written into the repository.
 
 ## State of `main`
 
-`main` is `db04b56` (the merge of #95) plus docs commits, 1296 tests
+`main` is `4632ac5` (the merge of #106) plus docs commits, 1348 tests
+passing and 1 ignored, CI green (run 40346149642), as of 2026-10-26.
+Since `v0.6.0` it also carries the whole print mode (FZ-46 to FZ-50).
+Earlier record: `main` was `db04b56` (the merge of #95) plus docs commits, 1296 tests
 passing and 1 ignored, CI green (run 39763821838). Since `v0.6.0` it
 carries #95 (the inspector's jobs, log and script bodies), #79 (header dates the failed
 attempt), #81 (footer hints follow focus), #90 (CI data layer), #94
@@ -367,9 +379,10 @@ release is `0.7.0`. Local toolchain rustc 1.99.0, same as CI's.
 
 ## Worktrees
 
-Under `.claude/worktrees/`: `issue-93` (committed, pushed, see "In
-flight"), `issue-88` (FZ-38, parked, uncommitted, see "Baton"; the
-sweep keeps it).
+Under `.claude/worktrees/` as of 2026-10-26 16:10: `issue-109`
+(FZ-53, uncommitted, see "In flight"), `issue-93` and `issue-96`
+(committed, pushed, Ready to integrate for his look), `issue-88`
+(FZ-38, parked, uncommitted, see "Baton"). The sweep keeps all four.
 
 ## In flight
 
@@ -380,27 +393,31 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
 
 - **#105 FZ-49: Done**, merged `0db0d32` 16:38 CET, worktree swept
   (record in the log, "Merged on 2026-10-26").
-- **#106 FZ-50 (print mode's fetch outcomes and a stalled remote): In
-  progress**, dispatched 16:50 CET under the standing scope. Base
-  `d9b8e33`, branch `feat/106-print-fetch-outcomes`, worktree
-  `.claude/worktrees/issue-106`, handoff `worker-106.txt` in the
-  session scratchpad; dispatch record on the issue. Byte parity, so
-  it merges under the safe-merge rule.
-- **#109 FZ-53 (the `notes` view in pane 2): In progress, stopped
-  for his word.** Base `27d750c`, branch `feat/109-notes-view`,
-  worktree `.claude/worktrees/issue-109`, uncommitted (tracked diff
-  `972ec9d0a4c136b9`, 52379 bytes; new `src/notes.rs` 13971 bytes).
-  The feature is built; `cargo test` is red on seven existing tests
-  that encode `ci` as the last view (one assertion each, listed on the
-  issue). The lead's ruling that these fall under the standing
-  existing-test exception was wrong and is withdrawn on the issue:
-  that exception covers only a new struct field. **They need his
-  word.** On it: tell the worker (resume it, or a fresh `fz-worker`
-  with the list from the issue) to apply exactly the seven, then
-  `fz-reviewer` on the full diff, commit, push, branch CI, combined
-  checks, Ready to integrate for his look (layout and interaction).
-  Follow-up for his word: the footer's `j/k` label still says "commit"
-  in `notes` (`src/ui/footer.rs` was out of scope).
+- **#106 FZ-50: Done**, merged `4632ac5`, worktree swept (log).
+- **#109 FZ-53 (the `notes` view in pane 2): In progress, built,
+  review not done.** Base `27d750c`, branch `feat/109-notes-view`,
+  worktree `.claude/worktrees/issue-109`, uncommitted, nothing
+  pushed: tracked diff sha256 prefix `8206bb9b7f0567ad` (55201
+  bytes), new `src/notes.rs` (13971 bytes); modified `README.md`,
+  `src/app.rs`, `src/discovery.rs` (`PRUNE_DIRS` pub), `src/main.rs`,
+  `src/ui/ci.rs`, `src/ui/colors.rs`, `src/ui/detail.rs`,
+  `src/ui/help.rs`. fmt and clippy clean, 1353 passed, 1 ignored. The
+  seven existing-test edits (one assertion or arm each, listed on the
+  issue) were made on his word of 16:00, "ok on the tests". Rulings 2
+  to 8 on the issue stand (nested repos skipped, hidden files skipped,
+  every file inside a notez directory, the `colors.rs` arm, the shared
+  `B m` help row, the `Enter` wording, the footer label as a
+  follow-up). **Next:** `fz-reviewer` on the full diff; the reviewer
+  handoff is `reviewer-109.txt` in this session's scratchpad and may
+  be gone, so write it again from the issue (acceptance criteria in
+  the body; trace both completion orders of the walk and the read;
+  diff each touched existing test against the base to confirm only
+  the seven approved lines moved). Then commit, push, branch CI,
+  combined checks against `main`, and Ready to integrate **for his
+  look** (layout and interaction; never merge it on the rule alone).
+  Try: `cargo run --release --manifest-path
+  .claude/worktrees/issue-109/Cargo.toml`, then `]` to `notes`, `m`
+  for all markdown, `Enter` on a file.
 
 Earlier record (2026-10-22, both merged since or waiting on his look,
 see the items below): two workers running since 13:30 (both slots;
@@ -454,15 +471,15 @@ Nothing starts until Andreas opens the next session.
    accepted, plan
    [2026-10-23-repoz-convergence-plan.md](superpowers/plans/2026-10-23-repoz-convergence-plan.md)
    agreed, FZ-46 to FZ-52 filed (#102 to #108), Backlog, milestone
-   `repoz convergence`. FZ-46 to FZ-49 Done; P1 landed
-   (`~/repos/repoz` `3fab42a`). **Next: FZ-50 (#106)** under his
-   2026-10-26 "choose what tickets to start on for now" (fetch
-   outcomes and a stalled remote), one `fz-worker` from a fresh
-   worktree off `main`, same pattern as #103 to #105 (rulings and
-   records on those issues show the shape: bash `3fab42a` is the
-   arbiter, record through the harness copy-over path, new
-   `Fixture::add_...` builders rather than edits to existing cases).
-   Then FZ-51. Ask before
+   `repoz convergence`. FZ-46 to FZ-50 Done; P1 landed
+   (`~/repos/repoz` `3fab42a`). **Next: FZ-51 (#107) on his word**
+   (measure print mode against bash repoz), then FZ-52 not before
+   0.8.0 and his explicit word. Open follow-ups from the reviews, each
+   an issue on his yes: the flaky `clipboard::tests` (FZ-48), the
+   `target` skip in `check_option_case`'s no-PR check (FZ-49), the
+   print-mode child without `--nocapture` (FZ-50), README has no
+   `--print` flags yet (FZ-47 to FZ-50), the footer `j/k` label in
+   `notes` (FZ-53). Ask before
    creating: an issue for the flaky `clipboard::tests`
    (`a_failing_command_is_reported`, `the_first_command_on_path_receives_the_hash`,
    a write-then-exec race seen once in five runs at the FZ-48 review).
