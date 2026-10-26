@@ -2046,3 +2046,46 @@ that does not match what `Config` reads, and a value that does not survive being
 written. Both are covered, the second by an actual save and load through a temp
 file, because a row that saves happily and changes nothing is the failure worth
 guarding.
+
+## Repo notes in pane 2
+
+**Status: ticketed as FZ-53, not built.** Agreed with Andreas 2026-10-26.
+
+**Problem.** Notes about a repo live in that repo (`notez/`, committed, and
+`.notez/`, gitignored scratch, at the top level or beside a module) and in
+`README.md`, `CLAUDE.md` and `docs/`. Reading any of them means leaving the
+dashboard for an editor and finding the file by hand. The repo under the
+cursor is the one you want to read about.
+
+**Shape.** A seventh pane 2 view, `notes`, following the ruling under
+"Branches" above: the fleetz equivalent of a lazygit panel is a pane 2 view,
+which inherits the header, scroll and selection arrays, tab strip and docked
+inspector. Pane 2 draws a tree of every `notez/` and `.notez/` directory in the
+selected repo, at any depth, each a section headed by its relative path; the
+inspector shows the highlighted file, read on highlight; `Enter` suspends to
+`$EDITOR` on it the way `e` opens the repo. One key toggles the tree between
+notez-only and every markdown file in the repo, grouped by directory.
+
+**No index.** The data is one walk of the selected repo, on demand, in the
+background, only while the view is on screen and after the `ci` dwell
+(`App::ci_wanted` is the pattern): never fleet-wide, never ahead of time, held
+in memory per repo for the session and re-walked when a sweep lands or a
+suspend returns. The walk applies `PRUNE_DIRS` and skips hidden directories
+except `.notez`, so `target/` and `node_modules/` cost nothing. A fleet-wide
+notes search would need an index and is a different feature; the per-repo
+question is the one pane 2 answers.
+
+**Rejected: a single master note per repo.** A fleetz-owned file (own store
+keyed by remote identity, or `notez/fleetz.md`) is simpler to add to and
+works for not-cloned rows, but it is one more notes system beside the vault
+and reads nothing that already exists. A `notez/fleetz.md` is just a file the
+tree already shows, so the idea costs nothing to keep open.
+
+**Rejected: `notez-core` as a dependency.** It would pin fleetz to the vault
+format for the sake of path rules a directory walk already finds.
+
+**Deferred.** Quick-add from a one-line prompt (the filter prompt is already a
+text input; `N` could append a timestamped line), a has-notes mark in the repo
+list or `info`, and the personal store `~/notez/personal/<project>/` as an
+extra root found by one stat on the folder name. All left out of FZ-53 on
+2026-10-26.

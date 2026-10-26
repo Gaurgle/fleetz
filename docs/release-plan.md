@@ -265,6 +265,10 @@ lands and he says go; FZ-52 (the rename) waits for 0.8.0 and his explicit
 word. Publishing, which replacing the public repoz needs, belongs to the
 release row (FZ-20, #3).
 
+FZ-53 (the `notes` view in pane 2: notez tree, markdown toggle, inspector)
+was agreed 2026-10-26, filed in Backlog under M4 at P2, not dispatched.
+Design in [ideas.md](ideas.md), "Repo notes in pane 2".
+
 ## Completion rule
 
 An agent finishing a turn is not a completed ticket. Done requires accepted
