@@ -14,7 +14,20 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Released** 2026-10-23 18:35 CEST by `claude-fable-5-1` (`claude
+**Held** since 2026-10-26 15:11 CET by `claude-fable-5-1` (`claude
+--agent fz-coordinator`, session
+`c47a5217-1276-4a26-b7a2-bceecc3c81fb`), taken on his "you can
+dispatch, choose what tickets to start on for now." The previous
+record below says the baton was released with nothing running;
+confirmed on start (no worker, no build, `main` `f2a9976` clean, CI
+green at `06e5026`). Before the takeover this session, as an advisor,
+agreed the notes view with him, filed FZ-53 (#109) and committed the
+docs on his "you may commit and push" (`27d750c`). **Running:** two
+`fz-worker` dispatched 15:20 CET, FZ-49 (#105) and FZ-53 (#109), see
+"In flight"; the `fz-small` slot is free. Stop conditions: his word,
+or the Fable usage limit (ask for routing, never switch billing).
+
+Previous record: **Released** 2026-10-23 18:35 CEST by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
 `d55ed60b-66ae-4198-a152-2c5eb3c46433`) on his "i want to start
 closing down for tonight" and "start nothing new". Held from 15:00
@@ -96,6 +109,19 @@ Andreas.
 Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
+
+- **2026-10-26, 15:10 CET, lead takeover and dispatch.** "you can
+  dispatch, choose what tickets to start on for now." after "you may
+  commit and push" (the FZ-53 docs, `27d750c`) and "sounds all good to
+  me. add it? lets try a markdown / notez-only toggle? and leave the
+  personal notes out for now. ready to put it as tickets?" (FZ-53,
+  #109, filed). Read as: takeover; dispatch of the lead's choice from
+  the recorded order and the new ticket, within the two-worker plus
+  one `fz-small` limit; merges under the safe-merge rule. Chosen:
+  FZ-49 (#105, next in the convergence order) and FZ-53 (#109).
+  **Not** read as: merging #93 or #96 (they wait for his look), the
+  `0.7.0` bump, FZ-52, or any ticket needing his look before merge.
+  "for now" is a standing scope until he says stop.
 
 - **2026-10-23, 14:58 to 15:00, lead takeover.** "i see. but i want the
   name for the TUI (fleetz) to actually be repoz, its just a better name.
@@ -347,8 +373,28 @@ sweep keeps it).
 
 ## In flight
 
-Two workers running since 13:30 (both slots; the `fz-small` slot is
-free):
+Two `fz-worker` (`claude-opus-5-5`, medium) running since 2026-10-26
+15:20 CET, the `fz-small` slot free; dispatch records are the first
+comment of today on each issue, handoff texts in the session
+scratchpad (`worker-105.txt`, `worker-109.txt`):
+
+- **#105 FZ-49 (print options `-s`, `-r`, `-p`, `--author`,
+  `--no-glyphs`): In progress.** Base `27d750c`, branch
+  `feat/105-print-options`, worktree `.claude/worktrees/issue-105`.
+  Golden parity against bash `3fab42a`; merge under the safe-merge
+  rule (byte parity, not a look item).
+- **#109 FZ-53 (the `notes` view in pane 2): In progress.** Base
+  `27d750c`, branch `feat/109-notes-view`, worktree
+  `.claude/worktrees/issue-109`. Layout and interaction, so it stops
+  at Ready to integrate for his look.
+
+Next for each: worker report, rulings on the issue, `fz-reviewer`,
+commit the accepted diff, push, branch CI, combined checks against
+`main`, then merge (#105) or his look (#109).
+
+Earlier record (2026-10-22, both merged since or waiting on his look,
+see the items below): two workers running since 13:30 (both slots;
+the `fz-small` slot was free):
 
 - **#93 FZ-30e (`l`/`a`/`x`/`O` on the highlighted run): Ready to
   integrate since 13:57, for his look.** Rework reviewed and accepted
