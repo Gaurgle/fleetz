@@ -128,6 +128,15 @@ pub const OPTION_CASES: &[(&str, &[&str], bool)] = &[
     ),
 ];
 
+/// The cases recorded on the fixture with [`Fixture::add_missing_remotes`],
+/// and whether bash prints a version line for them: the GitHub mode, where
+/// both failed fetches are rows and the summary counts them, and the target
+/// mode for the clone that is otherwise synced.
+pub const FETCH_FAILED_CASES: &[(&str, &[&str], bool)] = &[
+    ("fetch-failed-all", &["-a"], true),
+    ("fetch-failed-target", &["/fixture-org/orgproj"], false),
+];
+
 /// The author [`Fixture::add_other_author`] commits as, and the `--author`
 /// pattern that picks out their commits.
 pub const OTHER_AUTHOR: &str = "Other Person";
@@ -498,6 +507,23 @@ impl Fixture {
         let path = self.root.join("graphql-prs.json");
         std::fs::write(&path, payload.to_string()).unwrap();
         self.payload = path;
+    }
+
+    /// Remotes that do not exist, for D4's failure path: the bare remotes
+    /// of `alpha-tool` (one behind, as of its last fetch) and `orgproj`
+    /// (otherwise synced) are deleted, so a fetch of either fails offline.
+    /// Their `FETCH_HEAD`s go too, so fleetz reads them as never fetched and
+    /// fetches them (`stale_remotes`), as bash fetches every matched clone.
+    pub fn add_missing_remotes(&self) {
+        let clones = [
+            (LOGIN, "alpha-tool", &self.user_clone),
+            (ORG, "orgproj", &self.org_clone),
+        ];
+        for (owner, name, clone) in clones {
+            let bare = self.remotes.join(owner).join(format!("{name}.git"));
+            std::fs::remove_dir_all(bare).unwrap();
+            std::fs::remove_file(clone.join(".git/FETCH_HEAD")).unwrap();
+        }
     }
 
     fn init(&self, dir: &Path) {
@@ -1269,6 +1295,56 @@ mod tests {
     fn print_mode_matches_bash_repoz_with_options() {
         let fixture = options_fixture("golden_options");
         for &(case, args, versioned) in OPTION_CASES {
+            assert_matches_recording(case, &fixture.run_print_mode(args), versioned);
+        }
+    }
+
+    /// What each fetch-failed case must show in bash repoz, so a recording
+    /// that lost the failure (a remote that came back, a fetch skipped)
+    /// cannot pass: the note in front of the counts, never `synced` for a
+    /// failed clone, and the summary's count.
+    fn check_fetch_failed_case(case: &str, text: &str) {
+        let row = |name: &str| {
+            text.lines()
+                .find(|line| line.split_whitespace().any(|word| word == name))
+                .unwrap_or_else(|| panic!("{case}: no {name} row in\n{text}"))
+        };
+        let orgproj = row("orgproj");
+        assert!(orgproj.ends_with(" fetch failed"), "{case}: {orgproj}");
+        if case == "fetch-failed-all" {
+            let alpha = row("alpha-tool");
+            assert!(
+                alpha.ends_with(" fetch failed, 1\u{2193}"),
+                "{case}: {alpha}"
+            );
+            assert!(text.contains("2 fetch failed"), "{case}: summary\n{text}");
+            assert!(!text.contains("synced"), "{case}: synced\n{text}");
+        }
+    }
+
+    /// [`FETCH_FAILED_CASES`] against bash repoz.
+    #[test]
+    fn bash_repoz_renders_the_fetch_failed_cases() {
+        let Some(bin) = bash_with_hook() else {
+            return;
+        };
+        let fixture = Fixture::build("bash_fetch_failed");
+        fixture.add_missing_remotes();
+        for &(case, args, versioned) in FETCH_FAILED_CASES {
+            let live = fixture.run_bash(&bin, args);
+            check_fetch_failed_case(case, &strip_ansi(&String::from_utf8_lossy(&live)));
+            check_recording(case, &live, versioned);
+        }
+    }
+
+    /// D4's failure path byte for byte: a clone whose remote does not exist
+    /// prints `fetch failed` in front of its counts, is never `synced`, and
+    /// the summary counts it.
+    #[test]
+    fn print_mode_matches_bash_repoz_with_failed_fetches() {
+        let fixture = Fixture::build("golden_fetch_failed");
+        fixture.add_missing_remotes();
+        for &(case, args, versioned) in FETCH_FAILED_CASES {
             assert_matches_recording(case, &fixture.run_print_mode(args), versioned);
         }
     }
