@@ -291,6 +291,30 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-26
 
+Clock note: this lead's issue and chat stamps ran up to 70 minutes
+ahead of the wall clock in the afternoon (the FZ-49 merge written
+"16:38" happened before 15:59; the FZ-50 review dispatch written
+"17:16" likewise). Commit dates are authoritative.
+
+- **#106 (FZ-50), print mode's fetch outcomes and a stalled remote.**
+  Merged `4632ac5` at about 16:05 CET; ticket commit `dc4326a` (base
+  `d9b8e33`, branch `feat/106-print-fetch-outcomes`, worker `fz-worker`
+  `claude-opus-5-5` medium, reviewer `fz-reviewer` `claude-opus-5-5`
+  medium, accepted first round). Print mode already rendered a failed
+  fetch as bash `3fab42a` does, so the ticket is proof: two golden
+  cases on missing remotes (`fetch-failed-all`, `fetch-failed-target`,
+  builder `add_missing_remotes`, live-bash guard
+  `check_fetch_failed_case`), a bounded stall test through the FZ-35a
+  seam into the real row and summary, a credential test on the printed
+  lines, stdout and stderr; the `#[cfg(test)]` `fetch_watched` seam
+  made `pub(crate)`. Reviewer mutations (summary count, row and target
+  outcomes ignored, the config path drawn or written by fd, the
+  deadline times 20, the builder removed) all caught. Open: F1, the
+  print-mode child runs without `--nocapture`, so an `eprintln!` of a
+  credential would pass the stderr check (none exists on that path).
+  Branch CI 40345705104 green, `main` CI 40346149642 green, 1348 tests.
+  FZ-50: review changes 0; fix cycles 0; owner decisions 0; worker 8; review 6; usage worker 163k, review 46k tokens
+
 - **#105 (FZ-49), print mode's `-s`, `-r`, `-p`, `--author` and
   `--no-glyphs`.** Merged `0db0d32` at 16:38 CET; ticket commit
   `2c7c303` (base `27d750c`, branch `feat/105-print-options`, worker
