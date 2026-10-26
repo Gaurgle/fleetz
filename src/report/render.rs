@@ -268,6 +268,17 @@ impl Layout {
         )
     }
 
+    /// bash's `-r` line under a row: the release status, mauve when commits
+    /// wait since the tag, else overlay.
+    pub fn release(self, status: &str) -> String {
+        let color = if status.contains(" since ") {
+            MAUVE
+        } else {
+            OVERLAY
+        };
+        format!("      {SURFACE}\u{2514}{RULE}{RESET} {color}{status}{RESET}\n")
+    }
+
     /// The divider, the counts in words, the glyph legend and the version
     /// flush right, then a blank line.
     pub fn summary(self, counts: &Counts, version: &str) -> String {
@@ -343,6 +354,8 @@ pub struct Counts {
     pub stashed: u32,
     pub synced: u32,
     pub not_local: u32,
+    /// Open pull requests on the rows drawn; counted only under `-p`.
+    pub open_prs: u32,
 }
 
 impl Counts {
@@ -357,6 +370,7 @@ impl Counts {
             (self.stashed, MAUVE, "stashed"),
             (self.synced, GREEN, "synced"),
             (self.not_local, OVERLAY, "not local"),
+            (self.open_prs, MAUVE, "open PRs"),
         ]
         .iter()
         .filter(|(n, _, _)| *n > 0)

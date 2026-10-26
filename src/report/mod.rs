@@ -66,7 +66,7 @@ pub async fn print(args: &Args, out: &mut dyn Write) -> io::Result<i32> {
         == Some(crate::app::Icons::Plain);
     let layout = Layout {
         width: render::term_width(),
-        glyphs: !plain,
+        glyphs: !plain && !args.no_glyphs,
     };
 
     // bash checks these two before it asks GitHub anything, `-d` first, and
@@ -106,6 +106,9 @@ pub async fn print(args: &Args, out: &mut dyn Write) -> io::Result<i32> {
         home: &home,
         active: &active,
         author: args.author.as_deref(),
+        stat: args.stat,
+        releases: args.releases,
+        prs: args.prs,
         counts: Counts::default(),
     };
     report.write(&header, rows, out).await?;
@@ -248,6 +251,9 @@ async fn print_local(
         home,
         active: &[],
         author: None,
+        stat: false,
+        releases: false,
+        prs: false,
         counts: Counts::default(),
     };
     let mut text = layout.header("local changes");
@@ -587,6 +593,12 @@ struct Report<'a> {
     home: &'a Path,
     active: &'a [GithubRepo],
     author: Option<&'a str>,
+    /// `-s`: the diff stat on every commit line, not only a changed row's.
+    stat: bool,
+    /// `-r`: a release line under each pass 1 and pass 2 row.
+    releases: bool,
+    /// `-p` as repoz reads it: each row's open-PR count, and their total.
+    prs: bool,
     counts: Counts,
 }
 
@@ -671,6 +683,21 @@ impl Report<'_> {
             .map_or(row.name.as_str(), |r| r.name.as_str())
     }
 
+    /// The row's open pull requests under `-p`, as the payload counts them;
+    /// 0 without `-p`. Added to the summary's total.
+    fn open_prs(&mut self, row: &RepoStatus) -> u32 {
+        if !self.prs {
+            return 0;
+        }
+        let count = self
+            .active
+            .iter()
+            .find(|r| crate::names_remote(row.owner.as_deref(), &row.name, r))
+            .map_or(0, |r| r.pr_count);
+        self.counts.open_prs += count;
+        count
+    }
+
     /// The row's checkout on disk, from the path it displays.
     fn absolute(&self, row: &RepoStatus) -> PathBuf {
         on_disk(self.home, row)
@@ -696,7 +723,7 @@ impl Report<'_> {
             true => render::with_op("fetch failed", &symbols),
             false => symbols,
         };
-        let status = render::with_op(op, &noted);
+        let mut status = render::with_op(op, &noted);
 
         let counts = &mut self.counts;
         counts.in_progress += u32::from(!op.is_empty());
@@ -705,6 +732,16 @@ impl Report<'_> {
         counts.ahead += u32::from(ahead > 0);
         counts.uncommitted += u32::from(row.dirty > 0);
         counts.stashed += stashes;
+
+        // bash appends the count after the counters, and a row with only
+        // open PRs is not synced.
+        let prs = self.open_prs(row);
+        if prs > 0 {
+            if !status.is_empty() {
+                status.push(' ');
+            }
+            status.push_str(&format!("{prs}PR"));
+        }
 
         let changed = !status.is_empty();
         let mut text = match changed {
@@ -717,23 +754,27 @@ impl Report<'_> {
                 self.status_row(row, "synced", palette::GREEN)
             }
         };
+        if self.releases {
+            text.push_str(&self.layout.release(&release_status(&path).await));
+        }
+        let with_stat = changed || self.stat;
 
         let diverged: Vec<_> = tracked
             .iter()
             .filter(|b| b.behind > 0 || b.ahead > 0)
             .collect();
         if diverged.is_empty() {
-            text.push_str(&self.commit_lines(&path, "-1", changed).await);
+            text.push_str(&self.commit_lines(&path, "-1", with_stat).await);
         }
         for branch in diverged {
             let upstream = branch.upstream.as_deref().unwrap_or_default();
             if branch.behind > 0 {
                 let range = format!("{}..{upstream}", branch.name);
-                text.push_str(&self.commit_lines(&path, &range, changed).await);
+                text.push_str(&self.commit_lines(&path, &range, with_stat).await);
             }
             if branch.ahead > 0 {
                 let range = format!("{upstream}..{}", branch.name);
-                text.push_str(&self.commit_lines(&path, &range, changed).await);
+                text.push_str(&self.commit_lines(&path, &range, with_stat).await);
             }
         }
         text
@@ -751,11 +792,15 @@ impl Report<'_> {
 
     fn not_cloned_row(&mut self, row: &RepoStatus) -> String {
         self.counts.not_local += 1;
+        let status = match self.open_prs(row) {
+            0 => "not cloned".to_string(),
+            prs => format!("not cloned {prs}PR"),
+        };
         self.layout.row(
             Glyph::of(row.repo_kind),
             &row.name,
             None,
-            "not cloned",
+            &status,
             palette::RED,
         )
     }
@@ -809,6 +854,34 @@ fn row_color(status: &str, op: &str, dirty: u32, stashes: u32) -> &'static str {
         palette::YELLOW
     } else {
         palette::PEACH
+    }
+}
+
+/// bash's `release_status`: commits on HEAD since the newest reachable tag
+/// with a digit in it (`--no-merges`), `released <tag>` when none, or
+/// `unreleased` when no such tag is reachable.
+async fn release_status(path: &Path) -> String {
+    let describe = ["describe", "--tags", "--abbrev=0", "--match", "*[0-9]*"];
+    let tag = match crate::git::run_git(path, &describe).await {
+        Some(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+        _ => return "unreleased".to_string(),
+    };
+    let range = format!("{tag}..HEAD");
+    let since = crate::git::run_git(path, &["rev-list", "--count", "--no-merges", &range])
+        .await
+        .filter(|out| out.status.success())
+        .and_then(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
+        .unwrap_or(0);
+    match since {
+        0 => format!("released {tag}"),
+        n => format!("{n} since {tag}"),
     }
 }
 
