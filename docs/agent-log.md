@@ -289,6 +289,26 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-10-26
+
+- **#105 (FZ-49), print mode's `-s`, `-r`, `-p`, `--author` and
+  `--no-glyphs`.** Merged `0db0d32` at 16:38 CET; ticket commit
+  `2c7c303` (base `27d750c`, branch `feat/105-print-options`, worker
+  `fz-worker` `claude-opus-5-5` medium, fix cycle `fz-small` `sonnet`
+  medium, reviewer `fz-reviewer` `claude-opus-5-5` medium, two
+  passes). Byte parity with bash `3fab42a` on nine recordings
+  (`opt-*`), one options fixture with new builders `add_releases`,
+  `add_other_author`, `add_pull_requests`; `Layout::release`,
+  `Counts::open_prs`, `release_status`; print-only flags carry
+  `requires = "print"`, `-p` and `--author` unchanged for the TUI.
+  Review 1 changes requested (no live-bash guard that `-s` shows the
+  stat on an unchanged row); fix cycle 1 added the line-level arm,
+  proven on `opt-releases`. Rulings: `--author` with a space (bash
+  unquoted) and `-p` counts by owner and name are D3 entries
+  (`0ae5020`). Open: F1, the no-PR check skips `opt-target-no-glyphs`.
+  Branch CI 40341740278 green, `main` CI 40342344386 green, 1344 tests.
+  FZ-49: review changes 1; fix cycles 1; owner decisions 0; worker 13; review 7; small 3; usage worker 150k, review 131k, small 23k tokens
+
 ### Merged on 2026-10-23
 
 Clock note: this lead's chat and issue stamps ran up to 40 minutes

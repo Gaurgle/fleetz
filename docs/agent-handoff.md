@@ -378,19 +378,23 @@ Two `fz-worker` (`claude-opus-5-5`, medium) running since 2026-10-26
 comment of today on each issue, handoff texts in the session
 scratchpad (`worker-105.txt`, `worker-109.txt`):
 
-- **#105 FZ-49 (print options `-s`, `-r`, `-p`, `--author`,
-  `--no-glyphs`): In progress.** Base `27d750c`, branch
-  `feat/105-print-options`, worktree `.claude/worktrees/issue-105`.
-  Golden parity against bash `3fab42a`; merge under the safe-merge
-  rule (byte parity, not a look item).
-- **#109 FZ-53 (the `notes` view in pane 2): In progress.** Base
-  `27d750c`, branch `feat/109-notes-view`, worktree
-  `.claude/worktrees/issue-109`. Layout and interaction, so it stops
-  at Ready to integrate for his look.
-
-Next for each: worker report, rulings on the issue, `fz-reviewer`,
-commit the accepted diff, push, branch CI, combined checks against
-`main`, then merge (#105) or his look (#109).
+- **#105 FZ-49: Done**, merged `0db0d32` 16:38 CET, worktree swept
+  (record in the log, "Merged on 2026-10-26"). One worker slot free.
+- **#109 FZ-53 (the `notes` view in pane 2): In progress, stopped
+  for his word.** Base `27d750c`, branch `feat/109-notes-view`,
+  worktree `.claude/worktrees/issue-109`, uncommitted (tracked diff
+  `972ec9d0a4c136b9`, 52379 bytes; new `src/notes.rs` 13971 bytes).
+  The feature is built; `cargo test` is red on seven existing tests
+  that encode `ci` as the last view (one assertion each, listed on the
+  issue). The lead's ruling that these fall under the standing
+  existing-test exception was wrong and is withdrawn on the issue:
+  that exception covers only a new struct field. **They need his
+  word.** On it: tell the worker (resume it, or a fresh `fz-worker`
+  with the list from the issue) to apply exactly the seven, then
+  `fz-reviewer` on the full diff, commit, push, branch CI, combined
+  checks, Ready to integrate for his look (layout and interaction).
+  Follow-up for his word: the footer's `j/k` label still says "commit"
+  in `notes` (`src/ui/footer.rs` was out of scope).
 
 Earlier record (2026-10-22, both merged since or waiting on his look,
 see the items below): two workers running since 13:30 (both slots;
@@ -444,14 +448,15 @@ Nothing starts until Andreas opens the next session.
    accepted, plan
    [2026-10-23-repoz-convergence-plan.md](superpowers/plans/2026-10-23-repoz-convergence-plan.md)
    agreed, FZ-46 to FZ-52 filed (#102 to #108), Backlog, milestone
-   `repoz convergence`. FZ-46, FZ-47, FZ-48 Done; P1 landed
-   (`~/repos/repoz` `3fab42a`). **Next: FZ-49 (#105) on his word**
-   (`-s`, `-r`, `-p`, `--author`, `--no-glyphs`; print-only flags
-   rejected without `--print`), one `fz-worker` from a fresh worktree
-   off `main`, same pattern as #103 and #104 (rulings and records on
-   those issues show the shape: bash `3fab42a` is the arbiter, record
-   through the harness copy-over path, new `Fixture::add_...` builders
-   rather than edits to existing cases). Then FZ-50, FZ-51. Ask before
+   `repoz convergence`. FZ-46 to FZ-49 Done; P1 landed
+   (`~/repos/repoz` `3fab42a`). **Next: FZ-50 (#106)** under his
+   2026-10-26 "choose what tickets to start on for now" (fetch
+   outcomes and a stalled remote), one `fz-worker` from a fresh
+   worktree off `main`, same pattern as #103 to #105 (rulings and
+   records on those issues show the shape: bash `3fab42a` is the
+   arbiter, record through the harness copy-over path, new
+   `Fixture::add_...` builders rather than edits to existing cases).
+   Then FZ-51. Ask before
    creating: an issue for the flaky `clipboard::tests`
    (`a_failing_command_is_reported`, `the_first_command_on_path_receives_the_hash`,
    a write-then-exec race seen once in five runs at the FZ-48 review).
