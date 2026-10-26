@@ -102,6 +102,37 @@ pub const PREFIX_REPO: &str = "alpha";
 pub const WT_MAIN: &str = "wtmain";
 pub const WT_LINKED: &str = "wtmain-wt";
 
+/// The cases recorded on the options fixture (`options_fixture` in the
+/// tests: [`Fixture::add_local_changes`], [`Fixture::add_releases`],
+/// [`Fixture::add_other_author`] and [`Fixture::add_pull_requests`]), and
+/// whether bash prints a version line for them. Each print option alone
+/// under `-a`, `-s -r -p` together, and `--no-glyphs` in the two modes that
+/// ask GitHub nothing, where bash ignores the other options.
+pub const OPTION_CASES: &[(&str, &[&str], bool)] = &[
+    ("opt-stat", &["-a", "-s"], true),
+    ("opt-releases", &["-a", "-r"], true),
+    ("opt-prs", &["-a", "-p"], true),
+    ("opt-author", &["-a", "--author", OTHER_AUTHOR_MATCH], true),
+    ("opt-no-glyphs", &["-a", "--no-glyphs"], true),
+    ("opt-stat-releases-prs", &["-a", "-s", "-r", "-p"], true),
+    ("opt-dirty-no-glyphs", &["-d", "--no-glyphs"], false),
+    (
+        "opt-target-no-glyphs",
+        &["/fixture-user/alpha-tool", "--no-glyphs"],
+        false,
+    ),
+    (
+        "opt-target-options",
+        &["/fixture-user/alpha-tool", "-s", "-r", "-p"],
+        false,
+    ),
+];
+
+/// The author [`Fixture::add_other_author`] commits as, and the `--author`
+/// pattern that picks out their commits.
+pub const OTHER_AUTHOR: &str = "Other Person";
+pub const OTHER_AUTHOR_MATCH: &str = "Other";
+
 const CHILD_OUT: &str = "FLEETZ_PRINT_CHILD_OUT";
 const CHILD_ARGS: &str = "FLEETZ_PRINT_CHILD_ARGS";
 const CHILD_TEST: &str = "report::parity::print_mode_child";
@@ -393,6 +424,82 @@ impl Fixture {
         self.git(&main, &["stash", "-q"]);
     }
 
+    /// Tags for `-r`. `alpha-tool`'s HEAD is tagged `v1.0.0` (`released`);
+    /// `orgproj` is tagged `v0.1.0` and then fast-forwarded one commit past
+    /// it (`1 since`), still synced; `elsewhere-app`'s only tag is `latest`,
+    /// which the `*[0-9]*` match skips (`unreleased`).
+    pub fn add_releases(&self) {
+        self.git(&self.user_clone, &["tag", "v1.0.0"]);
+        self.git(&self.org_clone, &["tag", "v0.1.0"]);
+        self.push_upstream(ORG, "orgproj", "Org release follow-up");
+        self.git(&self.org_clone, &["pull", "-q", "--ff-only"]);
+        self.git(&self.elsewhere_clone, &["tag", "latest"]);
+    }
+
+    /// Commits by [`OTHER_AUTHOR`] for `--author`: one pushed to
+    /// `alpha-tool`'s remote and fetched, so the clone is two behind with
+    /// two authors, and one unpushed in `elsewhere-app`, two ahead.
+    pub fn add_other_author(&self) {
+        let scratch = self.seed("alpha-tool");
+        self.git(
+            &self.root,
+            &[
+                "clone",
+                "-q",
+                &github_url(LOGIN, "alpha-tool"),
+                scratch.to_str().unwrap(),
+            ],
+        );
+        self.commit_as_other(
+            &scratch,
+            "lexer.txt",
+            "Fix the lexer",
+            "2026-03-12T11:00:00Z",
+        );
+        self.git(&scratch, &["push", "-q", "origin", "main"]);
+        std::fs::remove_dir_all(&scratch).unwrap();
+        self.git(&self.user_clone, &["fetch", "-q"]);
+
+        self.commit_as_other(
+            &self.elsewhere_clone,
+            "layout.txt",
+            "Sketch the layout",
+            "2026-03-07T09:00:00Z",
+        );
+    }
+
+    /// Open pull requests for `-p`: the payload, copied under `root` with
+    /// `orgproj` at 2 and `ghost-repo` at 3 (`alpha-tool` keeps its 1), and
+    /// read from there by both tools.
+    pub fn add_pull_requests(&mut self) {
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&self.payload).unwrap()).unwrap();
+        let open = |node: &mut serde_json::Value| {
+            let count = match node["name"].as_str() {
+                Some("orgproj") => 2,
+                Some(NOT_CLONED) => 3,
+                _ => return,
+            };
+            node["pullRequests"]["totalCount"] = count.into();
+        };
+        let viewer = &mut payload["data"]["viewer"];
+        viewer["repositories"]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .for_each(open);
+        for org in viewer["organizations"]["nodes"].as_array_mut().unwrap() {
+            org["repositories"]["nodes"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .for_each(open);
+        }
+        let path = self.root.join("graphql-prs.json");
+        std::fs::write(&path, payload.to_string()).unwrap();
+        self.payload = path;
+    }
+
     fn init(&self, dir: &Path) {
         std::fs::create_dir_all(dir).unwrap();
         self.git(dir, &["init", "-q"]);
@@ -466,6 +573,22 @@ impl Fixture {
         let status = self
             .git_command(dir)
             .args(["commit", "-q", "-m", subject])
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("spawn git");
+        assert!(status.success(), "git commit in {dir:?} failed");
+    }
+
+    /// [`Fixture::commit`] by [`OTHER_AUTHOR`].
+    fn commit_as_other(&self, dir: &Path, file: &str, subject: &str, date: &str) {
+        std::fs::write(dir.join(file), format!("{subject}\n")).unwrap();
+        self.git(dir, &["add", file]);
+        let status = self
+            .git_command(dir)
+            .args(["commit", "-q", "-m", subject])
+            .env("GIT_AUTHOR_NAME", OTHER_AUTHOR)
+            .env("GIT_AUTHOR_EMAIL", "other@example.com")
             .env("GIT_AUTHOR_DATE", date)
             .env("GIT_COMMITTER_DATE", date)
             .status()
@@ -1075,6 +1198,77 @@ mod tests {
         let fixture = Fixture::build("golden_worktree");
         fixture.add_worktree_and_prefix();
         for &(case, args, versioned) in WORKTREE_CASES {
+            assert_matches_recording(case, &fixture.run_print_mode(args), versioned);
+        }
+    }
+
+    /// The fixture the [`OPTION_CASES`] were recorded on.
+    fn options_fixture(tag: &str) -> Fixture {
+        let mut fixture = Fixture::build(tag);
+        fixture.add_local_changes();
+        fixture.add_releases();
+        fixture.add_other_author();
+        fixture.add_pull_requests();
+        fixture
+    }
+
+    /// What each option case must show in bash repoz, so a recording that
+    /// misses the option's point cannot pass.
+    fn check_option_case(case: &str, text: &str) {
+        let wants: &[&str] = match case {
+            "opt-releases" => &["released v1.0.0", "1 since v0.1.0", "unreleased"],
+            "opt-prs" => &["2\u{2193} 1PR", "2PR", "not cloned 3PR", "6 open PRs"],
+            "opt-author" => &["(author: Other)", "Fix the lexer", "Sketch the layout"],
+            "opt-stat-releases-prs" => &["released v1.0.0", "6 open PRs", "+1  Fixture Author"],
+            _ => &[],
+        };
+        for want in wants {
+            assert!(text.contains(want), "{case}: no {want:?} in\n{text}");
+        }
+        if case == "opt-stat" {
+            // The stat sits after a dot leader, so check one line, not a substring.
+            assert!(
+                text.lines()
+                    .any(|l| l.contains("Org release follow-up") && l.contains("+1")),
+                "{case}: no stat on the unchanged row in\n{text}"
+            );
+        }
+        if case == "opt-author" {
+            assert!(
+                !text.contains("Fixture Author"),
+                "{case}: unfiltered\n{text}"
+            );
+        }
+        if case.contains("no-glyphs") {
+            for glyph in ["\u{f1ad}", "\u{f023}", "\u{f0ac}"] {
+                assert!(!text.contains(glyph), "{case}: a glyph\n{text}");
+            }
+        }
+        if !case.contains("prs") && !case.contains("target") {
+            assert!(!text.contains("PR"), "{case}: PR counts without -p\n{text}");
+        }
+    }
+
+    /// [`OPTION_CASES`] against bash repoz.
+    #[test]
+    fn bash_repoz_renders_the_option_cases() {
+        let Some(bin) = bash_with_hook() else {
+            return;
+        };
+        let fixture = options_fixture("bash_options");
+        for &(case, args, versioned) in OPTION_CASES {
+            let live = fixture.run_bash(&bin, args);
+            check_option_case(case, &strip_ansi(&String::from_utf8_lossy(&live)));
+            check_recording(case, &live, versioned);
+        }
+    }
+
+    /// `-s`, `-r`, `-p`, `--author` and `--no-glyphs` byte for byte, alone
+    /// and together.
+    #[test]
+    fn print_mode_matches_bash_repoz_with_options() {
+        let fixture = options_fixture("golden_options");
+        for &(case, args, versioned) in OPTION_CASES {
             assert_matches_recording(case, &fixture.run_print_mode(args), versioned);
         }
     }
