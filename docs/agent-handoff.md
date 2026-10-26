@@ -379,7 +379,13 @@ comment of today on each issue, handoff texts in the session
 scratchpad (`worker-105.txt`, `worker-109.txt`):
 
 - **#105 FZ-49: Done**, merged `0db0d32` 16:38 CET, worktree swept
-  (record in the log, "Merged on 2026-10-26"). One worker slot free.
+  (record in the log, "Merged on 2026-10-26").
+- **#106 FZ-50 (print mode's fetch outcomes and a stalled remote): In
+  progress**, dispatched 16:50 CET under the standing scope. Base
+  `d9b8e33`, branch `feat/106-print-fetch-outcomes`, worktree
+  `.claude/worktrees/issue-106`, handoff `worker-106.txt` in the
+  session scratchpad; dispatch record on the issue. Byte parity, so
+  it merges under the safe-merge rule.
 - **#109 FZ-53 (the `notes` view in pane 2): In progress, stopped
   for his word.** Base `27d750c`, branch `feat/109-notes-view`,
   worktree `.claude/worktrees/issue-109`, uncommitted (tracked diff
