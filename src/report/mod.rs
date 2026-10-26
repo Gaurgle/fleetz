@@ -1292,6 +1292,138 @@ mod tests {
         assert!(report.contains("1 stashed"), "{report}");
     }
 
+    /// `orgproj`'s row as print mode draws a pass 1 row, its fetch facts
+    /// holding `outcome`, and the summary after it. No glyphs, no escapes.
+    async fn checked_row_after(
+        fixture: &Fixture,
+        outcome: crate::git::FetchOutcome,
+    ) -> (String, Counts, String) {
+        let clone = &fixture.org_clone;
+        let mut row = bare_row(
+            "orgproj".to_string(),
+            Some(clone.display().to_string()),
+            RepoLocation::Primary,
+        );
+        row.dirty = crate::git::dirty_count(clone).await;
+        row.branches = crate::git::branch_statuses(clone).await;
+        row.fetch.outcome = outcome;
+        let layout = Layout {
+            width: 100,
+            glyphs: false,
+        };
+        let mut report = Report {
+            layout,
+            home: &fixture.home,
+            active: &[],
+            author: None,
+            stat: false,
+            releases: false,
+            prs: false,
+            counts: Counts::default(),
+        };
+        let line = strip_ansi(&report.checked_row(&row).await);
+        let summary = strip_ansi(&layout.summary(&report.counts, "fleetz 0.0.0"));
+        (line, report.counts, summary)
+    }
+
+    /// D4 with FZ-35a's stall limit, through its seam
+    /// (`git::fetch_watched`, here at 1 s; print mode's fetches run under
+    /// `FETCH_STALL_LIMIT` through `fetch_reporting`): a fetch whose remote
+    /// goes silent is cut at the limit as a failed fetch, and the row it
+    /// lands on reads `fetch failed` where it would read `synced`, and is
+    /// counted as a failed fetch, never as synced. No retry: one fetch, one
+    /// outcome.
+    #[tokio::test]
+    async fn a_stalled_fetch_ends_at_the_limit_and_its_row_is_never_synced() {
+        use crate::git::{FetchFailure, FetchFailureKind, FetchOutcome};
+        let fixture = Fixture::build("stall");
+        let clone = &fixture.org_clone;
+        // The bare remote by path, so the fetch needs no fixture `HOME` to
+        // stay offline, and an upload-pack that never answers.
+        let bare = fixture.remotes.join(super::parity::ORG).join("orgproj.git");
+        fixture.git(
+            clone,
+            &["remote", "set-url", "origin", bare.to_str().unwrap()],
+        );
+        fixture.git(
+            clone,
+            &["config", "remote.origin.uploadpack", "sleep 600; :"],
+        );
+
+        let (synced, _, _) = checked_row_after(&fixture, FetchOutcome::Succeeded).await;
+        assert!(
+            synced.contains(" synced"),
+            "not synced to begin with: {synced}"
+        );
+
+        let limit = std::time::Duration::from_secs(1);
+        let start = std::time::Instant::now();
+        let outcome = crate::git::fetch_watched(clone, limit, |_| {}).await;
+        let took = start.elapsed();
+        assert_eq!(
+            outcome,
+            FetchOutcome::Failed(FetchFailure {
+                kind: FetchFailureKind::TimedOut,
+                detail: None,
+            })
+        );
+        assert!(took >= limit, "cut before the limit: {took:?}");
+        assert!(
+            took < std::time::Duration::from_secs(10),
+            "not cut at the limit: {took:?}"
+        );
+
+        let (line, counts, summary) = checked_row_after(&fixture, outcome).await;
+        let row = line.lines().next().unwrap_or_default();
+        assert!(row.ends_with(" fetch failed"), "{line}");
+        assert!(!line.contains("synced"), "{line}");
+        assert_eq!((counts.fetch_failed, counts.synced), (1, 0), "{counts:?}");
+        assert!(summary.contains("1 fetch failed"), "{summary}");
+        assert!(!summary.contains("synced"), "{summary}");
+    }
+
+    /// Fetch outcome contract rule 8: a clone whose origin carries a token
+    /// fails its fetch (nothing listens on the port) and prints `fetch
+    /// failed`, and no byte print mode writes, nor anything its process
+    /// prints, holds the token or the user it rides with. In the GitHub
+    /// mode and the target mode, the two that fetch.
+    #[test]
+    fn no_credential_reaches_a_printed_line() {
+        const USER: &str = "fz-bot";
+        const TOKEN: &str = "ghp_FixtureSecret0123456789";
+        let fixture = Fixture::build("credential");
+        let clone = &fixture.org_clone;
+        let url = format!(
+            "https://{USER}:{TOKEN}@127.0.0.1:9/{}/orgproj.git",
+            super::parity::ORG
+        );
+        fixture.git(clone, &["remote", "set-url", "origin", &url]);
+        // Never fetched, so the GitHub mode fetches it too (`stale_remotes`).
+        std::fs::remove_file(clone.join(".git/FETCH_HEAD")).unwrap();
+
+        for args in [&["-a"][..], &["/fixture-org/orgproj"]] {
+            let (report, child) = fixture.run_print_mode_full(args);
+            let shown = text(&report);
+            assert!(
+                line_of(&shown, "orgproj").ends_with(" fetch failed"),
+                "{args:?}: the fetch did not fail\n{shown}"
+            );
+            for (stream, bytes) in [
+                ("report", &report),
+                ("stdout", &child.stdout),
+                ("stderr", &child.stderr),
+            ] {
+                let bytes = String::from_utf8_lossy(bytes);
+                for secret in [TOKEN, USER] {
+                    assert!(
+                        !bytes.contains(secret),
+                        "{args:?}: {secret} in the {stream}\n{bytes}"
+                    );
+                }
+            }
+        }
+    }
+
     /// A loopback listener answering one request with `body`, handing back
     /// the request it read.
     async fn serve_capturing(body: String) -> (String, tokio::sync::oneshot::Receiver<String>) {

@@ -890,7 +890,7 @@ async fn watch_fetch(
 /// fetch (the guard dropped mid-run) kills the group and removes them
 /// without waiting (`FetchGroup`'s `Drop`).
 #[cfg(test)]
-async fn fetch_watched(
+pub(crate) async fn fetch_watched(
     repo_path: &Path,
     stall_limit: std::time::Duration,
     on_progress: impl FnMut(FetchProgress),
