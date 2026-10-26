@@ -99,6 +99,8 @@ one of the two unless it is listed in D3.
 | Glyph on a local-only row | looked up by folder name | only on a carrier row matched through its origin (house invariant: a local-only row is never matched by name); added 2026-10-23 at FZ-47 fix cycle 1 |
 | A pass 3 clone or linked worktree whose origin names a GitHub repo passes 1 and 2 did not find | a `not cloned` row for the repo, the clone shown without a glyph | the clone carries the repo (glyph, no `not cloned` row, not counted `not local`); a consequence of the matching row above; added at FZ-48 |
 | Target (`/owner/repo`) under a hidden `$HOME` path that is no configured root | found by bash's `find` | not found (house invariant: the `$HOME` sweep skips dot-directories; name it in `extra_dirs`); added at FZ-48 |
+| `--author` with a space in the name | `$author_flag` is unquoted, so git gets two arguments, fails, and no commit lines print | one argument, filtered as asked; added at FZ-49 |
+| `-p` counts for two same-named repos under different owners | looked up by name over the whole payload | the row's owner and name (house invariant); added at FZ-49 |
 
 Noted at FZ-48, not a D3 entry until checked: `discovery::find_all_local`
 may find repos one level deeper than bash's `find -maxdepth 4`; no fixture
