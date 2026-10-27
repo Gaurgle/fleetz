@@ -438,12 +438,21 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   the rule, sweep, log. Try: `cargo run --release --manifest-path
   .claude/worktrees/issue-109/Cargo.toml`, `]` to `notes`, `m`,
   `Enter` on a file.
-- **#111 FZ-55 (scroll margin on every list, reveal on expand):
-  Ready, not dispatched**, filed 11:45 CET on his "port if needed,
-  or just implement this" and "the jizt of it all is the
-  scroll_padding" (a notez port, `Gaurgle/notez` `d32a412`). P2, M3.
-  Dispatch to the first free worker slot; it coordinates the pane 2
-  cursor-follow region with FZ-45. A look change.
+- **#101 FZ-45 (slot digest): Review** since 12:12 CET. Worker
+  delivered all five steps (diff `dbf10644e12c4f4a`, 59211 bytes,
+  new `src/digest.rs` and `src/ui/digest.rs`), 1380 tests, no
+  existing test edited; the lead's rulings 1 to 8 on the issue (the
+  pane 1 click now selects a row: flagged for his look). A new
+  screen: stops at Ready to integrate for his look. Shares regions
+  with FZ-53 and FZ-55; the lead merges the later ones with a
+  re-verified scratch merge.
+- **#111 FZ-55 (scroll margin on every list, reveal on expand): In
+  progress** since 12:15 CET, filed 11:45 on his "port if needed, or
+  just implement this" and "the jizt of it all is the scroll_padding"
+  (a notez port, `Gaurgle/notez` `d32a412`). P2, M3. Base `b799c49`,
+  branch `feat/111-scroll-margin`, worktree
+  `.claude/worktrees/issue-111`, handoff `worker-111.txt`. A look
+  change. Pane 2 scroll tests that pin offsets stop for his word.
 
 Earlier record (2026-10-22, both merged since or waiting on his look,
 see the items below): two workers running since 13:30 (both slots;
