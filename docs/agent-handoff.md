@@ -364,6 +364,16 @@ limit and ask Andreas for routing; no API billing or paid credits.
 A new lead confirms the first three once before relying on them; the rest
 are written into the repository.
 
+- **UI rules from his FZ-45 look** (2026-10-27, 13:55 and 14:10).
+  Indicators (CI, PRs, counters) are structured and have their place:
+  a pane 2 view or digest draws them in pane 1's row grammar through
+  the same badge functions and colors, never as prose. Information is
+  not hidden behind a scroll except in a list, and a list that
+  overflows says so with a count; non-list detail uses the full width
+  of its pane and is visible without scrolling. Applies to every
+  later UI ticket; FZ-45 fix cycle 2 is the first application. Worth
+  a CLAUDE.md line on his yes.
+
 - **Pace and dispatch** (2026-10-01, reconfirmed through 2026-10-16 "lets
   get started"). "keep me updated. backend is still vital, but its more
   important that we move forward in a good pace. But keep me updated, and
