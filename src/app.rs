@@ -45,17 +45,22 @@ pub enum HistoryView {
     /// polls: the CI data layer asks GitHub only while this one is on
     /// screen (`App::ci_wanted`).
     Ci,
+    /// The selected repo's notes as a tree, the highlighted file in the
+    /// inspector (FZ-53). Walks the repo only while on screen
+    /// (`App::notes_wanted`).
+    Notes,
 }
 
 impl HistoryView {
     /// Every view, in the order the tab strip draws them and `V` cycles them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Info,
         Self::Commits,
         Self::Reflog,
         Self::Graph,
         Self::Branches,
         Self::Ci,
+        Self::Notes,
     ];
     pub const COUNT: usize = Self::ALL.len();
 
@@ -68,6 +73,7 @@ impl HistoryView {
             Self::Graph => 3,
             Self::Branches => 4,
             Self::Ci => 5,
+            Self::Notes => 6,
         }
     }
 
@@ -79,6 +85,7 @@ impl HistoryView {
             Self::Graph => "graph",
             Self::Branches => "branches",
             Self::Ci => "ci",
+            Self::Notes => "notes",
         }
     }
 }
@@ -2332,6 +2339,21 @@ pub struct App {
     /// (`RefCell` for the reason `detail_row_tops` is one). A held log never
     /// changes, so its job id and the width are the whole key.
     pub ci_log_wrap: std::cell::RefCell<Option<CiLogWrap>>,
+    /// The `notes` view's walk per repo, keyed by the row's path, held for
+    /// the session and never written to disk (FZ-53). Walked only while the
+    /// view is on screen (`notes_wanted`).
+    pub notes: std::collections::HashMap<String, NotesState>,
+    /// Bumped when a sweep lands or a suspend returns: a walk or a body read
+    /// from an older generation is read again the next time it is shown.
+    pub notes_generation: u64,
+    /// `m`: the tree lists every markdown file, not only the notes
+    /// directories. The walk collected both; this changes only the drawing.
+    pub notes_all_markdown: bool,
+    /// The row path the cursor rests on in the `notes` view and since when,
+    /// for the dwell (`ci::DWELL`) before a walk starts.
+    pub notes_cursor: Option<(Option<String>, std::time::Instant)>,
+    /// The inspector's body for the highlighted file: one file at a time.
+    pub note_body: Option<NoteBody>,
     /// The section header the list cursor stands on (FZ-45), lifted off the
     /// section's first repo, which `selected` keeps pointing at. Read only
     /// through `on_header`, which also checks the header is drawn.
@@ -2353,6 +2375,41 @@ pub struct App {
     /// The section header under the resting pointer and since when; the
     /// tick lands on it after `HOVER_DWELL` (`settle_hover`).
     pub hover_pending: Option<(crate::digest::Section, std::time::Instant)>,
+}
+
+/// The `notes` view's walk of one repo (FZ-53).
+#[derive(Debug, Clone, Default)]
+pub struct NotesState {
+    /// The last walk's answer, kept on screen while a newer one runs.
+    pub tree: Option<Result<crate::notes::Notes, String>>,
+    /// A walk is running.
+    pub walking: bool,
+    /// The generation `tree` was walked in (`App::notes_generation`).
+    pub generation: u64,
+}
+
+/// The inspector's body for one file in the `notes` view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoteBody {
+    pub path: std::path::PathBuf,
+    pub generation: u64,
+    /// `None` while the read runs.
+    pub text: Option<Result<String, String>>,
+}
+
+/// A claimed walk of one repo, for `notes::walk` off the UI thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotesWalk {
+    pub key: String,
+    pub root: std::path::PathBuf,
+    pub generation: u64,
+}
+
+/// A claimed read of the highlighted file, for `notes::read_body`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteRead {
+    pub path: std::path::PathBuf,
+    pub generation: u64,
 }
 
 /// How long the pointer rests on a section header before the cursor lands
@@ -2700,6 +2757,11 @@ impl App {
             brackets_cycling_views: false,
             ci_inspected: None,
             ci_log_wrap: std::cell::RefCell::new(None),
+            notes: std::collections::HashMap::new(),
+            notes_generation: 0,
+            notes_all_markdown: false,
+            notes_cursor: None,
+            note_body: None,
             list_stop: None,
             digest_window: crate::digest::DigestWindow::default(),
             digest_selected: 0,
@@ -3071,6 +3133,167 @@ impl App {
     /// inspector is open.
     pub fn inspects_ci_run(&self) -> bool {
         self.ci_wanted() && !self.inspector_folded
+    }
+
+    /// Whether the `notes` view may walk a repo or read a file: pane 2 is on
+    /// screen showing it. The one gate the walk and the body read pass.
+    pub fn notes_wanted(&self) -> bool {
+        self.view == View::Detail && self.history_view == HistoryView::Notes
+    }
+
+    /// The selected row's walk, by its path; `None` for a row with nothing
+    /// on disk to walk, and a `None` state while nothing was walked yet.
+    pub fn selected_notes(&self) -> Option<(&str, Option<&NotesState>)> {
+        let path = self.selected_repo()?.path.as_deref()?;
+        Some((path, self.notes.get(path)))
+    }
+
+    /// The files the `notes` view lists for the selected repo, in drawing
+    /// order: what its cursor walks.
+    pub fn notes_listed(&self) -> Vec<&crate::notes::NoteFile> {
+        match self.selected_notes() {
+            Some((
+                _,
+                Some(NotesState {
+                    tree: Some(Ok(notes)),
+                    ..
+                }),
+            )) => notes.listed(self.notes_all_markdown),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The file the `notes` view's cursor is on, as an absolute path: read
+    /// from the view's own selection slot, clamped to the files there are.
+    pub fn notes_highlighted(&self) -> Option<std::path::PathBuf> {
+        let root = self.selected_notes()?.0;
+        let listed = self.notes_listed();
+        let last = listed.len().checked_sub(1)?;
+        let file = listed[self.detail_selections[HistoryView::Notes.index()].min(last)];
+        Some(std::path::PathBuf::from(shellexpand::tilde(root).as_ref()).join(&file.rel))
+    }
+
+    /// Claim the walk of the selected repo the `notes` view needs at
+    /// `instant`, or `None`. Nothing unless the view is on screen, the
+    /// cursor has rested on the row for `ci::DWELL`, and the row's walk is
+    /// missing or from an older generation; one walk per repo at a time.
+    pub fn claim_notes_walk(&mut self, instant: std::time::Instant) -> Option<NotesWalk> {
+        if !self.notes_wanted() {
+            return None;
+        }
+        let key = self.selected_repo().and_then(|r| r.path.clone());
+        let settled_for = match &self.notes_cursor {
+            Some((held, since)) if *held == key => instant.duration_since(*since),
+            _ => {
+                self.notes_cursor = Some((key.clone(), instant));
+                std::time::Duration::ZERO
+            }
+        };
+        let key = key?;
+        if settled_for < crate::ci::DWELL {
+            return None;
+        }
+        let generation = self.notes_generation;
+        let state = self.notes.entry(key.clone()).or_default();
+        let fresh = state.tree.is_some() && state.generation == generation;
+        if state.walking || fresh {
+            return None;
+        }
+        state.walking = true;
+        let root = std::path::PathBuf::from(shellexpand::tilde(&key).as_ref());
+        Some(NotesWalk {
+            key,
+            root,
+            generation,
+        })
+    }
+
+    /// Land a walk (`AppEvent::NotesWalked`) and ask for a redraw.
+    pub fn apply_notes_walk(
+        &mut self,
+        walk: NotesWalk,
+        result: Result<crate::notes::Notes, String>,
+    ) {
+        let state = self.notes.entry(walk.key).or_default();
+        state.walking = false;
+        state.tree = Some(result);
+        state.generation = walk.generation;
+        self.needs_redraw = true;
+    }
+
+    /// Claim the read of the highlighted file, or `None`: only while the
+    /// `notes` view shows with the inspector open, and only when the body
+    /// held is another file's or from an older generation. One file at a
+    /// time, whatever the cursor passed over since the last tick.
+    pub fn claim_note_read(&mut self) -> Option<NoteRead> {
+        if !self.notes_wanted() || self.inspector_folded {
+            return None;
+        }
+        let path = self.notes_highlighted()?;
+        let generation = self.notes_generation;
+        if self
+            .note_body
+            .as_ref()
+            .is_some_and(|b| b.path == path && b.generation == generation)
+        {
+            return None;
+        }
+        self.note_body = Some(NoteBody {
+            path: path.clone(),
+            generation,
+            text: None,
+        });
+        Some(NoteRead { path, generation })
+    }
+
+    /// Land a body read (`AppEvent::NoteRead`); one for a file or a
+    /// generation no longer wanted is dropped.
+    pub fn apply_note_read(&mut self, read: NoteRead, text: Result<String, String>) {
+        if let Some(body) = &mut self.note_body
+            && body.path == read.path
+            && body.generation == read.generation
+        {
+            body.text = Some(text);
+            self.needs_redraw = true;
+        }
+    }
+
+    /// A sweep landed or a suspend returned: every held walk and the body
+    /// are read again the next time they are shown.
+    pub fn invalidate_notes(&mut self) {
+        self.notes_generation += 1;
+        self.needs_redraw = true;
+    }
+
+    /// A sweep finished: close its books, stamp the refresh time and have
+    /// the notes walked again. The `SweepDone` arm of the event loop calls it.
+    pub fn sweep_landed(&mut self, at: chrono::DateTime<chrono::Local>) {
+        self.sweep_started = None;
+        self.last_refreshed = Some(at);
+        self.invalidate_notes();
+        self.needs_redraw = true;
+    }
+
+    /// `m` in the `notes` view: list every markdown file, or the notes
+    /// directories only. The cursor stays on its file when the other tree
+    /// lists it, else goes to the first.
+    pub fn toggle_notes_markdown(&mut self) {
+        if !self.notes_wanted() {
+            return;
+        }
+        let held = self.notes_highlighted();
+        self.notes_all_markdown = !self.notes_all_markdown;
+        let root = self
+            .selected_notes()
+            .map(|(p, _)| std::path::PathBuf::from(shellexpand::tilde(p).as_ref()));
+        let at = self
+            .notes_listed()
+            .iter()
+            .position(|f| root.as_ref().map(|r| r.join(&f.rel)) == held)
+            .unwrap_or(0);
+        self.set_detail_selected(at);
+        self.inspector_scroll = 0;
+        self.needs_redraw = true;
     }
 
     /// `[` or `]`: the next inspector body while the inspector has focus and
@@ -3738,6 +3961,8 @@ impl App {
                 .selected_ci()
                 .and_then(|(_, state)| state)
                 .map_or(0, |s| s.runs.len()),
+            // The files the tree lists, in its current mode.
+            HistoryView::Notes => self.notes_listed().len(),
         }
     }
 
@@ -3835,6 +4060,8 @@ impl App {
             // A run is not a commit of the loaded history; the inspector
             // details the run itself (`ci_highlighted_run`).
             HistoryView::Ci => None,
+            // A file is not a commit; the inspector reads the file itself.
+            HistoryView::Notes => None,
         }
     }
 
@@ -5226,9 +5453,9 @@ mod tests {
 
         // And backwards, which a shifted letter could not have given us.
         app.cycle_history_view(true);
-        assert_eq!(app.history_view, HistoryView::Ci, "wraps backward");
+        assert_eq!(app.history_view, HistoryView::Notes, "wraps backward");
         app.cycle_history_view(true);
-        assert_eq!(app.history_view, HistoryView::Branches);
+        assert_eq!(app.history_view, HistoryView::Ci);
     }
 
     /// Scroll and selection are per view. A shared offset is wrong the moment
@@ -8145,6 +8372,185 @@ mod tests {
         app.fetch_backoff.record("~/repos/repo-0", &timed_out(), t0);
         assert!(app.fetch_held("~/repos/repo-0", t0 + chrono::Duration::seconds(59)));
         assert!(!app.fetch_held("~/repos/repo-0", t0 + chrono::Duration::seconds(60)));
+    }
+
+    // --- The `notes` view (FZ-53) ---
+
+    /// An app on one repo at `/notes-fixture`, pane 2 in the detail view.
+    fn notes_app() -> App {
+        let mut app = make_app(1);
+        app.repos[0].path = Some("/notes-fixture".to_string());
+        app.view = View::Detail;
+        app.inspector_folded = false;
+        app
+    }
+
+    fn note(rel: &str) -> crate::notes::NoteFile {
+        crate::notes::NoteFile {
+            rel: std::path::PathBuf::from(rel),
+            notez: rel.starts_with("notez/").then(|| "notez".into()),
+        }
+    }
+
+    /// Land a walk of `/notes-fixture` holding `files`.
+    fn walked(app: &mut App, files: &[&str]) {
+        let walk = NotesWalk {
+            key: "/notes-fixture".to_string(),
+            root: "/notes-fixture".into(),
+            generation: app.notes_generation,
+        };
+        let notes = crate::notes::Notes {
+            files: files.iter().map(|f| note(f)).collect(),
+        };
+        app.apply_notes_walk(walk, Ok(notes));
+    }
+
+    /// The walk starts only while `notes` is on screen in the detail view,
+    /// and only once the cursor has rested on the row for the dwell. Fails
+    /// if any other view, or the compact grid, walks the repo.
+    #[test]
+    fn the_notes_walk_waits_for_its_view_and_the_dwell() {
+        let start = std::time::Instant::now();
+        let after = |ms: u64| start + std::time::Duration::from_millis(ms);
+        let mut app = notes_app();
+        for view in HistoryView::ALL {
+            if view == HistoryView::Notes {
+                continue;
+            }
+            app.history_view = view;
+            assert_eq!(app.claim_notes_walk(start), None, "{view:?}");
+            assert_eq!(app.claim_notes_walk(after(1000)), None, "{view:?}");
+        }
+        app.history_view = HistoryView::Notes;
+        app.view = View::Compact;
+        assert_eq!(app.claim_notes_walk(after(2000)), None, "compact");
+
+        app.view = View::Detail;
+        assert_eq!(app.claim_notes_walk(after(3000)), None, "the dwell starts");
+        assert_eq!(app.claim_notes_walk(after(3299)), None, "still dwelling");
+        let walk = app.claim_notes_walk(after(3300)).expect("walks");
+        assert_eq!(walk.root, std::path::PathBuf::from("/notes-fixture"));
+        assert_eq!(app.claim_notes_walk(after(4000)), None, "one at a time");
+        assert!(app.notes.values().all(|s| s.walking));
+    }
+
+    /// A not-cloned row has nothing to walk.
+    #[test]
+    fn a_not_cloned_row_is_never_walked() {
+        let start = std::time::Instant::now();
+        let mut app = notes_app();
+        app.repos[0].path = None;
+        app.history_view = HistoryView::Notes;
+        app.claim_notes_walk(start);
+        let later = start + std::time::Duration::from_secs(5);
+        assert_eq!(app.claim_notes_walk(later), None);
+        assert!(app.notes.is_empty());
+    }
+
+    /// The walk is held for the session: leaving the view and coming back
+    /// draws it again without a walk, until a sweep lands or a suspend
+    /// returns (`invalidate_notes`). The old tree stays drawn meanwhile.
+    #[test]
+    fn coming_back_does_not_rewalk_until_a_sweep_or_a_suspend() {
+        let start = std::time::Instant::now();
+        let after = |ms: u64| start + std::time::Duration::from_millis(ms);
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        app.claim_notes_walk(start);
+        app.claim_notes_walk(after(300)).expect("first walk");
+        walked(&mut app, &["notez/a.md"]);
+
+        app.history_view = HistoryView::Info;
+        app.claim_notes_walk(after(400));
+        app.history_view = HistoryView::Notes;
+        app.claim_notes_walk(after(500));
+        assert_eq!(app.claim_notes_walk(after(5000)), None, "held, not walked");
+        assert_eq!(app.notes_listed().len(), 1);
+
+        app.invalidate_notes();
+        assert!(app.claim_notes_walk(after(5100)).is_some(), "walked again");
+        assert_eq!(app.notes_listed().len(), 1, "the old tree stays drawn");
+    }
+
+    /// A landed sweep has the held walk read again: the `SweepDone` arm
+    /// goes through `sweep_landed`, so dropping its invalidation fails here.
+    #[test]
+    fn a_sweep_landing_rewalks_the_notes() {
+        let start = std::time::Instant::now();
+        let after = |ms: u64| start + std::time::Duration::from_millis(ms);
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        app.claim_notes_walk(start);
+        app.claim_notes_walk(after(300)).expect("first walk");
+        walked(&mut app, &["notez/a.md"]);
+        assert_eq!(app.claim_notes_walk(after(5000)), None, "held, not walked");
+
+        app.sweep_landed(chrono::Local::now());
+        assert!(app.claim_notes_walk(after(5100)).is_some(), "walked again");
+    }
+
+    /// The body read is the highlighted file's alone, however far the cursor
+    /// moved since the last tick, and nothing outside the view or with the
+    /// inspector folded. Read again after a suspend returns.
+    #[test]
+    fn only_the_highlighted_file_is_read() {
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        walked(&mut app, &["notez/a.md", "notez/b.md", "notez/c.md"]);
+        app.history_view = HistoryView::Info;
+        assert_eq!(app.claim_note_read(), None, "another view reads nothing");
+
+        app.history_view = HistoryView::Notes;
+        app.select_commit_down();
+        app.select_commit_down();
+        let read = app.claim_note_read().expect("reads");
+        assert_eq!(
+            read.path,
+            std::path::PathBuf::from("/notes-fixture/notez/c.md")
+        );
+        assert_eq!(app.claim_note_read(), None, "read once");
+
+        // An answer for a file no longer highlighted is dropped.
+        app.select_commit_up();
+        let b = app.claim_note_read().expect("b");
+        app.apply_note_read(read, Ok("c".to_string()));
+        assert_eq!(app.note_body.as_ref().and_then(|b| b.text.clone()), None);
+        app.apply_note_read(b, Ok("b".to_string()));
+        assert_eq!(
+            app.note_body.as_ref().and_then(|b| b.text.clone()),
+            Some(Ok("b".to_string()))
+        );
+
+        app.invalidate_notes();
+        assert!(app.claim_note_read().is_some(), "re-read after a suspend");
+
+        app.invalidate_notes();
+        app.inspector_folded = true;
+        assert_eq!(app.claim_note_read(), None, "folded inspector");
+    }
+
+    /// `m` widens the tree to every markdown file and back, keeping the
+    /// cursor on its file where the other tree lists it. Does nothing
+    /// outside the view.
+    #[test]
+    fn the_markdown_toggle_widens_the_tree_and_keeps_the_file() {
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        walked(&mut app, &["README.md", "docs/guide.md", "notez/a.md"]);
+        assert_eq!(app.selected_commit_count(), 1);
+
+        app.toggle_notes_markdown();
+        assert!(app.notes_all_markdown);
+        assert_eq!(app.selected_commit_count(), 3);
+        assert_eq!(
+            app.notes_highlighted(),
+            Some("/notes-fixture/notez/a.md".into()),
+            "the cursor stayed on its file"
+        );
+
+        app.history_view = HistoryView::Info;
+        app.toggle_notes_markdown();
+        assert!(app.notes_all_markdown, "not the view");
     }
 }
 
