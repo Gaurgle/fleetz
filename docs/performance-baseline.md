@@ -5,7 +5,8 @@ input behaviour, taken before any concurrency, caching or rendering change, so
 later tickets have something to compare against. Nothing in `src/` was changed
 to take it. Every number below was measured on a release build of one commit,
 on synthetic fixtures, with the commands in the appendix; anything inferred
-rather than measured says so.
+rather than measured says so. The one exception is the 2026-10-27 print-mode
+section, measured on the owner's real fleet on an Apple M2 with 8 GB.
 
 ## Summary
 
@@ -618,6 +619,379 @@ Summaries: `python3 summarize.py logs/A.jsonl first_paint first_row summary_done
 For G, H and I the per-press and per-window values are in the `input`, `idle`
 and `refresh` fields of each JSON line. In every record, `fleetz_cpu_*` is
 the process-tree CPU from `wait4`.
+
+## Print mode against bash repoz, 2026-10-27
+
+Ticket FZ-51 (issue #107). Wall time of bash repoz and `fleetz --print` on
+the owner's real fleet and real `HOME`, interleaved in one session. Unlike
+every case above, nothing here is a fixture: the repos, remotes, GitHub
+account and the keyed cache are the owner's, so the numbers move with what
+his fleet holds that day. Nothing in `src/` was changed.
+
+### Result
+
+| Condition (n pairs, bash then print) | Tool | Wall min / median / max | User / sys (median) | Own `git fetch` per run |
+|---|---|---|---|---|
+| Default window, warm (W, n=5) | bash | 28.73 / 31.37 / 33.83 s | 13.26 / 14.16 s | 6, 6, 6, 6, 6 |
+| | print | 22.10 / 22.52 / 25.48 s | 9.32 / 4.21 s | 1, 2, 0, 1, 2 |
+| Default window, FETCH_HEAD back-dated (D, n=5) | bash | 29.82 / 30.99 / 31.83 s | 13.35 / 14.37 s | 6, 6, 6, 6, 6 |
+| | print | 20.44 / 20.83 / 25.13 s | 9.27 / 4.21 s | 3, 0, 0, 0, 2 |
+| `-t`, warm (T, n=3) | bash | 29.69 / 30.19 / 32.31 s | 13.38 / 14.21 s | 6, 6, 6 |
+| | print | 20.81 / 21.34 / 22.49 s | 9.33 / 4.23 s | 0, 1, 1 |
+| `--since 2026-10-28`, empty window (E, n=5) | bash | 6.56 / 7.12 / 7.81 s | 2.41 / 1.96 s | 0 each |
+| | print | 6.67 / 8.71 / 10.51 s | 2.97 / 2.67 s | 0 each |
+| `-d`, no network (X, n=5) | bash | 4.73 / 5.10 / 5.52 s | 2.35 / 2.00 s | 0 each |
+| | print | 0.55 / 0.64 / 0.66 s | 1.68 / 1.52 s | 0 each |
+
+User and sys are the process tree's, as `/usr/bin/time -p` reports them
+(every git child is waited for). "Own fetch" counts the `git fetch`
+processes the measured tool itself started (`fshim/git` below), not
+fetches by anything else on the machine.
+
+- Print mode was faster in the default window (median 22.5 s against
+  31.4 s), with `-t` (21.3 against 30.2) and with `-d` (0.64 against 5.10).
+- **Print mode was slower with an empty window** (`--since` tomorrow:
+  median 8.71 s against 7.12 s, and 0.1 to 3.2 s slower in every pair: the
+  five differences are 2.70, 3.16, 0.37, 1.44 and 0.11 s, and the last
+  pair's 0.11 s is within noise). The cause is its GitHub poll, below.
+- **The "fetches due" condition was not produced.** The case F nudge was
+  applied before every D run, but the owner's own fleetz (see Machine
+  state) re-fetched those clones before print mode reads `FETCH_HEAD` (after its
+  poll, 6 to 9 s in). One unlogged, one-off observation put it at 3 of 7
+  refreshed after 1 s, 6 after 4 s and all 7 after 17 s; no file keeps it.
+  The evidence that is kept: every D print run's `.before` snapshot shows all
+  7 clones at 2026-01-01, and the `.after` snapshots of D runs 2 to 4 show
+  all 7 refreshed while print started no fetch of its own. D print runs started 0
+  to 3 fetches of their own, the same as W, so D is a second warm sample,
+  not a stale one. Across all ten W and D print runs, those with no fetch
+  of their own took 20.4 to 22.5 s (n=4) and those with 1 to 3 took 22.1 to
+  25.5 s (n=6). A real stale launch fetches all 7 clones in the window at
+  `FETCH_CONCURRENCY` = 4, two waves of 0.7 to 1.7 s per fetch (fetch times
+  from the counted runs): about +2 to 3.5 s on print's wall time, inferred,
+  not measured. bash is unaffected by construction: it fetches every clone
+  the window names on every run, whatever `FETCH_HEAD` says
+  (`start_fetch` in passes 1 and 2), so its W and D are one condition.
+
+### Where the time goes
+
+From untimed runs with a logging `git` and `gh` wrapper first on `PATH`
+(`shim/` below, which adds a Perl start per git process, so per-process
+times are inflated) and, for the GraphQL request, a local CONNECT proxy
+that timestamps the tunnelled bytes without decrypting them
+(`connlog.py`). One run per row unless stated.
+
+| | bash | print |
+|---|---|---|
+| GitHub request | `gh api graphql`, 1.29 to 1.57 s (n=4), 15 KB response | one reqwest POST after `gh auth token` (0.03 to 0.23 s, n=4): 90% of the 130 KB response in at 5.9 s (E) and 9.0 s (W); first git process after the poll 7.1, 7.9 and 9.4 s in (n=3, W) |
+| git processes, default window | 326: rev-parse 110, rev-list 101, status 51, for-each-ref 51, log 7, fetch 6 | 386 to 388: status 116, for-each-ref 106, remote 70, log 46, rev-list 19, rev-parse 8, worktree 7, stash 7, reflog 7, fetch 0 or 1, config 0 or 1 |
+| git processes, empty window | 295 | 311 |
+| Slowest git process | the 2255-commit range `log --shortstat beta..origin/beta` in bonsai-education, 5.0 s | the same range read with `--numstat --shortstat`, 4.8 to 7.4 s; and `log --numstat --shortstat -200 main` in bonsai/content, 5.4 to 8.6 s (n=3) |
+| Time with no git process running | 16.0 s after that log, before its next git process | none over 0.3 s after the poll |
+
+Reasons, from those logs and the code:
+
+- **The poll.** Print mode sends fleetz's own query (D5), whose response is
+  8.5 times bash's and carries the contribution calendars, PRs and CI that
+  the report does not draw; the keyed cache it writes is what keeps the
+  next TUI launch current. bash's query took about 1.3 s, fleetz's 5.9 to
+  9.0 s, and nothing local starts until it returns (the report needs the
+  dataset before `assemble_view_held`). In the empty window the local work
+  is small on both sides, so the poll decides: bash spends about 1.2 s on
+  GitHub and 6 s on local discovery and pass 3 (its `-d` alone is 5.1 s),
+  print 5.9 to 9.0 s on GitHub and about 1.4 s locally. Which part of the query
+  costs GitHub the time was not split out: that takes extra live requests.
+- **History print mode never draws.** `assemble_view_held` runs the TUI's
+  `build_repo_status` for every matched clone, including the 200-commit
+  `--numstat` history read, the graph, reflog, stash and worktree reads.
+  The report reads its commit lines with `git::commits` per range and does
+  not use the row's commit list, so the 5.4 to 8.6 s (n=3) history read on
+  bonsai/content is work bash does not do. It is hidden in the default
+  window only because bash spends longer elsewhere.
+- **Why bash loses the default window.** bonsai-education was 2255 commits
+  behind on a branch with an upstream, so both tools list 2255 commit lines.
+  bash's `print_commits` runs two `echo | grep -oE | grep -oE` pipelines per
+  stat line plus `print_commit_line`: 16 s with no git process running, and
+  its 14 s of system time, against print mode's 4.2 s.
+- **`-d`.** bash's pass 3 is `find` over its roots and serial per-repo git
+  under bash 3.2 (5.1 s);
+  print mode's is fleetz's walker with concurrent probes (0.64 s).
+
+### Environment and machine state
+
+| Item | Value |
+|---|---|
+| fleetz | `4d9bce9cb5b10848d3fe2c99a70eb13cdf8336ad` (main, FZ-50 merged), `cargo build --release` into a scratch `CARGO_TARGET_DIR`, 8.5 MB, sha256 `8e49dc2f0498f018c610dc422bb2bc0875204c75020af0b450280558ea6666ed`, rustc 1.99.1 |
+| bash repoz | `~/repos/repoz/repoz` at `59d51a74fadb7ce7201430f25d5b752d20900598`, clean; `git log 3fab42a..HEAD -- repoz` empty; `REPOZ_VERSION` 0.1.0; run by `/bin/bash` 3.2.57 |
+| OS, hardware | macOS 15.6.1 (24G90), Apple M2, 8 cores, 8 GB, on AC power. Not the machine of the sections above (M1 Max), so no number here compares with theirs |
+| git, gh | 2.50.1 (Apple Git-155) through `/usr/bin/git`; gh 2.98.0 |
+| Timer | `/usr/bin/time -p`; `hyperfine` is not installed |
+| Working directory | a scratch directory outside any git repository, so neither tool adds a toplevel scan root; stdin `/dev/null`, stdout to a file, `COLUMNS=120` |
+| Scan roots | bash: `~/repos` and `EXTRA_DIRS=~/notes` from the shell environment (no `~/.config/repoz/config`). print: `~/repos` and `extra_dirs` `~/.dotfiles` and `~/claude-config` from fleetz's `config.toml`. Different by the owner's setup, not by the tools |
+| Fleet size | Default window and `-t`: 12 rows each (6 with GitHub activity, 2 "also active", 4 local changes), 2308 to 2335 output lines as the fleet moved during the session. Empty window: "No GitHub activity" and 5 local rows, 20 lines. `-d`: 5 rows, 13 lines. Row differences: bash prints `notez-vault` as not cloned, print mode as the clone at `~/notez` (design D3, origin matching) |
+| GitHub poll cost | Not exposed by print mode (no rate-limit output); not measured here |
+| Measured on | 2026-10-27 CET: warm-up, profile and discarded runs 11:16 to 11:40, timed pairs 11:43 to 12:32, the empty-window profile run 12:33 |
+
+Machine state. `pgrep -fl 'fleetz|repoz'` before the first run: no repoz
+process; one fleetz, the owner's own TUI (pid 99377, running for a day),
+and a debug fleetz test binary from another agent's `cargo test`. The
+owner's TUI was left running: it was in watch mode with
+`refresh_interval = 5`, and a 0.5 s sampler saw it with git children in
+3926 of 6733 samples (58.3%), fetching every remote. That is background load
+through every run, and it is what defeated the D condition. Other agents
+built and tested Rust in the same session (load averages up to 73). A pair
+counted only when no `cargo` or `rustc` had run for 20 s before it and the
+1-minute load was under 6, and was discarded if the sampler saw `cargo` or
+`rustc` at any point during it: 3 of 8 W pairs were discarded, none
+otherwise. The load gate is checked before a pair, not during it: E pair 2
+saw a 1-minute load of 8.3. Earlier pairs (11:26 to 11:40, without the
+fetch wrapper) ran under that build load and are not used.
+
+### Method
+
+1. Confirm the repoz clone (`git -C ~/repos/repoz log 3fab42a..HEAD --
+   repoz` prints nothing) and that no other repoz runs.
+2. Warm-up, untimed: one run of each tool in the default window and with
+   `-d`. This also leaves every clone's `FETCH_HEAD` fresh.
+3. For each condition, pairs of bash then print through `series.sh`, which
+   waits for a quiet machine before each pair and marks a pair contaminated
+   when `bgmon.sh` saw a build during it, until it has n clean pairs.
+4. D only: before each run of either tool, `backdate.sh` sets `FETCH_HEAD`
+   of the seven clones the default window names to 2026-01-01, as case F
+   did. The last runs of the session fetched them again, so none was left
+   back-dated.
+5. The profile runs (`shim/`, `connlog.py`) are separate and untimed.
+
+```sh
+S=/path/to/scratch; cd "$S"          # outside any git repository
+B=$S/target/release/fleetz           # CARGO_TARGET_DIR=$S/target cargo build --release
+R=~/repos/repoz/repoz
+export S B R                         # the scripts below are separate processes
+mkdir -p out fshim shim
+TUI_PID=$(pgrep -f fleetz | head -1) # the owner's TUI; check it is the right one
+[ -n "$TUI_PID" ] || { echo "no fleetz TUI found"; exit 1; }
+nohup ./bgmon.sh "$TUI_PID" > bgmon.log 2>&1 &
+./one.sh warmup bash; ./one.sh warmup print; ./one.sh warmup bash -d; ./one.sh warmup print -d
+DL=$(( $(date +%s) + 9000 ))
+./series.sh W 5 $DL && ./series.sh D 5 $DL && ./series.sh X 5 $DL
+./series.sh T 3 $DL && ./series.sh E 5 $DL      # clean pairs land in pairs.tsv
+# profile, untimed: git and gh call logs, and the GraphQL timing
+python3 -I connlog.py 18777 conn.log &
+HTTPS_PROXY=http://127.0.0.1:18777 FZ_GIT_LOG=git-print.log FZ_GH_LOG=gh-print.log \
+  PATH=$S/shim:$PATH ./one.sh counted print
+```
+
+`due-clones.txt` lists the clones the default window names, one per line
+(on the day: `~/repos/bonsai/socials`, `~/repos/fleetz`,
+`~/repos/bonsai/content`, `~/repos/notez`, `~/repos/syncz`,
+`~/repos/bonsai/bonsai-education`, `~/notez`). The default window was
+"since 2026-10-26 Evening (18-00)" throughout; rerun before the next slot
+boundary or the window, and with it the fleet, changes mid-session.
+
+`one.sh LABEL TOOL [ARGS]`:
+
+```bash
+#!/bin/bash
+# Times one run with /usr/bin/time -p and appends a line to times.tsv.
+S=${S:?}; B=${B:?}; R=${R:-$HOME/repos/repoz/repoz}
+label=$1; tool=$2; shift 2
+cd "$S" || exit 1
+out="$S/out/$label-$tool-$(date +%H%M%S).txt"
+case "$tool" in
+bash) cmd=("$R" "$@") ;;
+print) cmd=("$B" --print "$@") ;;
+esac
+COLUMNS=120 /usr/bin/time -p "${cmd[@]}" >"$out" 2>"$out.time" </dev/null
+rc=$?
+real=$(awk '/^real/{print $2}' "$out.time")
+user=$(awk '/^user/{print $2}' "$out.time")
+sys=$(awk '/^sys/{print $2}' "$out.time")
+lines=$(wc -l <"$out" | tr -d ' ')
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$tool" "$*" "$real" "$user" "$sys" "$lines" "$rc" >>"$S/times.tsv"
+printf '%s %s %s real=%s user=%s sys=%s lines=%s rc=%s\n' "$label" "$tool" "$*" "$real" "$user" "$sys" "$lines" "$rc"
+```
+
+The session's copy also snapshotted every `FETCH_HEAD` mtime before and
+after each run; the owner's TUI made that count meaningless (19 changed in
+every default-window run), so it is left out here.
+
+`series.sh COND NPAIRS DEADLINE_EPOCH`:
+
+```bash
+#!/bin/bash
+# COND: W (default window, warm), D (default window, FETCH_HEAD back-dated),
+# X (-d), T (-t, warm), E (--since 2026-10-28, an empty window, warm).
+S=${S:?}; cond=$1; want=$2; deadline=$3
+cd "$S" || exit 1
+# refuse to run without a live monitor: no samples would mark every pair clean
+last=$(tail -1 bgmon.log 2>/dev/null | cut -f1)
+case $last in ''|*[!0-9]*) echo "bgmon.sh is not sampling"; exit 1 ;; esac
+[ $(( $(date +%s) - last )) -le 5 ] || { echo "bgmon.sh is not sampling"; exit 1; }
+args=()
+[ "$cond" = X ] && args=(-d)
+[ "$cond" = T ] && args=(-t)
+[ "$cond" = E ] && args=(--since 2026-10-28)
+quiet() { # 20 s with no cargo or rustc and a 1-minute load under 6
+  local ok=0
+  while [ $ok -lt 20 ]; do
+    [ "$(date +%s)" -gt "$deadline" ] && return 1
+    if pgrep -q -f 'cargo|rustc'; then ok=0
+    elif awk "BEGIN{exit !($(sysctl -n vm.loadavg | awk '{print $2}') < 6)}"; then ok=$((ok + 1))
+    else ok=0; fi
+    sleep 1
+  done
+}
+run() { # TOOL PAIRNO
+  local f="$S/out/$cond-$2-$1.fetch"
+  : >"$f"
+  [ "$cond" = D ] && ./backdate.sh
+  PATH="$S/fshim:$PATH" FZ_FETCH_LOG="$f" ./one.sh "$cond" "$1" "${args[@]}" | tr '\n' ' '
+  echo "own_fetches=$(wc -l <"$f" | tr -d ' ')"
+}
+clean=0; i=0
+while [ $clean -lt "$want" ]; do
+  quiet || { echo "deadline reached with $clean clean pairs"; exit 0; }
+  i=$((i + 1)); t0=$(date +%s)
+  a=$(run bash $i); b=$(run print $i)
+  t1=$(date +%s)
+  hits=$(awk -F'\t' -v a="$t0" -v b="$t1" '$1>=a && $1<=b && $4!="cargo=0"' bgmon.log | wc -l | tr -d ' ')
+  status=clean; [ "$hits" -gt 0 ] && status=contaminated || clean=$((clean + 1))
+  printf '%s\t%s\t%s\t%s\t%s\tcargo_samples=%s\n' "$cond" "$i" "$status" "$a" "$b" "$hits" | tee -a pairs.tsv
+done
+```
+
+The session's copy also wrote each pair's highest sampled 1-minute load to
+`pairs.tsv`, which is where the 8.3 for E pair 2 comes from.
+
+`backdate.sh` (case F's nudge, mtimes only):
+
+```bash
+#!/bin/bash
+while read -r d; do touch -t 202601010000 "$d/.git/FETCH_HEAD"; done <"${S:?}/due-clones.txt"
+```
+
+`bgmon.sh` (the owner's fleetz pid is an argument here; the session's copy
+had it written in):
+
+```bash
+#!/bin/bash
+# Every 0.5 s: children of the owner's fleetz, syncz, cargo or rustc, load.
+tui=${1:?pid of the owner fleetz}
+while :; do
+  printf '%s\ttui_children=%s\tsyncz=%s\tcargo=%s\tload=%s\n' "$(date +%s)" \
+    "$(pgrep -P "$tui" | wc -l | tr -d ' ')" "$(pgrep -f syncz | wc -l | tr -d ' ')" \
+    "$(pgrep -f 'cargo|rustc' | wc -l | tr -d ' ')" "$(sysctl -n vm.loadavg | awk '{print $2}')"
+  sleep 0.5
+done
+```
+
+`fshim/git`, on `PATH` in every timed run of both tools:
+
+```sh
+#!/bin/sh
+# Records each fetch this tool runs, then execs git.
+case " $* " in *" fetch "*) echo "$*" >> "${FZ_FETCH_LOG:-/dev/null}" ;; esac
+exec /usr/bin/git "$@"
+```
+
+`shim/git` (untimed profile runs only; `shim/gh` is the same with
+`/opt/homebrew/bin/gh` and `FZ_GH_LOG`):
+
+```perl
+#!/usr/bin/perl
+# Logs start, duration, exit and arguments of each git process.
+use strict; use Time::HiRes qw(time);
+my $t0 = time;
+my $rc = system('/usr/bin/git', @ARGV) >> 8;
+my $d = time - $t0;
+if (my $log = $ENV{FZ_GIT_LOG}) {
+  open(my $fh, '>>', $log) or die;
+  my $args = join(' ', @ARGV); $args =~ s/\s+/ /g; $args = substr($args, 0, 300);
+  printf $fh "%.3f\t%.3f\t%d\t%s\n", $t0, $d, $rc, $args;
+}
+exit $rc;
+```
+
+`connlog.py PORT LOG` (untimed profile runs only; TLS stays end to end, and
+it logs when 90% of the downstream bytes had arrived, since reqwest keeps
+the connection open until exit):
+
+```python
+#!/usr/bin/env python3
+import socket, sys, threading, time
+port, logpath = int(sys.argv[1]), sys.argv[2]
+lock = threading.Lock()
+
+def pipe(src, dst, counter):
+    try:
+        while True:
+            b = src.recv(65536)
+            if not b:
+                break
+            counter[0] += len(b)
+            counter[1] = time.time()
+            counter.append((counter[1], len(b)))
+            dst.sendall(b)
+    except OSError:
+        pass
+    finally:
+        try:
+            dst.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+def handle(c):
+    t0 = time.time()
+    head = b""
+    while b"\r\n\r\n" not in head:
+        b = c.recv(4096)
+        if not b:
+            c.close(); return
+        head += b
+    method, target, _ = head.split(b"\r\n")[0].decode().split(" ", 2)
+    if method != "CONNECT":
+        c.close(); return
+    host, p = target.rsplit(":", 1)
+    u = socket.create_connection((host, int(p)))
+    c.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+    up, down = [0, 0.0], [0, 0.0]
+    a = threading.Thread(target=pipe, args=(c, u, up))
+    d = threading.Thread(target=pipe, args=(u, c, down))
+    a.start(); d.start(); a.join(); d.join()
+    t1 = time.time()
+    tot, acc, t90 = down[0], 0, 0.0
+    for when, n in down[2:]:
+        acc += n
+        if acc >= 0.9 * tot:
+            t90 = when - t0
+            break
+    with lock, open(logpath, "a") as f:
+        f.write(f"{t0:.3f}\t{t1 - t0:.3f}\t{target}\tup={up[0]}\tdown={down[0]}\tdown90=+{t90:.3f}\tlast_down=+{down[1] - t0:.3f}\n")
+    c.close(); u.close()
+
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", port))
+s.listen(16)
+while True:
+    conn, _ = s.accept()
+    threading.Thread(target=handle, args=(conn,), daemon=True).start()
+```
+
+### Limitations
+
+- One session, one fleet, one day. The default window's cost is dominated
+  by one repo 2255 commits behind; a fleet without such a branch shifts the
+  balance towards the empty-window result, where print mode is slower.
+- The owner's TUI fetched continuously throughout, so both tools' fetches
+  competed with it for the network and for the same repositories, and the
+  stale condition could not be held. A clean D needs that TUI stopped,
+  which is the owner's call.
+- The GraphQL timing is two proxied print runs (5.9 and 9.0 s) and four
+  bash runs; GitHub's own latency varies by minute. A third, earlier proxied
+  print run (`conn.log.print`, before the 90% timestamp was added; tunnel
+  open 23.5 s) is excluded for lacking the 90% mark.
+- The profile runs used wrappers that add a process start per git call;
+  their per-process times are for ranking, not for adding up.
 
 ## Appendix: scripts
 
