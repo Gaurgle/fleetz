@@ -489,6 +489,13 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   skipping the 200-commit history read for print rows. His TUI runs
   watch mode at `refresh_interval = 5` and re-fetches every remote
   within seconds; told him.
+- **#112 FZ-56 (search by owner, organisation and contributor):
+  Ready, not dispatched**, filed 2026-10-27 13:30 CET on his "add that
+  as a ticket (if not exists) and push it". P2, M3. Free text in `/`
+  matches name, owner login, organisation and the authors of the
+  row's loaded commits, ranked name first; the strip marks a non-name
+  hit. Dispatch under the standing authority when a slot frees; a
+  look change (the strip), so Ready to integrate for his look.
 - **#111 FZ-55 (scroll margin on every list, reveal on expand): In
   progress, stopped for his word** since about 13:05 CET; filed
   11:45 on his "port if needed, or just implement this" and "the
