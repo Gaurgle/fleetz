@@ -489,12 +489,12 @@ pub const BLINK_TICKS: usize = 5;
 /// The cursor walks freely through the middle of the pane and parks this far
 /// from the edge, from where the text scrolls under it instead, as vim's
 /// `scrolloff`: enough to see where you are going, little enough that the
-/// cursor still travels. Five, as notez's tree keeps (FZ-55).
+/// cursor still travels. Four, shared by pane 1 and pane 2 (FZ-55).
 ///
 /// Applied in every history view, not only the graph, and as pane 1's
 /// `List::scroll_padding`. The margin collapses at the ends of the content,
 /// where there is nothing left to keep in reserve.
-pub const SCROLLOFF: u16 = 5;
+pub const SCROLLOFF: u16 = 4;
 
 /// The scrolloff margin for a pane of `height` rows: never more than half of
 /// it, or the two margins overlap and the cursor is pinned to the middle of a

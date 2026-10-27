@@ -6868,14 +6868,15 @@ mod tests {
     }
 
     /// Twenty rows less the border and the filter strip: sixteen list rows,
-    /// room for the full five-row margin.
+    /// room for the full margin pane 2 keeps.
     #[test]
-    fn the_repo_list_keeps_five_rows_past_the_cursor() {
-        walk_repo_list(20, 5);
+    fn the_repo_list_keeps_the_shared_margin_past_the_cursor() {
+        assert_eq!(crate::app::scrolloff_for(16), crate::app::SCROLLOFF);
+        walk_repo_list(20, usize::from(crate::app::SCROLLOFF));
     }
 
-    /// Eight list rows cannot hold five on each side of the cursor, so the
-    /// margin shrinks to (8 - 1) / 2 = 3 rather than pinning the cursor.
+    /// Eight list rows cannot hold the full margin on each side of the
+    /// cursor, so it shrinks to (8 - 1) / 2 = 3 rather than pinning it.
     #[test]
     fn a_short_repo_list_shrinks_the_margin() {
         assert_eq!(crate::app::scrolloff_for(8), 3);
@@ -6961,19 +6962,25 @@ mod tests {
     }
 
     /// `commits`, the longest list, through the cursor-follow path `j` and
-    /// `k` take: five rows past the cursor in a tall pane, the shrunken
-    /// margin in a short one.
+    /// `k` take: the full `SCROLLOFF` past the cursor in a tall pane, the
+    /// shrunken margin in a short one.
     #[test]
-    fn the_commit_list_keeps_five_rows_past_the_cursor() {
+    fn the_commit_list_keeps_the_shared_margin_past_the_cursor() {
         let mut app = crate::app::App::new(vec![long_lists_repo(80)], "t".to_string(), 96, 40);
         app.history_view = HistoryView::Commits;
         let tall = draw_detail(&app, 24);
-        assert!(tall >= 11, "the pane is too short for the full margin");
-        assert_eq!(crate::app::scrolloff_for(tall), 5);
+        assert_eq!(
+            crate::app::scrolloff_for(tall),
+            crate::app::SCROLLOFF,
+            "the pane is too short for the full margin: body {tall}"
+        );
         walk_detail(HistoryView::Commits, 24, 60);
 
         let short = draw_detail(&app, 10);
-        assert!(crate::app::scrolloff_for(short) < 5, "body {short}");
+        assert!(
+            crate::app::scrolloff_for(short) < crate::app::SCROLLOFF,
+            "body {short}"
+        );
         walk_detail(HistoryView::Commits, 10, 60);
     }
 

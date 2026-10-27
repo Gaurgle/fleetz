@@ -27,9 +27,9 @@ pub fn reveal_offset(rows: u16, folder: u16, offset: u16, height: u16) -> u16 {
 mod tests {
     use super::*;
 
-    /// The expanded row on body row 14 of a 20-row pane, the lowest the
-    /// margin lets a cursor sit; its eight rows end on row 21, below the
-    /// pane, so the view scrolls two rows and no further.
+    /// The expanded row on body row 14 of a 20-row pane; its eight rows end
+    /// on row 21, below the pane, so the view scrolls two rows and no
+    /// further.
     #[test]
     fn reveal_puts_the_last_expanded_row_on_the_bottom_row() {
         let offset = reveal_offset(8, 14, 0, 20);
@@ -43,11 +43,11 @@ mod tests {
     fn reveal_of_rows_taller_than_the_pane_stops_at_the_top_margin() {
         let offset = reveal_offset(30, 14, 0, 20);
         assert_eq!(14 - offset, scrolloff_for(20));
-        assert_eq!(14 - offset, 5);
+        assert_eq!(14 - offset, crate::app::SCROLLOFF);
     }
 
     /// Eight rows: the margin shrinks to (8 - 1) / 2 = 3, so the expanded
-    /// row climbs to row 3 of the pane, not to row 5 of a full margin.
+    /// row climbs to row 3 of the pane, not to the full margin's row.
     #[test]
     fn reveal_in_a_short_pane_uses_the_shrunken_margin() {
         let offset = reveal_offset(11, 14, 10, 8);
