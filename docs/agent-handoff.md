@@ -424,30 +424,26 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
 - **#105 FZ-49: Done**, merged `0db0d32` 16:38 CET, worktree swept
   (record in the log, "Merged on 2026-10-26").
 - **#106 FZ-50: Done**, merged `4632ac5`, worktree swept (log).
-- **#109 FZ-53 (the `notes` view in pane 2): In progress, built,
-  review not done.** Base `27d750c`, branch `feat/109-notes-view`,
-  worktree `.claude/worktrees/issue-109`, uncommitted, nothing
-  pushed: tracked diff sha256 prefix `8206bb9b7f0567ad` (55201
-  bytes), new `src/notes.rs` (13971 bytes); modified `README.md`,
-  `src/app.rs`, `src/discovery.rs` (`PRUNE_DIRS` pub), `src/main.rs`,
-  `src/ui/ci.rs`, `src/ui/colors.rs`, `src/ui/detail.rs`,
-  `src/ui/help.rs`. fmt and clippy clean, 1353 passed, 1 ignored. The
-  seven existing-test edits (one assertion or arm each, listed on the
-  issue) were made on his word of 16:00, "ok on the tests". Rulings 2
-  to 8 on the issue stand (nested repos skipped, hidden files skipped,
-  every file inside a notez directory, the `colors.rs` arm, the shared
-  `B m` help row, the `Enter` wording, the footer label as a
-  follow-up). **Next:** `fz-reviewer` on the full diff; the reviewer
-  handoff is `reviewer-109.txt` in this session's scratchpad and may
-  be gone, so write it again from the issue (acceptance criteria in
-  the body; trace both completion orders of the walk and the read;
-  diff each touched existing test against the base to confirm only
-  the seven approved lines moved). Then commit, push, branch CI,
-  combined checks against `main`, and Ready to integrate **for his
-  look** (layout and interaction; never merge it on the rule alone).
-  Try: `cargo run --release --manifest-path
-  .claude/worktrees/issue-109/Cargo.toml`, then `]` to `notes`, `m`
-  for all markdown, `Enter` on a file.
+- **#109 FZ-53 (the `notes` view in pane 2): Ready to integrate
+  for his look** since 2026-10-27 about 11:50 CET. Review 1 (re-run)
+  changes requested on one coverage gap, fix cycle 1 by `fz-small`
+  (`App::sweep_landed` plus its test), review 2 accepted (diff
+  `ff52d4dbf4e9982a` plus `src/notes.rs`); committed `0afd18b` on
+  `feat/109-notes-view` (base `27d750c`), pushed, branch CI
+  40486822394 green, scratch merge onto `main` `468451d` clean with
+  fmt, clippy and 1362 tests. Records and the follow-ups (post-suspend
+  invalidations untested at the seam, the "reading…" flash under watch
+  mode, a symlink-loop fixture, a `panel_rects` test naming `Notes`,
+  the footer label) on the issue. **Next:** his look, then merge under
+  the rule, sweep, log. Try: `cargo run --release --manifest-path
+  .claude/worktrees/issue-109/Cargo.toml`, `]` to `notes`, `m`,
+  `Enter` on a file.
+- **#111 FZ-55 (scroll margin on every list, reveal on expand):
+  Ready, not dispatched**, filed 11:45 CET on his "port if needed,
+  or just implement this" and "the jizt of it all is the
+  scroll_padding" (a notez port, `Gaurgle/notez` `d32a412`). P2, M3.
+  Dispatch to the first free worker slot; it coordinates the pane 2
+  cursor-follow region with FZ-45. A look change.
 
 Earlier record (2026-10-22, both merged since or waiting on his look,
 see the items below): two workers running since 13:30 (both slots;
