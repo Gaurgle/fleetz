@@ -269,6 +269,12 @@ FZ-53 (the `notes` view in pane 2: notez tree, markdown toggle, inspector)
 was agreed 2026-10-26, filed in Backlog under M4 at P2, not dispatched.
 Design in [ideas.md](ideas.md), "Repo notes in pane 2".
 
+FZ-55 (#111, scroll margin on every list and reveal on expand, a notez
+port) and FZ-56 (#112, search by owner, organisation and contributor)
+were filed 2026-10-27 on Andreas's word, Backlog or Ready under M3 at
+P2; FZ-55 is built to a decision point (keep pane 2's margin at 4 or
+go to 5), FZ-56 is not dispatched.
+
 ## Completion rule
 
 An agent finishing a turn is not a completed ticket. Done requires accepted

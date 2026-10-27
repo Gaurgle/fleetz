@@ -346,11 +346,7 @@ fn step_pct(current: u16, delta: i16, min: u16, max: u16) -> u16 {
 /// you happen to have a copy of. `render_repo_list` draws them in this order
 /// too; the two must not disagree.
 fn section_rank(repo: &RepoStatus) -> u8 {
-    match repo.location {
-        RepoLocation::Primary => 0,
-        RepoLocation::LocalOnly => 1,
-        RepoLocation::Elsewhere | RepoLocation::NotCloned => 2,
-    }
+    crate::digest::Section::of(repo) as u8
 }
 
 /// Overlay shown on top of the main view.
@@ -2358,6 +2354,27 @@ pub struct App {
     pub notes_cursor: Option<(Option<String>, std::time::Instant)>,
     /// The inspector's body for the highlighted file: one file at a time.
     pub note_body: Option<NoteBody>,
+    /// The section header the list cursor stands on (FZ-45), lifted off the
+    /// section's first repo, which `selected` keeps pointing at. Read only
+    /// through `on_header`, which also checks the header is drawn.
+    pub list_stop: Option<crate::digest::Section>,
+    /// The window the digest counts over, cycled by `t` on a header.
+    pub digest_window: crate::digest::DigestWindow,
+    /// The digest line pane 2's cursor is on.
+    pub digest_selected: usize,
+    /// The newest `git log --since` read per row path, or the one running
+    /// (`digest::HeldLog`). One per path, so it stays the size of the list.
+    pub digest_logs: std::collections::HashMap<String, crate::digest::HeldLog>,
+    /// The work hours slot boundaries are cut at, copied from `Config` at
+    /// startup as `github_poll_secs` is.
+    pub work_hours: (u8, u8),
+    /// Where the repo list's last frame drew its rows, so a click or a hover
+    /// resolves against what is on screen. Written by the renderer for the
+    /// reason `detail_hits` is.
+    pub list_hits: std::cell::Cell<ListHits>,
+    /// The section header under the resting pointer and since when; the
+    /// tick lands on it after `HOVER_DWELL` (`settle_hover`).
+    pub hover_pending: Option<(crate::digest::Section, std::time::Instant)>,
 }
 
 /// The `notes` view's walk of one repo (FZ-53).
@@ -2393,6 +2410,41 @@ pub struct NotesWalk {
 pub struct NoteRead {
     pub path: std::path::PathBuf,
     pub generation: u64,
+}
+
+/// How long the pointer rests on a section header before the cursor lands
+/// there: the CI view's dwell, the pause that tells a rest from a pass.
+pub const HOVER_DWELL: std::time::Duration = crate::ci::DWELL;
+
+/// The repo list's drawn rows as the renderer left them: the list area and
+/// the index of `App::list_rows` at its top.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ListHits {
+    pub area: ratatui::layout::Rect,
+    pub offset: usize,
+}
+
+impl ListHits {
+    /// The `App::list_rows` index drawn at (`col`, `row`), if any. Every list
+    /// row is one line high.
+    pub fn at(&self, col: u16, row: u16) -> Option<usize> {
+        let a = self.area;
+        (col >= a.x && col < a.x + a.width && row >= a.y && row < a.y + a.height)
+            .then(|| self.offset + (row - a.y) as usize)
+    }
+}
+
+/// One row the repo list draws, in drawn order (`App::list_rows`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListRow {
+    /// A section header, a cursor stop in the detail view (FZ-45).
+    Header(crate::digest::Section),
+    /// The "results" header a free-text query draws; not a stop.
+    Results,
+    /// The blank row between two sections; not a stop.
+    Gap,
+    /// A repo, by its position in `App::visible_repos`.
+    Repo(usize),
 }
 
 /// A whole job log wrapped for one pane width, so a 5000-line log is not
@@ -2710,6 +2762,13 @@ impl App {
             notes_all_markdown: false,
             notes_cursor: None,
             note_body: None,
+            list_stop: None,
+            digest_window: crate::digest::DigestWindow::default(),
+            digest_selected: 0,
+            digest_logs: std::collections::HashMap::new(),
+            work_hours: (9, 18),
+            list_hits: std::cell::Cell::new(ListHits::default()),
+            hover_pending: None,
         }
     }
 
@@ -3768,6 +3827,7 @@ impl App {
     pub fn clear_filters(&mut self) {
         self.search_query = parse_query(&self.search_query).text;
         self.selected = 0;
+        self.list_stop = None;
     }
 
     /// Cycle to the next group. None -> first -> second -> ... -> None.
@@ -3781,12 +3841,14 @@ impl App {
             Some(_) => None,
         };
         self.selected = 0;
+        self.list_stop = None;
     }
 
     /// Clear group filter (show all).
     pub fn clear_group(&mut self) {
         self.active_group = None;
         self.selected = 0;
+        self.list_stop = None;
     }
 
     /// Label for the active group, if any.
@@ -3797,18 +3859,28 @@ impl App {
     }
 
     /// The currently selected repo, if any.
+    /// None while the cursor stands on a section header (`on_header`).
     pub fn selected_repo(&self) -> Option<&RepoStatus> {
+        if self.on_header().is_some() {
+            return None;
+        }
         let visible = self.visible_repos();
         visible.get(self.selected).map(|(_, r)| *r)
     }
 
     /// Index into self.repos for the currently selected visible repo.
     pub fn selected_repo_index(&self) -> Option<usize> {
+        if self.on_header().is_some() {
+            return None;
+        }
         let visible = self.visible_repos();
         visible.get(self.selected).map(|(i, _)| *i)
     }
 
     pub fn move_up(&mut self) {
+        if self.step_list(-1) {
+            return;
+        }
         if self.selected > 0 {
             self.selected -= 1;
             self.reset_detail_view();
@@ -3816,6 +3888,9 @@ impl App {
     }
 
     pub fn move_down(&mut self) {
+        if self.step_list(1) {
+            return;
+        }
         let max = self.visible_repos().len().saturating_sub(1);
         if self.selected < max {
             self.selected += 1;
@@ -4502,16 +4577,19 @@ impl App {
         self.search_active = true;
         self.search_query.clear();
         self.selected = 0;
+        self.list_stop = None;
     }
 
     pub fn search_push_char(&mut self, c: char) {
         self.search_query.push(c);
         self.selected = 0; // reset selection when query changes
+        self.list_stop = None;
     }
 
     pub fn search_pop_char(&mut self) {
         self.search_query.pop();
         self.selected = 0;
+        self.list_stop = None;
     }
 
     pub fn end_search(&mut self) {
@@ -4522,6 +4600,7 @@ impl App {
         self.search_query.clear();
         self.search_active = false;
         self.selected = 0;
+        self.list_stop = None;
     }
 
     pub fn set_status(&mut self, text: String, is_error: bool) {
@@ -4694,29 +4773,345 @@ impl App {
     pub fn summary(&self) -> Summary {
         Summary::from_refs(self.visible_repos().into_iter().map(|(_, r)| r))
     }
+}
 
-    /// Repos grouped by location for the repo list pane.
-    pub fn primary_repos(&self) -> Vec<(usize, &RepoStatus)> {
-        self.visible_repos()
-            .into_iter()
-            .filter(|(_, r)| r.location == RepoLocation::Primary)
-            .collect()
+/// Section header stops and the slot digest (FZ-45). The header rows are a
+/// row kind of `list_rows`, built from `visible_repos`, so the cursor, the
+/// drawing and the hit-testing walk one list.
+impl App {
+    /// Every row the repo list draws, in drawn order. A free-text query draws
+    /// one ranked list under "results"; otherwise the sections, each headed
+    /// once another section is present, the second and third set off by a
+    /// blank row.
+    pub fn list_rows(&self) -> Vec<ListRow> {
+        use crate::digest::Section;
+        let visible = self.visible_repos();
+        if self.has_text_query() {
+            let mut rows = vec![ListRow::Results];
+            rows.extend((0..visible.len()).map(ListRow::Repo));
+            return rows;
+        }
+        let mixed = visible
+            .iter()
+            .any(|(_, r)| Section::of(r) != Section::GithubActivity);
+        let mut rows = Vec::new();
+        let mut current = None;
+        for (pos, (_, repo)) in visible.iter().enumerate() {
+            let section = Section::of(repo);
+            if current != Some(section) {
+                current = Some(section);
+                if section != Section::GithubActivity {
+                    if !rows.is_empty() {
+                        rows.push(ListRow::Gap);
+                    }
+                    rows.push(ListRow::Header(section));
+                } else if mixed {
+                    rows.push(ListRow::Header(section));
+                }
+            }
+            rows.push(ListRow::Repo(pos));
+        }
+        rows
     }
 
-    pub fn elsewhere_repos(&self) -> Vec<(usize, &RepoStatus)> {
-        self.visible_repos()
+    /// Whether the list cursor can stand on `row`. Headers only in the detail
+    /// view, whose pane 2 draws their digest; the compact grid has none.
+    pub fn is_stop(&self, row: ListRow) -> bool {
+        match row {
+            ListRow::Repo(_) => true,
+            ListRow::Header(_) => self.view == View::Detail,
+            ListRow::Results | ListRow::Gap => false,
+        }
+    }
+
+    /// The section whose header the cursor stands on. The stop is lifted off
+    /// the section's first repo, so anything that moved `selected` since (a
+    /// search, a reload, a group) has also left the header.
+    pub fn on_header(&self) -> Option<crate::digest::Section> {
+        let section = self.list_stop?;
+        if self.view != View::Detail {
+            return None;
+        }
+        let rows = self.list_rows();
+        let at = rows.iter().position(|r| *r == ListRow::Header(section))?;
+        (rows.get(at + 1) == Some(&ListRow::Repo(self.selected))).then_some(section)
+    }
+
+    /// The `list_rows` index the cursor is drawn on.
+    pub fn cursor_row(&self, rows: &[ListRow]) -> Option<usize> {
+        let at = match self.on_header() {
+            Some(section) => ListRow::Header(section),
+            None => ListRow::Repo(self.selected),
+        };
+        rows.iter().position(|r| *r == at)
+    }
+
+    /// Step the cursor `delta` stops through `list_rows`. False when the
+    /// cursor is on no row, so the caller's own clamp applies.
+    fn step_list(&mut self, delta: i32) -> bool {
+        let rows = self.list_rows();
+        let Some(current) = self.cursor_row(&rows) else {
+            return false;
+        };
+        let stops: Vec<usize> = (0..rows.len()).filter(|&i| self.is_stop(rows[i])).collect();
+        let Some(at) = stops.iter().position(|&i| i == current) else {
+            return false;
+        };
+        let next = (at as i32 + delta).clamp(0, stops.len() as i32 - 1) as usize;
+        if next != at {
+            self.land_on(rows[stops[next]]);
+        }
+        true
+    }
+
+    /// Put the cursor on `row`. Landing on a header keeps pane 2's view and
+    /// its place, so stepping back onto the repo restores them; a different
+    /// repo starts its detail from the top, as `move_down` does.
+    pub fn land_on(&mut self, row: ListRow) {
+        // A cursor moved by a key or a click outranks a pending hover.
+        self.hover_pending = None;
+        match row {
+            ListRow::Header(section) => {
+                if self.on_header() == Some(section) || !self.is_stop(row) {
+                    return;
+                }
+                let rows = self.list_rows();
+                let Some(at) = rows.iter().position(|r| *r == row) else {
+                    return;
+                };
+                let Some(ListRow::Repo(first)) = rows.get(at + 1).copied() else {
+                    return;
+                };
+                if self.selected != first {
+                    self.selected = first;
+                    self.reset_detail_view();
+                }
+                self.list_stop = Some(section);
+                self.digest_selected = 0;
+                self.inspector_scroll = 0;
+            }
+            ListRow::Repo(pos) => {
+                self.list_stop = None;
+                if self.selected != pos {
+                    self.selected = pos;
+                    self.reset_detail_view();
+                }
+            }
+            ListRow::Results | ListRow::Gap => return,
+        }
+        self.needs_redraw = true;
+    }
+
+    /// The list row drawn at (`col`, `row`) by the last frame, if a stop.
+    /// Only the detail view draws the list `list_hits` records; the compact
+    /// grid never writes it, so there a stale detail frame must not answer.
+    fn list_stop_at(&self, col: u16, row: u16) -> Option<ListRow> {
+        if self.view != View::Detail {
+            return None;
+        }
+        let i = self.list_hits.get().at(col, row)?;
+        let hit = self.list_rows().get(i).copied()?;
+        self.is_stop(hit).then_some(hit)
+    }
+
+    /// A click in the repo list lands the cursor on the row under it.
+    pub fn click_list(&mut self, col: u16, row: u16) {
+        if let Some(hit) = self.list_stop_at(col, row) {
+            self.land_on(hit);
+        }
+    }
+
+    /// The pointer moved to (`col`, `row`) at `now`. Over a section header it
+    /// starts, or keeps, the dwell `settle_hover` lands on; anywhere else it
+    /// cancels it, so a pointer passing over a header on its way elsewhere
+    /// lands nowhere.
+    pub fn hover_list(&mut self, col: u16, row: u16, now: std::time::Instant) {
+        self.hover_pending = match self.list_stop_at(col, row) {
+            Some(ListRow::Header(section)) => match self.hover_pending {
+                Some((held, since)) if held == section => Some((held, since)),
+                _ => Some((section, now)),
+            },
+            _ => None,
+        };
+    }
+
+    /// The pointer left the repo list: no hover is pending.
+    pub fn clear_hover(&mut self) {
+        self.hover_pending = None;
+    }
+
+    /// On the tick: land on the header the pointer has rested on for
+    /// `HOVER_DWELL`.
+    pub fn settle_hover(&mut self, now: std::time::Instant) {
+        if let Some((section, since)) = self.hover_pending
+            && now.saturating_duration_since(since) >= HOVER_DWELL
+        {
+            self.land_on(ListRow::Header(section));
+            self.hover_pending = None;
+        }
+    }
+
+    /// GitHub's push time for the remote `repo` carries, from the dataset
+    /// (`carries`, the predicate the poll follows).
+    fn pushed_at(&self, repo: &RepoStatus) -> Option<DateTime<chrono::Utc>> {
+        self.dataset
+            .iter()
+            .find(|e| crate::carries(repo, e))
+            .map(|e| e.pushed_at)
+    }
+
+    /// The digest of the header the cursor stands on, at `now`.
+    pub fn digest(&self, now: DateTime<Local>) -> Option<crate::digest::Digest> {
+        use crate::digest::{Row, Section, build, needs_log};
+        let section = self.on_header()?;
+        let (start, end) = self.work_hours;
+        let (cutoff, label) = self.digest_window.bounds(now, start, end);
+        let visible = self.visible_repos();
+        let rows: Vec<Row> = visible
+            .iter()
+            .filter(|(_, r)| Section::of(r) == section)
+            .map(|(index, repo)| {
+                let pushed_at = self.pushed_at(repo);
+                let log = needs_log(section, repo, pushed_at, cutoff).and_then(|key| {
+                    let held = self.digest_logs.get(repo.path.as_deref()?)?;
+                    if held.key == key {
+                        held.commits.as_deref()
+                    } else {
+                        None
+                    }
+                });
+                Row {
+                    index: *index,
+                    repo,
+                    pushed_at,
+                    log,
+                }
+            })
+            .collect();
+        Some(build(section, self.digest_window, cutoff, label, &rows))
+    }
+
+    /// The `git log --since` reads the shown digest needs and nothing holds
+    /// or runs under the same key: one per touched repo per cutoff and refs,
+    /// so a sweep that moves no ref runs none. Marked running here, so the
+    /// next tick does not ask again.
+    pub fn claim_digest_logs(&mut self, now: DateTime<Local>) -> Vec<crate::digest::LogRequest> {
+        use crate::digest::{HeldLog, LogRequest, Section, needs_log};
+        let Some(section) = self.on_header() else {
+            return Vec::new();
+        };
+        let (start, end) = self.work_hours;
+        let (cutoff, _) = self.digest_window.bounds(now, start, end);
+        let wanted: Vec<(String, crate::digest::LogKey)> = self
+            .visible_repos()
+            .iter()
+            .filter(|(_, r)| Section::of(r) == section)
+            .filter_map(|(_, repo)| {
+                let key = needs_log(section, repo, self.pushed_at(repo), cutoff)?;
+                let path = repo.path.clone()?;
+                let held = self.digest_logs.get(&path).is_some_and(|h| h.key == key);
+                (!held).then_some((path, key))
+            })
+            .collect();
+        wanted
             .into_iter()
-            .filter(|(_, r)| {
-                r.location == RepoLocation::Elsewhere || r.location == RepoLocation::NotCloned
+            .map(|(path, key)| {
+                self.digest_logs.insert(
+                    path.clone(),
+                    HeldLog {
+                        key: key.clone(),
+                        commits: None,
+                    },
+                );
+                LogRequest {
+                    dir: std::path::PathBuf::from(shellexpand::tilde(&path).to_string()),
+                    path,
+                    key,
+                }
             })
             .collect()
     }
 
-    pub fn local_only_repos(&self) -> Vec<(usize, &RepoStatus)> {
-        self.visible_repos()
-            .into_iter()
-            .filter(|(_, r)| r.location == RepoLocation::LocalOnly)
-            .collect()
+    /// Land a `git log --since` read. One read under a key the row has since
+    /// left (a newer window, moved refs) is dropped.
+    pub fn apply_digest_log(
+        &mut self,
+        path: &str,
+        key: &crate::digest::LogKey,
+        commits: Vec<crate::model::Commit>,
+    ) {
+        if let Some(held) = self.digest_logs.get_mut(path)
+            && held.key == *key
+        {
+            held.commits = Some(commits);
+            self.needs_redraw = true;
+        }
+    }
+
+    /// The digest line pane 2's cursor is on, clamped to the lines there are.
+    pub fn digest_line(&self, now: DateTime<Local>) -> Option<crate::digest::DigestLine> {
+        let digest = self.digest(now)?;
+        let last = digest.lines.len().checked_sub(1)?;
+        digest.lines.into_iter().nth(self.digest_selected.min(last))
+    }
+
+    /// Move pane 2's digest cursor.
+    pub fn digest_nav(&mut self, delta: i32) {
+        let Some(digest) = self.digest(Local::now()) else {
+            return;
+        };
+        let last = digest.lines.len().saturating_sub(1) as i32;
+        let next = (self.digest_selected.min(last as usize) as i32 + delta).clamp(0, last) as usize;
+        if next != self.digest_selected {
+            self.digest_selected = next;
+            self.inspector_scroll = 0;
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Scroll the inspector's digest line detail. Not `scroll_inspector`,
+    /// which in the `ci` view scrolls a run body the digest hides.
+    pub fn scroll_digest_inspector(&mut self, delta: i32) {
+        let max = self.inspector_max_scroll.get() as i32;
+        self.inspector_scroll = (self.inspector_scroll as i32 + delta).clamp(0, max) as u16;
+        self.needs_redraw = true;
+    }
+
+    /// `J`/`K` on a header: drive the next pane as `scroll_next_panel` does,
+    /// but pane 2 and the inspector are the digest's, so their hidden repo
+    /// views keep the place a return to the repo restores.
+    pub fn digest_scroll_next_panel(&mut self, delta: i32) {
+        match self.shift_scroll_target() {
+            Some(FocusedPanel::Detail) => self.digest_nav(delta),
+            Some(FocusedPanel::Inspector) => self.scroll_digest_inspector(delta),
+            Some(FocusedPanel::RepoList) => self.scroll_next_panel(delta),
+            Some(FocusedPanel::Contributions) | None => {}
+        }
+    }
+
+    /// `t` on a header: the next window.
+    pub fn cycle_digest_window(&mut self) {
+        self.digest_window = self.digest_window.next();
+        self.digest_selected = 0;
+        self.inspector_scroll = 0;
+        self.needs_redraw = true;
+    }
+
+    /// `Enter` on a header: land on the repo of the digest line under pane
+    /// 2's cursor, in pane 1.
+    pub fn jump_to_digest_line(&mut self, now: DateTime<Local>) {
+        let Some(line) = self.digest_line(now) else {
+            return;
+        };
+        let Some(pos) = self
+            .visible_repos()
+            .iter()
+            .position(|(i, _)| *i == line.repo)
+        else {
+            return;
+        };
+        self.land_on(ListRow::Repo(pos));
+        self.focus_panel(FocusedPanel::RepoList);
     }
 }
 
@@ -8135,5 +8530,186 @@ mod tests {
         app.history_view = HistoryView::Info;
         app.toggle_notes_markdown();
         assert!(app.notes_all_markdown, "not the view");
+    }
+}
+
+/// FZ-45: the digest's `git log --since` reads are claimed once per touched
+/// repo per cutoff and refs, and a read under a key the row has left is
+/// dropped.
+#[cfg(test)]
+mod digest_log_tests {
+    use super::*;
+    use crate::digest::tests::{commit, fetched, repo, work_key};
+    use crate::digest::{DigestWindow, LineBody, Section};
+
+    fn app() -> App {
+        let recent = chrono::Utc::now() - chrono::Duration::minutes(1);
+        let repos = vec![
+            fetched("alpha", recent),
+            repo("bravo", RepoLocation::Primary),
+            repo("charlie", RepoLocation::LocalOnly),
+        ];
+        let mut app = App::new(repos, String::new(), 120, 40);
+        app.view = View::Detail;
+        app.dataset = ["alpha", "bravo"]
+            .iter()
+            .map(|name| crate::github::GithubRepo {
+                name: name.to_string(),
+                pushed_at: recent,
+                pr_count: 0,
+                prs: vec![],
+                ci_status: CiStatus::Unknown,
+                ci_workflow: None,
+                ci_duration: None,
+                repo_kind: crate::model::RepoKind::Unknown,
+                owner: None,
+                disk_usage: None,
+            })
+            .collect();
+        app.land_on(ListRow::Header(Section::GithubActivity));
+        app
+    }
+
+    #[test]
+    fn nothing_is_claimed_off_a_header() {
+        let mut app = app();
+        app.land_on(ListRow::Repo(0));
+        assert!(app.claim_digest_logs(Local::now()).is_empty());
+    }
+
+    #[test]
+    fn a_touched_fetched_clone_is_read_once_per_cutoff_and_refs() {
+        let mut app = app();
+        let now = Local::now();
+        let first = app.claim_digest_logs(now);
+        assert_eq!(
+            first.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            vec!["~/repos/alpha"],
+            "only the fetched clone is read; bravo shows its push"
+        );
+        assert!(
+            app.claim_digest_logs(now).is_empty(),
+            "running: not asked twice"
+        );
+        let key = first[0].key.clone();
+        app.apply_digest_log("~/repos/alpha", &key, vec![commit("a1", "A", "x")]);
+        assert!(
+            app.claim_digest_logs(now).is_empty(),
+            "held: a sweep that moves no ref reads none"
+        );
+        let digest = app.digest(now).unwrap();
+        assert!(
+            matches!(&digest.lines[0].body, LineBody::Counted { commits } if commits.len() == 1)
+        );
+        assert!(matches!(digest.lines[1].body, LineBody::PushedOnly));
+
+        // A sweep that moved a ref asks again; the old answer is not drawn.
+        app.repos[0].work_key = Some(work_key("moved"));
+        assert!(matches!(
+            app.digest(now).unwrap().lines[0].body,
+            LineBody::Reading
+        ));
+        let second = app.claim_digest_logs(now);
+        assert_eq!(second.len(), 1);
+        // The first read landing late is dropped.
+        app.apply_digest_log("~/repos/alpha", &key, vec![commit("old", "A", "x")]);
+        assert!(matches!(
+            app.digest(now).unwrap().lines[0].body,
+            LineBody::Reading
+        ));
+
+        // A new window is a new cutoff.
+        app.apply_digest_log("~/repos/alpha", &second[0].key, vec![]);
+        app.digest_window = DigestWindow::Week;
+        assert_eq!(app.claim_digest_logs(now).len(), 1);
+    }
+
+    #[test]
+    fn landing_on_a_header_hides_the_repo_and_leaving_restores_its_place() {
+        let mut app = app();
+        assert_eq!(app.on_header(), Some(Section::GithubActivity));
+        assert!(app.selected_repo().is_none());
+        assert!(app.selected_repo_index().is_none());
+        app.history_view = HistoryView::Reflog;
+        app.move_down();
+        assert_eq!(app.on_header(), None);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.history_view, HistoryView::Reflog);
+    }
+
+    /// Review F1: someone else's push, fetched, moves only `origin/*`: HEAD
+    /// is where it was and only the ref signature changes. That is a new
+    /// read, and the old answer is not drawn.
+    #[test]
+    fn a_moved_remote_ref_alone_asks_for_a_new_read() {
+        let mut app = app();
+        let now = Local::now();
+        let first = app.claim_digest_logs(now);
+        app.apply_digest_log("~/repos/alpha", &first[0].key, vec![commit("a1", "A", "x")]);
+        let mut moved = work_key("abc");
+        moved.ref_signature += 1;
+        app.repos[0].work_key = Some(moved);
+        assert!(matches!(
+            app.digest(now).unwrap().lines[0].body,
+            LineBody::Reading
+        ));
+        let second = app.claim_digest_logs(now);
+        assert_eq!(second.len(), 1, "a new read for the moved remote ref");
+        assert_ne!(second[0].key, first[0].key);
+    }
+
+    /// Review F2: the round trip through a header keeps the repo pane's
+    /// cursor and scroll, not only its view.
+    #[test]
+    fn a_header_round_trip_keeps_the_detail_cursor_and_scroll() {
+        let mut app = app();
+        app.land_on(ListRow::Repo(0));
+        app.history_view = HistoryView::Reflog;
+        app.set_detail_selected(3);
+        app.set_detail_scroll(5);
+        app.move_up();
+        assert_eq!(app.on_header(), Some(Section::GithubActivity));
+        app.move_down();
+        assert_eq!(app.on_header(), None);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.detail_selected(), 3);
+        assert_eq!(app.detail_scroll(), 5);
+    }
+
+    /// Review F2b: the compact grid draws no headers, so a stop left from
+    /// the detail view is the section's first repo there.
+    #[test]
+    fn a_header_stop_is_its_first_repo_in_the_compact_view() {
+        let mut app = app();
+        assert_eq!(app.on_header(), Some(Section::GithubActivity));
+        app.toggle_view();
+        assert_eq!(app.view, View::Compact);
+        assert_eq!(app.on_header(), None);
+        assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("alpha"));
+    }
+
+    #[test]
+    fn a_search_drops_the_headers_and_the_stop() {
+        let mut app = app();
+        app.search_query = "alp".to_string();
+        assert_eq!(app.list_rows(), vec![ListRow::Results, ListRow::Repo(0)]);
+        assert_eq!(app.on_header(), None);
+    }
+
+    #[test]
+    fn a_lone_section_has_no_header_to_stop_on() {
+        let mut app = App::new(
+            vec![
+                repo("a", RepoLocation::Primary),
+                repo("b", RepoLocation::Primary),
+            ],
+            String::new(),
+            120,
+            40,
+        );
+        app.view = View::Detail;
+        assert_eq!(app.list_rows(), vec![ListRow::Repo(0), ListRow::Repo(1)]);
+        app.move_up();
+        assert_eq!(app.on_header(), None);
     }
 }

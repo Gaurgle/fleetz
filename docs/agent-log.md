@@ -289,6 +289,109 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-10-27
+
+Clock note: this lead's stamps again ran ahead of the wall clock
+(the FZ-51 merge was written "about 14:35" and happened before
+13:05 CET; the FZ-45 fix cycle 2 ruling "14:00" was before 13:00).
+Commit dates are authoritative.
+
+- **#101 (FZ-45), the slot digest on pane 1 section headers.** Merged
+  `7a2a020` at about 15:20 CET on his "45 is great." (his second
+  look); ticket commits `f0c130c`, `2cb7cfc`, `63d7762` (base
+  `4d9bce9`, branch `feat/101-slot-digest`, worker `fz-worker`
+  `claude-opus-5-5` medium through three fix cycles, reviewer
+  `fz-reviewer` `claude-opus-5-5` medium, four passes). Headers are
+  cursor stops (`App::list_rows`, one list for drawing, keys, click
+  and hover); the digest in pane 2 with a totals line and one line
+  per touched repo in pane 1's row grammar (`detail::repo_row_spans`
+  shared with pane 1); `git log --since` per touched repo per
+  (cutoff, head, refs) off the UI thread (`commits_since`, no `%b`);
+  `t` cycles slot, today, yesterday, week; `Enter` jumps; the
+  inspector two-lane or stacked, facts never scroll, lists end with
+  the shared `… and N more`; hover lands after a 300 ms dwell. Review
+  1: a compact-view click through stale list geometry plus three
+  coverage gaps and five follow-ups; review 3 (after his first look
+  changed the rows and the inspector): many PRs squeezed out the CI
+  line and the commit list; reviews 2 and 4 accepted. Rulings on the
+  issue: `--branches --remotes` instead of the spec's default branch;
+  a click now selects a row; the spec's fold question answered
+  "digest only". Open for his later looks: no top-of-list indicator;
+  what to drop at tiny inspector heights; `J`/`K` and hover edge
+  cases on the issue. Branch CI 40516357710, `main` CI 40520984376
+  green, 1397 tests. Conflicts with FZ-53's branch, which now needs a
+  resolution cycle.
+  FZ-45: review changes 2; fix cycles 3; owner decisions 2; worker 48; review 46; usage worker 416k, review 374k tokens
+
+- **#107 (FZ-51), measure print mode against bash repoz.** Merged
+  `579f28e` at about 13:05 CET; ticket commit `626a680` (base
+  `4d9bce9`, branch `chore/107-measure-print-mode`, worker
+  `fz-worker` `claude-opus-5-5` medium in the measurement role, fix
+  cycles `fz-small` `sonnet` medium twice, reviewer `fz-reviewer`
+  `claude-opus-5-5` medium, three passes). Docs only: a new section
+  in `docs/performance-baseline.md` and one CLAUDE.md index row.
+  Interleaved pairs on his real fleet (12 rows, Apple M2 8 GB): print
+  mode wins the default window (median 22.5 s against bash 31.4 s)
+  and `-d` (0.64 s against 5.1 s), loses an empty window (8.7 s
+  against 7.1 s) because the full TUI GraphQL query (130 KB, 6 to 9
+  s) gates everything local, and runs the 200-commit `log --numstat`
+  for rows the report never draws; the "fetches due" condition could
+  not be held while his TUI re-fetched in watch mode at
+  `refresh_interval = 5`. Review 1 changes requested (one wrong range,
+  rerun commands that failed as written and would have silently
+  disabled the build-contamination gate, six minor figures); review 2
+  found the new guard itself passed a dead monitor under bash 3.2;
+  review 3 accepted. Every number in the result table recomputed from
+  the raw data by the reviewer. Follow-up candidates on his yes: a
+  report-sized query (check D5's cache contract first) and skipping
+  the history read for print rows. `docs` workflow green on the branch
+  (40501468084) and on `main` (40501563882); `ci` skipped for prose.
+  FZ-51: review changes 2; fix cycles 2; owner decisions 0; worker 96; review 13; small 2; usage worker 162k, review 93k, small 41k tokens
+
+### Merged on 2026-10-26
+
+Clock note: this lead's issue and chat stamps ran up to 70 minutes
+ahead of the wall clock in the afternoon (the FZ-49 merge written
+"16:38" happened before 15:59; the FZ-50 review dispatch written
+"17:16" likewise). Commit dates are authoritative.
+
+- **#106 (FZ-50), print mode's fetch outcomes and a stalled remote.**
+  Merged `4632ac5` at about 16:05 CET; ticket commit `dc4326a` (base
+  `d9b8e33`, branch `feat/106-print-fetch-outcomes`, worker `fz-worker`
+  `claude-opus-5-5` medium, reviewer `fz-reviewer` `claude-opus-5-5`
+  medium, accepted first round). Print mode already rendered a failed
+  fetch as bash `3fab42a` does, so the ticket is proof: two golden
+  cases on missing remotes (`fetch-failed-all`, `fetch-failed-target`,
+  builder `add_missing_remotes`, live-bash guard
+  `check_fetch_failed_case`), a bounded stall test through the FZ-35a
+  seam into the real row and summary, a credential test on the printed
+  lines, stdout and stderr; the `#[cfg(test)]` `fetch_watched` seam
+  made `pub(crate)`. Reviewer mutations (summary count, row and target
+  outcomes ignored, the config path drawn or written by fd, the
+  deadline times 20, the builder removed) all caught. Open: F1, the
+  print-mode child runs without `--nocapture`, so an `eprintln!` of a
+  credential would pass the stderr check (none exists on that path).
+  Branch CI 40345705104 green, `main` CI 40346149642 green, 1348 tests.
+  FZ-50: review changes 0; fix cycles 0; owner decisions 0; worker 8; review 6; usage worker 163k, review 46k tokens
+
+- **#105 (FZ-49), print mode's `-s`, `-r`, `-p`, `--author` and
+  `--no-glyphs`.** Merged `0db0d32` at 16:38 CET; ticket commit
+  `2c7c303` (base `27d750c`, branch `feat/105-print-options`, worker
+  `fz-worker` `claude-opus-5-5` medium, fix cycle `fz-small` `sonnet`
+  medium, reviewer `fz-reviewer` `claude-opus-5-5` medium, two
+  passes). Byte parity with bash `3fab42a` on nine recordings
+  (`opt-*`), one options fixture with new builders `add_releases`,
+  `add_other_author`, `add_pull_requests`; `Layout::release`,
+  `Counts::open_prs`, `release_status`; print-only flags carry
+  `requires = "print"`, `-p` and `--author` unchanged for the TUI.
+  Review 1 changes requested (no live-bash guard that `-s` shows the
+  stat on an unchanged row); fix cycle 1 added the line-level arm,
+  proven on `opt-releases`. Rulings: `--author` with a space (bash
+  unquoted) and `-p` counts by owner and name are D3 entries
+  (`0ae5020`). Open: F1, the no-PR check skips `opt-target-no-glyphs`.
+  Branch CI 40341740278 green, `main` CI 40342344386 green, 1344 tests.
+  FZ-49: review changes 1; fix cycles 1; owner decisions 0; worker 13; review 7; small 3; usage worker 150k, review 131k, small 23k tokens
+
 ### Merged on 2026-10-23
 
 Clock note: this lead's chat and issue stamps ran up to 40 minutes

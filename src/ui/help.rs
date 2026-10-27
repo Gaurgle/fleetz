@@ -138,7 +138,7 @@ const GROUPS: [Group; 6] = [
             },
             Row {
                 key: "t",
-                desc: &["pick the activity window"],
+                desc: &["activity / digest window"],
             },
         ],
     },
@@ -147,7 +147,7 @@ const GROUPS: [Group; 6] = [
         rows: &[
             Row {
                 key: "Enter",
-                desc: &["lazygit; notes: $EDITOR"],
+                desc: &["lazygit; note; digest repo"],
             },
             Row {
                 key: "e",
