@@ -14,7 +14,18 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Released** 2026-10-26 16:12 CET by `claude-fable-5-1` (`claude
+**Held** since 2026-10-27 10:57 CET by `claude-fable-5-1` (`claude
+--agent fz-coordinator`, the same session
+`c47a5217-1276-4a26-b7a2-bceecc3c81fb`) on his "can we continue from
+where we stopped?". Confirmed on resume: nobody held the baton in
+between, `main` unchanged at `ed8877d`, CI green at `4632ac5`, the
+FZ-53 worktree byte-identical to the close (diff `8206bb9b7f0567ad`).
+Read as: resume FZ-53 (#109) at its review, under his word of
+2026-10-26 on the tests; **not** read as dispatch of FZ-51 or any
+other ticket, which is asked. **Running:** one `fz-reviewer` on
+FZ-53 from 11:00 CET.
+
+Previous record: **Released** 2026-10-26 16:12 CET by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
 `c47a5217-1276-4a26-b7a2-bceecc3c81fb`) on his "ok on the tests,
 then close after FZ-50" and "id rather close it now". Held from
