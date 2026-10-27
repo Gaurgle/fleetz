@@ -469,17 +469,19 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   the rule, sweep, log. Try: `cargo run --release --manifest-path
   .claude/worktrees/issue-109/Cargo.toml`, `]` to `notes`, `m`,
   `Enter` on a file.
-- **#101 FZ-45 (slot digest): In progress, fix cycle 2 delivered and
-  pushed unreviewed** as `2cb7cfc` on `feat/101-slot-digest` (on top
-  of the accepted `f0c130c`; diff `01148ecf1d46e4cb`, 1395 tests,
-  fmt and clippy clean per the worker). His look ("this is great!")
-  asked for pane 1's row grammar and fixed indicator slots, then the
-  full-width inspector with nothing but a list overflowing; both
-  rulings and the worker's report are on the issue. **Next:** review
-  3 by `fz-reviewer` on `01148ecf1d46e4cb` (include the new
-  `detail::repo_row_spans` extraction against pane 1's existing
-  render tests and the shared `more_line`), then branch CI (it ran on
-  the push: check it), then his second look, then Ready to integrate.
+- **#101 FZ-45 (slot digest): Ready to integrate for his second
+  look** since about 15:35 CET at `63d7762` on `feat/101-slot-digest`
+  (branch CI 40516357710 green; scratch merge onto `main` `8541b52`
+  clean, 1397 tests). After his first look ("this is great!", then
+  pane 1's row grammar, the full-width inspector, nothing hidden but
+  a list): fix cycle 2 (`2cb7cfc`, pushed unreviewed on his "ship
+  it"), review 3 changes requested (many PRs squeezed out the CI line
+  and the commit list), fix cycle 3 (PRs as their own counted list,
+  `LIST_MIN_ROWS`), review 4 accepted. Look items on the issue
+  (review 4's O1 to O3 at tiny heights, no top-of-list indicator).
+  **Next:** his look, then merge; it conflicts with FZ-53 (see the
+  integration note below), so the second of the two to be approved
+  gets a merge-resolution cycle.
   Earlier: Ready to integrate at `f0c130c`. Review 1 changes requested (a compact-view
   click through stale list geometry, three coverage gaps, five
   follow-ups), fix cycle 1 by the same worker, review 2 accepted
@@ -501,12 +503,19 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   watch mode at `refresh_interval = 5` and re-fetches every remote
   within seconds; told him.
 - **#112 FZ-56 (search by owner, organisation and contributor):
-  Ready, not dispatched**, filed 2026-10-27 13:30 CET on his "add that
-  as a ticket (if not exists) and push it". P2, M3. Free text in `/`
-  matches name, owner login, organisation and the authors of the
-  row's loaded commits, ranked name first; the strip marks a non-name
-  hit. Dispatch under the standing authority when a slot frees; a
-  look change (the strip), so Ready to integrate for his look.
+  Review** since 15:32 CET. Filed 13:30 on his "add that as a ticket
+  (if not exists) and push it", dispatched 14:40 under the standing
+  authority. Base `9e73cee`, branch
+  `feat/112-search-owner-contributor`, worktree
+  `.claude/worktrees/issue-112`, uncommitted (diff
+  `af01c9337485ff21`, 31808 bytes, 10 files). Worker delivered
+  `model::AuthorSet` (lazy, reset on sweep), `app::MatchField` tiers
+  inside the one ranking, word-start matching for people and owners,
+  the dimmed mark after the name, 1364 tests, red first, 200-row
+  timing within budget; rulings 1 to 5 on the issue (the five
+  production `authors: Default::default()` lines ruled in). After
+  acceptance: commit, push, CI, scratch merge, Ready to integrate for
+  his look (the mark).
 - **#111 FZ-55 (scroll margin on every list, reveal on expand): In
   progress, stopped for his word** since about 13:05 CET; filed
   11:45 on his "port if needed, or just implement this" and "the
