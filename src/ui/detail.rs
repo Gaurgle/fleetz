@@ -170,6 +170,7 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
                 col_width,
                 dim_pending,
                 app.is_not_in_last_poll(repo),
+                app.search_match_field(repo).and_then(|f| f.mark()),
             ));
         }
     };
@@ -330,6 +331,7 @@ fn repo_list_item(
     col_width: usize,
     dim_pending: bool,
     not_in_last_poll: bool,
+    match_mark: Option<&'static str>,
 ) -> ListItem<'static> {
     let marker = if is_selected { "▸ " } else { "  " };
     let name_style = if is_selected {
@@ -348,11 +350,15 @@ fn repo_list_item(
     // as in repoz. Truncate the name rather than let it overflow when narrow.
     let (badge_spans, badge_w) = badges::badge_spans_marked(repo, dim_pending, not_in_last_poll);
     let right_len = badge_w + 1; // +1 for space after dots
-    let reserved = badges::MARKER_W + badges::GLYPH_W + 1 + right_len;
+    // A search hit on the owner or an author says so after the name (FZ-56),
+    // in the filter strip's dim, so it does not read as a name match.
+    let mark = match_mark.map(|m| format!(" {m}")).unwrap_or_default();
+    let mark_w = mark.chars().count();
+    let reserved = badges::MARKER_W + badges::GLYPH_W + 1 + right_len + mark_w;
     let name_budget = col_width.saturating_sub(reserved).max(3);
     let name = crate::ui::truncate(&repo.name, name_budget);
 
-    let left_len = badges::MARKER_W + badges::GLYPH_W + name.chars().count() + 1; // +1 for space before dots
+    let left_len = badges::MARKER_W + badges::GLYPH_W + name.chars().count() + mark_w + 1; // +1 for space before dots
     let dot_count = col_width.saturating_sub(left_len + right_len).max(1);
     let dots = "·".repeat(dot_count);
 
@@ -360,8 +366,14 @@ fn repo_list_item(
         Span::raw(marker.to_string()),
         badges::glyph_span(repo),
         Span::styled(name, name_style),
-        Span::styled(format!(" {dots} "), Style::default().fg(colors::SURFACE)),
     ];
+    if !mark.is_empty() {
+        spans.push(Span::styled(mark, Style::default().fg(colors::OVERLAY)));
+    }
+    spans.push(Span::styled(
+        format!(" {dots} "),
+        Style::default().fg(colors::SURFACE),
+    ));
     spans.extend(badge_spans);
 
     ListItem::new(Line::from(spans))
@@ -5234,6 +5246,7 @@ mod tests {
             remote_branches: vec![],
             work_key: None,
             fetch: crate::model::FetchFacts::default(),
+            authors: Default::default(),
         }
     }
 
@@ -6595,6 +6608,101 @@ mod tests {
             })
             .collect();
         assert_eq!(walked, drawn, "cursor order disagrees with drawn order");
+    }
+
+    /// FZ-56: the repo list drawn for a ranked owner and author search, as
+    /// screen rows, with the app that drew it.
+    fn draw_people_search(query: &str) -> (crate::app::App, Vec<String>) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut tools = repo("tools-kestrel", RepoKind::Public, Some("Gaurgle"));
+        tools.commits = vec![crate::model::Commit {
+            hash: "a1".to_string(),
+            message: "subject".to_string(),
+            body: String::new(),
+            author: "Andreas Roos".to_string(),
+            date: None,
+            insertions: 0,
+            deletions: 0,
+            files: vec![],
+        }];
+        let web = repo("tools-web", RepoKind::Org, Some("kestrel-labs"));
+        let mut scratch = repo("tools-scratch", RepoKind::Unknown, None);
+        scratch.location = RepoLocation::LocalOnly;
+        scratch.commits = tools.commits.clone();
+        scratch.commits[0].author = "Kestrel Hansen".to_string();
+
+        let mut app = crate::app::App::new(vec![scratch, web, tools], "t".to_string(), 120, 40);
+        app.search_query = query.to_string();
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| render_repo_list(f, f.area(), &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let screen = (0..40u16)
+            .map(|y| (0..120u16).map(|x| buf[(x, y)].symbol()).collect())
+            .collect();
+        (app, screen)
+    }
+
+    /// The ranked order drawn for an owner query is the order the cursor
+    /// walks, with the name hit first, then the organisation, then the
+    /// contributor: one list, so a click lands on the row it names.
+    #[test]
+    fn an_owner_search_draws_the_order_the_cursor_walks() {
+        let (app, screen) = draw_people_search("kestrel");
+        let names = ["tools-kestrel", "tools-web", "tools-scratch"];
+        let drawn: Vec<&str> = screen
+            .iter()
+            .filter_map(|row| names.into_iter().find(|n| row.contains(n)))
+            .collect();
+        let walked: Vec<&str> = app
+            .visible_repos()
+            .iter()
+            .map(|(_, r)| r.name.as_str())
+            .collect();
+        assert_eq!(drawn, names, "drew: {screen:#?}");
+        assert_eq!(walked, drawn, "cursor order disagrees with drawn order");
+    }
+
+    /// A hit on the owner, organisation or an author is marked after the
+    /// name, dimmed; a name hit carries no mark.
+    #[test]
+    fn a_non_name_search_hit_is_marked_with_its_field() {
+        let row = |screen: &[String], name: &str| {
+            screen
+                .iter()
+                .find(|row| row.contains(name))
+                .cloned()
+                .unwrap_or_else(|| panic!("{name} not drawn: {screen:#?}"))
+        };
+        let (_, screen) = draw_people_search("kestrel");
+        assert!(
+            row(&screen, "tools-kestrel").contains("tools-kestrel ·"),
+            "a name hit is unmarked"
+        );
+        assert!(row(&screen, "tools-web").contains("tools-web org ·"));
+        assert!(row(&screen, "tools-scratch").contains("tools-scratch by ·"));
+
+        let (_, screen) = draw_people_search("gaurgle");
+        assert!(row(&screen, "tools-kestrel").contains("tools-kestrel owner ·"));
+
+        // Dimmed in the strip's own grey, not a new color.
+        let (app, _) = draw_people_search("gaurgle");
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| render_repo_list(f, f.area(), &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let y = (0..40u16)
+            .find(|&y| {
+                (0..120u16)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("owner")
+            })
+            .unwrap();
+        let line: String = (0..120u16).map(|x| buf[(x, y)].symbol()).collect();
+        let x = line.find("owner").unwrap();
+        let x = line[..x].chars().count() as u16;
+        assert_eq!(buf[(x, y)].fg, colors::OVERLAY);
     }
 
     /// A local-only repo has no `pushedAt` to date it by -- that is what puts

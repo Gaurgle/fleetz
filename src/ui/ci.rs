@@ -842,6 +842,7 @@ mod tests {
             remote_branches: vec![],
             work_key: None,
             fetch: model::FetchFacts::default(),
+            authors: Default::default(),
         }
     }
 

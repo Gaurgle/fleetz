@@ -3480,6 +3480,7 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
         remote_branches: remote,
         work_key: None,
         fetch: model::FetchFacts::from_disk(git::last_successful_fetch_at(path)),
+        authors: Default::default(),
     })
 }
 
@@ -4015,6 +4016,7 @@ async fn assemble_view_held(
             work_key: None,
             // Nothing on disk to fetch into.
             fetch: model::FetchFacts::default(),
+            authors: Default::default(),
         });
     }
 
@@ -4209,6 +4211,7 @@ async fn local_only_status(
         remote_branches: remote,
         work_key: None,
         fetch: model::FetchFacts::from_disk(git::last_successful_fetch_at(path)),
+        authors: Default::default(),
     })
 }
 
@@ -4313,6 +4316,7 @@ async fn build_repo_status(
         remote_branches: remote,
         work_key,
         fetch: model::FetchFacts::from_disk(git::last_successful_fetch_at(path)),
+        authors: Default::default(),
     }
 }
 
@@ -4589,6 +4593,7 @@ mod tests {
             remote_branches: vec![],
             work_key: None,
             fetch: model::FetchFacts::default(),
+            authors: Default::default(),
         }
     }
 
