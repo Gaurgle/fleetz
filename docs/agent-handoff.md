@@ -468,18 +468,12 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   approves first merges as is; the other gets a merge-resolution
   cycle by its worker on the new `main`, a re-review of the resolved
   regions and a fresh branch CI before it merges.
-- **#107 FZ-51 (measure print mode against bash): Review** since
-  13:22 CET. Docs only (`docs/performance-baseline.md`, +360, diff
-  `233324ab4804`); the condensed report and four rulings on the
-  issue. Findings worth follow-up tickets on his yes: print mode is
-  slower on an empty window because the full TUI GraphQL query (130
-  KB, 6 to 9 s on his M2) gates everything local, and
-  `build_repo_status`'s 200-commit `log --numstat` runs for rows the
-  report never draws. The "fetches due" condition could not be held
-  because his TUI was in watch mode at `refresh_interval = 5`. After
-  acceptance: commit, push (the `docs` workflow runs), merge under
-  the rule, sweep, log. Raw data in the session scratchpad `m107/`
-  (gone with the session; the doc holds the scripts).
+- **#107 FZ-51: Done**, merged `579f28e` about 14:35 CET (record in
+  the log, "Merged on 2026-10-27"). Follow-up candidates on his yes:
+  a report-sized GraphQL query (check D5's cache contract first) and
+  skipping the 200-commit history read for print rows. His TUI runs
+  watch mode at `refresh_interval = 5` and re-fetches every remote
+  within seconds; told him.
 - **#111 FZ-55 (scroll margin on every list, reveal on expand): In
   progress, stopped for his word** since about 13:05 CET; filed
   11:45 on his "port if needed, or just implement this" and "the

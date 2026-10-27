@@ -289,6 +289,33 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-10-27
+
+- **#107 (FZ-51), measure print mode against bash repoz.** Merged
+  `579f28e` at about 14:35 CET; ticket commit `626a680` (base
+  `4d9bce9`, branch `chore/107-measure-print-mode`, worker
+  `fz-worker` `claude-opus-5-5` medium in the measurement role, fix
+  cycles `fz-small` `sonnet` medium twice, reviewer `fz-reviewer`
+  `claude-opus-5-5` medium, three passes). Docs only: a new section
+  in `docs/performance-baseline.md` and one CLAUDE.md index row.
+  Interleaved pairs on his real fleet (12 rows, Apple M2 8 GB): print
+  mode wins the default window (median 22.5 s against bash 31.4 s)
+  and `-d` (0.64 s against 5.1 s), loses an empty window (8.7 s
+  against 7.1 s) because the full TUI GraphQL query (130 KB, 6 to 9
+  s) gates everything local, and runs the 200-commit `log --numstat`
+  for rows the report never draws; the "fetches due" condition could
+  not be held while his TUI re-fetched in watch mode at
+  `refresh_interval = 5`. Review 1 changes requested (one wrong range,
+  rerun commands that failed as written and would have silently
+  disabled the build-contamination gate, six minor figures); review 2
+  found the new guard itself passed a dead monitor under bash 3.2;
+  review 3 accepted. Every number in the result table recomputed from
+  the raw data by the reviewer. Follow-up candidates on his yes: a
+  report-sized query (check D5's cache contract first) and skipping
+  the history read for print rows. `docs` workflow green on the branch
+  (40501468084) and on `main` (40501563882); `ci` skipped for prose.
+  FZ-51: review changes 2; fix cycles 2; owner decisions 0; worker 96; review 13; small 2; usage worker 162k, review 93k, small 41k tokens
+
 ### Merged on 2026-10-26
 
 Clock note: this lead's issue and chat stamps ran up to 70 minutes
