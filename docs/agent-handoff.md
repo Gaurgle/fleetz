@@ -438,7 +438,12 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   the rule, sweep, log. Try: `cargo run --release --manifest-path
   .claude/worktrees/issue-109/Cargo.toml`, `]` to `notes`, `m`,
   `Enter` on a file.
-- **#101 FZ-45 (slot digest): Ready to integrate for his look**
+- **#101 FZ-45 (slot digest): In progress again, fix cycle 2** on his
+  look at about 13:55 CET ("this is great!", then: the digest lines
+  should use pane 1's formatting, colors and fixed indicator slots).
+  Ruling on the issue: the rows adopt pane 1's row grammar through
+  the same badge functions. Then review 3, commit on top of
+  `f0c130c`, push, CI, his second look. Earlier: Ready to integrate
   since about 13:15 CET. Review 1 changes requested (a compact-view
   click through stale list geometry, three coverage gaps, five
   follow-ups), fix cycle 1 by the same worker, review 2 accepted
