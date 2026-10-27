@@ -1,4 +1,4 @@
-<!-- relay-template: 0.6.0; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
+<!-- relay-template: 0.6.2; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
 <!-- relay-board: owner=Gaurgle project=1 prefix=FZ -->
 # Agent workflow for the release effort
 
@@ -263,11 +263,12 @@ Scratch builds are disposable and bounded. A scratch clone and its build output
 (a combined check, a reviewer's base build or mutation run) live under the
 session scratchpad, are built with `CARGO_TARGET_DIR` set inside that
 scratchpad (never inside a worktree or the main checkout), and are removed by
-the same command that used them. `scripts/relay-sweep` also prunes other
-sessions' leftover `target` directories and scratch clones (a directory with a
-`.git` directory); it never touches the current session, named by
-`CLAUDE_CODE_SESSION_ID`, and skips the prune when that is unset. The Relay
-template copy of `relay-sweep` in `~/claude-config` needs the same change.
+the same command that used them. Use one build dir per ticket,
+`<scratchpad>/target-<ticket>`, shared by every check on that ticket.
+`scripts/relay-sweep` also prunes scratch builds (Cargo target dirs and
+clones) idle for 1 hour in a closed session or 3 in a running one, this
+session included. Per-check target dirs (1.3GB each) filled the disk on
+2026-10-27.
 Leaving a clone behind for "later" filled the disk on
 2026-10-21.
 
