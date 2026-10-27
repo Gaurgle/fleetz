@@ -14,17 +14,26 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Held** again since 2026-10-27 14:35 CET by `claude-fable-5-1`
-(the same session `c47a5217-1276-4a26-b7a2-bceecc3c81fb`) on his
-"allright. we can continue now". Confirmed on resume: `main`
-unchanged at `9e73cee`, the three pushed branches at their recorded
-tips with clean worktrees, branch CI green on `2cb7cfc` and `0afd18b`
-and red on `b926726` as recorded. **Running:** `fz-reviewer` on
-FZ-45's `2cb7cfc` (review 3) and `fz-worker` on FZ-56 (#112, base
-`9e73cee`, branch `feat/112-search-owner-contributor`, worktree
-`issue-112`, handoff `worker-112.txt`), both from 14:40 under the
-standing authority. One worker slot and the `fz-small` slot free;
-FZ-55 still waits on his number.
+**Released** 2026-10-27 15:58 CET by `claude-fable-5-1`
+(session `c47a5217-1276-4a26-b7a2-bceecc3c81fb`) on his "wait for
+reviewers, then we can close session for today? if hand over is
+complete and all is shipped". Held 14:35 to 15:58 (second stretch of
+the day; the stamps written in this stretch ran up to 45 minutes
+ahead of the clock again, commit dates are authoritative). **Nothing
+is running: no worker, no reviewer, no build, no background job.**
+Everything is pushed: `main`, and the three open ticket branches at
+their recorded tips. Done this stretch: FZ-45 (#101) `7a2a020`, #93
+`cb72465`, FZ-53 (#109) `1d4e8b0` with `main` CI 40525825654 green
+and the worktree swept. Shipped on branches, reviewed and accepted,
+parked: FZ-55 (#111) `84be091`, FZ-56 (#112) `fb0c46b`. Filed:
+FZ-57 to FZ-59 (#113 to #115). His decisions this stretch are on the
+issues (#109, #111, #93, #96, #115). Incident: a reviewer lost its
+scratch copy and wrote into the main checkout; caught by the
+pre-merge `git status` guard (see "In flight", #112). The standing
+dispatch authority of 11:05 stands for the next lead.
+
+Previous record: **Held** again since 2026-10-27 14:35 CET by the
+same session on his "allright. we can continue now".
 
 Previous record: **Released** 2026-10-27 13:20 CET by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
@@ -436,14 +445,11 @@ release is `0.7.0`. Local toolchain rustc 1.99.0, same as CI's.
 
 ## Worktrees
 
-Under `.claude/worktrees/` as of 2026-10-27 13:20: `issue-109`
-(FZ-53, `0afd18b` pushed, Ready to integrate for his look),
-`issue-101` (FZ-45, `2cb7cfc` pushed, unreviewed fix cycle),
-`issue-111` (FZ-55, `b926726` pushed, red, parked on his decision),
-`issue-93` and `issue-96` (pushed, Ready to integrate for his look),
-`issue-88` (FZ-38, parked, uncommitted, see the 2026-10-23 record).
-All six are clean (nothing uncommitted except `issue-88`); the sweep
-keeps them because none is merged.
+Under `.claude/worktrees/` as of 2026-10-27 15:58: `issue-111` (FZ-55, `84be091` pushed, clean, merge
+cycle pending), `issue-112` (FZ-56, `fb0c46b` pushed, clean, guard
+and merge cycle pending), `issue-96` (pushed, Ready to integrate for
+his look), `issue-88` (FZ-38, parked, uncommitted, see the 2026-10-23
+record). `issue-101` and `issue-93` were swept today.
 
 ## In flight
 
@@ -470,15 +476,23 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   .claude/worktrees/issue-109/Cargo.toml`, `]` to `notes`, `m`,
   `Enter` on a file.
 - **#101 FZ-45: Done**, merged `7a2a020` on his "45 is great." (log,
-  "Merged on 2026-10-27"), worktree swept. `main` CI 40520984376
-  green, 1397 tests. **Consequence for FZ-53 (#109):** its branch
-  `feat/109-notes-view` (`0afd18b`, base `27d750c`) now conflicts
-  with `main` in `README.md`, `src/app.rs`, `src/main.rs`,
-  `src/ui/help.rs`; after his look it needs a merge-resolution cycle
-  (a fresh `fz-worker` merges `main` into the branch in its worktree,
-  resolving only the conflicts; `fz-reviewer` reviews the resolved
-  regions; fresh branch CI; then merge). The help overlay is the one
-  to watch: both tickets reworded rows to fit 80x24.
+  "Merged on 2026-10-27"), worktree swept.
+- **#109 FZ-53: Done**, merged `1d4e8b0` on his "53 is great" after
+  a merge-resolution cycle (log, "Merged on 2026-10-27"); `main` CI
+  40525825654 green, worktree swept, board Done. The merge pattern
+  that worked, for FZ-55 and FZ-56 next: the worker runs one
+  `git merge --no-ff origin/main` in the ticket worktree, resolves
+  only the conflicts, stages, does not commit; the reviewer verifies
+  the merged result against `main` equals the accepted diff plus the
+  resolution hunks; the lead commits the merge, pushes, waits for CI,
+  scratch-merges onto current `main` again if it moved, merges.
+- **Next dispatch under the standing authority, in this order:**
+  FZ-56's separator guard (`fz-small`) and its merge cycle; FZ-55's
+  merge cycle; then FZ-57 (#113, small), FZ-58 (#114), FZ-59 (#115,
+  `pulldown-cmark` approved by him 16:15), FZ-41 after #96. #96 waits
+  for his look ("not sure here"). Two lines on his yes: CLAUDE.md for
+  his two UI rules; `.claude/agents/fz-reviewer.md` for scratch
+  isolation.
   Earlier record: Ready to integrate at `f0c130c`. Review 1 changes requested (a compact-view
   click through stale list geometry, three coverage gaps, five
   follow-ups), fix cycle 1 by the same worker, review 2 accepted
@@ -499,20 +513,21 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   skipping the 200-commit history read for print rows. His TUI runs
   watch mode at `refresh_interval = 5` and re-fetches every remote
   within seconds; told him.
-- **#112 FZ-56 (search by owner, organisation and contributor):
-  Review** since 15:32 CET. Filed 13:30 on his "add that as a ticket
-  (if not exists) and push it", dispatched 14:40 under the standing
-  authority. Base `9e73cee`, branch
-  `feat/112-search-owner-contributor`, worktree
-  `.claude/worktrees/issue-112`, uncommitted (diff
-  `af01c9337485ff21`, 31808 bytes, 10 files). Worker delivered
-  `model::AuthorSet` (lazy, reset on sweep), `app::MatchField` tiers
-  inside the one ranking, word-start matching for people and owners,
-  the dimmed mark after the name, 1364 tests, red first, 200-row
-  timing within budget; rulings 1 to 5 on the issue (the five
-  production `authors: Default::default()` lines ruled in). After
-  acceptance: commit, push, CI, scratch merge, Ready to integrate for
-  his look (the mark). **Incident at 15:15:** the first reviewer lost
+- **#112 FZ-56 (search by owner, organisation and contributor): In
+  progress, accepted and shipped on its branch** as `fb0c46b`
+  (base `9e73cee`, `feat/112-search-owner-contributor`, worktree
+  `issue-112` clean). Review accepted the diff (`af01c9337485ff21`)
+  with one required fix before merge: a free text of only separators
+  (`-`, `.`, `/`, `_`) matches every row (`person_score` with no
+  words); `fz-small` adds the `None` guard and a test, the reviewer
+  re-checks that hunk. Then: branch CI (ran on the push; check), a
+  scratch merge onto current `main` (it touches `app.rs` and
+  `detail.rs`, which FZ-53 and FZ-45 changed since its base: expect
+  a merge-resolution cycle like FZ-53's), Ready to integrate for his
+  look (the dimmed `owner`/`org`/`by` mark after the name). Known
+  follow-ups: the `/` hint in `ui/mod.rs` still says "fuzzy name";
+  the compact grid draws no mark; the 9 ms debug timing assertion may
+  flake under heavy load (ruling 4: then make it a measurement). **Incident at 15:15:** the first reviewer lost
   its scratch copy when the session scratchpad was emptied (by an
   agent's cleanup; every handoff text was in it, all recorded on the
   issues) and wrote the worker's `app.rs` and `model.rs` into the
@@ -524,15 +539,19 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   --short` on the main checkout before every merge, and give
   reviewers an explicit scratch directory of their own. Worth a line
   in `.claude/agents/fz-reviewer.md` on his yes.
-- **#111 FZ-55 (scroll margin on every list, reveal on expand): In
-  progress, stopped for his word** since about 13:05 CET; filed
-  11:45 on his "port if needed, or just implement this" and "the
-  jizt of it all is the scroll_padding" (a notez port,
-  `Gaurgle/notez` `d32a412`). P2, M3. Base `b799c49`, branch
-  `feat/111-scroll-margin`, worktree `.claude/worktrees/issue-111`,
-  **committed unreviewed as `b926726` and pushed** on his "ship it"
-  (diff `fe6cbedf6134`; `cargo test` red on it by design, 10 tests,
-  so branch CI is red). Finding: pane 2 already had a
+- **#111 FZ-55 (scroll margin on every list, reveal on expand):
+  Ready to integrate for his look, but needs a merge cycle first.**
+  His "lets keep 4" (15:40) settled the margin; the finish and the
+  whole ticket were reviewed and accepted (`b926726` plus `84be091`
+  on `feat/111-scroll-margin`, worktree `issue-111` clean, branch CI
+  40525478334). A scratch merge onto `main` after FZ-53 **conflicts
+  in `src/ui/detail.rs`** (its tests module; both tickets appended
+  tests there): a merge-resolution cycle like FZ-53's (worker merges
+  `main` into the branch, resolves only the conflict, reviewer checks
+  the hunk, fresh CI) before his look and the merge. Earlier record:
+  filed 11:45 on his "port if needed, or just implement this" and
+  "the jizt of it all is the scroll_padding" (a notez port,
+  `Gaurgle/notez` `d32a412`). P2, M3. Base `b799c49`. Finding: pane 2 already had a
   margin (`app::SCROLLOFF = 4`); pane 1's `scroll_padding` and
   `reveal_offset` for `B` are done and tested. Raising `SCROLLOFF`
   to 5 breaks 10 existing tests that pin the 4-row offsets (listed

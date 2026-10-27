@@ -296,6 +296,34 @@ Clock note: this lead's stamps again ran ahead of the wall clock
 13:05 CET; the FZ-45 fix cycle 2 ruling "14:00" was before 13:00).
 Commit dates are authoritative.
 
+- **#109 (FZ-53), the `notes` view in pane 2.** Merged `1d4e8b0` at
+  about 16:30 CET on his "53 is great"; ticket commits `0afd18b` and
+  the merge-in `6cb7b1d` (base `27d750c`, branch `feat/109-notes-view`,
+  worker `fz-worker` `claude-opus-5-5` medium, fix cycle `fz-small`
+  `sonnet` medium, a second `fz-worker` for the merge resolution,
+  reviewer `fz-reviewer` `claude-opus-5-5` medium, three passes). A
+  seventh view: `notez/` and `.notez/` directories at any depth as a
+  tree, `m` widens to every markdown file, the inspector reads the
+  highlighted file (256 KiB cap, binaries refused), `Enter` opens it
+  in `$EDITOR`; one walk of the selected repo on demand, off the UI
+  thread, gated on the view and the dwell, re-walked when a sweep
+  lands (`App::sweep_landed`) or a suspend returns; no index. Seven
+  existing tests that encoded `ci` as the last view were edited on his
+  word ("ok on the tests", 2026-10-26); the lead's earlier ruling that
+  the standing exception covered them was wrong and withdrawn on the
+  issue. Review 1 changes requested (the `SweepDone` invalidation had
+  no test at the seam), review 2 accepted; the merge with `main` after
+  FZ-45 resolved four files (help `Enter` row `lazygit; note; digest
+  repo`), reviewed and accepted (merged result equals the accepted
+  change plus the two allowed rows). Follow-ups filed on his look:
+  FZ-57 (#113) name the modes, FZ-58 (#114) tree browser, FZ-59
+  (#115) rendered markdown with `pulldown-cmark`; open from reviews:
+  the footer `j/k` label, the "reading…" flash under watch mode, the
+  post-suspend invalidations untested at the seam. Branch CI
+  40524975494 green, scratch merge onto `main` `103883d` 1427 tests,
+  `main` CI 40525825654.
+  FZ-53: review changes 1; fix cycles 1 plus a merge cycle; owner decisions 2; worker 15 plus 9; review 9 plus 2 plus 5; small 3; usage worker 192k plus 68k, review 102k plus 45k, small 27k tokens
+
 - **#93 (FZ-30e), `l`/`a`/`x`/`O` on the highlighted CI run.** Merged
   `cb72465` at about 15:55 CET on his "#93: i trust you here" (the
   look waived); ticket commit `1e9ccde` (branch `feat/93-ci-handoffs`
