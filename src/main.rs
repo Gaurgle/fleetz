@@ -11,6 +11,7 @@ mod git;
 mod github;
 mod graph;
 mod model;
+mod notes;
 mod report;
 mod time;
 mod ui;
@@ -164,6 +165,17 @@ pub enum AppEvent {
     /// jobs, a job's whole log or the workflow file, applied by
     /// `App::apply_ci_detail`.
     CiDetail(Box<ci::DetailAnswer>),
+    /// A `notes` view walk of one repo (FZ-53), applied by
+    /// `App::apply_notes_walk`.
+    NotesWalked {
+        walk: app::NotesWalk,
+        result: Result<notes::Notes, String>,
+    },
+    /// The highlighted note's body, applied by `App::apply_note_read`.
+    NoteRead {
+        read: app::NoteRead,
+        text: Result<String, String>,
+    },
 }
 
 /// Why a load ran, which decides what the loop does with the result.
@@ -1009,6 +1021,12 @@ async fn run_event_loop(
                 for request in app.claim_ci_details(now, instant) {
                     spawn_ci_detail(&tx, request);
                 }
+                if let Some(walk) = app.claim_notes_walk(instant) {
+                    spawn_notes_walk(&tx, walk);
+                }
+                if let Some(read) = app.claim_note_read() {
+                    spawn_note_read(&tx, read);
+                }
             }
             AppEvent::Input(Event::Key(key)) => {
                 // Any keypress takes the loading field down. Skip means skip:
@@ -1067,12 +1085,12 @@ async fn run_event_loop(
                 start_account_rebuild(app, &tx, args, config, repo_dir);
             }
             AppEvent::SweepDone { at } => {
-                app.sweep_started = None;
-                app.last_refreshed = Some(at);
-                app.needs_redraw = true;
+                app.sweep_landed(at);
             }
             AppEvent::Ci(answer) => app.apply_ci(*answer, chrono::Local::now()),
             AppEvent::CiDetail(answer) => app.apply_ci_detail(*answer, chrono::Local::now()),
+            AppEvent::NotesWalked { walk, result } => app.apply_notes_walk(walk, result),
+            AppEvent::NoteRead { read, text } => app.apply_note_read(read, text),
         }
 
         if app.should_quit {
@@ -1648,7 +1666,7 @@ async fn handle_normal_input(
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.should_quit = true;
         }
-        // `[` and `]` step the repo pane's body between its six views --
+        // `[` and `]` step the repo pane's body between its seven views --
         // lazygit's own binding for the same gesture, and unlike a shifted
         // letter it gives backwards for free.
         // On the focused inspector while pane 2 shows `ci`, they step its
@@ -1722,6 +1740,13 @@ async fn handle_normal_input(
             app.set_status("\u{27f3} Fetching all…".to_string(), false);
             start_sweep(app, tx, true, args.author.clone(), true);
         }
+        // On a file in the `notes` view, $EDITOR on that file (FZ-53).
+        KeyCode::Enter if note_to_open(app).is_some() => {
+            let file = note_to_open(app).unwrap_or_default();
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+            suspend_and_run(terminal, &editor, &[&file.to_string_lossy()])?;
+            app.invalidate_notes();
+        }
         KeyCode::Enter => {
             // Open lazygit in selected repo
             if let Some(repo) = app.selected_repo()
@@ -1729,6 +1754,7 @@ async fn handle_normal_input(
             {
                 let expanded = shellexpand::tilde(path).to_string();
                 suspend_and_run(terminal, "lazygit", &["-p", &expanded])?;
+                app.invalidate_notes();
             }
         }
         KeyCode::Char('e') => {
@@ -1739,8 +1765,12 @@ async fn handle_normal_input(
                 let expanded = shellexpand::tilde(path).to_string();
                 let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
                 suspend_and_run(terminal, &editor, &[&expanded])?;
+                app.invalidate_notes();
             }
         }
+        // The `notes` view's tree: notes directories only, or every
+        // markdown file. Nothing elsewhere.
+        KeyCode::Char('m') => app.toggle_notes_markdown(),
         KeyCode::Char('o') => {
             // Open shell in repo dir
             if let Some(repo) = app.selected_repo()
@@ -1749,6 +1779,7 @@ async fn handle_normal_input(
                 let expanded = shellexpand::tilde(path).to_string();
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
                 suspend_and_run_in_dir(terminal, &shell, &[], &expanded)?;
+                app.invalidate_notes();
             }
         }
         KeyCode::Char('g') => {
@@ -1859,6 +1890,19 @@ async fn handle_normal_input(
         _ => {}
     }
     Ok(())
+}
+
+/// The file `Enter` opens in $EDITOR: the `notes` view's highlighted file,
+/// while pane 2 or the inspector has focus. `None` leaves `Enter` to open
+/// lazygit on the repo.
+fn note_to_open(app: &App) -> Option<std::path::PathBuf> {
+    let focused = matches!(
+        app.focused_panel,
+        FocusedPanel::Detail | FocusedPanel::Inspector
+    );
+    (app.notes_wanted() && focused)
+        .then(|| app.notes_highlighted())
+        .flatten()
 }
 
 /// Suspend the TUI, run a command, then resume. Input reading is paused for
@@ -2687,6 +2731,32 @@ fn spawn_ci_detail(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, request: c
     tokio::spawn(async move {
         let answer = ci::fetch_detail(request).await;
         let _ = tx.send(AppEvent::CiDetail(Box::new(answer)));
+    });
+}
+
+/// Walk a repo for the `notes` view off the UI thread and send the tree back.
+fn spawn_notes_walk(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, walk: app::NotesWalk) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let root = walk.root.clone();
+        let result = tokio::task::spawn_blocking(move || notes::walk(&root))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.map_err(|e| e.to_string()));
+        let _ = tx.send(AppEvent::NotesWalked { walk, result });
+    });
+}
+
+/// Read the highlighted note off the UI thread and send its body back.
+fn spawn_note_read(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, read: app::NoteRead) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let path = read.path.clone();
+        let text = tokio::task::spawn_blocking(move || notes::read_body(&path))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+        let _ = tx.send(AppEvent::NoteRead { read, text });
     });
 }
 
@@ -11354,6 +11424,43 @@ mod tests {
         app
     }
 
+    /// `Enter` opens the `notes` view's highlighted file while pane 2 or the
+    /// inspector has focus, and lazygit everywhere else, a row with no file
+    /// included. Fails while `Enter` only ever opens lazygit.
+    #[test]
+    fn enter_opens_the_highlighted_note_only_in_the_notes_view() {
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.repos = vec![RepoStatus {
+            path: Some("/repo".to_string()),
+            ..test_repo()
+        }];
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Notes;
+        app.focused_panel = FocusedPanel::Detail;
+        assert_eq!(note_to_open(&app), None, "nothing walked yet");
+
+        let walk = app::NotesWalk {
+            key: "/repo".to_string(),
+            root: "/repo".into(),
+            generation: 0,
+        };
+        let files = vec![notes::NoteFile {
+            rel: "notez/a.md".into(),
+            notez: Some("notez".into()),
+        }];
+        app.apply_notes_walk(walk, Ok(notes::Notes { files }));
+        let file = Some(std::path::PathBuf::from("/repo/notez/a.md"));
+        assert_eq!(note_to_open(&app), file);
+        app.focused_panel = FocusedPanel::Inspector;
+        assert_eq!(note_to_open(&app), file);
+
+        app.focused_panel = FocusedPanel::RepoList;
+        assert_eq!(note_to_open(&app), None, "the repo list opens lazygit");
+        app.focused_panel = FocusedPanel::Detail;
+        app.history_view = app::HistoryView::Info;
+        assert_eq!(note_to_open(&app), None, "another view opens lazygit");
+    }
+
     fn ci_key() -> app::RemoteKey {
         (Some("gaurgle".to_string()), "fleetz".to_string())
     }
@@ -11905,7 +12012,7 @@ mod tests {
             views,
             vec![
                 (HistoryView::Ci, CiBody::Jobs),
-                (HistoryView::Info, CiBody::Jobs),
+                (HistoryView::Notes, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Log),

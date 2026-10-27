@@ -523,7 +523,7 @@ pub fn find_all_local(roots: &[PathBuf]) -> Vec<PathBuf> {
 ///
 /// Tradeoff, and repoz makes the same one: a repo literally named `target` or
 /// `build` is skipped.
-const PRUNE_DIRS: [&str; 14] = [
+pub const PRUNE_DIRS: [&str; 14] = [
     "Library",
     ".Trash",
     ".cache",

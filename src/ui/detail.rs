@@ -1111,6 +1111,20 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.extend(rows);
     }
 
+    // The `notes` view: which tree is drawn, pinned with the header, then
+    // the tree, one cursor stop per file.
+    if view == HistoryView::Notes {
+        lines.push(notes_mode_line(app));
+        pinned_rows = lines.len();
+        let base = lines.len();
+        let (rows, tops, selected) = notes_rows(app, repo, width);
+        if let Some(row) = selected {
+            selected_block = Some((base + row, base + row));
+        }
+        block_tops.extend(tops.into_iter().map(|t| base + t));
+        lines.extend(rows);
+    }
+
     // PRs
     // Gated on `-p`: the header row already names the open PRs by number, so
     // this section is the opt-in detail rather than the news itself.
@@ -1451,6 +1465,178 @@ fn mark_cursor_row(lines: &mut [Line<'static>], cursor: u16, width: usize) {
     lines[row] = Line::from(spans);
 }
 
+/// The `notes` view's first line: which tree is drawn and the key that
+/// swaps it.
+fn notes_mode_line(app: &App) -> Line<'static> {
+    let (shown, other) = match app.notes_all_markdown {
+        false => ("notez", "all markdown"),
+        true => ("all markdown", "notez only"),
+    };
+    Line::from(vec![
+        Span::styled(shown, Style::default().fg(colors::TEXT)),
+        Span::styled(
+            format!("  m for {other}"),
+            Style::default().fg(colors::OVERLAY),
+        ),
+    ])
+}
+
+/// The `notes` view's tree for `repo` (FZ-53): its lines, the line each file
+/// starts on, in cursor order, and the line the cursor's file is on. A row
+/// with nothing to list says why in one line.
+fn notes_rows(
+    app: &App,
+    repo: &RepoStatus,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<usize>, Option<usize>) {
+    let say = |text: String| {
+        let line = Line::from(Span::styled(text, Style::default().fg(colors::OVERLAY)));
+        (vec![line], Vec::new(), None)
+    };
+    if repo.path.is_none() {
+        return say("not cloned: no notes to read".to_string());
+    }
+    let notes = match app
+        .selected_notes()
+        .and_then(|(_, state)| state?.tree.as_ref())
+    {
+        None => return say("reading notes…".to_string()),
+        Some(Err(e)) => return say(format!("could not read the repo: {e}")),
+        Some(Ok(notes)) => notes,
+    };
+    let rows = notes.rows(app.notes_all_markdown);
+    if rows.is_empty() {
+        return say(match app.notes_all_markdown {
+            false => "no notez/ or .notez/ directory".to_string(),
+            true => "no markdown files".to_string(),
+        });
+    }
+    let files = rows
+        .iter()
+        .filter(|r| matches!(r, crate::notes::Row::File { .. }))
+        .count();
+    let cursor = app.detail_selected().min(files.saturating_sub(1));
+    let mut lines = Vec::with_capacity(rows.len());
+    let mut tops = Vec::with_capacity(files);
+    let mut selected = None;
+    for row in rows {
+        match row {
+            crate::notes::Row::Section(label) => {
+                if !lines.is_empty() {
+                    lines.push(Line::from(""));
+                }
+                lines.push(Line::from(section_label(&label)));
+            }
+            crate::notes::Row::Dir { depth, name } => {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}{name}/", "  ".repeat(depth)),
+                    Style::default().fg(colors::OVERLAY),
+                )));
+            }
+            crate::notes::Row::File { depth, name, .. } => {
+                let is_sel = tops.len() == cursor;
+                if is_sel {
+                    selected = Some(lines.len());
+                }
+                tops.push(lines.len());
+                let mut spans = vec![
+                    Span::styled(
+                        if is_sel { "▸ " } else { "  " },
+                        Style::default().fg(colors::SAPPHIRE),
+                    ),
+                    Span::styled(
+                        format!("{}{name}", "  ".repeat(depth)),
+                        Style::default().fg(colors::TEXT),
+                    ),
+                ];
+                if is_sel {
+                    spans = wash(pad_to(spans, width));
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+    }
+    (lines, tops, selected)
+}
+
+/// The inspector while pane 2 shows `notes` (FZ-53): the highlighted file's
+/// path, then its body as read, or why there is none. Scrolled by the
+/// inspector's own offset, clamped to what this frame measured.
+fn render_notes_inspector(frame: &mut Frame, area: Rect, app: &App) {
+    let focused = app.focused_panel == FocusedPanel::Inspector;
+    let border_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .padding(Padding::new(2, 2, 1, 0))
+        .title_top(crate::ui::panel_title(
+            crate::ui::INSPECTOR_NUM,
+            "inspector",
+            focused,
+        ));
+    let inner = block.inner(area);
+    let dim = |text: String| Line::from(Span::styled(text, Style::default().fg(colors::OVERLAY)));
+    let lines: Vec<Line> = match app.notes_highlighted() {
+        None => vec![dim("no file selected".to_string())],
+        Some(path) => {
+            let root = app
+                .selected_notes()
+                .map(|(p, _)| std::path::PathBuf::from(shellexpand::tilde(p).as_ref()))
+                .unwrap_or_default();
+            let shown = path
+                .strip_prefix(&root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            let mut lines = vec![
+                Line::from(Span::styled(
+                    shown,
+                    Style::default()
+                        .fg(colors::TEXT)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+            ];
+            let body = app.note_body.as_ref().filter(|b| b.path == path);
+            match body.and_then(|b| b.text.as_ref()) {
+                None => lines.push(dim("reading…".to_string())),
+                Some(Err(e)) => lines.push(Line::from(Span::styled(
+                    format!("could not read: {e}"),
+                    Style::default().fg(colors::PEACH),
+                ))),
+                Some(Ok(text)) => lines.extend(text.lines().map(|l| {
+                    Line::from(Span::styled(
+                        l.to_string(),
+                        Style::default().fg(colors::TEXT),
+                    ))
+                })),
+            }
+            lines
+        }
+    };
+    let wrapped: Vec<Line> = lines
+        .iter()
+        .flat_map(|l| wrap_line(l, inner.width as usize))
+        .collect();
+    let max_scroll = u16::try_from(wrapped.len())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(inner.height);
+    app.inspector_max_scroll.set(max_scroll);
+    let scroll = app.inspector_scroll.min(max_scroll);
+    let visible: Vec<Line> = wrapped
+        .into_iter()
+        .skip(scroll as usize)
+        .take(inner.height as usize)
+        .collect();
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(visible), inner);
+}
+
 /// Render the `[3] inspector` pane: the full details of the commit the detail
 /// pane's cursor is on -- a two-line masthead (hash, then author · date), the
 /// full message (subject bold, body untruncated), and the per-file diffstat --
@@ -1492,6 +1678,10 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     }
     if app.inspects_ci_run() {
         render_ci_inspector(frame, area, app);
+        return;
+    }
+    if app.notes_wanted() {
+        render_notes_inspector(frame, area, app);
         return;
     }
     let focused = app.focused_panel == FocusedPanel::Inspector;
@@ -4497,6 +4687,9 @@ mod tests {
             // `ci` lists runs, so it is drawn with the recorded runs held.
             let text = match view {
                 HistoryView::Ci => ci_view_text(92),
+                HistoryView::Notes => {
+                    notes_pane_text(&notes_view_app(&[("notez/a.md", Some("notez"))]))
+                }
                 _ => pane_text(view, 92),
             };
             assert!(
@@ -4865,7 +5058,7 @@ mod tests {
             app.history_view = view;
             // A run is not a commit; FZ-30f details runs.
             let expected = match view {
-                HistoryView::Ci => None,
+                HistoryView::Ci | HistoryView::Notes => None,
                 _ => Some("a1b2c3d"),
             };
             assert_eq!(
@@ -6772,5 +6965,128 @@ mod tests {
         assert_eq!((off_hash.entry, off_hash.hash), (Some(2), None));
 
         assert_eq!(hits.at(12, 7), None, "below the last line");
+    }
+
+    // --- The `notes` view (FZ-53) ---
+
+    /// An app on `busy_repo` showing `notes`, with a walk of `files` landed.
+    fn notes_view_app(files: &[(&str, Option<&str>)]) -> crate::app::App {
+        let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), 100, 44);
+        app.view = crate::app::View::Detail;
+        app.history_view = HistoryView::Notes;
+        app.inspector_folded = false;
+        let key = app.repos[0].path.clone().expect("cloned");
+        let notes = crate::notes::Notes {
+            files: files
+                .iter()
+                .map(|(rel, notez)| crate::notes::NoteFile {
+                    rel: (*rel).into(),
+                    notez: notez.map(Into::into),
+                })
+                .collect(),
+        };
+        let walk = crate::app::NotesWalk {
+            root: key.clone().into(),
+            key,
+            generation: 0,
+        };
+        app.apply_notes_walk(walk, Ok(notes));
+        app
+    }
+
+    fn notes_pane_text(app: &crate::app::App) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..30u16)
+            .map(|y| {
+                (0..100u16)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The tree draws each notes directory as a section, nested directories
+    /// indented, and the caret on the cursor's file; the cursor walks files
+    /// only, so its second stop is the nested file, not the directory.
+    #[test]
+    fn the_notes_view_draws_sections_and_marks_the_file() {
+        let mut app = notes_view_app(&[
+            ("notez/a.md", Some("notez")),
+            ("notez/sub/b.md", Some("notez")),
+            ("crates/x/notez/c.md", Some("crates/x/notez")),
+            ("docs/guide.md", None),
+        ]);
+        app.select_commit_down();
+        let text = notes_pane_text(&app);
+        for want in [
+            "notez  m for all markdown",
+            "notez/",
+            "  sub/",
+            "crates/x/notez/",
+        ] {
+            assert!(text.contains(want), "{want} missing:\n{text}");
+        }
+        assert!(
+            text.contains("▸   b.md"),
+            "caret on the nested file:\n{text}"
+        );
+        assert!(!text.contains("guide.md"), "docs only under the toggle");
+        assert_eq!(app.detail_row_tops.borrow().len(), 3, "one stop per file");
+
+        app.toggle_notes_markdown();
+        let text = notes_pane_text(&app);
+        assert!(
+            text.contains("docs/") && text.contains("guide.md"),
+            "{text}"
+        );
+    }
+
+    /// Each empty case says what it is in one line.
+    #[test]
+    fn the_notes_view_says_why_it_lists_nothing() {
+        let app = notes_view_app(&[("docs/guide.md", None)]);
+        assert!(notes_pane_text(&app).contains("no notez/ or .notez/ directory"));
+
+        let mut app = notes_view_app(&[]);
+        app.notes.clear();
+        assert!(notes_pane_text(&app).contains("reading notes…"));
+
+        app.repos[0].path = None;
+        assert!(notes_pane_text(&app).contains("not cloned: no notes to read"));
+    }
+
+    /// The inspector reads the highlighted file: its path, then its body, or
+    /// the read's error in place.
+    #[test]
+    fn the_notes_inspector_shows_the_body_or_the_error() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let draw = |app: &crate::app::App| {
+            let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
+            term.draw(|f| render_inspector(f, f.area(), app)).unwrap();
+            let buf = term.backend().buffer().clone();
+            (0..12u16)
+                .map(|y| (0..60u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        let read = app.claim_note_read().expect("a read");
+        assert!(draw(&app).contains("reading…"));
+
+        app.apply_note_read(read.clone(), Ok("# Plan\nship it".to_string()));
+        let text = draw(&app);
+        for want in ["notez/a.md", "# Plan", "ship it"] {
+            assert!(text.contains(want), "{want} missing:\n{text}");
+        }
+
+        app.note_body.as_mut().unwrap().text = None;
+        app.apply_note_read(read, Err("permission denied".to_string()));
+        assert!(draw(&app).contains("could not read: permission denied"));
     }
 }

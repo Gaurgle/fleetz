@@ -76,9 +76,11 @@ const GROUPS: [Group; 6] = [
                 key: "[ ]",
                 desc: &["previous / next repo view"],
             },
+            // One row for the two in-view expanders: neither column has a
+            // row to spare at 80x24.
             Row {
-                key: "B",
-                desc: &["info: all remote branches"],
+                key: "B m",
+                desc: &["info remotes / notes .md"],
             },
             Row {
                 key: "c",
@@ -145,7 +147,7 @@ const GROUPS: [Group; 6] = [
         rows: &[
             Row {
                 key: "Enter",
-                desc: &["lazygit in this repo"],
+                desc: &["lazygit; notes: $EDITOR"],
             },
             Row {
                 key: "e",
