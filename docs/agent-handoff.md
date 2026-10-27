@@ -438,21 +438,51 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   the rule, sweep, log. Try: `cargo run --release --manifest-path
   .claude/worktrees/issue-109/Cargo.toml`, `]` to `notes`, `m`,
   `Enter` on a file.
-- **#101 FZ-45 (slot digest): Review** since 12:12 CET. Worker
-  delivered all five steps (diff `dbf10644e12c4f4a`, 59211 bytes,
-  new `src/digest.rs` and `src/ui/digest.rs`), 1380 tests, no
-  existing test edited; the lead's rulings 1 to 8 on the issue (the
-  pane 1 click now selects a row: flagged for his look). A new
-  screen: stops at Ready to integrate for his look. Shares regions
-  with FZ-53 and FZ-55; the lead merges the later ones with a
-  re-verified scratch merge.
+- **#101 FZ-45 (slot digest): Ready to integrate for his look**
+  since about 13:15 CET. Review 1 changes requested (a compact-view
+  click through stale list geometry, three coverage gaps, five
+  follow-ups), fix cycle 1 by the same worker, review 2 accepted
+  (diff `edb42fa676e641e7` plus `src/digest.rs` and
+  `src/ui/digest.rs`); committed `f0c130c` on `feat/101-slot-digest`
+  (base `4d9bce9`), pushed, branch CI 40492388449 green, scratch
+  merge onto `main` `22338ff` clean with 1387 tests. Rulings 1 to 8
+  and the look items on the issue (click selects a row; `--branches
+  --remotes` instead of the default branch; the look; the help rows).
+  **Conflicts with FZ-53** in `README.md`, `src/app.rs`,
+  `src/main.rs`, `src/ui/help.rs` (three-way probe): whichever he
+  approves first merges as is; the other gets a merge-resolution
+  cycle by its worker on the new `main`, a re-review of the resolved
+  regions and a fresh branch CI before it merges.
+- **#107 FZ-51 (measure print mode against bash): Review** since
+  13:22 CET. Docs only (`docs/performance-baseline.md`, +360, diff
+  `233324ab4804`); the condensed report and four rulings on the
+  issue. Findings worth follow-up tickets on his yes: print mode is
+  slower on an empty window because the full TUI GraphQL query (130
+  KB, 6 to 9 s on his M2) gates everything local, and
+  `build_repo_status`'s 200-commit `log --numstat` runs for rows the
+  report never draws. The "fetches due" condition could not be held
+  because his TUI was in watch mode at `refresh_interval = 5`. After
+  acceptance: commit, push (the `docs` workflow runs), merge under
+  the rule, sweep, log. Raw data in the session scratchpad `m107/`
+  (gone with the session; the doc holds the scripts).
 - **#111 FZ-55 (scroll margin on every list, reveal on expand): In
-  progress** since 12:15 CET, filed 11:45 on his "port if needed, or
-  just implement this" and "the jizt of it all is the scroll_padding"
-  (a notez port, `Gaurgle/notez` `d32a412`). P2, M3. Base `b799c49`,
-  branch `feat/111-scroll-margin`, worktree
-  `.claude/worktrees/issue-111`, handoff `worker-111.txt`. A look
-  change. Pane 2 scroll tests that pin offsets stop for his word.
+  progress, stopped for his word** since about 13:05 CET; filed
+  11:45 on his "port if needed, or just implement this" and "the
+  jizt of it all is the scroll_padding" (a notez port,
+  `Gaurgle/notez` `d32a412`). P2, M3. Base `b799c49`, branch
+  `feat/111-scroll-margin`, worktree `.claude/worktrees/issue-111`,
+  uncommitted (diff `fe6cbedf6134`, 20424 bytes, new
+  `src/ui/scroll.rs` 3069 bytes). Finding: pane 2 already had a
+  margin (`app::SCROLLOFF = 4`); pane 1's `scroll_padding` and
+  `reveal_offset` for `B` are done and tested. Raising `SCROLLOFF`
+  to 5 breaks 10 existing tests that pin the 4-row offsets (listed
+  on the issue with the new values). **His decision asked:** keep 4
+  (recommended, one constant, no test edits) or go to 5 and approve
+  the 10 edits. Then the worker finishes (resume it or a fresh
+  `fz-worker` with the issue), review, commit, push, CI, Ready to
+  integrate for his look. Follow-up for his look: pane 1's fresh
+  `ListState` scrolls on every step going up (notez's feel needs a
+  persisted offset).
 
 Earlier record (2026-10-22, both merged since or waiting on his look,
 see the items below): two workers running since 13:30 (both slots;
