@@ -39,7 +39,8 @@ pub const LOG_TAIL_LINES: usize = 12;
 /// one runaway log cannot hold the session's memory (FZ-30f).
 pub const LOG_LINE_CAP: usize = 5000;
 /// The first line of a log cut to `LOG_LINE_CAP`.
-pub const LOG_TRUNCATED: &str = "log truncated to the last 5000 lines; l opens the whole log in gh";
+pub const LOG_TRUNCATED: &str =
+    "log truncated to the last 5000 lines; the whole log is on the run's page (O)";
 /// What one REST call costs on `core`. A 304 costs nothing, but the pace is
 /// judged before the answer is known.
 pub const CALL_COST: u32 = 1;
@@ -1718,7 +1719,9 @@ mod tests {
         assert_eq!(held.last().unwrap(), &format!("line {}", LOG_LINE_CAP + 3));
         assert_eq!(
             LOG_TRUNCATED,
-            format!("log truncated to the last {LOG_LINE_CAP} lines; l opens the whole log in gh")
+            format!(
+                "log truncated to the last {LOG_LINE_CAP} lines; the whole log is on the run's page (O)"
+            )
         );
         let whole = log_lines(&log(LOG_LINE_CAP));
         assert_eq!(whole.len(), LOG_LINE_CAP);

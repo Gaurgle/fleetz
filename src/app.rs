@@ -2775,6 +2775,14 @@ impl App {
         Some((key, state))
     }
 
+    /// The run under the `ci` view's cursor, clamped onto the last run as the
+    /// view draws it; `None` while the selected repo holds no runs.
+    pub fn highlighted_ci_run(&self) -> Option<&crate::ci::WorkflowRun> {
+        let runs = &self.selected_ci()?.1?.runs;
+        let at = self.detail_selections[HistoryView::Ci.index()];
+        runs.get(at.min(runs.len().saturating_sub(1)))
+    }
+
     /// Whether the CI data layer may poll: pane 2 is on screen showing the
     /// `ci` view. The one gate the poll trigger, the loading spinner and
     /// the stuck-poll expiry read. Never true for `info`, whose `ci` section
@@ -3044,6 +3052,19 @@ impl App {
         {
             state.expanded = expanded;
         }
+    }
+
+    /// `l` on the highlighted run in the `ci` view (FZ-30e, amended
+    /// 2026-10-22): the inspector, opened if folded and focused as the
+    /// pane's number key does, on the run's `log` body, which shows the
+    /// marked job (the failed one, until `j`/`k` move it). Stays in fleetz
+    /// rather than suspending into `gh run view --log`.
+    pub fn inspect_ci_log(&mut self) {
+        self.inspector_folded = false;
+        self.focus_panel(FocusedPanel::Inspector);
+        self.sync_ci_inspector(std::time::Instant::now());
+        self.ci_body = CiBody::Log;
+        self.needs_redraw = true;
     }
 
     /// Whether the inspector shows a run body: pane 2 shows `ci` and the
