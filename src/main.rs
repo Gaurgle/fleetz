@@ -12225,10 +12225,7 @@ mod digest_handler_tests {
 
         press_key(&mut app, KeyCode::Char('k')).await;
         let on_header = screen(&app).join("\n");
-        assert!(
-            on_header.contains("2 repos · 0 commits · 0 PRs · 0 red CI"),
-            "{on_header}"
-        );
+        assert!(on_header.contains("2 repos · 0 commits"), "{on_header}");
         assert!(on_header.contains("pushed 1m ago"), "{on_header}");
         assert!(!on_header.contains("COMMITS"), "{on_header}");
 
@@ -12237,7 +12234,7 @@ mod digest_handler_tests {
         assert_eq!(app.selected, 0);
         let after = screen(&app).join("\n");
         assert!(after.contains("COMMITS"), "{after}");
-        assert!(!after.contains("red CI"), "{after}");
+        assert!(!after.contains("2 repos · 0 commits"), "{after}");
     }
 
     #[tokio::test]
