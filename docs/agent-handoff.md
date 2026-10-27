@@ -14,13 +14,24 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Released** 2026-10-27 13:20 CET by `claude-fable-5-1` (`claude
+**Held** again since 2026-10-27 14:35 CET by `claude-fable-5-1`
+(the same session `c47a5217-1276-4a26-b7a2-bceecc3c81fb`) on his
+"allright. we can continue now". Confirmed on resume: `main`
+unchanged at `9e73cee`, the three pushed branches at their recorded
+tips with clean worktrees, branch CI green on `2cb7cfc` and `0afd18b`
+and red on `b926726` as recorded. **Running:** `fz-reviewer` on
+FZ-45's `2cb7cfc` (review 3) and `fz-worker` on FZ-56 (#112, base
+`9e73cee`, branch `feat/112-search-owner-contributor`, worktree
+`issue-112`, handoff `worker-112.txt`), both from 14:40 under the
+standing authority. One worker slot and the `fz-small` slot free;
+FZ-55 still waits on his number.
+
+Previous record: **Released** 2026-10-27 13:20 CET by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
 `c47a5217-1276-4a26-b7a2-bceecc3c81fb`) on his "find a place to stop
 for today" and "if anything should be commited or pushed, you should
 ship it". Held from 10:57 ("can we continue from where we stopped?").
-**Nothing is running: no worker, no reviewer, no build, no background
-job.** Stamps this session ran ahead of the clock again (the log's
+Nothing was running at that release. Stamps this session ran ahead of the clock again (the log's
 clock note for 2026-10-27); commit dates are authoritative. Done
 today: FZ-51 (#107) Done `579f28e`; FZ-53 (#109) Ready to integrate
 for his look (`0afd18b`); FZ-45 (#101) reviewed and accepted at
