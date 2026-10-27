@@ -314,6 +314,20 @@ fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
     if pane == FocusedPanel::Detail && app.history_view == HistoryView::Info {
         keys.push(("[B]".into(), "remotes"));
     }
+    // On a section header pane 2 is the slot digest (FZ-45): its keys
+    // replace the list's and pane 2's.
+    if app.on_header().is_some() && matches!(pane, FocusedPanel::RepoList | FocusedPanel::Detail) {
+        let walk = if pane == FocusedPanel::Detail {
+            "line"
+        } else {
+            "move"
+        };
+        keys = vec![
+            ("[j/k]".into(), walk),
+            ("[t]".into(), "digest window"),
+            ("[Enter]".into(), "go to repo"),
+        ];
+    }
 
     let key_style = Style::default()
         .fg(colors::TEXT)
@@ -897,5 +911,32 @@ mod tests {
         // Muscle memory: the rightmost hint should not move as hints are added.
         assert!(text(&keybind_hints(&app_in(View::Detail), true)).ends_with(" quit"));
         assert!(text(&keybind_hints(&app_in(View::Detail), false)).ends_with("[q]"));
+    }
+
+    /// FZ-45: on a section header the focused pane hints the digest's keys.
+    #[test]
+    fn a_header_stop_hints_the_digest_keys() {
+        use crate::digest::tests::repo;
+        use crate::model::RepoLocation;
+        let mut app = App::new(
+            vec![
+                repo("a", RepoLocation::Primary),
+                repo("b", RepoLocation::LocalOnly),
+            ],
+            String::new(),
+            120,
+            40,
+        );
+        app.view = View::Detail;
+        app.land_on(crate::app::ListRow::Header(
+            crate::digest::Section::LocalChanges,
+        ));
+        let list = text(&focus_hints(&app, true));
+        assert_eq!(list, "[j/k] move  [t] digest window  [Enter] go to repo");
+        app.focused_panel = FocusedPanel::Detail;
+        assert!(text(&focus_hints(&app, true)).starts_with("[j/k] line  [t]"));
+        app.land_on(crate::app::ListRow::Repo(1));
+        app.focused_panel = FocusedPanel::RepoList;
+        assert!(text(&focus_hints(&app, true)).contains("[t] window"));
     }
 }

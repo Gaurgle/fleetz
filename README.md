@@ -27,6 +27,21 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 - Active worktrees (`WT` badge, drawn in the dirty colour when a linked worktree has uncommitted work) and stashes (archive-glyph badge)
 - Open PR count and numbers on the repo row, in the repo pane, and in the footer
 - Repo pane header reads local-to-remote: local path, branch and stashes on the left of each row, remote URL, PRs and CI flush right
+- A slot digest: stand on a repo list section header ("github activity",
+  "local changes", "also active") and pane 2 shows what happened across that
+  section's repos since the slot boundary, as repoz's default mode heads it.
+  A totals line (`since 2026-10-26  Evening (18-00)   5 repos · 14 commits ·
+  2 PRs · 1 red CI`), then one line per touched repo, most recent push first:
+  its commit count in the window (with the authors' initials when more than
+  one), the newest subject, its CI and open PRs. A repo not cloned, or not
+  fetched since the window began, says only `pushed 2h ago`. "local changes"
+  lists the worklist instead: dirty files, stashes and unpushed commits. The
+  inspector details the line under pane 2's cursor (commits with author and
+  time, PR titles, the CI run), `Enter` goes to that repo's row and `t` cycles
+  the window: slot, today, yesterday (since its midnight), week (since
+  midnight seven days ago). Counts come from `git log --since` over the local
+  and remote-tracking branches, read off the UI thread once per window and
+  refs; nothing extra is asked of GitHub
 - Repo groups defined in your config (cycle with `g`)
 - Repo ownership in the detail pane: `owner/name` flush right on the status
   line, colored and glyphed by kind (org, private, public)
@@ -230,7 +245,7 @@ pane's keys lose theirs, then the pane's keys go, and the summary goes last.
 | `1` / `2` / `3` / `4` | Focus repo list / detail / inspector / contributions. On the focused inspector or strip, its number folds it to one row, its title (still focused) and unfolds it again; on a folded one from elsewhere, it unfolds and focuses it |
 | `Tab` | Cycle panel focus |
 | mouse | Click a panel to focus; click the `[3]` or `[4]` tag in the inspector's or the strip's title to fold it to one row, its title, and again to unfold and focus it; drag a pane border to resize it (a `⠿` grip marks each draggable border, and lights up while you drag it); scroll wheel scrolls whichever panel the cursor is over. Scrolling moves the view, never the selection: the highlight stays with the row it is on and travels off the pane if you scroll past it, and the next `j`/`k` re-enters at the edge you are looking at |
-| `j` / `k`, `↑` / `↓` | Repo list: move selection · Detail: pick commit · Inspector: scroll · Contributions: move the day cursor up/down a weekday (a caret above the grid marks the column) |
+| `j` / `k`, `↑` / `↓` | Repo list: move selection, stopping on the section headers in the detail view (a header shows its slot digest in pane 2; clicking a header, or resting the pointer on one, lands there too, and a click on a repo row selects it) · Detail: pick commit, or the digest line on a header · Inspector: scroll · Contributions: move the day cursor up/down a weekday (a caret above the grid marks the column) |
 | `J` / `K` | Drive the **next** pane without leaving the one you are in: repo list → window 2, window 2 → the inspector, inspector → back to the list. Aimed at window 2 it steps that pane's commit cursor, so the inspector reads out each commit in turn; past the last commit it falls through to scrolling, so the sections below a short list stay reachable. Two exceptions: `graph` docks no inspector, so there the keys stay on the pane and walk its **rows** a line at a time where plain `j`/`k` jumps whole commit blocks; and the contributions strip is skipped, being a horizontal timeline with nothing below the fold to scroll into |
 | `PgUp` / `PgDn` | Scroll the focused pane itself by a page, leaving its selection where it is |
 | `v` | Toggle detail vs compact view. The compact grid packs as many columns as the terminal has room for |
@@ -243,14 +258,14 @@ pane's keys lose theirs, then the pane's keys go, and the summary goes last.
 | `h` / `l`, `←` / `→` | Contributions: move the day cursor back/forward a week. The grid scrolls with it, oldest weeks hiding off to the left |
 | mouse | Contributions: click picks a day, drag pans the grid, and any wheel axis (including shift-wheel) scrolls it sideways |
 | `Home` / `End` | Contributions: jump to the oldest / newest week |
-| `Enter` | Open repo in lazygit (pull / merge live here) |
+| `Enter` | Open repo in lazygit (pull / merge live here). On a section header: go to the row of the digest line pane 2's cursor is on |
 | `e` | Open repo in `$EDITOR` |
 | `o` | Open shell in repo dir |
 | `O` | Open PR in browser |
 | `f` | Fetch selected repo (updates ahead/behind, no merge), with no size cap: how you pull a repo marked `fetch ~N MB, press f` or `fetch over N MB, press f` (see `fetch_max_mb`). The row shows `fetching N MB` while it runs. A failure is marked on the repo and named in the status line |
 | `F` | Fetch all repos, each capped at `fetch_max_mb`; a repo held for its size is skipped until `f`. If any fail, the status line says how many |
 | `b` / `s` | Branches overlay: preview + switch (`Enter`), clean up merged (`space` to mark, `d` to delete) |
-| `t` | Time window: pick how far back to show activity (slot / hours / days / weeks / months / years) |
+| `t` | Time window: pick how far back to show activity (slot / hours / days / weeks / months / years). On a section header it cycles the digest's window instead: slot / today / yesterday / week |
 | `g` | Cycle group filter |
 | `G` | Show all (clear group) |
 | `/` | Fuzzy-search repos by name (best match first, `flz` finds `fleetz`), or type `#dirty` `#behind` `#ahead` `#ci` `#prs` `#stash` to filter |
