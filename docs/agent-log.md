@@ -296,6 +296,22 @@ Clock note: this lead's stamps again ran ahead of the wall clock
 13:05 CET; the FZ-45 fix cycle 2 ruling "14:00" was before 13:00).
 Commit dates are authoritative.
 
+- **#93 (FZ-30e), `l`/`a`/`x`/`O` on the highlighted CI run.** Merged
+  `cb72465` at about 15:55 CET on his "#93: i trust you here" (the
+  look waived); ticket commit `1e9ccde` (branch `feat/93-ci-handoffs`
+  over the merge-in `f300b0a`; worker and reviewer records from
+  2026-10-21 and 2026-10-22 on the issue: rework accepted at diff
+  `3da63a19`, six mutations caught; his look of 2026-10-22 on help,
+  footer and `O`). `l` opens and focuses the inspector on the run's
+  `log` body (completed runs only), the `gh run view` builder is gone,
+  `LOG_TRUNCATED` points at the run's page (one existing-test string
+  edit, ruled in on the issue); `a` and `x` take the terminal over for
+  `gh run rerun`/`cancel` (a background variant is a follow-up
+  candidate). Branch CI 39774103522 (2026-10-22) green; fresh scratch
+  merge onto `main` `ffcf0a6` clean, 1413 tests; `main` CI
+  40523459762 green. Worktree swept.
+  FZ-30e: review changes 1 (the 2026-10-21 rework); fix cycles 1; owner decisions 1; worker and review minutes on the issue; usage not read
+
 - **#101 (FZ-45), the slot digest on pane 1 section headers.** Merged
   `7a2a020` at about 15:20 CET on his "45 is great." (his second
   look); ticket commits `f0c130c`, `2cb7cfc`, `63d7762` (base

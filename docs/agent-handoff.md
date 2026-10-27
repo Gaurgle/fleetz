@@ -548,20 +548,10 @@ Earlier record (2026-10-22, both merged since or waiting on his look,
 see the items below): two workers running since 13:30 (both slots;
 the `fz-small` slot was free):
 
-- **#93 FZ-30e (`l`/`a`/`x`/`O` on the highlighted run): Ready to
-  integrate since 13:57, for his look.** Rework reviewed and accepted
-  (diff `3da63a19`, six mutations caught), committed `1e9ccde` on
-  `feat/93-ci-handoffs` (over the merge-in `f300b0a`), pushed; branch
-  CI 39774103522 green; combined with `main` `6fcd337` 1312 tests
-  under UTC, fmt and clippy clean. `l` opens and focuses the inspector
-  on the run's `log` body (completed runs only), the `gh run view`
-  builder is gone, `LOG_TRUNCATED` points at the run's page (one
-  existing-test string edit, ruled in, comment "Rework rulings"); `a`
-  and `x` still take the terminal over for `gh run rerun`/`cancel`
-  (background variant a candidate follow-up). Earlier: accepted
-  `7d39d52d` committed `8a5bdac` (2026-10-21); his look 2026-10-22:
-  help and footer "yes", `O` fine. Next: his look (`l`), merge under
-  the safe-merge rule, sweep, log.
+- **#93 FZ-30e: Done**, merged `cb72465` 2026-10-27 on his "i trust
+  you here" (record in the log, "Merged on 2026-10-27"); `#96` no
+  longer needs re-verification against it beyond the normal scratch
+  merge.
 - **#96 FZ-40 (the `ci` view's headline row and width budget): Ready
   to integrate since 14:05, for his look.** Reviewed and accepted
   (diff `16bb0848`, seven mutations caught), committed `19a21d6` on
