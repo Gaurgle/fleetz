@@ -14,25 +14,31 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Held** since 2026-10-27 10:57 CET by `claude-fable-5-1` (`claude
---agent fz-coordinator`, the same session
-`c47a5217-1276-4a26-b7a2-bceecc3c81fb`) on his "can we continue from
-where we stopped?". Confirmed on resume: nobody held the baton in
-between, `main` unchanged at `ed8877d`, CI green at `4632ac5`, the
-FZ-53 worktree byte-identical to the close (diff `8206bb9b7f0567ad`).
-Read as: resume FZ-53 (#109) at its review, under his word of
-2026-10-26 on the tests; **not** read as dispatch of FZ-51 or any
-other ticket, which was asked and answered at 11:05 (standing
-authority, see "Authorized by the owner"). **Running:** one
-`fz-reviewer` on FZ-53 from 11:00 CET; two `fz-worker` from 11:12,
-FZ-51 (#107, measurement, worktree `issue-107`, branch
-`chore/107-measure-print-mode`) and FZ-45 (#101, slot digest,
-worktree `issue-101`, branch `feat/101-slot-digest`), both off
-`4d9bce9`; dispatch records and rulings on the issues, handoff texts
-`worker-107.txt` and `worker-101.txt` in the session scratchpad. The
-`fz-small` slot is free. FZ-19 (#2) was passed over: its body is
-stale (`epoz -d`) and needs a rewrite before it is Ready. FZ-41
-waits for #96 to merge (same `ci` view code).
+**Released** 2026-10-27 13:20 CET by `claude-fable-5-1` (`claude
+--agent fz-coordinator`, session
+`c47a5217-1276-4a26-b7a2-bceecc3c81fb`) on his "find a place to stop
+for today" and "if anything should be commited or pushed, you should
+ship it". Held from 10:57 ("can we continue from where we stopped?").
+**Nothing is running: no worker, no reviewer, no build, no background
+job.** Stamps this session ran ahead of the clock again (the log's
+clock note for 2026-10-27); commit dates are authoritative. Done
+today: FZ-51 (#107) Done `579f28e`; FZ-53 (#109) Ready to integrate
+for his look (`0afd18b`); FZ-45 (#101) reviewed and accepted at
+`f0c130c`, then his look asked for pane 1's row grammar and a
+full-width inspector, delivered and **pushed unreviewed** as
+`2cb7cfc` on his "ship it"; FZ-55 (#111) filed, built to a decision
+point and **pushed unreviewed and red** as `b926726` (see "In
+flight"). His standing dispatch authority of 11:05 stands for the
+next lead (see "Authorized by the owner"). FZ-19 (#2) was passed
+over: its body is stale (`epoz -d`) and needs a rewrite before it is
+Ready. FZ-41 waits for #96 to merge (same `ci` view code). Two UI
+rules from his look are under "What Andreas told the leads"; a
+CLAUDE.md line for them waits on his yes.
+
+Previous record: **Held** since 2026-10-27 10:57 CET by the same
+session on his "can we continue from where we stopped?", resumed
+FZ-53 at its review and, from 11:05, dispatched under the standing
+authority.
 
 Previous record: **Released** 2026-10-26 16:12 CET by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
@@ -419,10 +425,14 @@ release is `0.7.0`. Local toolchain rustc 1.99.0, same as CI's.
 
 ## Worktrees
 
-Under `.claude/worktrees/` as of 2026-10-26 16:10: `issue-109`
-(FZ-53, uncommitted, see "In flight"), `issue-93` and `issue-96`
-(committed, pushed, Ready to integrate for his look), `issue-88`
-(FZ-38, parked, uncommitted, see "Baton"). The sweep keeps all four.
+Under `.claude/worktrees/` as of 2026-10-27 13:20: `issue-109`
+(FZ-53, `0afd18b` pushed, Ready to integrate for his look),
+`issue-101` (FZ-45, `2cb7cfc` pushed, unreviewed fix cycle),
+`issue-111` (FZ-55, `b926726` pushed, red, parked on his decision),
+`issue-93` and `issue-96` (pushed, Ready to integrate for his look),
+`issue-88` (FZ-38, parked, uncommitted, see the 2026-10-23 record).
+All six are clean (nothing uncommitted except `issue-88`); the sweep
+keeps them because none is merged.
 
 ## In flight
 
@@ -448,13 +458,18 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   the rule, sweep, log. Try: `cargo run --release --manifest-path
   .claude/worktrees/issue-109/Cargo.toml`, `]` to `notes`, `m`,
   `Enter` on a file.
-- **#101 FZ-45 (slot digest): In progress again, fix cycle 2** on his
-  look at about 13:55 CET ("this is great!", then: the digest lines
-  should use pane 1's formatting, colors and fixed indicator slots).
-  Ruling on the issue: the rows adopt pane 1's row grammar through
-  the same badge functions. Then review 3, commit on top of
-  `f0c130c`, push, CI, his second look. Earlier: Ready to integrate
-  since about 13:15 CET. Review 1 changes requested (a compact-view
+- **#101 FZ-45 (slot digest): In progress, fix cycle 2 delivered and
+  pushed unreviewed** as `2cb7cfc` on `feat/101-slot-digest` (on top
+  of the accepted `f0c130c`; diff `01148ecf1d46e4cb`, 1395 tests,
+  fmt and clippy clean per the worker). His look ("this is great!")
+  asked for pane 1's row grammar and fixed indicator slots, then the
+  full-width inspector with nothing but a list overflowing; both
+  rulings and the worker's report are on the issue. **Next:** review
+  3 by `fz-reviewer` on `01148ecf1d46e4cb` (include the new
+  `detail::repo_row_spans` extraction against pane 1's existing
+  render tests and the shared `more_line`), then branch CI (it ran on
+  the push: check it), then his second look, then Ready to integrate.
+  Earlier: Ready to integrate at `f0c130c`. Review 1 changes requested (a compact-view
   click through stale list geometry, three coverage gaps, five
   follow-ups), fix cycle 1 by the same worker, review 2 accepted
   (diff `edb42fa676e641e7` plus `src/digest.rs` and
@@ -480,8 +495,9 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   jizt of it all is the scroll_padding" (a notez port,
   `Gaurgle/notez` `d32a412`). P2, M3. Base `b799c49`, branch
   `feat/111-scroll-margin`, worktree `.claude/worktrees/issue-111`,
-  uncommitted (diff `fe6cbedf6134`, 20424 bytes, new
-  `src/ui/scroll.rs` 3069 bytes). Finding: pane 2 already had a
+  **committed unreviewed as `b926726` and pushed** on his "ship it"
+  (diff `fe6cbedf6134`; `cargo test` red on it by design, 10 tests,
+  so branch CI is red). Finding: pane 2 already had a
   margin (`app::SCROLLOFF = 4`); pane 1's `scroll_padding` and
   `reveal_offset` for `B` are done and tested. Raising `SCROLLOFF`
   to 5 breaks 10 existing tests that pin the 4-row offsets (listed

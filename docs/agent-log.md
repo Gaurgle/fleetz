@@ -291,8 +291,13 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-10-27
 
+Clock note: this lead's stamps again ran ahead of the wall clock
+(the FZ-51 merge was written "about 14:35" and happened before
+13:05 CET; the FZ-45 fix cycle 2 ruling "14:00" was before 13:00).
+Commit dates are authoritative.
+
 - **#107 (FZ-51), measure print mode against bash repoz.** Merged
-  `579f28e` at about 14:35 CET; ticket commit `626a680` (base
+  `579f28e` at about 13:05 CET; ticket commit `626a680` (base
   `4d9bce9`, branch `chore/107-measure-print-mode`, worker
   `fz-worker` `claude-opus-5-5` medium in the measurement role, fix
   cycles `fz-small` `sonnet` medium twice, reviewer `fz-reviewer`
