@@ -296,6 +296,33 @@ Clock note: this lead's stamps again ran ahead of the wall clock
 13:05 CET; the FZ-45 fix cycle 2 ruling "14:00" was before 13:00).
 Commit dates are authoritative.
 
+- **#101 (FZ-45), the slot digest on pane 1 section headers.** Merged
+  `7a2a020` at about 15:20 CET on his "45 is great." (his second
+  look); ticket commits `f0c130c`, `2cb7cfc`, `63d7762` (base
+  `4d9bce9`, branch `feat/101-slot-digest`, worker `fz-worker`
+  `claude-opus-5-5` medium through three fix cycles, reviewer
+  `fz-reviewer` `claude-opus-5-5` medium, four passes). Headers are
+  cursor stops (`App::list_rows`, one list for drawing, keys, click
+  and hover); the digest in pane 2 with a totals line and one line
+  per touched repo in pane 1's row grammar (`detail::repo_row_spans`
+  shared with pane 1); `git log --since` per touched repo per
+  (cutoff, head, refs) off the UI thread (`commits_since`, no `%b`);
+  `t` cycles slot, today, yesterday, week; `Enter` jumps; the
+  inspector two-lane or stacked, facts never scroll, lists end with
+  the shared `… and N more`; hover lands after a 300 ms dwell. Review
+  1: a compact-view click through stale list geometry plus three
+  coverage gaps and five follow-ups; review 3 (after his first look
+  changed the rows and the inspector): many PRs squeezed out the CI
+  line and the commit list; reviews 2 and 4 accepted. Rulings on the
+  issue: `--branches --remotes` instead of the spec's default branch;
+  a click now selects a row; the spec's fold question answered
+  "digest only". Open for his later looks: no top-of-list indicator;
+  what to drop at tiny inspector heights; `J`/`K` and hover edge
+  cases on the issue. Branch CI 40516357710, `main` CI 40520984376
+  green, 1397 tests. Conflicts with FZ-53's branch, which now needs a
+  resolution cycle.
+  FZ-45: review changes 2; fix cycles 3; owner decisions 2; worker 48; review 46; usage worker 416k, review 374k tokens
+
 - **#107 (FZ-51), measure print mode against bash repoz.** Merged
   `579f28e` at about 13:05 CET; ticket commit `626a680` (base
   `4d9bce9`, branch `chore/107-measure-print-mode`, worker

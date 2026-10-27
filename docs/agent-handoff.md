@@ -469,20 +469,17 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   the rule, sweep, log. Try: `cargo run --release --manifest-path
   .claude/worktrees/issue-109/Cargo.toml`, `]` to `notes`, `m`,
   `Enter` on a file.
-- **#101 FZ-45 (slot digest): Ready to integrate for his second
-  look** since about 15:35 CET at `63d7762` on `feat/101-slot-digest`
-  (branch CI 40516357710 green; scratch merge onto `main` `8541b52`
-  clean, 1397 tests). After his first look ("this is great!", then
-  pane 1's row grammar, the full-width inspector, nothing hidden but
-  a list): fix cycle 2 (`2cb7cfc`, pushed unreviewed on his "ship
-  it"), review 3 changes requested (many PRs squeezed out the CI line
-  and the commit list), fix cycle 3 (PRs as their own counted list,
-  `LIST_MIN_ROWS`), review 4 accepted. Look items on the issue
-  (review 4's O1 to O3 at tiny heights, no top-of-list indicator).
-  **Next:** his look, then merge; it conflicts with FZ-53 (see the
-  integration note below), so the second of the two to be approved
-  gets a merge-resolution cycle.
-  Earlier: Ready to integrate at `f0c130c`. Review 1 changes requested (a compact-view
+- **#101 FZ-45: Done**, merged `7a2a020` on his "45 is great." (log,
+  "Merged on 2026-10-27"), worktree swept. `main` CI 40520984376
+  green, 1397 tests. **Consequence for FZ-53 (#109):** its branch
+  `feat/109-notes-view` (`0afd18b`, base `27d750c`) now conflicts
+  with `main` in `README.md`, `src/app.rs`, `src/main.rs`,
+  `src/ui/help.rs`; after his look it needs a merge-resolution cycle
+  (a fresh `fz-worker` merges `main` into the branch in its worktree,
+  resolving only the conflicts; `fz-reviewer` reviews the resolved
+  regions; fresh branch CI; then merge). The help overlay is the one
+  to watch: both tickets reworded rows to fit 80x24.
+  Earlier record: Ready to integrate at `f0c130c`. Review 1 changes requested (a compact-view
   click through stale list geometry, three coverage gaps, five
   follow-ups), fix cycle 1 by the same worker, review 2 accepted
   (diff `edb42fa676e641e7` plus `src/digest.rs` and
@@ -515,7 +512,18 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   timing within budget; rulings 1 to 5 on the issue (the five
   production `authors: Default::default()` lines ruled in). After
   acceptance: commit, push, CI, scratch merge, Ready to integrate for
-  his look (the mark).
+  his look (the mark). **Incident at 15:15:** the first reviewer lost
+  its scratch copy when the session scratchpad was emptied (by an
+  agent's cleanup; every handoff text was in it, all recorded on the
+  issues) and wrote the worker's `app.rs` and `model.rs` into the
+  main checkout; the pre-merge `git status` guard caught it, the lead
+  restored `main` (`git restore`), confirmed the worktree unchanged
+  (`af01c9337485ff21`) and restarted the review with isolation rules
+  (one self-made scratch directory, never the main checkout, never
+  delete what it did not create). Lesson for every lead: `git status
+  --short` on the main checkout before every merge, and give
+  reviewers an explicit scratch directory of their own. Worth a line
+  in `.claude/agents/fz-reviewer.md` on his yes.
 - **#111 FZ-55 (scroll margin on every list, reveal on expand): In
   progress, stopped for his word** since about 13:05 CET; filed
   11:45 on his "port if needed, or just implement this" and "the
