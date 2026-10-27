@@ -341,7 +341,11 @@ pub fn visible_lines(total: usize, selected: usize, rows: usize) -> (usize, usiz
     if total <= rows {
         return (0, total, 0);
     }
-    let room = rows.saturating_sub(1).max(1);
+    if rows <= 1 {
+        // Room for the marker alone: it stays inside the pane.
+        return (0, 0, total);
+    }
+    let room = rows - 1;
     let first = (selected + 1).saturating_sub(room);
     let below = total - first - room.min(total - first);
     if below == 0 {
@@ -365,10 +369,65 @@ fn dim(text: String) -> Line<'static> {
     Line::from(Span::styled(text, Style::default().fg(colors::OVERLAY)))
 }
 
-/// The inspector's facts about one digest line, everything but its list:
-/// the heading, why a line has no count, the PR titles and the CI run; for
-/// the worklist, its counts. Drawn without scrolling.
-pub fn fact_lines(app: &App, line: &DigestLine) -> Vec<Line<'static>> {
+/// The inspector's facts about one digest line, everything but its list.
+/// The heading and the CI run always draw; the PR titles are a list of
+/// their own that gives way to them, marked with how many PRs it left out.
+/// Never scrolled.
+pub struct Facts {
+    /// The heading, why a line has no count, or the worklist's counts.
+    pub head: Vec<Line<'static>>,
+    /// The "pull requests" label and one entry per PR.
+    pub prs: Option<(Line<'static>, Vec<Line<'static>>)>,
+    /// The CI run.
+    pub ci: Option<Line<'static>>,
+}
+
+impl Facts {
+    /// Rows the facts take, everything shown, `width` wide.
+    fn rows_wanted(&self, width: usize) -> usize {
+        let prs = self
+            .prs
+            .as_ref()
+            .map_or(0, |(_, e)| 2 + wrapped_rows(e, width));
+        let ci = self
+            .ci
+            .as_ref()
+            .map_or(0, |c| 1 + wrapped_rows(std::slice::from_ref(c), width));
+        wrapped_rows(&self.head, width) + prs + ci
+    }
+
+    /// The facts in at most `rows` rows `width` wide: the heading first and
+    /// the CI run last, both whole; the PR titles in what is left, ending
+    /// in the overflow marker counting PRs when they do not all fit.
+    pub fn fit(&self, width: usize, rows: usize) -> Vec<Line<'static>> {
+        let wrap = |l: &Line<'static>| crate::ui::detail::wrap_line(l, width.max(1));
+        let head: Vec<Line> = self.head.iter().flat_map(wrap).collect();
+        let ci: Vec<Line> = self
+            .ci
+            .iter()
+            .flat_map(|c| std::iter::once(Line::from("")).chain(wrap(c)))
+            .collect();
+        let mut out = head;
+        if let Some((title, entries)) = &self.prs {
+            let left = rows.saturating_sub(out.len() + ci.len());
+            // A blank row before the label only when the list still keeps a
+            // row of its own beside the label.
+            if left >= 3 {
+                out.push(Line::from(""));
+            }
+            if left >= 2 {
+                out.push(title.clone());
+                let room = rows.saturating_sub(out.len() + ci.len());
+                out.extend(fit_list(entries, 0, width, room));
+            }
+        }
+        out.extend(ci);
+        out
+    }
+}
+
+/// The inspector's facts about one digest line (`Facts`).
+pub fn facts(app: &App, line: &DigestLine) -> Facts {
     let repo = &app.repos[line.repo];
     let mut out = vec![Line::from(vec![
         Span::styled(
@@ -401,33 +460,40 @@ pub fn fact_lines(app: &App, line: &DigestLine) -> Vec<Line<'static>> {
             out.push(Line::from(format!("{dirty} dirty files")));
             out.push(Line::from(format!("{unpushed} unpushed commits")));
             out.push(Line::from(plural(*stashes as usize, "stash", "stashes")));
-            return out;
+            return Facts {
+                head: out,
+                prs: None,
+                ci: None,
+            };
         }
     }
-    if line.prs > 0 {
-        out.push(Line::from(""));
-        out.push(label("pull requests"));
-        for pr in &repo.prs {
-            out.push(Line::from(vec![
-                Span::styled(
-                    format!("#{} ", pr.number),
-                    Style::default().fg(colors::PR_CLR),
-                ),
-                Span::styled(pr.title.clone(), Style::default().fg(colors::TEXT)),
-                Span::styled(
-                    format!("  {}", pr.author),
-                    Style::default().fg(colors::OVERLAY),
-                ),
-            ]));
-        }
-        if repo.prs.is_empty() {
-            out.push(dim(format!(
+    let prs = (line.prs > 0).then(|| {
+        let mut entries: Vec<Line<'static>> = repo
+            .prs
+            .iter()
+            .map(|pr| {
+                Line::from(vec![
+                    Span::styled(
+                        format!("#{} ", pr.number),
+                        Style::default().fg(colors::PR_CLR),
+                    ),
+                    Span::styled(pr.title.clone(), Style::default().fg(colors::TEXT)),
+                    Span::styled(
+                        format!("  {}", pr.author),
+                        Style::default().fg(colors::OVERLAY),
+                    ),
+                ])
+            })
+            .collect();
+        if entries.is_empty() {
+            entries.push(dim(format!(
                 "{} open; titles with -p",
                 plural(line.prs as usize, "PR", "PRs")
             )));
         }
-    }
-    if line.ci != CiStatus::Unknown {
+        (label("pull requests"), entries)
+    });
+    let ci = (line.ci != CiStatus::Unknown).then(|| {
         let (glyph, color, word) = badges::ci_display(&line.ci, false);
         let mut spans = vec![Span::styled(
             format!("{glyph} CI {word}"),
@@ -439,10 +505,9 @@ pub fn fact_lines(app: &App, line: &DigestLine) -> Vec<Line<'static>> {
                 Style::default().fg(colors::OVERLAY),
             ));
         }
-        out.push(Line::from(""));
-        out.push(Line::from(spans));
-    }
-    out
+        Line::from(spans)
+    });
+    Facts { head: out, prs, ci }
 }
 
 /// The inspector's list for one digest line, its label and one entry per
@@ -556,7 +621,7 @@ pub fn render_inspector(frame: &mut Frame, area: Rect, app: &App, digest: &Diges
         );
         return;
     };
-    let facts = fact_lines(app, line);
+    let facts = facts(app, line);
     let list = list_entries(app, digest, line);
     let entries = list.as_ref().map_or(0, |(_, e)| e.len());
     app.inspector_max_scroll
@@ -571,27 +636,18 @@ pub fn render_inspector(frame: &mut Frame, area: Rect, app: &App, digest: &Diges
             (h[0], Some(h[1]))
         }
         Some(_) => {
-            let facts_rows = wrapped_rows(&facts, inner.width as usize) + 1;
-            let v = Layout::vertical([
-                Constraint::Length(facts_rows.min(inner.height as usize) as u16),
-                Constraint::Min(0),
-            ])
-            .split(inner);
+            // The facts and a blank row, but the list below keeps at least
+            // its title and the marker row.
+            let wanted = facts.rows_wanted(inner.width as usize) + 1;
+            let height = wanted.min((inner.height as usize).saturating_sub(LIST_MIN_ROWS));
+            let v = Layout::vertical([Constraint::Length(height as u16), Constraint::Min(0)])
+                .split(inner);
             (v[0], Some(v[1]))
         }
         None => (inner, None),
     };
-    let fact_rows: Vec<Line> = facts
-        .iter()
-        .flat_map(|l| crate::ui::detail::wrap_line(l, facts_area.width.max(1) as usize))
-        .collect();
     frame.render_widget(
-        Paragraph::new(fit_list(
-            &fact_rows,
-            0,
-            facts_area.width as usize,
-            facts_area.height as usize,
-        )),
+        Paragraph::new(facts.fit(facts_area.width as usize, facts_area.height as usize)),
         facts_area,
     );
     if let (Some(area), Some((title, entries))) = (list_area, list) {
@@ -605,6 +661,10 @@ pub fn render_inspector(frame: &mut Frame, area: Rect, app: &App, digest: &Diges
         frame.render_widget(Paragraph::new(rows), area);
     }
 }
+
+/// Rows a stacked list never gives up to the facts above it: its title and
+/// the overflow marker.
+const LIST_MIN_ROWS: usize = 2;
 
 fn wrapped_rows(lines: &[Line<'_>], width: usize) -> usize {
     lines
@@ -888,12 +948,16 @@ mod tests {
     // Inspector and overflow (FZ-45 fix cycle 2).
 
     fn rich_app(commits: usize) -> (App, Digest) {
+        rich_app_with(commits, 2)
+    }
+
+    fn rich_app_with(commits: usize, prs: u32) -> (App, Digest) {
         let mut r = crate::digest::tests::repo("fleetz", crate::model::RepoLocation::Primary);
         r.ci_status = CiStatus::Failed;
         r.ci_workflow = Some("ci.yml".to_string());
         r.ci_duration = Some("2m".to_string());
-        r.pr_count = 2;
-        r.prs = (1..=2)
+        r.pr_count = prs;
+        r.prs = (1..=prs)
             .map(|n| crate::model::PullRequest {
                 number: n,
                 title: format!("pull request title {n}"),
@@ -917,8 +981,82 @@ mod tests {
                 .collect(),
         );
         l.ci = CiStatus::Failed;
-        l.prs = 2;
+        l.prs = prs;
         (app, digest(Section::GithubActivity, vec![l]))
+    }
+
+    /// Every overflow marker's count, top to bottom.
+    fn markers(screen: &[String]) -> Vec<usize> {
+        screen
+            .iter()
+            .filter_map(|row| {
+                let rest = row.split("… and ").nth(1)?;
+                rest.split(" more").next()?.parse().ok()
+            })
+            .collect()
+    }
+
+    /// Review 3 B1: twelve open PRs on a short inspector. The PR titles are
+    /// a list of their own, marked with how many PRs they left out; the
+    /// heading and the CI run still draw, and the commit list keeps its
+    /// title and its marker.
+    #[test]
+    fn many_prs_give_way_to_the_ci_run_and_the_commit_list() {
+        let (app, d) = rich_app_with(30, 12);
+        for (w, h) in [(80, 14), (170, 14)] {
+            let screen = inspector_screen(&app, &d, w, h);
+            let all = screen.join("\n");
+            for fact in [
+                "fleetz  30 commits",
+                "◉ CI failed  ci.yml  2m",
+                "commits since 2026-10-26",
+            ] {
+                assert!(all.contains(fact), "{w}x{h}: {fact:?} not drawn:\n{all}");
+            }
+            let prs_drawn = (1..=12)
+                .filter(|n| all.contains(&format!("#{n} pull request")))
+                .count();
+            let commits_drawn = (0..30)
+                .filter(|i| all.contains(&format!("h{i:03} ")))
+                .count();
+            let found = markers(&screen);
+            let (pr_more, commit_more) = if w >= 170 {
+                // Side by side: the lanes share rows, so read each lane.
+                let left: Vec<String> = screen
+                    .iter()
+                    .map(|r| r.chars().take(85).collect())
+                    .collect();
+                let right: Vec<String> = screen
+                    .iter()
+                    .map(|r| r.chars().skip(85).collect())
+                    .collect();
+                (markers(&left)[0], markers(&right)[0])
+            } else {
+                assert_eq!(found.len(), 2, "{all}");
+                (found[0], found[1])
+            };
+            assert_eq!(
+                prs_drawn + pr_more,
+                12,
+                "{w}x{h}: the marker counts PRs:\n{all}"
+            );
+            assert_eq!(commits_drawn + commit_more, 30, "{w}x{h}:\n{all}");
+        }
+    }
+
+    /// Review 3 B2: the facts never scroll. With the list scrolled, the
+    /// heading and every fact still draw, and the list starts further down.
+    #[test]
+    fn scrolling_moves_the_list_and_never_the_facts() {
+        let (mut app, d) = rich_app(30);
+        app.inspector_scroll = 5;
+        for (w, h) in [(170, 14), (80, 18)] {
+            let screen = inspector_screen(&app, &d, w, h);
+            assert_every_fact_drawn(&screen);
+            let all = screen.join("\n");
+            assert!(!all.contains("h000 "), "{all}");
+            assert!(all.contains("h005 "), "{all}");
+        }
     }
 
     fn inspector_screen(app: &App, d: &Digest, w: u16, h: u16) -> Vec<String> {
@@ -1033,5 +1171,8 @@ mod tests {
             (14, 6, 0),
             "at the end the lines fill the pane"
         );
+        // Review 3 F1: one body row holds the marker alone, inside the pane.
+        assert_eq!(visible_lines(20, 0, 1), (0, 0, 20));
+        assert_eq!(visible_lines(20, 7, 1), (0, 0, 20));
     }
 }
