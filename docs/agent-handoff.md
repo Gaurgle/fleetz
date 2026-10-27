@@ -22,8 +22,17 @@ between, `main` unchanged at `ed8877d`, CI green at `4632ac5`, the
 FZ-53 worktree byte-identical to the close (diff `8206bb9b7f0567ad`).
 Read as: resume FZ-53 (#109) at its review, under his word of
 2026-10-26 on the tests; **not** read as dispatch of FZ-51 or any
-other ticket, which is asked. **Running:** one `fz-reviewer` on
-FZ-53 from 11:00 CET.
+other ticket, which was asked and answered at 11:05 (standing
+authority, see "Authorized by the owner"). **Running:** one
+`fz-reviewer` on FZ-53 from 11:00 CET; two `fz-worker` from 11:12,
+FZ-51 (#107, measurement, worktree `issue-107`, branch
+`chore/107-measure-print-mode`) and FZ-45 (#101, slot digest,
+worktree `issue-101`, branch `feat/101-slot-digest`), both off
+`4d9bce9`; dispatch records and rulings on the issues, handoff texts
+`worker-107.txt` and `worker-101.txt` in the session scratchpad. The
+`fz-small` slot is free. FZ-19 (#2) was passed over: its body is
+stale (`epoz -d`) and needs a rewrite before it is Ready. FZ-41
+waits for #96 to merge (same `ci` view code).
 
 Previous record: **Released** 2026-10-26 16:12 CET by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
@@ -129,6 +138,16 @@ Andreas.
 Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
+
+- **2026-10-27, 11:05 CET, standing dispatch authority.** "you, as
+  the lead, have authority to decide what tickets to start on. if
+  unsure, do a status check on the project", after "can we continue
+  from where we stopped?". Read as: a standing scope for the lead to
+  choose and dispatch tickets from the board, within the workflow's
+  limits (two workers plus one `fz-small`, safe-merge rule, look
+  items stop for him, FZ-52 and the `0.7.0` bump still need his
+  explicit word, issues created only on his yes). Not time-boxed; it
+  carries to the next lead as recorded here until he withdraws it.
 
 - **2026-10-26, 15:10 CET, lead takeover and dispatch.** "you can
   dispatch, choose what tickets to start on for now." after "you may
