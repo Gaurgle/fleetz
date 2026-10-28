@@ -58,11 +58,24 @@ workflow alongside the Relay workers and reviewer.
 1. Record `git status --short` and the base commit. Create the ticket branch
    and worktree yourself under `.claude/worktrees/<ticket>`, for example
    `git worktree add -b fix/fz-02-preserve-github-state .claude/worktrees/fz-02 <base>`.
+   Write the allowed files to `<worktree>/.claude/relay-scope` (format in
+   `scripts/relay-scope`); the guard hook enforces it on every write. To
+   change a scope later, `rm` the file and write it again.
 2. Fill the worker template from `docs/agent-workflow.md` and dispatch
    `fz-worker` (or `fz-small` for a truly small task). Pass the ticket, base,
    branch, absolute worktree path and allowed files, not this conversation.
-3. Dispatch `fz-reviewer` as a separate invocation with the reviewer template
-   and the worker's report. Changes after review get re-reviewed.
+3. When the worker reports, run `scripts/relay-scope <worktree> <base>`.
+   Out-of-scope or guarded files go back to the worker, or to Andreas if
+   the ticket needs them; do not spend the reviewer on that. Record the diff
+   id in the handoff, then dispatch `fz-reviewer` as a separate invocation
+   with the reviewer template, the worker's report and the scope output.
+   Changes after review get re-reviewed. On `needs evidence` or `needs
+   change`, use the rework template in `docs/agent-workflow.md`; if the
+   resubmitted diff id equals one already reviewed, do not dispatch the
+   reviewer again, the worker is stuck.
+   On a blocker, check the claim against the worker's scope and tools first:
+   re-scope, reassign (worker to small, or the reverse) or answer the missing
+   fact, before counting it as a fix cycle.
    Record the accepted revision, including new files, so it survives a handoff.
 4. Once the reviewer accepts, commit exactly the reviewed diff on the ticket
    branch (Conventional Commits, no `Co-Authored-By`, ending with
@@ -102,7 +115,9 @@ and end the loop with a report at the first stop condition.
 Before you stop, or when Astra returns, update `docs/agent-handoff.md` with
 the current state, open worktrees, pending reviews and the next authorized
 step, so either lead can resume from the files alone. Keep the handoff short:
-finished tickets and earlier lead records go to `docs/agent-log.md`.
+finished tickets and earlier lead records go to `docs/agent-log.md`. Take
+the token numbers for the metrics line from the completion notices of the
+worker and reviewer; write `not read` only when the harness showed none.
 Preserve authorization evidence and its limits. Record whether workers are
 stopped or still running, and mark the baton released. Read the clock before
 recording a timestamp.
