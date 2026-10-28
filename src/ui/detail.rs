@@ -6930,7 +6930,7 @@ mod tests {
             "a name hit is unmarked"
         );
         assert!(row(&screen, "tools-web").contains("tools-web org ·"));
-        assert!(row(&screen, "tools-scratch").contains("tools-scratch by ·"));
+        assert!(row(&screen, "tools-scratch").contains("tools-scratch author ·"));
 
         let (_, screen) = draw_people_search("gaurgle");
         assert!(row(&screen, "tools-kestrel").contains("tools-kestrel owner ·"));
