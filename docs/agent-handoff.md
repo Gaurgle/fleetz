@@ -14,20 +14,27 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Held** since 2026-10-28 16:04 CET by `claude-fable-5-1` (`claude
+**Released** 2026-10-28 16:55 CET by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session `2883bc20-7992-4566-8140-9e302e7b1d25`)
-on his "yes, lets go" to filing the changes view. Previous lead had
-released cleanly (nothing running, everything pushed), confirmed
-from the files and `git worktree list`. Done this stretch: the
-`changes` view designed with him (read-only; upstream as the default
-base with a default-branch toggle; named `changes`), written to
-`docs/ideas.md` "Changed files in pane 2", filed as **FZ-60 (#116)**,
-Ready, P2, M4. **Not dispatched:** his words were "its a go only if
-we dont have any other, more important tickets to complete first",
-so it takes its turn in the order under "Next step" (after the FZ-56
-and FZ-55 merge cycles and FZ-57) unless he moves it. Nothing is
-running: no worker, no reviewer, no build. The standing dispatch
-authority of 2026-10-27 11:05 still holds.
+on his "ok. make that change, ship, and then stop for today?". Held
+from 16:04 ("yes, lets go"). The stamps this session wrote on the
+issues between the first dispatch and the FZ-61 merge ran up to an
+hour ahead of the clock; commit dates are authoritative. **Nothing
+is running: no worker, no reviewer, no build, no background job.**
+Everything is pushed. Done this session, all merged to `main` on his
+looks and words (records in the log, "Merged on 2026-10-28"): FZ-56
+(#112) `3353adc`, FZ-55 (#111) `9643cd8`, FZ-61 (#117) `30a9883`;
+`main` CI 40719616971 green, all three worktrees swept.
+Filed: FZ-60 (#116, the `changes` view, Ready, P2, M4, design in
+`docs/ideas.md` "Changed files in pane 2") and FZ-61 (#117, Done).
+His stop of 16:28 ("stop after these worker/tickets are done"),
+amended at 16:45 to include FZ-61, ended the session: **the standing
+dispatch authority of 2026-10-27 11:05 is paused by that stop**; the
+next lead needs his word to resume the order under "Next step"
+(FZ-57, then FZ-60, FZ-58, FZ-59; his words on FZ-60: "its a go only
+if we dont have any other, more important tickets to complete first").
+His looks today: "111: scroll margin feels is great.", "112: is
+great!", "author it is" (FZ-61's word).
 
 Previous record: **Released** 2026-10-27 15:58 CET by `claude-fable-5-1`
 (session `c47a5217-1276-4a26-b7a2-bceecc3c81fb`) on his "wait for
@@ -447,9 +454,18 @@ are written into the repository.
 
 ## State of `main`
 
-`main` is `4632ac5` (the merge of #106) plus docs commits, 1348 tests
+`main` is `30a9883` (the merge of #117) as of 2026-10-28 16:50 CET,
+1457 tests passing and 1 ignored, CI run 40719616971 green. Since `v0.6.0` it also carries the whole
+print mode (FZ-46 to FZ-50), the `notes` view (#109), the slot digest
+(#101), the scroll margin (#111), search by owner, organisation and
+contributor (#112, mark `author` since #117). Lead's rule from today:
+when a Cargo target dir was shared between a worker's
+`--manifest-path` build, a reviewer's copy and the lead's run, `cargo
+clean -p fleetz` before the final verification, or use a fresh dir;
+stale incremental artifacts made 25 tests fail in a worktree whose
+code was green everywhere else (#117).
+Earlier record: `main` was `4632ac5` (the merge of #106) plus docs commits, 1348 tests
 passing and 1 ignored, CI green (run 40346149642), as of 2026-10-26.
-Since `v0.6.0` it also carries the whole print mode (FZ-46 to FZ-50).
 Earlier record: `main` was `db04b56` (the merge of #95) plus docs commits, 1296 tests
 passing and 1 ignored, CI green (run 39763821838). Since `v0.6.0` it
 carries #95 (the inspector's jobs, log and script bodies), #79 (header dates the failed
@@ -460,130 +476,49 @@ release is `0.7.0`. Local toolchain rustc 1.99.0, same as CI's.
 
 ## Worktrees
 
-Under `.claude/worktrees/` as of 2026-10-27 15:58: `issue-111` (FZ-55, `84be091` pushed, clean, merge
-cycle pending), `issue-112` (FZ-56, `fb0c46b` pushed, clean, guard
-and merge cycle pending), `issue-96` (pushed, Ready to integrate for
-his look), `issue-88` (FZ-38, parked, uncommitted, see the 2026-10-23
-record). `issue-101` and `issue-93` were swept today.
+Under `.claude/worktrees/` as of 2026-10-28 16:55: `issue-96`
+(pushed, Ready to integrate for his look), `issue-88` (FZ-38, parked,
+uncommitted, see the 2026-10-23 record). `issue-111`, `issue-112`
+and `issue-117` were swept today after green `main` CI.
 
 ## In flight
 
-Two `fz-worker` (`claude-opus-5-5`, medium) running since 2026-10-26
-15:20 CET, the `fz-small` slot free; dispatch records are the first
-comment of today on each issue, handoff texts in the session
-scratchpad (`worker-105.txt`, `worker-109.txt`):
+Nothing running as of 2026-10-28 16:55 CET. Every ticket dispatched
+since 2026-10-26 is Done and in the log (FZ-49, FZ-50, FZ-45, FZ-53,
+FZ-51 on 2026-10-26 and 27; FZ-56, FZ-55, FZ-61 on 2026-10-28).
 
-- **#105 FZ-49: Done**, merged `0db0d32` 16:38 CET, worktree swept
-  (record in the log, "Merged on 2026-10-26").
-- **#106 FZ-50: Done**, merged `4632ac5`, worktree swept (log).
-- **#109 FZ-53 (the `notes` view in pane 2): Ready to integrate
-  for his look** since 2026-10-27 about 11:50 CET. Review 1 (re-run)
-  changes requested on one coverage gap, fix cycle 1 by `fz-small`
-  (`App::sweep_landed` plus its test), review 2 accepted (diff
-  `ff52d4dbf4e9982a` plus `src/notes.rs`); committed `0afd18b` on
-  `feat/109-notes-view` (base `27d750c`), pushed, branch CI
-  40486822394 green, scratch merge onto `main` `468451d` clean with
-  fmt, clippy and 1362 tests. Records and the follow-ups (post-suspend
-  invalidations untested at the seam, the "reading…" flash under watch
-  mode, a symlink-loop fixture, a `panel_rects` test naming `Notes`,
-  the footer label) on the issue. **Next:** his look, then merge under
-  the rule, sweep, log. Try: `cargo run --release --manifest-path
-  .claude/worktrees/issue-109/Cargo.toml`, `]` to `notes`, `m`,
-  `Enter` on a file.
-- **#101 FZ-45: Done**, merged `7a2a020` on his "45 is great." (log,
-  "Merged on 2026-10-27"), worktree swept.
-- **#109 FZ-53: Done**, merged `1d4e8b0` on his "53 is great" after
-  a merge-resolution cycle (log, "Merged on 2026-10-27"); `main` CI
-  40525825654 green, worktree swept, board Done. The merge pattern
-  that worked, for FZ-55 and FZ-56 next: the worker runs one
-  `git merge --no-ff origin/main` in the ticket worktree, resolves
-  only the conflicts, stages, does not commit; the reviewer verifies
-  the merged result against `main` equals the accepted diff plus the
-  resolution hunks; the lead commits the merge, pushes, waits for CI,
-  scratch-merges onto current `main` again if it moved, merges.
-- **Next dispatch under the standing authority, in this order:**
-  FZ-56's separator guard (`fz-small`) and its merge cycle; FZ-55's
-  merge cycle; then FZ-57 (#113, small), FZ-60 (#116, the `changes`
-  view, filed 2026-10-28, conflicts by region with the notes
+- **Next dispatch when he resumes the order (his word needed after
+  the 2026-10-28 stop):** FZ-57 (#113, small), FZ-60 (#116, the
+  `changes` view, Ready, conflicts by region with the notes
   follow-ups in `app.rs`, `detail.rs`, `help.rs`, `main.rs`: share by
   symbol as the workflow allows), FZ-58 (#114), FZ-59 (#115,
-  `pulldown-cmark` approved by him 16:15), FZ-41 after #96. His
-  2026-10-28 words on FZ-60: "its a go only if we dont have any
-  other, more important tickets to complete first"; the lead placed
-  it after the merges and FZ-57, ahead of FZ-58 and FZ-59 (new
-  capability before polish), and he can move it. #96 waits
-  for his look ("not sure here"). Two lines on his yes: CLAUDE.md for
-  his two UI rules; `.claude/agents/fz-reviewer.md` for scratch
-  isolation.
-  Earlier record: Ready to integrate at `f0c130c`. Review 1 changes requested (a compact-view
-  click through stale list geometry, three coverage gaps, five
-  follow-ups), fix cycle 1 by the same worker, review 2 accepted
-  (diff `edb42fa676e641e7` plus `src/digest.rs` and
-  `src/ui/digest.rs`); committed `f0c130c` on `feat/101-slot-digest`
-  (base `4d9bce9`), pushed, branch CI 40492388449 green, scratch
-  merge onto `main` `22338ff` clean with 1387 tests. Rulings 1 to 8
-  and the look items on the issue (click selects a row; `--branches
-  --remotes` instead of the default branch; the look; the help rows).
-  **Conflicts with FZ-53** in `README.md`, `src/app.rs`,
-  `src/main.rs`, `src/ui/help.rs` (three-way probe): whichever he
-  approves first merges as is; the other gets a merge-resolution
-  cycle by its worker on the new `main`, a re-review of the resolved
-  regions and a fresh branch CI before it merges.
-- **#107 FZ-51: Done**, merged `579f28e` about 14:35 CET (record in
-  the log, "Merged on 2026-10-27"). Follow-up candidates on his yes:
-  a report-sized GraphQL query (check D5's cache contract first) and
-  skipping the 200-commit history read for print rows. His TUI runs
-  watch mode at `refresh_interval = 5` and re-fetches every remote
-  within seconds; told him.
-- **#112 FZ-56 (search by owner, organisation and contributor): In
-  progress, accepted and shipped on its branch** as `fb0c46b`
-  (base `9e73cee`, `feat/112-search-owner-contributor`, worktree
-  `issue-112` clean). Review accepted the diff (`af01c9337485ff21`)
-  with one required fix before merge: a free text of only separators
-  (`-`, `.`, `/`, `_`) matches every row (`person_score` with no
-  words); `fz-small` adds the `None` guard and a test, the reviewer
-  re-checks that hunk. Then: branch CI (ran on the push; check), a
-  scratch merge onto current `main` (it touches `app.rs` and
-  `detail.rs`, which FZ-53 and FZ-45 changed since its base: expect
-  a merge-resolution cycle like FZ-53's), Ready to integrate for his
-  look (the dimmed `owner`/`org`/`by` mark after the name). Known
-  follow-ups: the `/` hint in `ui/mod.rs` still says "fuzzy name";
-  the compact grid draws no mark; the 9 ms debug timing assertion may
-  flake under heavy load (ruling 4: then make it a measurement). **Incident at 15:15:** the first reviewer lost
-  its scratch copy when the session scratchpad was emptied (by an
-  agent's cleanup; every handoff text was in it, all recorded on the
-  issues) and wrote the worker's `app.rs` and `model.rs` into the
-  main checkout; the pre-merge `git status` guard caught it, the lead
-  restored `main` (`git restore`), confirmed the worktree unchanged
-  (`af01c9337485ff21`) and restarted the review with isolation rules
-  (one self-made scratch directory, never the main checkout, never
-  delete what it did not create). Lesson for every lead: `git status
-  --short` on the main checkout before every merge, and give
-  reviewers an explicit scratch directory of their own. Worth a line
-  in `.claude/agents/fz-reviewer.md` on his yes.
-- **#111 FZ-55 (scroll margin on every list, reveal on expand):
-  Ready to integrate for his look, but needs a merge cycle first.**
-  His "lets keep 4" (15:40) settled the margin; the finish and the
-  whole ticket were reviewed and accepted (`b926726` plus `84be091`
-  on `feat/111-scroll-margin`, worktree `issue-111` clean, branch CI
-  40525478334). A scratch merge onto `main` after FZ-53 **conflicts
-  in `src/ui/detail.rs`** (its tests module; both tickets appended
-  tests there): a merge-resolution cycle like FZ-53's (worker merges
-  `main` into the branch, resolves only the conflict, reviewer checks
-  the hunk, fresh CI) before his look and the merge. Earlier record:
-  filed 11:45 on his "port if needed, or just implement this" and
-  "the jizt of it all is the scroll_padding" (a notez port,
-  `Gaurgle/notez` `d32a412`). P2, M3. Base `b799c49`. Finding: pane 2 already had a
-  margin (`app::SCROLLOFF = 4`); pane 1's `scroll_padding` and
-  `reveal_offset` for `B` are done and tested. Raising `SCROLLOFF`
-  to 5 breaks 10 existing tests that pin the 4-row offsets (listed
-  on the issue with the new values). **His decision asked:** keep 4
-  (recommended, one constant, no test edits) or go to 5 and approve
-  the 10 edits. Then the worker finishes (resume it or a fresh
-  `fz-worker` with the issue), review, commit, push, CI, Ready to
-  integrate for his look. Follow-up for his look: pane 1's fresh
-  `ListState` scrolls on every step going up (notez's feel needs a
-  persisted offset).
+  `pulldown-cmark` approved by him 2026-10-27 16:15), FZ-41 after
+  #96. His words on FZ-60: "its a go only if we dont have any other,
+  more important tickets to complete first"; the lead placed it after
+  FZ-57 and ahead of FZ-58 and FZ-59 (new capability before polish),
+  and he can move it. #96 waits for his look ("not sure here"). Two
+  lines on his yes: CLAUDE.md for his two UI rules;
+  `.claude/agents/fz-reviewer.md` for scratch isolation (the
+  2026-10-27 incident, in the log).
+- **The merge-cycle pattern that worked three times (FZ-53, FZ-56,
+  FZ-55):** the worker runs one `git merge --no-ff --no-commit
+  origin/main` in the ticket worktree, resolves only the conflicts,
+  stages, does not commit; the reviewer verifies the merged result
+  against `main` equals the accepted diff plus the resolution hunks
+  (`git merge-file --diff3` to redo it is a good check); the lead
+  commits the merge, pushes, waits for CI, repeats if `main` moved
+  (an automatic re-merge with no hand edits needs no second reviewer,
+  only the lead's line-for-line comparison and checks). When the
+  conflict lands in production code (FZ-56: FZ-45 had rewritten the
+  function), the lead rules on the resolution and widens the scope;
+  a missing-field build break in another file (`authors` in a test
+  literal) is a blocker answered, not a fix cycle.
+- **Known follow-ups not ticketed:** the `/` hint in `ui/mod.rs`
+  says "fuzzy name"; the compact grid draws no search mark; the 9 ms
+  debug timing assertion may flake under load (ruling: then make it a
+  measurement); pane 1's fresh `ListState` scrolls on every step
+  going up (notez's feel needs a persisted offset); the footer
+  `j/k` label in `notes`; the "reading…" flash under watch mode.
 
 Earlier record (2026-10-22, both merged since or waiting on his look,
 see the items below): two workers running since 13:30 (both slots;

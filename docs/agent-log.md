@@ -289,6 +289,78 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-10-28
+
+Clock note: the issue comments of this session between the first
+dispatch and the merges carry stamps up to an hour ahead of the clock
+(a "17:50" review record was posted at 16:26 CET). Commit dates are
+authoritative.
+
+- **#112 (FZ-56), search by owner, organisation and contributor.**
+  Merged `3353adc` at 16:30 CET on his "112: is great!"; ticket
+  commit `fb0c46b` (base `9e73cee`, branch
+  `feat/112-search-owner-contributor`, worker `fz-worker`
+  `claude-opus-5-5` medium, reviewer `fz-reviewer` `claude-opus-5-5`)
+  and the merge-in `3d7cea8`. The ticket was accepted on 2026-10-27
+  (diff `af01c9337485ff21`) with one required fix; this session ran
+  the fix and the merge of `main` `ebdff46` as one cycle. Two
+  blockers, both real and answered by rulings on the issue: FZ-45 had
+  rewritten `render_repo_list` to draw from `App::list_rows` and
+  moved the row into `pub fn repo_row_spans`, so the search mark
+  became a parameter of that function (the digest's two callers pass
+  `None`); and FZ-45's `digest::tests::repo` literal lacked the
+  `authors` field this ticket adds. Guard: `person_score` returns
+  `None` for a text with no words (a query of only separators had
+  matched every row), test
+  `a_separator_only_query_matches_no_owner_or_author`. Review of the
+  staged merge (tree `a62e682`, diff `4eb7cac0645c4499`) accepted:
+  file-by-file equal to the accepted diff plus exactly the expected
+  additions, mutation check on the guard, 1444 tests. Branch CI
+  40715723892, `main` CI 40716836301 green. His look asked what `by`
+  means: FZ-61 (#117) renames the mark `author`. Known follow-ups
+  unchanged: the `/` hint in `ui/mod.rs` says "fuzzy name"; the
+  compact grid draws no mark; the 9 ms debug timing assertion may
+  flake under load.
+  FZ-56: review accepted (merge cycle, after changes 1 on 2026-10-27); fix cycles 1; owner decisions 2; worker 11; review 3; usage worker 59k, reviewer 34k tokens
+
+- **#111 (FZ-55), scroll margin on every list and reveal on expand.**
+  Merged `9643cd8` at 16:50 CET on his "111: scroll margin feels is
+  great."; ticket commits `b926726` and `84be091` (base `b799c49`,
+  branch `feat/111-scroll-margin`, accepted 2026-10-27, `SCROLLOFF`
+  kept at 4 on his "lets keep 4") and the merge-ins `38b6b68` and
+  `12b4930`. First merge of `main` `ebdff46`: one conflict in the
+  `detail.rs` tests module, resolved by the worker keeping the FZ-55
+  tests then the FZ-53 tests; reviewer redid the merge with `git
+  merge-file --diff3` and got a byte-identical file, accepted (tree
+  `a6d6e02`, diff `36dc3dced3648ce1`, 1440 tests), branch CI
+  40714562594. Second merge after FZ-56 landed was automatic (no
+  hand edits); the lead verified the changed lines against `main`
+  identical to the accepted diff and ran fmt, clippy and 1457 tests,
+  no second review; branch CI 40717281451, `main` CI 40717824061
+  green. Follow-up from his look, not ticketed: pane 1's fresh
+  `ListState` scrolls on every step going up (notez's feel needs a
+  persisted offset).
+  FZ-55: review accepted first (merge cycle); fix cycles 0; owner decisions 2; worker 5; review 2; usage worker 35k, reviewer 27k tokens
+
+- **#117 (FZ-61), the contributor search mark reads `author`, not
+  `by`.** Merged `30a9883` at 16:45 CET; ticket commit `4ed3940`
+  (base `9643cd8`, branch `fix/117-author-mark`, worker `fz-small`
+  `claude-opus-5-5` medium, reviewer `fz-reviewer` `claude-opus-5-5`).
+  Filed from his look at FZ-56 ("'by' is a bit unclear"), the word
+  his ("author it is", over `commit by`, which would misname a PR
+  author hit). Three one-line hunks: the constant, the mark test's
+  expected string, the README `/` row. Review accepted first (diff
+  `d7eaf16643ba`): the test still pins the mark's position, the
+  constant reverted makes it fail, `mark_w` is in the name budget so
+  the longer word shrinks the name rather than the row. Branch CI
+  40718674567 green. Lead's verification hit 25 failures in the
+  worktree (the mark test and every `report::` test) that were stale
+  artifacts in the shared `target-117`: a clean `cargo clean -p
+  fleetz` run gave 1457 green, the same binary from a scratch copy
+  passed from every directory. Rule for leads under "Practical
+  notes" in the handoff. `main` CI 40719616971.
+  FZ-61: review accepted first; fix cycles 0; owner decisions 1; worker 2; review 2; usage small 25k, reviewer 27k tokens
+
 ### Merged on 2026-10-27
 
 Clock note: this lead's stamps again ran ahead of the wall clock
