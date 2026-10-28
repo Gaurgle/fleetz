@@ -364,7 +364,7 @@ impl MatchField {
             MatchField::Name => None,
             MatchField::Owner => Some("owner"),
             MatchField::Org => Some("org"),
-            MatchField::Author => Some("by"),
+            MatchField::Author => Some("author"),
         }
     }
 }
