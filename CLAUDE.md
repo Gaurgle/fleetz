@@ -62,7 +62,7 @@ and blink, watch mode re-sweeps on an interval.
 | `scripts/relay-status` | The Relay status block: version, lead and baton, `main` and CI, worktrees, next step |
 | `scripts/relay-check` | Reports Relay template drift; the coordinator runs it on start |
 | `scripts/relay-sweep` | Removes merged, clean ticket worktrees once `main` CI is green |
-| `docs/performance-baseline.md` | Measured startup, idle, refresh and input baseline, with fixtures and commands to rerun |
+| `docs/performance-baseline.md` | Measured startup, idle, refresh and input baseline, with fixtures and commands to rerun, and the print mode comparison against bash repoz |
 | `docs/repository-identity-design.md` | Accepted design: remote and checkout identity, collision scenarios, ordered tickets FZ-05a to f |
 | `docs/cache-invalidation-design.md` | Accepted design: what the sweep's `WorkKey` misses, the ref-content signature, fix tickets FIX-A to E |
 | `docs/freshness-contract.md` | Accepted contract for GitHub data freshness: attempt, outcome, data time, header states, and the FZ-10 amendments |

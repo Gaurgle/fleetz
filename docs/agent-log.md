@@ -289,6 +289,109 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-10-27
+
+Clock note: this lead's stamps again ran ahead of the wall clock
+(the FZ-51 merge was written "about 14:35" and happened before
+13:05 CET; the FZ-45 fix cycle 2 ruling "14:00" was before 13:00).
+Commit dates are authoritative.
+
+- **#109 (FZ-53), the `notes` view in pane 2.** Merged `1d4e8b0` at
+  about 16:30 CET on his "53 is great"; ticket commits `0afd18b` and
+  the merge-in `6cb7b1d` (base `27d750c`, branch `feat/109-notes-view`,
+  worker `fz-worker` `claude-opus-5-5` medium, fix cycle `fz-small`
+  `sonnet` medium, a second `fz-worker` for the merge resolution,
+  reviewer `fz-reviewer` `claude-opus-5-5` medium, three passes). A
+  seventh view: `notez/` and `.notez/` directories at any depth as a
+  tree, `m` widens to every markdown file, the inspector reads the
+  highlighted file (256 KiB cap, binaries refused), `Enter` opens it
+  in `$EDITOR`; one walk of the selected repo on demand, off the UI
+  thread, gated on the view and the dwell, re-walked when a sweep
+  lands (`App::sweep_landed`) or a suspend returns; no index. Seven
+  existing tests that encoded `ci` as the last view were edited on his
+  word ("ok on the tests", 2026-10-26); the lead's earlier ruling that
+  the standing exception covered them was wrong and withdrawn on the
+  issue. Review 1 changes requested (the `SweepDone` invalidation had
+  no test at the seam), review 2 accepted; the merge with `main` after
+  FZ-45 resolved four files (help `Enter` row `lazygit; note; digest
+  repo`), reviewed and accepted (merged result equals the accepted
+  change plus the two allowed rows). Follow-ups filed on his look:
+  FZ-57 (#113) name the modes, FZ-58 (#114) tree browser, FZ-59
+  (#115) rendered markdown with `pulldown-cmark`; open from reviews:
+  the footer `j/k` label, the "reading…" flash under watch mode, the
+  post-suspend invalidations untested at the seam. Branch CI
+  40524975494 green, scratch merge onto `main` `103883d` 1427 tests,
+  `main` CI 40525825654.
+  FZ-53: review changes 1; fix cycles 1 plus a merge cycle; owner decisions 2; worker 15 plus 9; review 9 plus 2 plus 5; small 3; usage worker 192k plus 68k, review 102k plus 45k, small 27k tokens
+
+- **#93 (FZ-30e), `l`/`a`/`x`/`O` on the highlighted CI run.** Merged
+  `cb72465` at about 15:55 CET on his "#93: i trust you here" (the
+  look waived); ticket commit `1e9ccde` (branch `feat/93-ci-handoffs`
+  over the merge-in `f300b0a`; worker and reviewer records from
+  2026-10-21 and 2026-10-22 on the issue: rework accepted at diff
+  `3da63a19`, six mutations caught; his look of 2026-10-22 on help,
+  footer and `O`). `l` opens and focuses the inspector on the run's
+  `log` body (completed runs only), the `gh run view` builder is gone,
+  `LOG_TRUNCATED` points at the run's page (one existing-test string
+  edit, ruled in on the issue); `a` and `x` take the terminal over for
+  `gh run rerun`/`cancel` (a background variant is a follow-up
+  candidate). Branch CI 39774103522 (2026-10-22) green; fresh scratch
+  merge onto `main` `ffcf0a6` clean, 1413 tests; `main` CI
+  40523459762 green. Worktree swept.
+  FZ-30e: review changes 1 (the 2026-10-21 rework); fix cycles 1; owner decisions 1; worker and review minutes on the issue; usage not read
+
+- **#101 (FZ-45), the slot digest on pane 1 section headers.** Merged
+  `7a2a020` at about 15:20 CET on his "45 is great." (his second
+  look); ticket commits `f0c130c`, `2cb7cfc`, `63d7762` (base
+  `4d9bce9`, branch `feat/101-slot-digest`, worker `fz-worker`
+  `claude-opus-5-5` medium through three fix cycles, reviewer
+  `fz-reviewer` `claude-opus-5-5` medium, four passes). Headers are
+  cursor stops (`App::list_rows`, one list for drawing, keys, click
+  and hover); the digest in pane 2 with a totals line and one line
+  per touched repo in pane 1's row grammar (`detail::repo_row_spans`
+  shared with pane 1); `git log --since` per touched repo per
+  (cutoff, head, refs) off the UI thread (`commits_since`, no `%b`);
+  `t` cycles slot, today, yesterday, week; `Enter` jumps; the
+  inspector two-lane or stacked, facts never scroll, lists end with
+  the shared `… and N more`; hover lands after a 300 ms dwell. Review
+  1: a compact-view click through stale list geometry plus three
+  coverage gaps and five follow-ups; review 3 (after his first look
+  changed the rows and the inspector): many PRs squeezed out the CI
+  line and the commit list; reviews 2 and 4 accepted. Rulings on the
+  issue: `--branches --remotes` instead of the spec's default branch;
+  a click now selects a row; the spec's fold question answered
+  "digest only". Open for his later looks: no top-of-list indicator;
+  what to drop at tiny inspector heights; `J`/`K` and hover edge
+  cases on the issue. Branch CI 40516357710, `main` CI 40520984376
+  green, 1397 tests. Conflicts with FZ-53's branch, which now needs a
+  resolution cycle.
+  FZ-45: review changes 2; fix cycles 3; owner decisions 2; worker 48; review 46; usage worker 416k, review 374k tokens
+
+- **#107 (FZ-51), measure print mode against bash repoz.** Merged
+  `579f28e` at about 13:05 CET; ticket commit `626a680` (base
+  `4d9bce9`, branch `chore/107-measure-print-mode`, worker
+  `fz-worker` `claude-opus-5-5` medium in the measurement role, fix
+  cycles `fz-small` `sonnet` medium twice, reviewer `fz-reviewer`
+  `claude-opus-5-5` medium, three passes). Docs only: a new section
+  in `docs/performance-baseline.md` and one CLAUDE.md index row.
+  Interleaved pairs on his real fleet (12 rows, Apple M2 8 GB): print
+  mode wins the default window (median 22.5 s against bash 31.4 s)
+  and `-d` (0.64 s against 5.1 s), loses an empty window (8.7 s
+  against 7.1 s) because the full TUI GraphQL query (130 KB, 6 to 9
+  s) gates everything local, and runs the 200-commit `log --numstat`
+  for rows the report never draws; the "fetches due" condition could
+  not be held while his TUI re-fetched in watch mode at
+  `refresh_interval = 5`. Review 1 changes requested (one wrong range,
+  rerun commands that failed as written and would have silently
+  disabled the build-contamination gate, six minor figures); review 2
+  found the new guard itself passed a dead monitor under bash 3.2;
+  review 3 accepted. Every number in the result table recomputed from
+  the raw data by the reviewer. Follow-up candidates on his yes: a
+  report-sized query (check D5's cache contract first) and skipping
+  the history read for print rows. `docs` workflow green on the branch
+  (40501468084) and on `main` (40501563882); `ci` skipped for prose.
+  FZ-51: review changes 2; fix cycles 2; owner decisions 0; worker 96; review 13; small 2; usage worker 162k, review 93k, small 41k tokens
+
 ### Merged on 2026-10-26
 
 Clock note: this lead's issue and chat stamps ran up to 70 minutes
