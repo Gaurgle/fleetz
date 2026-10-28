@@ -1480,6 +1480,34 @@ pub async fn commits(
     parse_commit_output(&stdout)
 }
 
+/// Commits committed since `since` on every local and remote-tracking
+/// branch, newest first: what the slot digest counts (FZ-45). Run after the
+/// sweep's fetch, so the remote-tracking refs carry what was pushed; local
+/// branches add what was committed here and not pushed yet. No stat and no
+/// body: the digest names subjects, authors and times only, and the reads
+/// are held for the session. No cap either, so the count never undercounts.
+/// Empty on any failure.
+pub async fn commits_since(repo_path: &Path, since: DateTime<chrono::Utc>) -> Vec<Commit> {
+    let since = format!("--since={}", since.format("%Y-%m-%d %H:%M:%S +0000"));
+    let output = run_git(
+        repo_path,
+        &[
+            "log",
+            // The trailing separator keeps the record's newline out of the
+            // subject, where `%b` used to take it.
+            "--format=%x1e%h%x1f%aN%x1f%at%x1f%s%x1f",
+            &since,
+            "--branches",
+            "--remotes",
+        ],
+    )
+    .await;
+    match output {
+        Some(o) if o.status.success() => parse_commit_output(&String::from_utf8_lossy(&o.stdout)),
+        _ => Vec::new(),
+    }
+}
+
 /// Parse the record-separated git log output (see `commits`). Each record is
 /// `hash US author US date US subject US body-and-maybe-shortstat`.
 fn parse_commit_output(output: &str) -> Vec<Commit> {
@@ -3489,6 +3517,51 @@ mod real_repo_tests {
             .status()
             .expect("spawn");
         assert!(status.success(), "command failed: {args:?}");
+    }
+
+    /// FZ-45: the digest counts commits since the cutoff on the local and
+    /// the remote-tracking branches, and none from before it.
+    #[tokio::test]
+    async fn commits_since_reads_branches_and_remotes_after_the_cutoff() {
+        let dir = empty_repo("since");
+        std::fs::write(dir.join("a.txt"), "old\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh_at(
+            &dir,
+            "2026-10-20T10:00:00Z",
+            &["git", "commit", "-qm", "before"],
+        );
+        std::fs::write(dir.join("a.txt"), "new\n").unwrap();
+        sh_at(
+            &dir,
+            "2026-10-27T10:00:00Z",
+            &["git", "commit", "-qam", "on main"],
+        );
+        // A remote-tracking ref ahead of every local branch: what a fetch of
+        // someone else's push leaves behind.
+        sh(&dir, &["git", "checkout", "-qb", "side"]);
+        std::fs::write(dir.join("b.txt"), "b\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh_at(
+            &dir,
+            "2026-10-27T11:00:00Z",
+            &["git", "commit", "-qm", "pushed elsewhere", "-m", "a body"],
+        );
+        sh(
+            &dir,
+            &["git", "update-ref", "refs/remotes/origin/side", "HEAD"],
+        );
+        sh(&dir, &["git", "checkout", "-q", "main"]);
+        sh(&dir, &["git", "branch", "-qD", "side"]);
+
+        let cutoff = DateTime::parse_from_rfc3339("2026-10-27T09:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let read = commits_since(&dir, cutoff).await;
+        let got: Vec<&str> = read.iter().map(|c| c.message.as_str()).collect();
+        assert_eq!(got, vec!["pushed elsewhere", "on main"]);
+        assert!(read.iter().all(|c| c.body.is_empty()), "no bodies are held");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A bare `git init` with nothing in it, which is where the three repos

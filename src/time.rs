@@ -133,7 +133,18 @@ impl TimeWindow {
 
 /// Resolve "auto" mode: return the cutoff for the previous time slot boundary.
 pub fn auto_cutoff(work_start: u8, work_end: u8) -> (DateTime<Utc>, String) {
-    let now = Local::now();
+    slot_cutoff_at(Local::now(), work_start, work_end)
+}
+
+/// The deterministic core of `auto_cutoff`, evaluated at `now`. The one
+/// place a slot boundary is derived: the time window and the slot digest
+/// (`digest::DigestWindow`) both read it, so they cannot disagree on where
+/// the slot began.
+pub fn slot_cutoff_at(
+    now: DateTime<Local>,
+    work_start: u8,
+    work_end: u8,
+) -> (DateTime<Utc>, String) {
     let today = now.date_naive();
     let hour = now.hour();
     let slot = TimeSlot::from_hour(hour, work_start, work_end);

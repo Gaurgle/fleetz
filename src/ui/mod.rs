@@ -5,6 +5,7 @@ pub mod colors;
 pub mod compact;
 pub mod contributions;
 pub mod detail;
+pub mod digest;
 pub mod footer;
 pub mod grips;
 pub mod help;

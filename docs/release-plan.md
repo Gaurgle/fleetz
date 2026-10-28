@@ -270,10 +270,12 @@ was agreed 2026-10-26, filed in Backlog under M4 at P2, not dispatched.
 Design in [ideas.md](ideas.md), "Repo notes in pane 2".
 
 FZ-55 (#111, scroll margin on every list and reveal on expand, a notez
-port) and FZ-56 (#112, search by owner, organisation and contributor)
-were filed 2026-10-27 on Andreas's word, Backlog or Ready under M3 at
-P2; FZ-55 is built to a decision point (keep pane 2's margin at 4 or
-go to 5), FZ-56 is not dispatched.
+port), FZ-56 (#112, search by owner, organisation and contributor),
+and the three follow-ups from his look at FZ-53 (FZ-57 #113 the notes
+view names its modes, FZ-58 #114 a notez-style tree browser, FZ-59
+#115 rendered markdown, which waits on his dependency decision) were
+filed 2026-10-27 on Andreas's word under M3 at P2. His "keep 4" settled
+FZ-55's margin.
 
 ## Completion rule
 
