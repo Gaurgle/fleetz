@@ -60,7 +60,10 @@ workflow alongside the Relay workers and reviewer.
    `git worktree add -b fix/fz-02-preserve-github-state .claude/worktrees/fz-02 <base>`.
    Write the allowed files to `<worktree>/.claude/relay-scope` (format in
    `scripts/relay-scope`); the guard hook enforces it on every write. To
-   change a scope later, `rm` the file and write it again.
+   change a scope later, `rm` the file and write it again. For a
+   merge-resolution cycle, list the ticket's allowed files plus the
+   conflicted files; the script then judges the staged tree against
+   `MERGE_HEAD` by itself.
 2. Fill the worker template from `docs/agent-workflow.md` and dispatch
    `fz-worker` (or `fz-small` for a truly small task). Pass the ticket, base,
    branch, absolute worktree path and allowed files, not this conversation.

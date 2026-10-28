@@ -1,4 +1,4 @@
-<!-- relay-template: 0.7.0; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
+<!-- relay-template: 0.7.1; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
 <!-- relay-board: owner=Gaurgle project=1 prefix=FZ -->
 # Agent workflow for the release effort
 
@@ -257,7 +257,12 @@ escalate with the evidence.
    Claude-side guard hook refuses writes outside it, and
    `scripts/relay-scope <worktree> <base>` reports out-of-scope and guarded
    files (dependencies, lockfiles, CI) plus a diff id before the reviewer is
-   dispatched. A Codex lead runs the script; the hook is Claude only.
+   dispatched. A Codex lead runs the script; the hook is Claude only. For a
+   merge-resolution cycle (the worker merges `main` into the ticket branch,
+   resolves conflicts, stages and does not commit) the scope file lists the
+   ticket's allowed files plus the conflicted files, and
+   `scripts/relay-scope` judges the staged tree against `MERGE_HEAD` on its
+   own.
 3. Include the planning documents in the worker checkout if they are not yet
    committed; they do not automatically appear in a worktree from an older base.
 4. Shared event/model contracts are decided before parallel implementation.
