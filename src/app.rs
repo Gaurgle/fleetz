@@ -586,12 +586,13 @@ pub const BLINK_TICKS: usize = 5;
 /// Rows of context the detail pane keeps past its cursor at either edge.
 ///
 /// The cursor walks freely through the middle of the pane and parks this far
-/// from the edge, from where the text scrolls under it instead. Four is what
-/// vim's `scrolloff` and less's default both settle near: enough to see where
-/// you are going, little enough that the cursor still travels.
+/// from the edge, from where the text scrolls under it instead, as vim's
+/// `scrolloff`: enough to see where you are going, little enough that the
+/// cursor still travels. Four, shared by pane 1 and pane 2 (FZ-55).
 ///
-/// Applied in every history view, not only the graph. The margin collapses at
-/// the ends of the content, where there is nothing left to keep in reserve.
+/// Applied in every history view, not only the graph, and as pane 1's
+/// `List::scroll_padding`. The margin collapses at the ends of the content,
+/// where there is nothing left to keep in reserve.
 pub const SCROLLOFF: u16 = 4;
 
 /// The scrolloff margin for a pane of `height` rows: never more than half of
@@ -2282,6 +2283,10 @@ pub struct App {
     /// about how you want `info` to read, not a fact about one repo. Resets on
     /// launch, like the pane sizes.
     pub expand_remote_branches: bool,
+    /// `expand_remote_branches` as the detail pane last drew it, so the frame
+    /// that sees it flip on is the one that reveals the opened rows (FZ-55).
+    /// A `Cell` because the renderer records it, as `detail_view_height`.
+    pub remotes_drawn_expanded: std::cell::Cell<bool>,
     /// Screen column the in-progress contribution-strip pan is measured from,
     /// or None when no drag is underway. Separate from `dragging`, which owns
     /// pane resizing: a pan moves content inside a pane rather than moving
@@ -2815,6 +2820,7 @@ impl App {
             show_pr_detail: false,
             dragging: None,
             expand_remote_branches: false,
+            remotes_drawn_expanded: std::cell::Cell::new(false),
             contrib_drag: None,
             loading: false,
             sweep_started: None,

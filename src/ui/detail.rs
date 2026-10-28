@@ -234,7 +234,9 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     // A fresh ListState each frame is fine -- ratatui's List recomputes the
     // scroll offset from `.select()` on every render, so the selected row is
     // always brought into view without needing to persist offset ourselves.
-    let list = List::new(items);
+    // The padding keeps the pane 2 margin past the cursor, shrunk by ratatui
+    // in a short pane as `scrolloff_for` shrinks it (FZ-55).
+    let list = List::new(items).scroll_padding(usize::from(crate::app::SCROLLOFF));
     let mut state = ListState::default();
     state.select(selected_display_idx);
     frame.render_stateful_widget(list, rows[2], &mut state);
@@ -849,6 +851,9 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // out. Starts at the identity header and grows to take the local branches
     // in; every view that draws no branches keeps the header's own count.
     let mut pinned_rows = header_rows;
+    // The first line and line count of `info`'s remote-only names, when `B`
+    // has them expanded, for the reveal below (FZ-55).
+    let mut expanded_remotes: Option<(usize, usize)> = None;
 
     // Branches. Info lists worktrees in a section of their own; the branches
     // view still draws each inline under the branch it has checked out.
@@ -906,6 +911,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         // place; the `branches` view lists them all with their state.
         if !repo.remote_only_branches.is_empty() {
             if app.expand_remote_branches {
+                expanded_remotes = Some((lines.len(), repo.remote_only_branches.len()));
                 for name in &repo.remote_only_branches {
                     lines.push(Line::from(vec![
                         Span::styled(format!("  {name}"), Style::default().fg(colors::OVERLAY)),
@@ -1322,6 +1328,25 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         scroll = scroll.min(max_scroll);
         app.set_detail_scroll(scroll);
         app.follow_selection.set(false);
+    }
+
+    // Reveal on expand: on the frame `B` opens the remote-only names, scroll
+    // just far enough to show them (`scroll::reveal_offset`). Only the frame
+    // the flag flips, so scrolling back up afterwards is left alone, and only
+    // when the expand opened rows in the scrolling body.
+    let opened = app.expand_remote_branches && !app.remotes_drawn_expanded.get();
+    app.remotes_drawn_expanded.set(app.expand_remote_branches);
+    if opened && let Some((first, count)) = expanded_remotes {
+        let first = first.saturating_sub(shed);
+        let row = |range: std::ops::Range<usize>| -> u16 {
+            let rows: usize = lines[range].iter().map(|l| line_rows(l, area.width)).sum();
+            rows.min(u16::MAX as usize) as u16
+        };
+        let folder = row(0..first);
+        let rows = row(first..first + count);
+        scroll =
+            crate::ui::scroll::reveal_offset(rows, folder, scroll, area.height).min(max_scroll);
+        app.set_detail_scroll(scroll);
     }
 
     // The graph's cursor is a row, so the wash goes on after the block layout
@@ -7104,6 +7129,336 @@ mod tests {
         assert_eq!((off_hash.entry, off_hash.hash), (Some(2), None));
 
         assert_eq!(hits.at(12, 7), None, "below the last line");
+    }
+
+    // --- FZ-55: a scroll margin on every list, reveal on expand ---
+
+    /// Pane 1 drawn `height` rows tall: the `visible_repos` index of each repo
+    /// row on screen, top to bottom, and the index of the selected one.
+    fn drawn_repo_window(app: &crate::app::App, height: u16) -> (Vec<usize>, usize) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let names: Vec<String> = app
+            .visible_repos()
+            .iter()
+            .map(|(_, r)| format!(" {} ", r.name))
+            .collect();
+        let mut term = Terminal::new(TestBackend::new(60, height)).unwrap();
+        term.draw(|f| render_repo_list(f, f.area(), app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let drawn = (0..height)
+            .filter_map(|y| {
+                let row: String = (0..60u16).map(|x| buf[(x, y)].symbol()).collect();
+                names.iter().position(|n| row.contains(n.as_str()))
+            })
+            .collect();
+        let selected = format!(" {} ", app.selected_repo().expect("a selection").name);
+        let selected = names.iter().position(|n| *n == selected).expect("listed");
+        (drawn, selected)
+    }
+
+    /// Walks pane 1 down to the last repo and back, checking the drawn
+    /// window after every step: `margin` rows stay past the cursor on the
+    /// side it heads for, fewer only where the list itself runs out.
+    fn walk_repo_list(height: u16, margin: usize) {
+        let repos = (0..40)
+            .map(|i| repo(&format!("list-{i:02}"), RepoKind::Public, None))
+            .collect();
+        let mut app = crate::app::App::new(repos, "t".to_string(), 60, height);
+        let last = app.visible_repos().len() - 1;
+        let mut parked = false;
+        let check = |app: &crate::app::App, down: bool, parked: &mut bool| {
+            let (drawn, selected) = drawn_repo_window(app, height);
+            let pos = drawn
+                .iter()
+                .position(|&i| i == selected)
+                .expect("on screen");
+            let (above, below) = (pos, drawn.len() - 1 - pos);
+            if down {
+                assert!(
+                    below >= margin.min(last - selected),
+                    "cursor {selected} has {below} rows below it: {drawn:?}"
+                );
+                *parked |= drawn[0] > 0 && below == margin;
+            } else {
+                assert!(
+                    above >= margin.min(selected),
+                    "cursor {selected} has {above} rows above it: {drawn:?}"
+                );
+            }
+        };
+        for _ in 0..last {
+            app.move_down();
+            check(&app, true, &mut parked);
+        }
+        assert!(parked, "the list never scrolled with the margin held");
+        for _ in 0..last {
+            app.move_up();
+            check(&app, false, &mut parked);
+        }
+    }
+
+    /// Twenty rows less the border and the filter strip: sixteen list rows,
+    /// room for the full margin pane 2 keeps.
+    #[test]
+    fn the_repo_list_keeps_the_shared_margin_past_the_cursor() {
+        assert_eq!(crate::app::scrolloff_for(16), crate::app::SCROLLOFF);
+        walk_repo_list(20, usize::from(crate::app::SCROLLOFF));
+    }
+
+    /// Eight list rows cannot hold the full margin on each side of the
+    /// cursor, so it shrinks to (8 - 1) / 2 = 3 rather than pinning it.
+    #[test]
+    fn a_short_repo_list_shrinks_the_margin() {
+        assert_eq!(crate::app::scrolloff_for(8), 3);
+        walk_repo_list(12, 3);
+    }
+
+    /// A repo whose commits, reflog and local branches each run to `n`
+    /// one-row entries, so every one of those views overflows the pane.
+    fn long_lists_repo(n: usize) -> RepoStatus {
+        let mut r = busy_repo();
+        r.graph = (0..n)
+            .map(|i| crate::model::GraphLine {
+                lanes: vec![crate::graph::commit_cell()],
+                hash: format!("h{i:06}"),
+                is_merge: false,
+                refs: vec![],
+                author: "Gaurgle".to_string(),
+                message: format!("subject {i}"),
+            })
+            .collect();
+        r.reflog = (0..n)
+            .map(|i| crate::model::ReflogEntry {
+                hash: format!("h{i:06}"),
+                action: "commit".to_string(),
+                description: format!("subject {i}"),
+            })
+            .collect();
+        r.branches = (0..n)
+            .map(|i| crate::model::BranchStatus {
+                name: format!("branch-{i:02}"),
+                upstream: Some(format!("origin/branch-{i:02}")),
+                behind: 0,
+                ahead: 0,
+                is_head: i == 0,
+                tip: String::new(),
+            })
+            .collect();
+        r
+    }
+
+    /// Draws pane 2 `height` rows tall and returns the cursor's rows of
+    /// margin above and below it on screen, and the rows of content past it
+    /// either way, as the renderer measured them.
+    fn detail_cursor_margins(app: &crate::app::App, height: u16) -> (u16, u16, u16, u16) {
+        let body = draw_detail(app, height);
+        let top = app.detail_row_tops.borrow()[app.detail_selected()];
+        let pos = top - app.detail_scroll();
+        let content = app.detail_max_scroll.get() + body;
+        (pos, body - 1 - pos, top, content - 1 - top)
+    }
+
+    /// Draws pane 2 `height` rows tall and returns its scrolling body's
+    /// height, as the renderer measured it.
+    fn draw_detail(app: &crate::app::App, height: u16) -> u16 {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut term = Terminal::new(TestBackend::new(96, height)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), app)).unwrap();
+        app.detail_view_height.get()
+    }
+
+    /// Steps pane 2's cursor down `steps` entries and back with `j` and `k`,
+    /// checking the margin after every draw.
+    fn walk_detail(view: HistoryView, height: u16, steps: usize) {
+        let mut app = crate::app::App::new(vec![long_lists_repo(80)], "t".to_string(), 96, 40);
+        app.history_view = view;
+        app.focused_panel = crate::app::FocusedPanel::Detail;
+        let margin = crate::app::scrolloff_for(draw_detail(&app, height));
+        let mut parked = false;
+        for _ in 0..steps {
+            app.detail_nav_down();
+            let (_, below, _, past) = detail_cursor_margins(&app, height);
+            assert!(below >= margin.min(past), "{view:?}: {below} rows below");
+            parked |= app.detail_scroll() > 0 && below == margin;
+        }
+        assert!(parked, "{view:?}: never scrolled with the margin held");
+        for _ in 0..steps {
+            app.detail_nav_up();
+            let (above, _, before, _) = detail_cursor_margins(&app, height);
+            assert!(above >= margin.min(before), "{view:?}: {above} rows above");
+        }
+    }
+
+    /// `commits`, the longest list, through the cursor-follow path `j` and
+    /// `k` take: the full `SCROLLOFF` past the cursor in a tall pane, the
+    /// shrunken margin in a short one.
+    #[test]
+    fn the_commit_list_keeps_the_shared_margin_past_the_cursor() {
+        let mut app = crate::app::App::new(vec![long_lists_repo(80)], "t".to_string(), 96, 40);
+        app.history_view = HistoryView::Commits;
+        let tall = draw_detail(&app, 24);
+        assert_eq!(
+            crate::app::scrolloff_for(tall),
+            crate::app::SCROLLOFF,
+            "the pane is too short for the full margin: body {tall}"
+        );
+        walk_detail(HistoryView::Commits, 24, 60);
+
+        let short = draw_detail(&app, 10);
+        assert!(
+            crate::app::scrolloff_for(short) < crate::app::SCROLLOFF,
+            "body {short}"
+        );
+        walk_detail(HistoryView::Commits, 10, 60);
+    }
+
+    /// One margin for every view the cursor walks: each parks its cursor the
+    /// same `scrolloff_for` rows off the bottom, so a change to that function
+    /// moves all of them.
+    #[test]
+    fn every_history_view_parks_its_cursor_on_the_shared_margin() {
+        for view in [
+            HistoryView::Commits,
+            HistoryView::Reflog,
+            HistoryView::Branches,
+        ] {
+            let mut app = crate::app::App::new(vec![long_lists_repo(80)], "t".to_string(), 96, 40);
+            app.history_view = view;
+            app.focused_panel = crate::app::FocusedPanel::Detail;
+            draw_detail(&app, 24);
+            for _ in 0..40 {
+                app.detail_nav_down();
+                draw_detail(&app, 24);
+            }
+            let (_, below, _, _) = detail_cursor_margins(&app, 24);
+            let body = app.detail_view_height.get();
+            assert_eq!(below, crate::app::scrolloff_for(body), "{view:?}");
+            walk_detail(view, 24, 50);
+        }
+    }
+
+    /// Draws `info` `height` rows tall and returns the screen text.
+    fn info_text(app: &crate::app::App, height: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut term = Terminal::new(TestBackend::new(92, height)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..92u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Short enough that the branches block scrolls with the body (nine
+    /// rows, a margin of four), so the remote-only summary sits low in it
+    /// and the names `B` opens run past the bottom edge.
+    const REVEAL_HEIGHT: u16 = 18;
+
+    /// The body row, counted from the pane's top edge, holding `needle`.
+    fn text_row_of(text: &str, needle: &str) -> Option<usize> {
+        text.lines().position(|l| l.contains(needle))
+    }
+
+    /// `B` on a remotes list that overflows the pane scrolls it into view:
+    /// five names open one row past the bottom edge, and the reveal brings
+    /// the last onto the bottom row.
+    #[test]
+    fn expanding_the_remotes_reveals_the_rows_it_opened() {
+        let mut r = spread_repo();
+        r.remote_only_branches.truncate(5);
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), 92, 40);
+        app.history_view = HistoryView::Info;
+        let before = info_text(&app, REVEAL_HEIGHT);
+        assert!(before.contains("5 remote branches not fetched"), "{before}");
+        assert_eq!(app.detail_scroll(), 0);
+
+        app.expand_remote_branches = true;
+        let after = info_text(&app, REVEAL_HEIGHT);
+        assert_eq!(app.detail_scroll(), 1, "the pane did not move:\n{after}");
+        // The last text row sits above the bottom border.
+        assert_eq!(
+            text_row_of(&after, "spare-4 "),
+            Some(usize::from(REVEAL_HEIGHT) - 2),
+            "the last opened row is not on the bottom row:\n{after}"
+        );
+        assert!(after.contains("spare-0 "), "{after}");
+    }
+
+    /// Twelve names cannot all show in a nine-row body, so the reveal stops
+    /// with the first of them on the top margin rather than scrolling it off.
+    #[test]
+    fn a_reveal_taller_than_the_pane_stops_at_the_top_margin() {
+        let mut app = crate::app::App::new(vec![spread_repo()], "t".to_string(), 92, 40);
+        app.history_view = HistoryView::Info;
+        info_text(&app, REVEAL_HEIGHT);
+        app.expand_remote_branches = true;
+        let after = info_text(&app, REVEAL_HEIGHT);
+        assert!(app.detail_scroll() > 0, "the pane did not move:\n{after}");
+        let body_top = usize::from(REVEAL_HEIGHT - app.detail_view_height.get() - 1);
+        let margin = usize::from(crate::app::scrolloff_for(app.detail_view_height.get()));
+        assert_eq!(
+            text_row_of(&after, "spare-0 "),
+            Some(body_top + margin),
+            "the expanded row is not on the top margin:\n{after}"
+        );
+    }
+
+    /// Without the reveal the names open below the fold, which is the bug:
+    /// the same draw with the expand already recorded leaves the offset at 0.
+    /// Also covers "only on the frame it flips": scrolling back up after the
+    /// reveal is left alone.
+    #[test]
+    fn the_reveal_fires_once_per_expand() {
+        let mut app = crate::app::App::new(vec![spread_repo()], "t".to_string(), 92, 40);
+        app.history_view = HistoryView::Info;
+        info_text(&app, REVEAL_HEIGHT);
+        app.expand_remote_branches = true;
+        info_text(&app, REVEAL_HEIGHT);
+        assert!(app.detail_scroll() > 0);
+
+        app.set_detail_scroll(0);
+        let text = info_text(&app, REVEAL_HEIGHT);
+        assert_eq!(app.detail_scroll(), 0, "the reveal ran again:\n{text}");
+
+        // Collapsing never scrolls, and expanding again reveals again.
+        app.expand_remote_branches = false;
+        info_text(&app, REVEAL_HEIGHT);
+        assert_eq!(app.detail_scroll(), 0);
+        app.expand_remote_branches = true;
+        info_text(&app, REVEAL_HEIGHT);
+        assert!(app.detail_scroll() > 0, "a second expand did not reveal");
+    }
+
+    /// An expand that opens no rows (no remote-only branches, or a view that
+    /// does not draw them) leaves the pane where it was.
+    #[test]
+    fn an_expand_that_opens_nothing_does_not_scroll() {
+        let mut r = spread_repo();
+        r.remote_only_branches.clear();
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), 92, 40);
+        app.history_view = HistoryView::Info;
+        info_text(&app, REVEAL_HEIGHT);
+        app.expand_remote_branches = true;
+        info_text(&app, REVEAL_HEIGHT);
+        assert_eq!(app.detail_scroll(), 0);
+
+        // `B` pressed in `commits`, then back to `info`: nothing opened on
+        // the frame it flipped, so nothing is revealed later.
+        let mut app = crate::app::App::new(vec![spread_repo()], "t".to_string(), 92, 40);
+        app.history_view = HistoryView::Commits;
+        info_text(&app, REVEAL_HEIGHT);
+        app.expand_remote_branches = true;
+        info_text(&app, REVEAL_HEIGHT);
+        app.history_view = HistoryView::Info;
+        app.set_detail_scroll(0);
+        info_text(&app, REVEAL_HEIGHT);
+        assert_eq!(app.detail_scroll(), 0);
     }
 
     // --- The `notes` view (FZ-53) ---
