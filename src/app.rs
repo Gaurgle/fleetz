@@ -279,7 +279,8 @@ fn set_filter(filters: &mut QuickFilters, kind: FilterKind) {
 /// A search-bar query split into its three parts.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParsedQuery {
-    /// The free-text portion, fuzzy-matched against repo names.
+    /// The free-text portion, matched against repo names, owners and
+    /// authors (`text_match`).
     pub text: String,
     /// Quick filters activated by `#tag` words.
     pub filters: QuickFilters,
@@ -330,6 +331,101 @@ pub fn parse_query(query: &str) -> ParsedQuery {
 
     parsed.text = text_words.join(" ");
     parsed
+}
+
+/// Which field of a row a free-text search matched (FZ-56), declared in
+/// rank order: a name hit outranks an owner or organisation hit, which
+/// outranks a contributor hit, whatever the fuzzy scores say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchField {
+    Name,
+    Owner,
+    /// The owner, when GitHub reports it as an organisation.
+    Org,
+    /// An author of the row's loaded commits, or of one of its open PRs.
+    Author,
+}
+
+impl MatchField {
+    /// The rank tier: lower sorts first. Owner and organisation share one,
+    /// being the same login.
+    fn tier(self) -> u8 {
+        match self {
+            MatchField::Name => 0,
+            MatchField::Owner | MatchField::Org => 1,
+            MatchField::Author => 2,
+        }
+    }
+
+    /// The dimmed word the ranked list draws after a non-name hit, so a
+    /// match on a person does not read as a mistaken name match.
+    pub fn mark(self) -> Option<&'static str> {
+        match self {
+            MatchField::Name => None,
+            MatchField::Owner => Some("owner"),
+            MatchField::Org => Some("org"),
+            MatchField::Author => Some("by"),
+        }
+    }
+}
+
+/// Score `text` against an owner or author string, or None when it does
+/// not match.
+///
+/// Stricter than the name match: every query word must start a word of the
+/// field (`roos` and `and ro` find "Andreas Roos", `dr` does not). A loose
+/// subsequence made nearly any two letters match a full name, so a short
+/// name query listed every row its author ever touched. Word order is free,
+/// so the phrase and the words one by one find the same rows; the fuzzy
+/// score then orders the hits, phrase first.
+fn person_score(text: &str, field: &str) -> Option<i32> {
+    fn words(s: &str) -> impl Iterator<Item = &str> {
+        s.split(|c: char| matches!(c, '-' | '_' | '.' | '/') || c.is_whitespace())
+            .filter(|w| !w.is_empty())
+    }
+    let field_lower = field.to_lowercase();
+    let text_lower = text.to_lowercase();
+    let field_words: Vec<&str> = words(&field_lower).collect();
+    let text_words: Vec<&str> = words(&text_lower).collect();
+    // Separators alone give no words, and zero words would match anyone.
+    if text_words.is_empty() {
+        return None;
+    }
+    let mut by_word = 0;
+    for word in text_words {
+        if !field_words.iter().any(|w| w.starts_with(word)) {
+            return None;
+        }
+        by_word += crate::fuzzy::score(word, field).unwrap_or(0);
+    }
+    Some(crate::fuzzy::score(text, field).unwrap_or(by_word))
+}
+
+/// How a row answers a free-text query: the best field it matched and that
+/// field's score, or None when it matched nothing. The name is tried first
+/// and wins outright, so a name search ranks exactly as it did before
+/// owners and authors were searched.
+pub fn text_match(text: &str, repo: &RepoStatus) -> Option<(MatchField, i32)> {
+    if let Some(score) = crate::fuzzy::score(text, &repo.name) {
+        return Some((MatchField::Name, score));
+    }
+    if let Some(owner) = repo.owner_display()
+        && let Some(score) = person_score(text, &owner)
+    {
+        let field = if repo.repo_kind == crate::model::RepoKind::Org {
+            MatchField::Org
+        } else {
+            MatchField::Owner
+        };
+        return Some((field, score));
+    }
+    repo.commit_authors()
+        .iter()
+        .map(String::as_str)
+        .chain(repo.prs.iter().map(|pr| pr.author.as_str()))
+        .filter_map(|author| person_score(text, author))
+        .max()
+        .map(|score| (MatchField::Author, score))
 }
 
 /// Step a percentage by `delta` resize steps, clamped to `[min, max]`.
@@ -3745,7 +3841,7 @@ impl App {
         let active_group = self.active_group.and_then(|i| self.group_names.get(i));
         let parsed = parse_query(&self.search_query);
 
-        let mut visible: Vec<(usize, &RepoStatus, i32)> = self
+        let mut visible: Vec<(usize, &RepoStatus, (MatchField, i32))> = self
             .repos
             .iter()
             .enumerate()
@@ -3760,9 +3856,9 @@ impl App {
                 if !parsed.filters.matches(r) {
                     return None;
                 }
-                // Fuzzy search: None means the name isn't a match at all.
-                let score = crate::fuzzy::score(&parsed.text, &r.name)?;
-                Some((i, r, score))
+                // Name, owner or author: None means no field matched.
+                let hit = text_match(&parsed.text, r)?;
+                Some((i, r, hit))
             })
             .collect();
 
@@ -3778,7 +3874,9 @@ impl App {
             // first, so the top row is what Enter should act on. The repo list
             // drops its section headers to match (see `render_repo_list`);
             // both sides key off the same "is there text to rank by" test.
-            visible.sort_by_key(|(_, _, score)| std::cmp::Reverse(*score));
+            // The field's tier leads the key, so name hits stay on top in
+            // this one sort rather than a second pass over the drawn rows.
+            visible.sort_by_key(|(_, _, (field, score))| (field.tier(), std::cmp::Reverse(*score)));
         }
 
         visible.into_iter().map(|(i, r, _)| (i, r)).collect()
@@ -3789,6 +3887,19 @@ impl App {
     /// above and whether the repo list draws sections.
     pub fn has_text_query(&self) -> bool {
         !parse_query(&self.search_query).text.is_empty()
+    }
+
+    /// The field `repo` matched the free text on, when that is not its
+    /// name: what the ranked list marks after the name. None with no text
+    /// typed, on a name hit, or for a row the query does not match.
+    pub fn search_match_field(&self, repo: &RepoStatus) -> Option<MatchField> {
+        let text = parse_query(&self.search_query).text;
+        if text.is_empty() {
+            return None;
+        }
+        text_match(&text, repo)
+            .map(|(field, _)| field)
+            .filter(|field| *field != MatchField::Name)
     }
 
     /// Move the vertical divider between the repo list and the right column.
@@ -5186,6 +5297,7 @@ mod tests {
                 remote_branches: vec![],
                 work_key: None,
                 fetch: crate::model::FetchFacts::default(),
+                authors: Default::default(),
             })
             .collect();
         App::new(repos, "test".to_string(), 120, 40)
@@ -5853,6 +5965,232 @@ mod tests {
         app.search_query = "#dirty".to_string();
         assert!(!app.has_text_query());
         assert_eq!(app.visible_repos().len(), 2);
+    }
+
+    /// A commit by `author`, for the FZ-56 search fixtures.
+    fn commit_by(hash: &str, author: &str) -> crate::model::Commit {
+        let mut c = commit(hash);
+        c.author = author.to_string();
+        c
+    }
+
+    /// FZ-56's four rows: one name prefix, two owners, one organisation and
+    /// one local-only clone with an author nobody else has.
+    fn people_app() -> App {
+        use crate::model::RepoKind;
+        let mut app = make_app(4);
+        let r = &mut app.repos[0];
+        r.name = "tools".to_string();
+        r.owner = Some("Gaurgle".to_string());
+        r.repo_kind = RepoKind::Public;
+        r.commits = vec![
+            commit_by("a1", "Andreas Roos"),
+            commit_by("a2", "Andreas Roos"),
+        ];
+        let r = &mut app.repos[1];
+        r.name = "tools-kestrel".to_string();
+        r.owner = Some("Gaurgle".to_string());
+        r.repo_kind = RepoKind::Private;
+        r.location = RepoLocation::NotCloned;
+        r.path = None;
+        let r = &mut app.repos[2];
+        r.name = "tools-web".to_string();
+        r.owner = Some("kestrel-labs".to_string());
+        r.repo_kind = RepoKind::Org;
+        r.commits = vec![commit_by("b1", "Pia Holm")];
+        let r = &mut app.repos[3];
+        r.name = "tools-scratch".to_string();
+        r.location = RepoLocation::LocalOnly;
+        r.commits = vec![commit_by("c1", "Mira Lindqvist")];
+        app
+    }
+
+    fn names_for(app: &mut App, query: &str) -> Vec<String> {
+        app.search_query = query.to_string();
+        app.visible_repos()
+            .iter()
+            .map(|(_, r)| r.name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn an_owner_login_finds_the_owners_rows_and_not_the_organisations() {
+        let mut app = people_app();
+        let mut found = names_for(&mut app, "Gaurgle");
+        found.sort();
+        assert_eq!(found, vec!["tools", "tools-kestrel"]);
+    }
+
+    #[test]
+    fn an_organisation_name_finds_its_row() {
+        let mut app = people_app();
+        assert_eq!(names_for(&mut app, "kestrel-labs"), vec!["tools-web"]);
+    }
+
+    #[test]
+    fn a_contributor_finds_the_rows_whose_commits_carry_them() {
+        let mut app = people_app();
+        assert_eq!(names_for(&mut app, "Andreas Roos"), vec!["tools"]);
+        assert_eq!(names_for(&mut app, "Roos"), vec!["tools"]);
+        // Word by word as well as the phrase: the order typed does not matter.
+        assert_eq!(names_for(&mut app, "roos andreas"), vec!["tools"]);
+    }
+
+    #[test]
+    fn a_local_only_row_matches_on_its_authors() {
+        let mut app = people_app();
+        assert_eq!(names_for(&mut app, "Lindqvist"), vec!["tools-scratch"]);
+    }
+
+    #[test]
+    fn a_not_cloned_row_matches_on_its_owner_and_has_no_authors() {
+        let mut app = people_app();
+        app.repos.retain(|r| r.is_not_cloned());
+        assert_eq!(names_for(&mut app, "gaurgle"), vec!["tools-kestrel"]);
+        assert!(names_for(&mut app, "Roos").is_empty());
+    }
+
+    /// The tiers outrank the score: the organisation's login is a better
+    /// fuzzy hit for "kestrel" than `tools-kestrel` is, and still ranks
+    /// below it, since a name match is what a search usually means.
+    #[test]
+    fn a_name_match_ranks_above_an_owner_match() {
+        let mut app = people_app();
+        assert!(
+            crate::fuzzy::score("kestrel", "kestrel-labs")
+                > crate::fuzzy::score("kestrel", "tools-kestrel")
+        );
+        assert_eq!(
+            names_for(&mut app, "kestrel"),
+            vec!["tools-kestrel", "tools-web"]
+        );
+    }
+
+    /// All three tiers at once: name, then organisation, then contributor.
+    #[test]
+    fn an_owner_match_ranks_above_a_contributor_match() {
+        let mut app = people_app();
+        app.repos[3].commits = vec![commit_by("c2", "Kestrel Hansen")];
+        assert_eq!(
+            names_for(&mut app, "kestrel"),
+            vec!["tools-kestrel", "tools-web", "tools-scratch"]
+        );
+    }
+
+    /// Owners and authors match on word starts, not as loose subsequences:
+    /// a short name query would otherwise pull in every row a prolific
+    /// author touched ("dr" is in "Andreas"), burying the names it meant.
+    #[test]
+    fn an_owner_or_author_matches_on_word_starts_only() {
+        let mut app = people_app();
+        assert!(names_for(&mut app, "dr").is_empty());
+        assert!(names_for(&mut app, "urgle").is_empty());
+        assert_eq!(names_for(&mut app, "and ro"), vec!["tools"]);
+    }
+
+    /// A text of separators alone splits into no words, and zero words
+    /// must not match: "-" or "." against an owner or author matched every
+    /// row. A name that holds the separator still matches it as a name.
+    #[test]
+    fn a_separator_only_query_matches_no_owner_or_author() {
+        for text in ["-", ".", "/", "_", "- .", " "] {
+            assert_eq!(person_score(text, "Gaurgle"), None, "{text:?}");
+            assert_eq!(person_score(text, "Andreas Roos"), None, "{text:?}");
+        }
+        let mut app = people_app();
+        assert!(names_for(&mut app, ".").is_empty());
+        let mut found = names_for(&mut app, "-");
+        found.sort();
+        assert_eq!(found, vec!["tools-kestrel", "tools-scratch", "tools-web"]);
+    }
+
+    #[test]
+    fn a_pull_request_author_counts_as_a_contributor() {
+        let mut app = people_app();
+        app.repos[1].prs = vec![crate::model::PullRequest {
+            number: 7,
+            title: "fix".to_string(),
+            author: "octo-reviewer".to_string(),
+            created_at: chrono::Utc::now(),
+            review_status: crate::model::ReviewStatus::Unknown,
+            url: String::new(),
+        }];
+        assert_eq!(names_for(&mut app, "octo"), vec!["tools-kestrel"]);
+    }
+
+    #[test]
+    fn the_matched_field_is_reported_only_for_a_non_name_hit() {
+        let mut app = people_app();
+        let field = |app: &App, i: usize| app.search_match_field(&app.repos[i]);
+        assert_eq!(field(&app, 0), None, "nothing typed");
+        app.search_query = "kestrel".to_string();
+        assert_eq!(field(&app, 1), None, "a name hit needs no mark");
+        assert_eq!(field(&app, 2), Some(MatchField::Org));
+        app.search_query = "gaurgle".to_string();
+        assert_eq!(field(&app, 0), Some(MatchField::Owner));
+        app.search_query = "roos".to_string();
+        assert_eq!(field(&app, 0), Some(MatchField::Author));
+        assert_eq!(field(&app, 3), None, "not a match at all");
+    }
+
+    /// The author set is cached on the row, so it has to follow a sweep
+    /// that lands a new commit list rather than keep the old authors.
+    #[test]
+    fn a_sweep_landing_new_commits_refreshes_who_the_row_matches() {
+        let mut app = people_app();
+        assert_eq!(names_for(&mut app, "Lindqvist"), vec!["tools-scratch"]);
+        let mut fresh = app.repos[3].clone();
+        fresh.commits = vec![commit_by("c9", "Ola Berg")];
+        app.repos[3].apply_local_sweep(fresh);
+        assert!(names_for(&mut app, "Lindqvist").is_empty());
+        assert_eq!(names_for(&mut app, "Berg"), vec!["tools-scratch"]);
+    }
+
+    /// FZ-56's performance criterion: a 200-row fleet, every row with a
+    /// 200-commit history, filters in well under the input-to-paint budget
+    /// in `docs/performance-baseline.md` (median about 4 to 6 ms for a whole
+    /// keypress frame). The bound here is that budget's p90, 9 ms, for the
+    /// filter alone in a debug build, a deliberately loose ceiling: the
+    /// release measurement is in the FZ-56 report. The first query builds
+    /// the author sets; the timed ones reuse them.
+    #[test]
+    fn a_two_hundred_row_fleet_filters_within_the_input_budget() {
+        let mut app = make_app(200);
+        for (i, r) in app.repos.iter_mut().enumerate() {
+            r.owner = Some(format!("owner-{}", i % 7));
+            r.commits = (0..200)
+                .map(|n| {
+                    commit_by(
+                        &format!("{i}-{n}"),
+                        ["Andreas Roos", "Pia Holm", "Ola Berg"][n % 3],
+                    )
+                })
+                .collect();
+        }
+        names_for(&mut app, "warm");
+        let first = app.repos[0].commit_authors().as_ptr();
+        let started = std::time::Instant::now();
+        for query in ["repo-1", "owner-3", "holm", "nothing at all"] {
+            names_for(&mut app, query);
+        }
+        let per_query = started.elapsed() / 4;
+        assert_eq!(
+            app.repos[0].commit_authors().as_ptr(),
+            first,
+            "the author set is built once, not per keystroke"
+        );
+        assert!(
+            per_query < std::time::Duration::from_millis(9),
+            "filtering took {per_query:?} per query"
+        );
+    }
+
+    /// Tag filters still narrow an owner search, as they narrow a name one.
+    #[test]
+    fn tag_filters_combine_with_an_owner_query() {
+        let mut app = people_app();
+        app.repos[0].dirty = 1;
+        assert_eq!(names_for(&mut app, "Gaurgle #dirty"), vec!["tools"]);
     }
 
     fn settings() -> SettingsOverlay {

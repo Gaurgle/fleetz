@@ -368,6 +368,7 @@ pub(crate) mod tests {
             remote_branches: vec![],
             work_key: None,
             fetch: crate::model::FetchFacts::default(),
+            authors: Default::default(),
         }
     }
 
