@@ -14,7 +14,22 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Released** 2026-10-27 15:58 CET by `claude-fable-5-1`
+**Held** since 2026-10-28 16:04 CET by `claude-fable-5-1` (`claude
+--agent fz-coordinator`, session `2883bc20-7992-4566-8140-9e302e7b1d25`)
+on his "yes, lets go" to filing the changes view. Previous lead had
+released cleanly (nothing running, everything pushed), confirmed
+from the files and `git worktree list`. Done this stretch: the
+`changes` view designed with him (read-only; upstream as the default
+base with a default-branch toggle; named `changes`), written to
+`docs/ideas.md` "Changed files in pane 2", filed as **FZ-60 (#116)**,
+Ready, P2, M4. **Not dispatched:** his words were "its a go only if
+we dont have any other, more important tickets to complete first",
+so it takes its turn in the order under "Next step" (after the FZ-56
+and FZ-55 merge cycles and FZ-57) unless he moves it. Nothing is
+running: no worker, no reviewer, no build. The standing dispatch
+authority of 2026-10-27 11:05 still holds.
+
+Previous record: **Released** 2026-10-27 15:58 CET by `claude-fable-5-1`
 (session `c47a5217-1276-4a26-b7a2-bceecc3c81fb`) on his "wait for
 reviewers, then we can close session for today? if hand over is
 complete and all is shipped". Held 14:35 to 15:58 (second stretch of
@@ -488,8 +503,15 @@ scratchpad (`worker-105.txt`, `worker-109.txt`):
   scratch-merges onto current `main` again if it moved, merges.
 - **Next dispatch under the standing authority, in this order:**
   FZ-56's separator guard (`fz-small`) and its merge cycle; FZ-55's
-  merge cycle; then FZ-57 (#113, small), FZ-58 (#114), FZ-59 (#115,
-  `pulldown-cmark` approved by him 16:15), FZ-41 after #96. #96 waits
+  merge cycle; then FZ-57 (#113, small), FZ-60 (#116, the `changes`
+  view, filed 2026-10-28, conflicts by region with the notes
+  follow-ups in `app.rs`, `detail.rs`, `help.rs`, `main.rs`: share by
+  symbol as the workflow allows), FZ-58 (#114), FZ-59 (#115,
+  `pulldown-cmark` approved by him 16:15), FZ-41 after #96. His
+  2026-10-28 words on FZ-60: "its a go only if we dont have any
+  other, more important tickets to complete first"; the lead placed
+  it after the merges and FZ-57, ahead of FZ-58 and FZ-59 (new
+  capability before polish), and he can move it. #96 waits
   for his look ("not sure here"). Two lines on his yes: CLAUDE.md for
   his two UI rules; `.claude/agents/fz-reviewer.md` for scratch
   isolation.

@@ -2089,3 +2089,82 @@ text input; `N` could append a timestamped line), a has-notes mark in the repo
 list or `info`, and the personal store `~/notez/personal/<project>/` as an
 extra root found by one stat on the folder name. All left out of FZ-53 on
 2026-10-26.
+
+## Changed files in pane 2
+
+**Status: ticketed as FZ-60, not built.** Agreed with Andreas 2026-10-28.
+
+**Problem.** The repo list says a repo is dirty (`4!`) and ahead (`2↑`) and
+stops there. Which files those are, and whether the dirt is a forgotten
+scratch directory or half a feature, means leaving the dashboard for a shell
+and `git status`. The repo under the cursor is the one you want to know
+about.
+
+**Shape.** An eighth pane 2 view, `changes`, following the ruling under
+"Branches view": the fleetz equivalent of a lazygit panel is a pane 2 view,
+inheriting the header, scroll and selection arrays, tab strip and docked
+inspector. It lists the files that have not left this machine, in two
+sections:
+
+```
+uncommitted (4)
+  M  src/app.rs           +12  -3
+  M  src/git.rs            +4  -4
+  A  docs/foo.md          +40  -0    staged
+  ?? scratch/
+unpushed (2 ahead of origin/main)
+  M  src/ui/detail.rs     +88 -12
+  D  src/old.rs
+```
+
+`uncommitted` is `git status --porcelain` with its two status columns kept
+(staged versus unstaged, `??` for untracked) and `git diff --numstat` churn
+beside each tracked file; untracked directories stay collapsed as porcelain
+reports them, so a forgotten `target/` costs one line. `unpushed` is `git
+diff --name-status --numstat @{u}..HEAD`, the files touched by the commits
+the `ahead` counter counts. A branch with no upstream says so in one line
+and draws no `unpushed` section: it never pretends every commit is
+unpushed. Detached HEAD likewise.
+
+**Base toggle.** One key in the view swaps the base of the second section
+from the upstream to the repo's default branch (`git::default_branch`,
+`origin/HEAD` with the main/master fallback) and renames the section `on
+branch vs main (N)`: the branch's whole divergence, pushed or not, which on
+a feature branch is the PR's file list. Default is the upstream, decided
+2026-10-28: the question the dirty and ahead counters raise is "what has
+not left this machine", and the toggle answers the other one in place, the
+way `m` widens the notes tree.
+
+**Inspector.** The highlighted file's diff: `git diff HEAD -- <path>` for
+the uncommitted section (staged and unstaged in one), `git diff <base>..HEAD
+-- <path>` for the other, added and removed lines in the green and red the
+churn column already owns. An untracked file shows its body under
+`notes::BODY_CAP`. `Enter` suspends to `$EDITOR` on the file as the notes
+view does; `y` copies the repo-relative path.
+
+**On demand, as notes.** The reads run only while the view is on screen for
+the highlighted repo, after the `ci` dwell, off the UI thread, landing as an
+`AppEvent`; held per repo for the session; re-read when a sweep lands or a
+suspend returns. Never fleet-wide, never ahead of time. The sweep already
+runs `status --porcelain` per repo (`dirty_count`, `dirty_paths`) and
+throws the paths away; carrying them on `RepoStatus` would paint the first
+section without a dwell. Left for later, on purpose: the on-demand pattern is
+the established one and keeps the sweep untouched, and the dwell is the same
+one `ci` and `notes` live with.
+
+**Read-only.** No staging, no commit, no discard. Decided 2026-10-28: fleetz
+is what you sit in, lazygit is what you commit from, and write actions are
+where a dashboard starts needing confirmations and an undo.
+
+**Rejected: "differs from main" as the default.** On a feature branch that
+list includes everything already pushed and reviewed, which is not what a
+dirty counter is asking about. Kept as the toggle.
+
+**Rejected: a fleet-wide changed-files index.** Every porcelain path for
+every repo, every sweep, to answer a per-repo question; the sweep's count is
+enough for the list and the view answers the rest on demand.
+
+**Deferred.** Linked worktrees as further sections (the Worktrees section of
+`info` counts their dirt but this view lists the main checkout only in v1);
+the porcelain paths carried from the sweep to skip the dwell; the file list
+in `-d` print mode.
