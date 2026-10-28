@@ -453,6 +453,7 @@ fn bare_row(name: String, path: Option<String>, location: RepoLocation) -> RepoS
         daily_key: None,
         work_key: None,
         fetch: crate::model::FetchFacts::default(),
+        authors: Default::default(),
     }
 }
 

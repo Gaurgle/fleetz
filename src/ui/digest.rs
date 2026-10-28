@@ -212,6 +212,7 @@ pub fn line_spans(
         columns.row,
         dim_pending,
         not_in_last_poll,
+        None,
     );
     let mut room = width.saturating_sub(width_of(&spans));
     let mut slot = |spans: &mut Vec<Span<'static>>, text: String, w: usize, color: Color| {
@@ -708,7 +709,7 @@ mod tests {
     /// The pane 1 row the digest line opens with, at the digest's width.
     fn pane1_row(r: &crate::model::RepoStatus, selected: bool, cols: Columns) -> String {
         text(&crate::ui::detail::repo_row_spans(
-            r, selected, cols.row, false, false,
+            r, selected, cols.row, false, false, None,
         ))
     }
 

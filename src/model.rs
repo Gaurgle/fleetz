@@ -304,6 +304,7 @@ impl FetchFacts {
 /// - **Load** (discovery and `assemble_view`, which rebuild the whole list):
 ///   everything else, including `owner`, which comes from GitHub data but is
 ///   only ever set at load.
+/// - **Derived** (no writer): `authors`, rebuilt from `commits` on read.
 ///
 /// Background results land on the row as it is when they arrive, so a slow
 /// writer never restores another writer's fields from an older snapshot.
@@ -376,6 +377,38 @@ pub struct RepoStatus {
     /// Whether the remote refs behind `behind` and `ahead` are current: the
     /// fetch facts for this checkout.
     pub fetch: FetchFacts,
+    /// The distinct authors of `commits`, for the `/` search (FZ-56).
+    /// Derived, never written by a source: built on first read and dropped
+    /// by `apply_local_sweep` when a new commit list lands, so a keystroke
+    /// does not walk 200 commits per row. In memory only.
+    pub authors: AuthorSet,
+}
+
+/// The distinct authors of a row's commit list, filled on first read.
+///
+/// Lazy rather than computed where the commits are built, so the rows
+/// assembled at load (`main.rs`) need no code of their own: they start
+/// empty-unfilled and the first search fills them. A `OnceLock` so the row
+/// stays `Sync`.
+#[derive(Debug, Clone, Default)]
+pub struct AuthorSet(std::sync::OnceLock<Vec<String>>);
+
+impl AuthorSet {
+    /// The distinct authors of `commits`, sorted, computed once.
+    fn get_or_build(&self, commits: &[Commit]) -> &[String] {
+        self.0.get_or_init(|| {
+            let mut authors: Vec<String> = commits
+                .iter()
+                .map(|c| c.author.as_str())
+                .filter(|a| !a.is_empty())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+            authors.shrink_to_fit();
+            authors
+        })
+    }
 }
 
 /// The inputs a local contribution histogram (`RepoStatus::daily`) depends
@@ -735,6 +768,12 @@ impl RepoStatus {
         owner_from_remote_url(self.remote_url.as_deref()?)
     }
 
+    /// The distinct authors of the loaded commit list, cached on the row
+    /// (see `authors`). Empty for a row with no commits, a not-cloned one.
+    pub fn commit_authors(&self) -> &[String] {
+        self.authors.get_or_build(&self.commits)
+    }
+
     /// Write a GitHub poll's answer for this repo: the GitHub-owned fields
     /// and nothing else (see `RepoStatus` for the split).
     ///
@@ -817,7 +856,11 @@ impl RepoStatus {
             // Fetch-owned: written only when a fetch lands
             // (`FetchFacts::record`). The sweep's copy is the snapshot's.
             fetch: _,
+            // Derived from `commits`: reset below so the next read rebuilds
+            // it from the list that just landed.
+            authors: _,
         } = fresh;
+        self.authors = AuthorSet::default();
         self.branches = branches;
         self.commits = commits;
         self.behind = behind;
@@ -1233,7 +1276,36 @@ mod tests {
             remote_branches: vec![],
             work_key: None,
             fetch: FetchFacts::default(),
+            authors: Default::default(),
         }
+    }
+
+    /// FZ-56: the cached author set is the distinct, non-empty authors.
+    #[test]
+    fn commit_authors_are_distinct_and_skip_empty_names() {
+        let mut r = make_repo("r", 0, 0, 0);
+        assert!(r.commit_authors().is_empty(), "no commits, no authors");
+        let mut r2 = make_repo("r", 0, 0, 0);
+        r2.commits = ["Pia Holm", "", "Andreas Roos", "Pia Holm"]
+            .into_iter()
+            .map(|author| Commit {
+                hash: String::new(),
+                message: String::new(),
+                body: String::new(),
+                author: author.to_string(),
+                date: None,
+                insertions: 0,
+                deletions: 0,
+                files: vec![],
+            })
+            .collect();
+        assert_eq!(r2.commit_authors(), ["Andreas Roos", "Pia Holm"]);
+        r.apply_local_sweep(r2);
+        assert_eq!(
+            r.commit_authors(),
+            ["Andreas Roos", "Pia Holm"],
+            "rebuilt after a sweep"
+        );
     }
 
     #[test]

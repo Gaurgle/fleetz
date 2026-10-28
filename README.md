@@ -270,7 +270,7 @@ pane's keys lose theirs, then the pane's keys go, and the summary goes last.
 | `t` | Time window: pick how far back to show activity (slot / hours / days / weeks / months / years). On a section header it cycles the digest's window instead: slot / today / yesterday / week |
 | `g` | Cycle group filter |
 | `G` | Show all (clear group) |
-| `/` | Fuzzy-search repos by name (best match first, `flz` finds `fleetz`), or type `#dirty` `#behind` `#ahead` `#ci` `#prs` `#stash` to filter |
+| `/` | Fuzzy-search repos by name (best match first, `flz` finds `fleetz`), owner or organisation login, or commit author (`Gaurgle`, `Andreas Roos`, or just `Roos`). Name hits rank first, then owner, then author; a non-name hit is marked `owner`, `org` or `by` after the repo name. Owners and authors match on word starts. Type `#dirty` `#behind` `#ahead` `#ci` `#prs` `#stash` to filter |
 | `0` | Clear `#tag` filters (keeps free-text search) |
 | `,` | Settings overlay: refresh interval, startup view, work hours, pane persistence, contributions strip and its cell size, icon set (`nerd` or `plain`), loading screen. `Enter` saves to `config.toml` |
 | `<` / `>` | Narrow / widen the repo list |
