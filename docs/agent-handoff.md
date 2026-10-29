@@ -509,7 +509,24 @@ and `issue-117` were swept today after green `main` CI.
 
 ## In flight
 
-Nothing running as of 2026-10-28 16:55 CET. Every ticket dispatched
+- **#115 FZ-59: worker running** since 2026-10-29 13:50 CET on his
+  look at FZ-62 ("syntax highlighting and/or formatting tho, must be
+  fixed, and togglable as in 'notez'"): `fz-worker` claude-opus-5-5
+  medium, base `ff730c4`, branch `feat/115-markdown-reader`,
+  worktree `.claude/worktrees/issue-115`, scope in its
+  `.claude/relay-scope` (includes `Cargo.toml`/`Cargo.lock` for
+  `pulldown-cmark`, approved 2026-10-27 16:15). Rulings on the issue
+  (dispatch comment). Board: In progress. Next: scope check (the
+  lockfile will show as guarded: approved), diff id here, reviewer.
+  **Open with Andreas:** syntax highlighting of fenced code and
+  source files, as notez does it with tree-sitter (eleven crates:
+  `tree-sitter`, `tree-sitter-highlight` and nine grammars) or not
+  at all; a dependency decision, then a ticket on his yes.
+- **#118 FZ-62: Done**, merged `ff730c4` 13:40 CET on "looks
+  great.", `main` CI 40871002149 green, worktree swept 14:05 (record
+  in the log, "Merged on 2026-10-29").
+
+Earlier: nothing was running as of 2026-10-28 16:55 CET. Every ticket dispatched
 since 2026-10-26 is Done and in the log (FZ-49, FZ-50, FZ-45, FZ-53,
 FZ-51 on 2026-10-26 and 27; FZ-56, FZ-55, FZ-61 on 2026-10-28).
 

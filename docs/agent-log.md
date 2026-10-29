@@ -289,6 +289,47 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-10-29
+
+- **#118 (FZ-62), the notes view reads in pane 2, with a metadata
+  card under pane 1.** Merged `ff730c4` at 13:40 CET on his "looks
+  great."; ticket commit `a4e4468` (base `73a25a5`, branch
+  `feat/118-notes-reader`, worker `fz-worker` `claude-opus-5-5`
+  medium, reviewer `fz-reviewer` `claude-opus-5-5` medium). Filed
+  the same morning from his proposal (the inspector too short to read
+  in; do what `graph` does; the card as wide as pane 1; a reader
+  stolen from notez; file kinds in the border), with FZ-63 (#119,
+  todoz boards) beside it, FZ-59 amended to render in the reader and
+  FZ-57 closed into this one. One blocker cycle before any edit, both
+  answered by ruling: `footer.rs` re-scoped for the `focus_hints`
+  arm, and `reader: None` in two `PanelRects` test literals under the
+  standing new-field exception; design (a), `PanelRects.reader` and
+  one `detail::split_notes_pane` for render and hit-testing. First
+  review (diff `a91b9a8d73ca`) needs change: the shift-scroll arm
+  for the reader sat behind the `inspector_is_expanded` arm (dead
+  unless the card was folded, pasted inside the graph comment by a
+  python-script edit the worker owned up to), focus could stay on a
+  reader no longer drawn when the cursor landed on a section header,
+  and the 30-column tree floor clipped the mode line's `)` below 150
+  columns. The lead added two of the reviewer's follow-ups as
+  required: the body must not wait on `git log` (an untracked file
+  walks the whole history), now `NoteRead` then `NoteCommit`; and
+  `--literal-pathspecs`. His 12:40 instruction rode in the same
+  round: tree focused, `j`/`k` files, `h`/`l` left for FZ-58's folds,
+  `J`/`K` scroll the reader a line and `H`/`L` a page without moving
+  focus. Re-review (diff `b5cfd28325ee`) accepted: four mutations
+  caught, a key-level probe passed; the second `footer.rs` arm ruled
+  under the 12:40 keys. Branch CI 40861298610 green; lead's
+  verification on the branch (`main` was the base) fmt, clippy, 1476
+  tests. `main` CI 40871002149. Look items he accepted: mode words
+  `notez` / `markdown`, `[3] file`, the glyphs, the 80-column wrap.
+  Follow-ups not ticketed: the help PgUp/PgDn row dropped
+  "inspector"; a git timeout reads as "untracked"; two re-sorts in a
+  row could leave focus on an undrawn reader. His word after the
+  look: markdown formatting and syntax highlighting, togglable as in
+  notez (FZ-59 next).
+  FZ-62: review changes 1; fix cycles 1; owner decisions 4; worker 32; review 11; usage worker 303045 tokens, reviewer 272583 tokens
+
 ### Merged on 2026-10-28
 
 Clock note: the issue comments of this session between the first
