@@ -173,11 +173,21 @@ pub enum AppEvent {
         result: Result<notes::Notes, String>,
     },
     /// The highlighted note's body and its metadata for the card, applied by
-    /// `App::apply_note_read` and `App::apply_note_facts`.
+    /// `App::apply_note_read` and `App::apply_note_facts`, and a markdown
+    /// body rendered at the read's `render_width` (FZ-59), applied by
+    /// `App::apply_note_rendered` in the same turn so the reader never
+    /// draws the source first.
     NoteRead {
         read: app::NoteRead,
         text: Result<String, String>,
         facts: notes::NoteFacts,
+        rendered: Option<app::RenderedNote>,
+    },
+    /// The held markdown body rendered again at a new reader width
+    /// (`App::claim_note_render`).
+    NoteRendered {
+        render: app::NoteRender,
+        rendered: app::RenderedNote,
     },
     /// git's last commit for that note (FZ-62), sent after the body so the
     /// reader never waits on git; applied by `App::apply_note_commit`.
@@ -1044,6 +1054,9 @@ async fn run_event_loop(
                 if let Some(read) = app.claim_note_read() {
                     spawn_note_read(&tx, read);
                 }
+                if let Some(render) = app.claim_note_render() {
+                    spawn_note_render(&tx, render);
+                }
                 app.settle_hover(instant);
                 for request in app.claim_digest_logs(now) {
                     spawn_digest_log(&tx, request);
@@ -1111,9 +1124,20 @@ async fn run_event_loop(
             AppEvent::Ci(answer) => app.apply_ci(*answer, chrono::Local::now()),
             AppEvent::CiDetail(answer) => app.apply_ci_detail(*answer, chrono::Local::now()),
             AppEvent::NotesWalked { walk, result } => app.apply_notes_walk(walk, result),
-            AppEvent::NoteRead { read, text, facts } => {
+            AppEvent::NoteRead {
+                read,
+                text,
+                facts,
+                rendered,
+            } => {
                 app.apply_note_facts(&read, facts);
+                if let Some(rendered) = rendered {
+                    app.apply_note_rendered(&read.path, read.generation, rendered);
+                }
                 app.apply_note_read(read, text);
+            }
+            AppEvent::NoteRendered { render, rendered } => {
+                app.apply_note_rendered(&render.path, render.generation, rendered);
             }
             AppEvent::NoteCommit { read, last } => app.apply_note_commit(&read, last),
             AppEvent::DigestLog { path, key, commits } => {
@@ -1717,6 +1741,9 @@ async fn handle_normal_input(
         // above scroll it a line through `scroll_next_panel`.
         KeyCode::Char('H') if app.reader_pages() => app.page_reader(-1),
         KeyCode::Char('L') if app.reader_pages() => app.page_reader(1),
+        // From the tree or the reader, `r` flips rendered markdown and its
+        // source (FZ-59); elsewhere it refreshes, below.
+        KeyCode::Char('r') if app.reader_pages() => app.toggle_reader_raw(),
         KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(1),
         KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(-1),
         // Must be matched before the plain `c` arm below, or ctrl-c switches
@@ -2989,23 +3016,32 @@ fn spawn_notes_walk(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, walk: app
 /// its metadata for the card (FZ-62), then its last commit from a bounded
 /// `git log`, "untracked" when git prints nothing. Two answers, body first:
 /// for a file git never saw it walks the whole history, and the reader
-/// shows the body without waiting for that.
+/// shows the body without waiting for that. A markdown body is rendered in
+/// the same blocking task at the read's `render_width` (FZ-59): a capped
+/// file costs more than a keypress frame.
 fn spawn_note_read(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, read: app::NoteRead) {
     let tx = tx.clone();
     tokio::spawn(async move {
         let path = read.path.clone();
+        let render_width = read.render_width;
         let read_both = tokio::task::spawn_blocking(move || {
-            (notes::read_body(&path), notes::file_facts(&path))
+            let text = notes::read_body(&path);
+            let rendered = match (&text, render_width) {
+                (Ok(body), Some(width)) => Some(render_note(body, width)),
+                _ => None,
+            };
+            (text, notes::file_facts(&path), rendered)
         })
         .await;
-        let (text, facts) = match read_both {
-            Ok((text, facts)) => (text, facts),
-            Err(e) => (Err(e.to_string()), notes::NoteFacts::default()),
+        let (text, facts, rendered) = match read_both {
+            Ok(answer) => answer,
+            Err(e) => (Err(e.to_string()), notes::NoteFacts::default(), None),
         };
         let _ = tx.send(AppEvent::NoteRead {
             read: read.clone(),
             text,
             facts,
+            rendered,
         });
         let rel = read.path.strip_prefix(&read.root).unwrap_or(&read.path);
         let rel = rel.to_string_lossy();
@@ -3026,6 +3062,44 @@ fn spawn_note_read(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, read: app:
                 notes::last_commit_from(&String::from_utf8_lossy(&out.stdout))
             });
         let _ = tx.send(AppEvent::NoteCommit { read, last });
+    });
+}
+
+/// `body` as the reader draws it rendered at `width` (FZ-59).
+/// A body `notes::read_body` cut at the cap ends in its marker line, which
+/// is not the note's markdown: it is rendered without it and drawn after
+/// it, plain, as the raw reader draws it, so an open fence or table cannot
+/// swallow it.
+fn render_note(body: &str, width: u16) -> app::RenderedNote {
+    let marker = format!("… cut at {} KiB", notes::BODY_CAP / 1024);
+    let suffix = format!("\n{marker}");
+    let (markdown, cut) = match body.strip_suffix(&suffix) {
+        Some(markdown) => (markdown, true),
+        None => (body, false),
+    };
+    let mut lines = ui::markdown::render_markdown(markdown, width);
+    if cut {
+        let plain = ratatui::style::Style::default().fg(ui::colors::TEXT);
+        lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+            marker, plain,
+        )));
+    }
+    app::RenderedNote { width, lines }
+}
+
+/// Render the held markdown body again at a new reader width, off the UI
+/// thread, and send it back (`App::claim_note_render`).
+fn spawn_note_render(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, render: app::NoteRender) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let rendered = tokio::task::spawn_blocking(move || {
+            let rendered = render_note(&render.text, render.width);
+            (render, rendered)
+        })
+        .await;
+        if let Ok((render, rendered)) = rendered {
+            let _ = tx.send(AppEvent::NoteRendered { render, rendered });
+        }
     });
 }
 
@@ -11788,7 +11862,12 @@ mod tests {
         (app::NoteRead, notes::LastCommit),
     > {
         match rx.recv().await {
-            Some(AppEvent::NoteRead { read, text, facts }) => Ok((read, text, facts)),
+            Some(AppEvent::NoteRead {
+                read,
+                text,
+                facts,
+                rendered: _,
+            }) => Ok((read, text, facts)),
             Some(AppEvent::NoteCommit { read, last }) => Err((read, last)),
             _ => panic!("not a note answer"),
         }
@@ -11819,6 +11898,7 @@ mod tests {
             path: repo.join(rel),
             root: repo.clone(),
             generation: 0,
+            render_width: None,
         };
         spawn_note_read(&tx, answer("notez/plan.md"));
         // A current-thread test runtime has not run the task yet: had the
@@ -11899,6 +11979,103 @@ mod tests {
             app.note_body.as_ref().and_then(|b| b.last_commit.clone()),
             Some(notes::LastCommit::Untracked)
         );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// FZ-59: a capped markdown file costs more to render than a keypress
+    /// frame (`docs/performance-baseline.md`), so it is rendered off the UI
+    /// thread: with the read, at the read's width, in the same answer as
+    /// the body, and again at a new width by `spawn_note_render`. Neither
+    /// call has sent anything when it returns.
+    #[tokio::test]
+    async fn markdown_renders_off_the_ui_thread_with_the_read_and_on_a_resize() {
+        let scratch = std::env::temp_dir().join("fleetz_test_note_render_seam");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("notez")).unwrap();
+        let path = scratch.join("notez/plan.md");
+        std::fs::write(&path, "# Plan\n\nship it\n").unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let read = app::NoteRead {
+            path: path.clone(),
+            root: scratch.clone(),
+            generation: 3,
+            render_width: Some(30),
+        };
+        spawn_note_read(&tx, read);
+        assert!(rx.try_recv().is_err(), "rendered on the calling thread");
+        let Some(AppEvent::NoteRead { text, rendered, .. }) = rx.recv().await else {
+            panic!("the body comes first");
+        };
+        let body = text.expect("read");
+        let rendered = rendered.expect("rendered with the read");
+        assert_eq!(rendered, render_note(&body, 30));
+        let first: String = rendered.lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(first, "Plan", "rendered, not the source");
+
+        let render = app::NoteRender {
+            path: path.clone(),
+            generation: 3,
+            width: 12,
+            text: body.clone(),
+        };
+        spawn_note_render(&tx, render.clone());
+        assert!(rx.try_recv().is_err(), "re-rendered on the calling thread");
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::NoteRendered {
+                    render: got,
+                    rendered,
+                }) => {
+                    assert_eq!(got, render);
+                    assert_eq!(rendered, render_note(&body, 12));
+                    break;
+                }
+                Some(AppEvent::NoteCommit { .. }) => continue,
+                _ => panic!("not a render"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// FZ-59 review: a capped body's `… cut at 256 KiB` line, as
+    /// `notes::read_body` really writes it, is not parsed as markdown. Cut
+    /// inside an open fence or a table it stays its own last line, plain,
+    /// rather than a code line or a table cell; the line above it is still
+    /// the fence's or the table's.
+    #[test]
+    fn the_cut_marker_is_its_own_plain_line_after_a_fence_or_a_table() {
+        let scratch = std::env::temp_dir().join("fleetz_test_note_cut_marker");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let text_of = |line: &ratatui::text::Line<'_>| -> String {
+            line.spans.iter().map(|s| s.content.as_ref()).collect()
+        };
+        let fence = format!("```\n{}", "x\n".repeat(notes::BODY_CAP));
+        let table = format!("| a | b |\n|---|---|\n{}", "| 1 | 2 |\n".repeat(30_000));
+        for (name, source, above) in [("fence.md", fence, "  x"), ("table.md", table, "1 │")] {
+            let path = scratch.join(name);
+            std::fs::write(&path, source).unwrap();
+            let body = notes::read_body(&path).expect("read");
+            assert!(body.ends_with("\n… cut at 256 KiB"), "{name}: cut");
+            let lines = render_note(&body, 40).lines;
+            let last = lines.last().expect("lines");
+            assert_eq!(text_of(last), "… cut at 256 KiB", "{name}");
+            assert_eq!(last.spans.len(), 1, "{name}: one plain span");
+            assert_eq!(last.spans[0].style.fg, Some(ui::colors::TEXT), "{name}");
+            let marked = lines
+                .iter()
+                .filter(|l| text_of(l).contains("cut at"))
+                .count();
+            assert_eq!(marked, 1, "{name}: the marker is nowhere else");
+            let before = text_of(&lines[lines.len() - 2]);
+            assert!(before.starts_with(above), "{name}: {before:?}");
+        }
+        let short = render_note("# T\n\nbody", 40).lines;
+        assert!(!short.iter().any(|l| text_of(l).contains("cut at")));
         let _ = std::fs::remove_dir_all(&scratch);
     }
 

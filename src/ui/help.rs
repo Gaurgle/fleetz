@@ -99,9 +99,11 @@ const GROUPS: [Group; 6] = [
     Group {
         title: "Refresh and fetch",
         rows: &[
+            // In the `notes` tree or reader `r` flips the reader between
+            // rendered markdown and its source (FZ-59); no row to spare.
             Row {
                 key: "r",
-                desc: &["re-stat repos, poll GitHub"],
+                desc: &["re-stat, poll; reader: raw"],
             },
             Row {
                 key: "R",

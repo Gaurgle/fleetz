@@ -1804,18 +1804,32 @@ fn render_scrolled(
     scroll: u16,
     max: &std::cell::Cell<u16>,
 ) {
-    let wrapped: Vec<Line> = lines
+    let wrapped: Vec<Line<'static>> = lines
         .iter()
         .flat_map(|l| wrap_line(l, inner.width as usize))
         .collect();
-    let max_scroll = u16::try_from(wrapped.len())
+    render_rows(frame, inner, &wrapped, scroll, max);
+}
+
+/// Draw `rows`, one per screen row as given, into `inner` from `scroll`,
+/// clamped to what this frame measured, and report the largest useful
+/// offset through `max`. Only the rows on screen are copied.
+fn render_rows(
+    frame: &mut Frame,
+    inner: Rect,
+    rows: &[Line<'static>],
+    scroll: u16,
+    max: &std::cell::Cell<u16>,
+) {
+    let max_scroll = u16::try_from(rows.len())
         .unwrap_or(u16::MAX)
         .saturating_sub(inner.height);
     max.set(max_scroll);
-    let visible: Vec<Line> = wrapped
-        .into_iter()
+    let visible: Vec<Line> = rows
+        .iter()
         .skip(scroll.min(max_scroll) as usize)
         .take(inner.height as usize)
+        .cloned()
         .collect();
     frame.render_widget(Paragraph::new(visible), inner);
 }
@@ -1851,8 +1865,9 @@ fn render_notes_card(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// The reader's border title: the file's name, kind and size, as in
-/// `README.md · markdown · 4.2 KiB`. The size waits for the read.
+/// The reader's border title: the file's name, kind and size, then for a
+/// markdown file whether it is drawn rendered or raw, as in
+/// `README.md · markdown · 4.2 KiB · rendered`. The size waits for the read.
 fn reader_title(app: &App) -> Option<String> {
     let file = app.notes_highlighted_file()?;
     let name = file.rel.file_name()?.to_string_lossy().into_owned();
@@ -1863,13 +1878,38 @@ fn reader_title(app: &App) -> Option<String> {
     {
         title.push_str(&format!(" · {}", crate::notes::size_label(size)));
     }
+    if file.kind().is_markdown() {
+        title.push_str(match app.reader_raw {
+            true => " · raw",
+            false => " · rendered",
+        });
+    }
     title.push(' ');
     Some(title)
 }
 
+/// The held body's markdown render, when the reader draws one: a markdown
+/// file, `r` not on raw, and a render landed (FZ-59). Until one lands the
+/// reader shows the source.
+fn reader_render(app: &App) -> Option<&crate::app::RenderedNote> {
+    let markdown = app
+        .notes_highlighted_file()
+        .is_some_and(|f| f.kind().is_markdown());
+    if !markdown || app.reader_raw {
+        return None;
+    }
+    let body = held_note_body(app)?;
+    matches!(body.text, Some(Ok(_)))
+        .then_some(body.rendered.as_ref())
+        .flatten()
+}
+
 /// The `notes` layout's reader, right of the tree in pane 2 (FZ-62): the
-/// highlighted file's body raw as `notes::read_body` delivers it, wrapped to
-/// the pane, with its own scroll (`App::reader_scroll`). A cut body says so
+/// highlighted file's body, wrapped to the pane, with its own scroll
+/// (`App::reader_scroll`). A markdown file is drawn rendered
+/// (`ui::markdown`, FZ-59), its rows laid out off the UI thread at the
+/// width this pass records; `r` shows its source, which every other kind
+/// always shows, raw as `notes::read_body` delivers it. A cut body says so
 /// on its last line, as the read leaves it.
 fn render_reader(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focused_panel == FocusedPanel::Reader;
@@ -1894,8 +1934,32 @@ fn render_reader(frame: &mut Frame, area: Rect, app: &App) {
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    // One `H`/`L` page, which only this pass can measure.
+    // One `H`/`L` page and the render width, which only this pass can
+    // measure.
     app.reader_view_height.set(inner.height);
+    app.reader_width.set(inner.width);
+    if let Some(rendered) = reader_render(app) {
+        let rows: std::borrow::Cow<[Line<'static>]> = match rendered.width == inner.width {
+            true => std::borrow::Cow::Borrowed(&rendered.lines),
+            // Laid out for the width before a resize, until the render
+            // at this one lands (`App::claim_note_render`).
+            false => std::borrow::Cow::Owned(
+                rendered
+                    .lines
+                    .iter()
+                    .flat_map(|l| wrap_line(l, inner.width as usize))
+                    .collect(),
+            ),
+        };
+        render_rows(
+            frame,
+            inner,
+            &rows,
+            app.reader_scroll,
+            &app.reader_max_scroll,
+        );
+        return;
+    }
     let dim = |text: String| Line::from(Span::styled(text, Style::default().fg(colors::OVERLAY)));
     let lines: Vec<Line<'static>> = match app.notes_highlighted_file() {
         None => vec![dim("no file selected".to_string())],
@@ -7906,6 +7970,130 @@ mod tests {
         app.scroll_reader(1000);
         let rows = draw(&app);
         assert!(rows[10].contains("line 40"), "{}", rows.join("\n"));
+    }
+
+    // --- Rendered markdown in the reader (FZ-59) ---
+
+    const MARKDOWN_FIXTURE: &str = "# Plan\n\n- ship *it* now\n- run `cargo test`\n\n\
+                                    See [the docs](https://x.io).";
+
+    /// Draw the reader into a 60 by 12 buffer.
+    fn reader_buffer(app: &crate::app::App) -> ratatui::buffer::Buffer {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        term.draw(|f| render_reader(f, f.area(), app)).unwrap();
+        term.backend().buffer().clone()
+    }
+
+    fn buffer_rows(buf: &ratatui::buffer::Buffer) -> Vec<String> {
+        let area = buf.area;
+        (0..area.height)
+            .map(|y| (0..area.width).map(|x| buf[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    /// The style of the cell where `needle` starts on screen.
+    fn style_at(buf: &ratatui::buffer::Buffer, needle: &str) -> Style {
+        for (y, row) in buffer_rows(buf).iter().enumerate() {
+            let cells: Vec<char> = row.chars().collect();
+            let want: Vec<char> = needle.chars().collect();
+            if let Some(x) = cells.windows(want.len()).position(|w| w == want) {
+                return buf[(x as u16, y as u16)].style();
+            }
+        }
+        panic!("{needle} not on screen:\n{}", buffer_rows(buf).join("\n"));
+    }
+
+    /// Land `text` as the reader's body the way the event loop does: the
+    /// read claimed at the width the reader last drew, rendered with it.
+    fn land_rendered(app: &mut crate::app::App, text: &str) {
+        reader_buffer(app);
+        let read = app.claim_note_read().expect("a read");
+        let width = read.render_width.expect("a markdown read renders");
+        let lines = crate::ui::markdown::render_markdown(text, width);
+        let rendered = crate::app::RenderedNote { width, lines };
+        app.apply_note_rendered(&read.path, read.generation, rendered);
+        app.apply_note_read(read, Ok(text.to_string()));
+    }
+
+    /// FZ-59: a markdown file draws rendered by default, through the
+    /// `colors.rs` tokens: the heading in the title colour, bold, without
+    /// its `#`; list bullets; emphasis italic; code in the code colour; a
+    /// link's text in the link colour beside its url. The border says
+    /// `rendered`; `r` shows the source unchanged and the border says `raw`.
+    #[test]
+    fn the_reader_renders_markdown_and_r_shows_the_source() {
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        land_rendered(&mut app, MARKDOWN_FIXTURE);
+        let buf = reader_buffer(&app);
+        let text = buffer_rows(&buf).join("\n");
+        for want in [
+            "a.md · markdown · rendered",
+            "Plan",
+            "• ship it now",
+            "• run cargo test",
+            "See the docs (https://x.io).",
+        ] {
+            assert!(text.contains(want), "{want} missing:\n{text}");
+        }
+        assert!(!text.contains("# Plan"), "the heading's # is gone:\n{text}");
+        let heading = style_at(&buf, "Plan");
+        assert_eq!(heading.fg, Some(colors::LAVENDER), "the title colour");
+        assert!(heading.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            style_at(&buf, "it now")
+                .add_modifier
+                .contains(Modifier::ITALIC)
+        );
+        assert_eq!(style_at(&buf, "cargo test").fg, Some(colors::SUBTEXT));
+        assert_eq!(style_at(&buf, "the docs").fg, Some(colors::SAPPHIRE));
+        assert_eq!(style_at(&buf, "(https").fg, Some(colors::OVERLAY));
+
+        app.toggle_reader_raw();
+        let text = buffer_rows(&reader_buffer(&app)).join("\n");
+        assert!(text.contains("a.md · markdown · raw"), "{text}");
+        for line in MARKDOWN_FIXTURE.lines().filter(|l| !l.is_empty()) {
+            assert!(text.contains(line), "source line {line:?} missing:\n{text}");
+        }
+    }
+
+    /// FZ-59: the scroll bound counts rendered rows, not source lines: 40
+    /// source lines that render as one paragraph of a few rows do not
+    /// scroll, and raw they scroll by the source's 40 rows.
+    #[test]
+    fn the_rendered_reader_scrolls_by_rendered_rows() {
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        let body: Vec<String> = (1..=40).map(|i| format!("line {i}")).collect();
+        let body = body.join("\n");
+        land_rendered(&mut app, &body);
+        let rows = crate::ui::markdown::render_markdown(&body, app.reader_width.get()).len();
+        reader_buffer(&app);
+        let height = app.reader_view_height.get();
+        let want = u16::try_from(rows).unwrap().saturating_sub(height);
+        assert_eq!(app.reader_max_scroll.get(), want, "{rows} rendered rows");
+        assert!(rows < 40, "one paragraph, {rows} rows");
+
+        app.toggle_reader_raw();
+        reader_buffer(&app);
+        assert_eq!(app.reader_max_scroll.get(), 40 - height, "raw rows");
+    }
+
+    /// FZ-59: a text file is always raw: no render is asked for, its border
+    /// names no mode, and `r` does not change what it shows.
+    #[test]
+    fn a_text_file_stays_raw_whatever_the_toggle() {
+        let mut app = notes_view_app(&[("notez/notes.txt", Some("notez"))]);
+        reader_buffer(&app);
+        let read = app.claim_note_read().expect("a read");
+        assert_eq!(read.render_width, None, "no render for text");
+        app.apply_note_read(read, Ok("# not a heading".to_string()));
+        let before = buffer_rows(&reader_buffer(&app)).join("\n");
+        assert!(before.contains("notes.txt · text "), "{before}");
+        assert!(!before.contains("rendered") && !before.contains("raw"));
+        assert!(before.contains("# not a heading"), "{before}");
+        app.toggle_reader_raw();
+        assert_eq!(buffer_rows(&reader_buffer(&app)).join("\n"), before);
     }
 
     /// The card says every fact for a file: name, path, project, kind,
