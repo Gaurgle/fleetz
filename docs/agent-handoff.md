@@ -1,9 +1,9 @@
 # Fleetz coordinator handoff
 
-Last written 2026-10-21 20:42 CEST by `claude-fable-5-1` (`claude --agent
-fz-coordinator`, session `6c0bef32-e39d-4d66-98b4-edcb6d119773`) at the
-release of the baton (the stamps of this session ran up to ten minutes
-ahead of the clock at times; commit dates are authoritative). Read
+Last written 2026-10-29 14:00 CET by `claude-fable-5-1` (`claude --agent
+fz-coordinator`, session `1ce7d882-5277-4dba-9921-5a102463d703`) at the
+release of the baton (the stamps of this session ran up to 1h45
+ahead of the clock from late morning on; commit dates are authoritative). Read
 this file, the repository instructions, [agent-workflow.md](agent-workflow.md)
 and [release-plan.md](release-plan.md) before acting. GitHub (the issues and
 the [release Project](https://github.com/users/Gaurgle/projects/1)) is
@@ -14,14 +14,37 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Held** since 2026-10-29 10:50 CET by `claude-fable-5-1` (`claude
+**Released** 2026-10-29 14:00 CET by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session
-`1ce7d882-5277-4dba-9921-5a102463d703`), taken on his first message of
-the day (the notes view reader proposal). Previous release confirmed:
-nothing was running. `main` `e7fe82c`, clean; worktrees `issue-88`
-(uncommitted) and `issue-96` (Ready to integrate, his look) kept by
-the sweep. The standing dispatch authority stays paused by his
-2026-10-28 stop until he says otherwise.
+`1ce7d882-5277-4dba-9921-5a102463d703`) on his "we can paus for today
+when this is done" (FZ-59's re-review). Held from 10:50 (his notes
+reader proposal). **Clock slip:** the stamps this session wrote on
+the issues and in this file from about 11:20 on ran up to 1h45
+ahead of the wall clock (the clock read 13:55 when the "15:40"
+acceptance was posted); commit dates are authoritative. **Nothing is
+running: no worker, no reviewer, no build, no background job.**
+Everything is pushed. Done this session: FZ-62 (#118) merged
+`ff730c4` on his "looks great." (record in the log, "Merged on
+2026-10-29"), worktree swept. Ready to integrate for his look:
+FZ-59 (#115) at `b5b4168` on `feat/115-markdown-reader`, branch CI
+40876859246 green, verified in a scratch merge with `main` (see "In
+flight"). Filed on his word: FZ-62 (#118) and FZ-63 (#119); FZ-59
+amended; FZ-57 (#113) closed into FZ-62. His words today, in order:
+"you may continue, all is green for now" (11:20, the word to run the
+order FZ-62, FZ-59 and FZ-63, FZ-58), the keys instruction of 12:40
+(on #118), "looks great." (FZ-62's merge), "syntax highlighting
+and/or formatting tho, must be fixed, and togglable as in 'notez'"
+(FZ-59's dispatch), "we can paus for today when this is done" (the
+stop). **Open:** the syntax highlighting route (tree-sitter as notez
+with eleven crates, markdown only, or a small highlighter of our
+own) is his dependency decision, asked and unanswered; a ticket on
+his yes. Chore for a quiet moment: this file is far over the 150-line
+cap; the "Previous record" chain below belongs in the log's "Earlier
+leads".
+
+Previous record: **Held** since 2026-10-29 10:50 CET by the same
+session, taken on his first message of the day with the previous
+release confirmed and nothing running.
 
 Previous record: **Released** 2026-10-28 16:55 CET by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session `2883bc20-7992-4566-8140-9e302e7b1d25`)
@@ -210,8 +233,14 @@ of 2026-10-17 to 2026-10-20" and earlier).
   into FZ-62 (done, #118, #119, #115 comment, #113 closed); the card
   fields with the git last-commit date; the card only under pane 1
   with pane 2 at full height; todoz read-only with `Enter` to `todoz`.
-  **Dispatch of FZ-62 was asked as question 5 and not answered**: the
-  2026-10-28 stop still holds until he says to run it.
+  Dispatch came at 11:20 ("you may continue, all is green for now"),
+  read as the word to run the order FZ-62, then FZ-59 and FZ-63,
+  then FZ-58; FZ-62 merged on "looks great." (13:40). **Stop,
+  15:35 CET: "we can paus for today when this is done."** (FZ-59's
+  re-review): bring FZ-59 to Ready to integrate for his look and stop;
+  nothing new starts after it, FZ-63 and FZ-58 wait for his word in
+  the next session. The syntax highlighting question (tree-sitter as
+  notez, markdown only, or own) is still unanswered.
 
 - **2026-10-27, 11:05 CET, standing dispatch authority.** "you, as
   the lead, have authority to decide what tickets to start on. if
@@ -480,11 +509,16 @@ are written into the repository.
 
 ## State of `main`
 
-`main` is `30a9883` (the merge of #117) as of 2026-10-28 16:50 CET,
-1457 tests passing and 1 ignored, CI run 40719616971 green. Since `v0.6.0` it also carries the whole
-print mode (FZ-46 to FZ-50), the `notes` view (#109), the slot digest
-(#101), the scroll margin (#111), search by owner, organisation and
-contributor (#112, mark `author` since #117). Lead's rule from today:
+`main` is `1a58eb2` (docs, on the merge of #118 `ff730c4`) as of
+2026-10-29 14:00 CET, 1476 tests passing and 1 ignored, CI run
+40871002149 green on `ff730c4`. Since `v0.6.0` it carries the whole
+print mode (FZ-46 to FZ-50), the `notes` view (#109) with its pane 2
+reader and metadata card (#118), the slot digest (#101), the scroll
+margin (#111), search by owner, organisation and contributor (#112,
+mark `author` since #117). FZ-59 (#115) adds `pulldown-cmark` when
+it merges: the first new dependency since `v0.6.0`, a minor bump.
+Earlier record: `main` was `30a9883` (the merge of #117) as of
+2026-10-28, 1457 tests, CI 40719616971. Lead's rule from today:
 when a Cargo target dir was shared between a worker's
 `--manifest-path` build, a reviewer's copy and the lead's run, `cargo
 clean -p fleetz` before the final verification, or use a fresh dir;
@@ -502,22 +536,54 @@ release is `0.7.0`. Local toolchain rustc 1.99.0, same as CI's.
 
 ## Worktrees
 
-Under `.claude/worktrees/` as of 2026-10-28 16:55: `issue-96`
-(pushed, Ready to integrate for his look), `issue-88` (FZ-38, parked,
-uncommitted, see the 2026-10-23 record). `issue-111`, `issue-112`
-and `issue-117` were swept today after green `main` CI.
+Under `.claude/worktrees/` as of 2026-10-29 14:00: `issue-115`
+(FZ-59, committed `b5b4168`, pushed, Ready to integrate for his
+look), `issue-96` (pushed, Ready to integrate for his look),
+`issue-88` (FZ-38, parked, uncommitted, see the 2026-10-23 record).
+`issue-118` was swept today after green `main` CI.
 
 ## In flight
 
-- **#115 FZ-59: worker running** since 2026-10-29 13:50 CET on his
+- **#115 FZ-59: Ready to integrate for his look, nothing running.**
+  Dispatched 2026-10-29 13:50 CET on his
   look at FZ-62 ("syntax highlighting and/or formatting tho, must be
   fixed, and togglable as in 'notez'"): `fz-worker` claude-opus-5-5
   medium, base `ff730c4`, branch `feat/115-markdown-reader`,
   worktree `.claude/worktrees/issue-115`, scope in its
   `.claude/relay-scope` (includes `Cargo.toml`/`Cargo.lock` for
   `pulldown-cmark`, approved 2026-10-27 16:15). Rulings on the issue
-  (dispatch comment). Board: In progress. Next: scope check (the
-  lockfile will show as guarded: approved), diff id here, reviewer.
+  (dispatch comment). Worker reported 14:25 with four questions,
+  ruled 14:30 on the issue (global footer `[r]` segment says
+  raw/render in the notes tree and reader; code lines wrap as notez
+  does; pre-render state and the reworded help row accepted);
+  rework reported 14:45: 11 files, 610/20, 1523 tests; worker
+  tokens 208902. Scope check in scope (Cargo guarded files are the
+  approved crate), **diff id `05f39d765f06`**; reviewer dispatched
+  14:50. Review 1 at 15:05: **needs change** (reviewer tokens 90004):
+  one blocker, the untested generation check in
+  `apply_note_rendered` (mutation survived), plus the lead's
+  addition that the cut marker must not be parsed as markdown;
+  rework round 1 of 2 with the same worker since 15:10, ruling on
+  the issue. Rework reported 15:20 (app.rs test, `render_note`
+  strips and re-appends the cut marker; 1525 tests; worker tokens
+  221183 total); scope check in scope, **diff id `269ad2bafe53`**;
+  re-review **accepted** 15:40 (reviewer tokens 97657 this round,
+  187661 total; both round-1 mutations killed). Committed `b5b4168`
+  on `feat/115-markdown-reader`, pushed; branch CI 40876859246. The
+  base moved (docs commit `1a58eb2` on `main`), so the lead verified
+  a scratch merge of `origin/main` into the branch: fmt, clippy,
+  1525 tests green. **Ready to integrate for his look**, board set.
+  Try: `cargo run --release --manifest-path
+  /Users/at-a/Repos/fleetz/.claude/worktrees/issue-115/Cargo.toml`.
+  On his word: merge `Merge branch 'feat/115-markdown-reader'
+  (#115)` with `Closes #115` (the docs-only base move auto-merges),
+  `main` CI, sweep, log record with the metrics line (worker 221183
+  tokens, reviewer 187661; review changes 1; fix cycles 1; owner
+  decisions 2 before dispatch plus the lead's 4 rulings). Follow-ups
+  not ticketed: one cut-marker constant in `notes.rs`; the marker
+  line clipped under 16 columns; a late render at an older width
+  overwrites a newer one; eight notez renderer tests not ported.
+  Look items on the issue (15:40 comment).
   **Open with Andreas:** syntax highlighting of fenced code and
   source files, as notez does it with tree-sitter (eleven crates:
   `tree-sitter`, `tree-sitter-highlight` and nine grammars) or not
@@ -600,7 +666,18 @@ for 2026-10-21 under "Earlier leads".
 
 ## Next step, and the order after it
 
-Nothing starts until Andreas opens the next session.
+Nothing starts until Andreas opens the next session. The order he
+confirmed on 2026-10-29 (FZ-62, then FZ-59 and FZ-63, then FZ-58)
+is paused by his stop of the same day; his word resumes it.
+
+-1. **FZ-59 (#115): his look, then merge** (see "In flight"; the
+   try command is there). Then **FZ-63 (#119, todoz boards)** and
+   **FZ-58 (#114, the tree)** as the two worker slots, FZ-60 (#116)
+   after them unless he moves it, FZ-41 after #96. **Syntax
+   highlighting** waits on his route (tree-sitter as notez, markdown
+   only, or own); on a tree-sitter yes it is a new ticket with eleven
+   crates, created on his yes. The notes follow-ups not ticketed are
+   listed under "In flight" on each ticket's record.
 
 0. **repoz convergence, accepted 2026-10-23** (authority entry of
    15:00). Design [repoz-print-design.md](repoz-print-design.md)
@@ -608,9 +685,8 @@ Nothing starts until Andreas opens the next session.
    [2026-10-23-repoz-convergence-plan.md](superpowers/plans/2026-10-23-repoz-convergence-plan.md)
    agreed, FZ-46 to FZ-52 filed (#102 to #108), Backlog, milestone
    `repoz convergence`. FZ-46 to FZ-50 Done; P1 landed
-   (`~/repos/repoz` `3fab42a`). **Next: FZ-51 (#107) on his word**
-   (measure print mode against bash repoz), then FZ-52 not before
-   0.8.0 and his explicit word. Open follow-ups from the reviews, each
+   (`~/repos/repoz` `3fab42a`); FZ-51 (#107) Done 2026-10-27. FZ-52
+   not before 0.8.0 and his explicit word. Open follow-ups from the reviews, each
    an issue on his yes: the flaky `clipboard::tests` (FZ-48), the
    `target` skip in `check_option_case`'s no-PR check (FZ-49), the
    print-mode child without `--nocapture` (FZ-50), README has no
@@ -623,12 +699,12 @@ Nothing starts until Andreas opens the next session.
    0.8.0 and his explicit word. Phase 0 check done: `repoz` is free on
    crates.io (API lookup, 2026-10-23 15:10).
 
-1. **#93 and #96: his look, then merge** (see "In flight"). Try:
+1. **#96: his look, then merge** (see "In flight"; #93 merged
+   2026-10-27). Try:
    `cargo run --release --manifest-path
-   /Users/at-a/Repos/fleetz/.claude/worktrees/issue-96/Cargo.toml` and
-   the same with `issue-93`. On "merge both": merge #96 first, then
-   #93 re-verified against the new `main` (already checked together,
-   1319 tests), `main` CI, sweep, log records. The `ci` view's
+   /Users/at-a/Repos/fleetz/.claude/worktrees/issue-96/Cargo.toml`.
+   On his word: re-verify against the current `main` (its base is
+   old), `main` CI, sweep, log record. The `ci` view's
    selection wash only with focus (from the #92 review) is still his
    call.
 2. **Prepare `0.7.0`** on his word after those merges: one bump commit
