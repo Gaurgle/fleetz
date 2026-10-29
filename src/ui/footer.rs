@@ -281,6 +281,14 @@ fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
             ("[x]".into(), "cancel"),
             ("[O]".into(), "open"),
         ],
+        // The `notes` tree (FZ-62): its cursor walks files, and the shifted
+        // keys read the file beside it without leaving the tree.
+        FocusedPanel::Detail if app.notes_layout() => vec![
+            ("[j/k]".into(), "file"),
+            ("[[ ]]".into(), "view"),
+            ("[J/K]".into(), "read"),
+            ("[H/L]".into(), "page"),
+        ],
         FocusedPanel::Detail => vec![
             ("[j/k]".into(), "commit"),
             ("[[ ]]".into(), "view"),
@@ -304,6 +312,12 @@ fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
             ("[j/k]".into(), "scroll"),
             ("[+/-]".into(), "size"),
             (format!("[{}]", crate::ui::INSPECTOR_NUM), "fold"),
+        ],
+        // The `notes` view's reader (FZ-62): `Enter` opens the file it shows.
+        FocusedPanel::Reader => vec![
+            ("[j/k]".into(), "scroll"),
+            ("[H/L]".into(), "page"),
+            ("[Enter]".into(), "edit"),
         ],
         FocusedPanel::Contributions => vec![
             ("[h/l]".into(), "week"),

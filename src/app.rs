@@ -25,6 +25,9 @@ pub enum FocusedPanel {
     /// view too, and only while the pane is open, so both `focus_panel` and
     /// `toggle_panel_focus` special-case it.
     Contributions,
+    /// The `notes` view's reader, beside the tree in pane 2 (FZ-62). On
+    /// screen only in that layout (`App::notes_layout`); j/k scroll it.
+    Reader,
 }
 
 /// Which rendering of a repo's history the pane body is showing.
@@ -2453,8 +2456,17 @@ pub struct App {
     /// The row path the cursor rests on in the `notes` view and since when,
     /// for the dwell (`ci::DWELL`) before a walk starts.
     pub notes_cursor: Option<(Option<String>, std::time::Instant)>,
-    /// The inspector's body for the highlighted file: one file at a time.
+    /// The highlighted file's body and facts, for the reader and the card:
+    /// one file at a time.
     pub note_body: Option<NoteBody>,
+    /// The reader's scroll offset (FZ-62), its own rather than the
+    /// inspector's, which the card scrolls. Reset when the file changes.
+    pub reader_scroll: u16,
+    /// Largest useful reader offset, measured by the renderer for the
+    /// reason `inspector_max_scroll` is.
+    pub reader_max_scroll: std::cell::Cell<u16>,
+    /// Rows the reader's body drew on the last frame: one `H`/`L` page.
+    pub reader_view_height: std::cell::Cell<u16>,
     /// The section header the list cursor stands on (FZ-45), lifted off the
     /// section's first repo, which `selected` keeps pointing at. Read only
     /// through `on_header`, which also checks the header is drawn.
@@ -2489,13 +2501,18 @@ pub struct NotesState {
     pub generation: u64,
 }
 
-/// The inspector's body for one file in the `notes` view.
+/// The body and facts of one file in the `notes` view: the reader draws the
+/// text, the card the facts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoteBody {
     pub path: std::path::PathBuf,
     pub generation: u64,
     /// `None` while the read runs.
     pub text: Option<Result<String, String>>,
+    /// `None` while the read runs; read in the same blocking read as `text`.
+    pub facts: Option<crate::notes::NoteFacts>,
+    /// `None` until git answers, which lands after the body.
+    pub last_commit: Option<crate::notes::LastCommit>,
 }
 
 /// A claimed walk of one repo, for `notes::walk` off the UI thread.
@@ -2506,10 +2523,13 @@ pub struct NotesWalk {
     pub generation: u64,
 }
 
-/// A claimed read of the highlighted file, for `notes::read_body`.
+/// A claimed read of the highlighted file, for `notes::read_body` and the
+/// card's facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteRead {
     pub path: std::path::PathBuf,
+    /// The repo the file sits in, where git is asked for its last commit.
+    pub root: std::path::PathBuf,
     pub generation: u64,
 }
 
@@ -2864,6 +2884,9 @@ impl App {
             notes_all_markdown: false,
             notes_cursor: None,
             note_body: None,
+            reader_scroll: 0,
+            reader_max_scroll: std::cell::Cell::new(0),
+            reader_view_height: std::cell::Cell::new(0),
             list_stop: None,
             digest_window: crate::digest::DigestWindow::default(),
             digest_selected: 0,
@@ -3269,10 +3292,16 @@ impl App {
     /// from the view's own selection slot, clamped to the files there are.
     pub fn notes_highlighted(&self) -> Option<std::path::PathBuf> {
         let root = self.selected_notes()?.0;
+        let file = self.notes_highlighted_file()?;
+        Some(std::path::PathBuf::from(shellexpand::tilde(root).as_ref()).join(&file.rel))
+    }
+
+    /// The walk's entry for the file the cursor is on: what the card and the
+    /// reader's border describe (FZ-62).
+    pub fn notes_highlighted_file(&self) -> Option<&crate::notes::NoteFile> {
         let listed = self.notes_listed();
         let last = listed.len().checked_sub(1)?;
-        let file = listed[self.detail_selections[HistoryView::Notes.index()].min(last)];
-        Some(std::path::PathBuf::from(shellexpand::tilde(root).as_ref()).join(&file.rel))
+        Some(listed[self.detail_selections[HistoryView::Notes.index()].min(last)])
     }
 
     /// Claim the walk of the selected repo the `notes` view needs at
@@ -3324,28 +3353,100 @@ impl App {
     }
 
     /// Claim the read of the highlighted file, or `None`: only while the
-    /// `notes` view shows with the inspector open, and only when the body
-    /// held is another file's or from an older generation. One file at a
-    /// time, whatever the cursor passed over since the last tick.
+    /// `notes` view shows, and only when the body held is another file's or
+    /// from an older generation. One file at a time, whatever the cursor
+    /// passed over since the last tick. A folded card still reads: the
+    /// reader beside the tree shows the body (FZ-62). A new file starts the
+    /// reader at its top; a re-read of the same one keeps its place.
     pub fn claim_note_read(&mut self) -> Option<NoteRead> {
-        if !self.notes_wanted() || self.inspector_folded {
+        if !self.notes_wanted() {
             return None;
         }
         let path = self.notes_highlighted()?;
+        let root = self
+            .selected_notes()
+            .map(|(p, _)| std::path::PathBuf::from(shellexpand::tilde(p).as_ref()))?;
         let generation = self.notes_generation;
-        if self
-            .note_body
-            .as_ref()
-            .is_some_and(|b| b.path == path && b.generation == generation)
-        {
+        let held = self.note_body.as_ref();
+        if held.is_some_and(|b| b.path == path && b.generation == generation) {
             return None;
+        }
+        if held.is_none_or(|b| b.path != path) {
+            self.reader_scroll = 0;
         }
         self.note_body = Some(NoteBody {
             path: path.clone(),
             generation,
             text: None,
+            facts: None,
+            last_commit: None,
         });
-        Some(NoteRead { path, generation })
+        Some(NoteRead {
+            path,
+            root,
+            generation,
+        })
+    }
+
+    /// Land a read's metadata beside its body (`AppEvent::NoteRead`), on the
+    /// same terms as `apply_note_read`.
+    pub fn apply_note_facts(&mut self, read: &NoteRead, facts: crate::notes::NoteFacts) {
+        if let Some(body) = self.held_note_mut(read) {
+            body.facts = Some(facts);
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Land git's answer for a read's last commit (`AppEvent::NoteCommit`),
+    /// which follows the body; one for a file or a generation no longer
+    /// wanted is dropped.
+    pub fn apply_note_commit(&mut self, read: &NoteRead, last: crate::notes::LastCommit) {
+        if let Some(body) = self.held_note_mut(read) {
+            body.last_commit = Some(last);
+            self.needs_redraw = true;
+        }
+    }
+
+    /// The held body `read` was claimed for, if it still is that file's and
+    /// generation's.
+    fn held_note_mut(&mut self, read: &NoteRead) -> Option<&mut NoteBody> {
+        self.note_body
+            .as_mut()
+            .filter(|b| b.path == read.path && b.generation == read.generation)
+    }
+
+    /// Whether the main area takes the `notes` layout (FZ-62): pane 2 at
+    /// full height split into tree and reader, the card under pane 1. Not on
+    /// a section header, where pane 2 is the digest and the usual layout
+    /// returns. Read by `ui::panel_rects`, so render and hit-testing agree.
+    pub fn notes_layout(&self) -> bool {
+        self.notes_wanted() && self.on_header().is_none()
+    }
+
+    /// Scroll the reader by `delta` lines, clamped to what the last frame
+    /// measured.
+    pub fn scroll_reader(&mut self, delta: i32) {
+        let max = i32::from(self.reader_max_scroll.get());
+        self.reader_scroll = (i32::from(self.reader_scroll) + delta).clamp(0, max) as u16;
+        self.needs_redraw = true;
+    }
+
+    /// Whether `H`/`L` page the reader: in the `notes` layout with the tree
+    /// or the reader focused (Andreas, 2026-10-29). Plain `h`/`l` stay free
+    /// in the tree for its folds (FZ-58).
+    pub fn reader_pages(&self) -> bool {
+        self.notes_layout()
+            && matches!(
+                self.focused_panel,
+                FocusedPanel::Detail | FocusedPanel::Reader
+            )
+    }
+
+    /// `H` (`-1`) or `L` (`1`): scroll the reader one page of the height its
+    /// last frame drew, focus unmoved.
+    pub fn page_reader(&mut self, pages: i32) {
+        let page = i32::from(self.reader_view_height.get().max(1));
+        self.scroll_reader(pages * page);
     }
 
     /// Land a body read (`AppEvent::NoteRead`); one for a file or a
@@ -3786,7 +3887,7 @@ impl App {
         match panel {
             FocusedPanel::Inspector => Some(&mut self.inspector_folded),
             FocusedPanel::Contributions => Some(&mut self.contributions_folded),
-            FocusedPanel::RepoList | FocusedPanel::Detail => None,
+            FocusedPanel::RepoList | FocusedPanel::Detail | FocusedPanel::Reader => None,
         }
     }
 
@@ -4266,6 +4367,9 @@ impl App {
         }
         Some(match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
+            // In the `notes` layout the pane after the tree is the reader,
+            // as Tab goes, ahead of the card.
+            FocusedPanel::Detail if self.notes_layout() => FocusedPanel::Reader,
             FocusedPanel::Detail if self.inspector_is_expanded() => FocusedPanel::Inspector,
             // The graph docks no inspector, so there is no next pane to reach
             // into -- and it is the one view whose rows are finer than its
@@ -4275,6 +4379,10 @@ impl App {
             // list instead would spend the only line-by-line gesture the graph
             // has on moving to a different repo.
             FocusedPanel::Detail => FocusedPanel::Detail,
+            // The reader keeps the keys: in the `notes` layout the shifted
+            // keys scroll it from the tree and from the reader alike
+            // (Andreas, 2026-10-29), as the graph keeps them on its rows.
+            FocusedPanel::Reader => FocusedPanel::Reader,
             FocusedPanel::Inspector | FocusedPanel::Contributions => FocusedPanel::RepoList,
         })
     }
@@ -4315,6 +4423,7 @@ impl App {
                 }
             }
             FocusedPanel::Inspector => self.scroll_inspector(delta),
+            FocusedPanel::Reader => self.scroll_reader(delta),
             // Never selected as a target, but the match has to be total.
             FocusedPanel::Contributions => {}
         }
@@ -4347,10 +4456,16 @@ impl App {
             };
             return;
         }
+        // The `notes` layout puts its reader between pane 2 and the card.
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
-            FocusedPanel::Detail if self.shows_inspector() => FocusedPanel::Inspector,
-            FocusedPanel::Detail | FocusedPanel::Inspector => FocusedPanel::Contributions,
+            FocusedPanel::Detail if self.notes_layout() => FocusedPanel::Reader,
+            FocusedPanel::Detail | FocusedPanel::Reader if self.shows_inspector() => {
+                FocusedPanel::Inspector
+            }
+            FocusedPanel::Detail | FocusedPanel::Reader | FocusedPanel::Inspector => {
+                FocusedPanel::Contributions
+            }
             FocusedPanel::Contributions => FocusedPanel::RepoList,
         };
     }
@@ -4367,7 +4482,12 @@ impl App {
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Contributions,
             FocusedPanel::Contributions if self.shows_inspector() => FocusedPanel::Inspector,
-            FocusedPanel::Contributions | FocusedPanel::Inspector => FocusedPanel::Detail,
+            FocusedPanel::Contributions | FocusedPanel::Inspector if self.notes_layout() => {
+                FocusedPanel::Reader
+            }
+            FocusedPanel::Contributions | FocusedPanel::Inspector | FocusedPanel::Reader => {
+                FocusedPanel::Detail
+            }
             FocusedPanel::Detail => FocusedPanel::RepoList,
         };
     }
@@ -4386,6 +4506,10 @@ impl App {
         // The graph view draws no inspector, and focus on a pane that is not
         // on screen swallows every later keypress.
         if panel == FocusedPanel::Inspector && !self.shows_inspector() {
+            return;
+        }
+        // The reader exists only in the `notes` layout.
+        if panel == FocusedPanel::Reader && !self.notes_layout() {
             return;
         }
         self.focused_panel = panel;
@@ -4898,6 +5022,10 @@ impl App {
         if self.focused_panel == FocusedPanel::Inspector && !self.shows_inspector() {
             self.focused_panel = FocusedPanel::Detail;
         }
+        // Likewise the reader, once pane 2 leaves `notes`.
+        if self.focused_panel == FocusedPanel::Reader && !self.notes_layout() {
+            self.focused_panel = FocusedPanel::Detail;
+        }
         // Deliberately does not follow the selection. Each view keeps its own
         // scroll offset, so arriving restores where you left that view --
         // which is where its cursor is anyway, since the two were left in
@@ -5027,6 +5155,11 @@ impl App {
                 self.list_stop = Some(section);
                 self.digest_selected = 0;
                 self.inspector_scroll = 0;
+                // On a header the `notes` layout gives way to the digest and
+                // no reader is drawn; focus cannot stay on it (FZ-62).
+                if self.focused_panel == FocusedPanel::Reader {
+                    self.focused_panel = FocusedPanel::Detail;
+                }
             }
             ListRow::Repo(pos) => {
                 self.list_stop = None;
@@ -5223,7 +5356,8 @@ impl App {
             Some(FocusedPanel::Detail) => self.digest_nav(delta),
             Some(FocusedPanel::Inspector) => self.scroll_digest_inspector(delta),
             Some(FocusedPanel::RepoList) => self.scroll_next_panel(delta),
-            Some(FocusedPanel::Contributions) | None => {}
+            // No reader on a header: the `notes` layout gives way there.
+            Some(FocusedPanel::Contributions | FocusedPanel::Reader) | None => {}
         }
     }
 
@@ -8834,8 +8968,9 @@ mod tests {
     }
 
     /// The body read is the highlighted file's alone, however far the cursor
-    /// moved since the last tick, and nothing outside the view or with the
-    /// inspector folded. Read again after a suspend returns.
+    /// moved since the last tick, and nothing outside the view. Read again
+    /// after a suspend returns, and with the card folded: the reader beside
+    /// the tree still shows the body (FZ-62).
     #[test]
     fn only_the_highlighted_file_is_read() {
         let mut app = notes_app();
@@ -8870,7 +9005,7 @@ mod tests {
 
         app.invalidate_notes();
         app.inspector_folded = true;
-        assert_eq!(app.claim_note_read(), None, "folded inspector");
+        assert!(app.claim_note_read().is_some(), "folded card, open reader");
     }
 
     /// `m` widens the tree to every markdown file and back, keeping the
@@ -8895,6 +9030,156 @@ mod tests {
         app.history_view = HistoryView::Info;
         app.toggle_notes_markdown();
         assert!(app.notes_all_markdown, "not the view");
+    }
+
+    /// In the `notes` layout Tab walks repo list, tree, reader, card, strip
+    /// and Shift-Tab walks it back; the reader takes focus nowhere else, and
+    /// leaving the view moves focus off it (FZ-62).
+    #[test]
+    fn focus_walks_tree_reader_and_card_in_the_notes_layout() {
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        let order = [
+            FocusedPanel::RepoList,
+            FocusedPanel::Detail,
+            FocusedPanel::Reader,
+            FocusedPanel::Inspector,
+            FocusedPanel::Contributions,
+        ];
+        app.focused_panel = FocusedPanel::RepoList;
+        for want in order.iter().cycle().skip(1).take(order.len()) {
+            app.toggle_panel_focus();
+            assert_eq!(app.focused_panel, *want, "Tab");
+        }
+        assert_eq!(app.focused_panel, FocusedPanel::RepoList, "a full turn");
+        for want in order.iter().rev() {
+            app.toggle_panel_focus_back();
+            assert_eq!(app.focused_panel, *want, "Shift-Tab");
+        }
+
+        app.focus_panel(FocusedPanel::Reader);
+        assert_eq!(app.focused_panel, FocusedPanel::Reader);
+        app.cycle_history_view(false);
+        assert_eq!(app.focused_panel, FocusedPanel::Detail, "left the view");
+        app.focus_panel(FocusedPanel::Reader);
+        assert_eq!(app.focused_panel, FocusedPanel::Detail, "no reader here");
+        app.toggle_panel_focus();
+        assert_eq!(app.focused_panel, FocusedPanel::Inspector, "Tab skips it");
+    }
+
+    /// `J`/`K` in the `notes` layout scroll the reader a line from the tree,
+    /// with the card open (the default) as well as folded (FZ-62 review F1),
+    /// and from the reader itself, focus unmoved (finding 6).
+    #[test]
+    fn shift_scroll_walks_tree_reader_card_in_the_notes_layout() {
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        walked(&mut app, &["notez/a.md"]);
+        assert!(!app.inspector_folded, "the card is open");
+
+        app.focused_panel = FocusedPanel::Detail;
+        assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
+        app.reader_max_scroll.set(20);
+        app.scroll_next_panel(3);
+        assert_eq!(app.reader_scroll, 3, "J from the tree scrolls the reader");
+        assert_eq!(app.inspector_scroll, 0, "not the card");
+
+        assert_eq!(app.focused_panel, FocusedPanel::Detail, "focus unmoved");
+
+        app.focused_panel = FocusedPanel::Reader;
+        assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
+        app.scroll_next_panel(-1);
+        assert_eq!(app.reader_scroll, 2, "J/K on the reader scroll it");
+        app.inspector_folded = true;
+        assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
+        app.focused_panel = FocusedPanel::Detail;
+        assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
+    }
+
+    /// `H`/`L` page the reader by the height its last frame drew, from the
+    /// tree or the reader, focus unmoved and the tree's cursor where it was;
+    /// anywhere else they do nothing (Andreas, 2026-10-29, finding 6).
+    #[test]
+    fn h_and_l_page_the_reader_from_the_tree() {
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        walked(&mut app, &["notez/a.md", "notez/b.md"]);
+        app.reader_max_scroll.set(100);
+        app.reader_view_height.set(18);
+
+        app.focused_panel = FocusedPanel::Detail;
+        assert!(app.reader_pages());
+        app.page_reader(1);
+        assert_eq!(app.reader_scroll, 18, "L: one page down");
+        app.page_reader(1);
+        assert_eq!(app.reader_scroll, 36);
+        app.page_reader(-1);
+        assert_eq!(app.reader_scroll, 18, "H: one page up");
+        assert_eq!(app.focused_panel, FocusedPanel::Detail, "focus unmoved");
+        assert_eq!(app.detail_selected(), 0, "the tree's cursor stayed");
+
+        app.focused_panel = FocusedPanel::Reader;
+        assert!(app.reader_pages(), "from the reader too");
+        app.page_reader(-5);
+        assert_eq!(app.reader_scroll, 0, "clamped at the top");
+
+        for panel in [FocusedPanel::RepoList, FocusedPanel::Inspector] {
+            app.focused_panel = panel;
+            assert!(!app.reader_pages(), "{panel:?}");
+        }
+        app.focused_panel = FocusedPanel::Detail;
+        app.history_view = HistoryView::Info;
+        assert!(!app.reader_pages(), "no reader outside notes");
+    }
+
+    /// The reader keeps its own offset: moving the tree's cursor does not
+    /// scroll it, scrolling it does not move the cursor, and a new file
+    /// starts it at the top while a re-read of the same file keeps its
+    /// place.
+    #[test]
+    fn the_reader_scrolls_on_its_own_and_resets_on_a_new_file() {
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        walked(&mut app, &["notez/a.md", "notez/b.md"]);
+        app.claim_note_read().expect("a");
+        app.reader_max_scroll.set(30);
+        app.scroll_reader(12);
+        assert_eq!(app.reader_scroll, 12);
+        assert_eq!(app.detail_selected(), 0, "the cursor stayed");
+        assert_eq!(app.inspector_scroll, 0, "the card did not scroll");
+
+        app.invalidate_notes();
+        app.claim_note_read().expect("re-read of a");
+        assert_eq!(app.reader_scroll, 12, "same file keeps its place");
+
+        app.select_commit_down();
+        assert_eq!(app.reader_scroll, 12, "the cursor does not scroll it");
+        app.claim_note_read().expect("b");
+        assert_eq!(app.reader_scroll, 0, "a new file starts at the top");
+
+        app.scroll_reader(-5);
+        assert_eq!(app.reader_scroll, 0, "clamped at the top");
+        app.scroll_reader(1000);
+        assert_eq!(app.reader_scroll, 30, "clamped to what was measured");
+    }
+
+    /// Facts land beside the body they were read with, and an answer for a
+    /// file no longer highlighted is dropped, as a body is.
+    #[test]
+    fn note_facts_land_only_on_their_file() {
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        walked(&mut app, &["notez/a.md", "notez/b.md"]);
+        let a = app.claim_note_read().expect("a");
+        assert_eq!(a.root, std::path::PathBuf::from("/notes-fixture"));
+        let facts = crate::notes::NoteFacts {
+            size: Some(3),
+            ..Default::default()
+        };
+        app.select_commit_down();
+        app.claim_note_read().expect("b");
+        app.apply_note_facts(&a, facts.clone());
+        assert_eq!(app.note_body.as_ref().and_then(|b| b.facts.clone()), None);
     }
 }
 
@@ -9000,6 +9285,25 @@ mod digest_log_tests {
         assert_eq!(app.on_header(), None);
         assert_eq!(app.selected, 0);
         assert_eq!(app.history_view, HistoryView::Reflog);
+    }
+
+    /// FZ-62 review F2: with the reader focused in `notes`, the cursor
+    /// landing on a header (key, wheel, click or hover dwell, all through
+    /// `land_on`) drops the reader from the screen, so focus moves to pane 2,
+    /// where `j`/`k` walk the digest. Fails while focus stays on the reader.
+    #[test]
+    fn landing_on_a_header_takes_focus_off_the_reader() {
+        let mut app = app();
+        app.move_down();
+        assert_eq!(app.on_header(), None);
+        app.history_view = HistoryView::Notes;
+        app.focus_panel(FocusedPanel::Reader);
+        assert_eq!(app.focused_panel, FocusedPanel::Reader);
+
+        app.move_up();
+        assert_eq!(app.on_header(), Some(Section::GithubActivity));
+        assert!(!app.notes_layout(), "no reader on a header");
+        assert_eq!(app.focused_panel, FocusedPanel::Detail);
     }
 
     /// Review F1: someone else's push, fetched, moves only `origin/*`: HEAD

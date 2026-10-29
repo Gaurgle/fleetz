@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// The name of a notes directory, committed (`notez`) or scratch (`.notez`).
 const NOTEZ_DIRS: [&str; 2] = ["notez", ".notez"];
 
-/// How much of one file the inspector reads. A notes directory can hold an
+/// How much of one file the reader reads. A notes directory can hold an
 /// image or a PDF; the body never pulls a whole one into memory.
 pub const BODY_CAP: usize = 256 * 1024;
 
@@ -27,6 +27,109 @@ pub struct NoteFile {
     /// repo root, when it sits under one. Any file there counts; outside
     /// one, only markdown was collected.
     pub notez: Option<PathBuf>,
+}
+
+/// What a note file is, from its name alone (FZ-62): the tree's glyph, the
+/// card's and the reader's word. `Todo` is any `TODO.md`, which FZ-63 draws
+/// as a board; until then it reads as the markdown it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteKind {
+    Markdown,
+    Todo,
+    Text,
+    Other,
+}
+
+impl NoteKind {
+    /// The word the card and the reader's border say.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Markdown => "markdown",
+            Self::Todo => "todo",
+            Self::Text => "text",
+            Self::Other => "other",
+        }
+    }
+}
+
+impl NoteFile {
+    /// The file's kind, from its name and extension. A method rather than a
+    /// field: the walk already holds the name, and nothing is stored twice.
+    pub fn kind(&self) -> NoteKind {
+        let name = self
+            .rel
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if name.eq_ignore_ascii_case("TODO.md") {
+            return NoteKind::Todo;
+        }
+        let ext = Path::new(&name)
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase());
+        match ext.as_deref() {
+            Some("md" | "markdown") => NoteKind::Markdown,
+            Some("txt") => NoteKind::Text,
+            _ => NoteKind::Other,
+        }
+    }
+}
+
+/// What the card says about a file from its metadata (FZ-62): read off the
+/// UI thread in the same blocking read as the body
+/// (`main.rs::spawn_note_read`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NoteFacts {
+    /// Bytes on disk; `None` when the metadata could not be read.
+    pub size: Option<u64>,
+    pub modified: Option<std::time::SystemTime>,
+    /// `None` where the filesystem keeps no birth time.
+    pub created: Option<std::time::SystemTime>,
+}
+
+/// The file's last commit, as git answers after the body has landed: git
+/// walks the whole history for a file it never saw, so the body never waits
+/// for this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LastCommit {
+    /// git printed nothing: never committed, as every `.notez/` file is.
+    Untracked,
+    /// The commit date as git prints it (`%cI`).
+    At(String),
+}
+
+/// The size, modified and created times of `path`, from one `metadata`
+/// call.
+pub fn file_facts(path: &Path) -> NoteFacts {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return NoteFacts::default();
+    };
+    NoteFacts {
+        size: Some(meta.len()),
+        modified: meta.modified().ok(),
+        created: meta.created().ok(),
+    }
+}
+
+/// `git log -1 --format=%cI` output as the card holds it: the trimmed date,
+/// or `Untracked` for the empty answer git gives a file it never committed.
+pub fn last_commit_from(stdout: &str) -> LastCommit {
+    match stdout.trim() {
+        "" => LastCommit::Untracked,
+        date => LastCommit::At(date.to_string()),
+    }
+}
+
+/// A byte count as the reader's border and the card write it: `812 B`,
+/// `4.2 KiB`, `1.3 MiB`.
+pub fn size_label(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    match bytes {
+        b if b < KIB => format!("{b} B"),
+        b if b < MIB => format!("{:.1} KiB", b as f64 / KIB as f64),
+        b => format!("{:.1} MiB", b as f64 / MIB as f64),
+    }
 }
 
 /// What one walk of a repo found: every file under a notes directory and
@@ -208,7 +311,7 @@ fn section_label(dir: &Path) -> String {
     }
 }
 
-/// Read the first `BODY_CAP` bytes of `path` as text, for the inspector. A
+/// Read the first `BODY_CAP` bytes of `path` as text, for the reader. A
 /// cut body says so on its last line; a file that is not text is an error.
 pub fn read_body(path: &Path) -> Result<String, String> {
     use std::io::Read;
@@ -346,6 +449,55 @@ mod tests {
         assert!(notes.rows(false).is_empty());
         assert!(notes.rows(true).is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The ticket's four names, plus the case and path forms the rule must
+    /// survive: `TODO.md` anywhere and in any case is a todo, a `.txt` is
+    /// text, an image is other.
+    #[test]
+    fn a_note_kind_comes_from_its_name() {
+        let kind = |rel: &str| {
+            NoteFile {
+                rel: rel.into(),
+                notez: None,
+            }
+            .kind()
+        };
+        assert_eq!(kind("README.md"), NoteKind::Markdown);
+        assert_eq!(kind("TODO.md"), NoteKind::Todo);
+        assert_eq!(kind("notes.txt"), NoteKind::Text);
+        assert_eq!(kind("diagram.png"), NoteKind::Other);
+        assert_eq!(kind("notez/sub/todo.md"), NoteKind::Todo);
+        assert_eq!(kind("notez/plan.MD"), NoteKind::Markdown);
+        assert_eq!(kind("notez/Makefile"), NoteKind::Other);
+        assert_eq!(NoteKind::Markdown.label(), "markdown");
+    }
+
+    /// The facts are the file's size and times, and git's empty answer is
+    /// "untracked" (`None`), not an empty date.
+    #[test]
+    fn file_facts_read_the_metadata_and_an_empty_log_is_untracked() {
+        let root = fixture("facts", &["notez/a.md"]);
+        let facts = file_facts(&root.join("notez/a.md"));
+        assert_eq!(facts.size, Some("# notez/a.md\n".len() as u64));
+        assert!(facts.modified.is_some());
+        assert_eq!(file_facts(&root.join("missing.md")), NoteFacts::default());
+
+        assert_eq!(last_commit_from(""), LastCommit::Untracked);
+        assert_eq!(last_commit_from("\n"), LastCommit::Untracked);
+        assert_eq!(
+            last_commit_from("2026-10-29T10:50:00+01:00\n"),
+            LastCommit::At("2026-10-29T10:50:00+01:00".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_size_is_written_in_binary_units() {
+        assert_eq!(size_label(0), "0 B");
+        assert_eq!(size_label(812), "812 B");
+        assert_eq!(size_label(4300), "4.2 KiB");
+        assert_eq!(size_label(1024 * 1024 * 13 / 10), "1.3 MiB");
     }
 
     #[test]
