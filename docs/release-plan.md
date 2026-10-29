@@ -277,6 +277,16 @@ view names its modes, FZ-58 #114 a notez-style tree browser, FZ-59
 filed 2026-10-27 on Andreas's word under M3 at P2. His "keep 4" settled
 FZ-55's margin.
 
+On 2026-10-29 Andreas reshaped the notes view: the inspector was too
+short to read in, so FZ-62 (#118, pane 2 splits into tree and reader,
+the inspector becomes a metadata card as wide as pane 1, file kinds)
+and FZ-63 (#119, todoz boards drawn as boards, pinned at the top of
+the tree, read-only, `Enter` to `todoz`) were filed Ready under M4 at
+P2; FZ-57 was closed into FZ-62 and FZ-59 amended to render in the
+reader with `pulldown-cmark`. Order: FZ-62, then FZ-59 and FZ-63 side
+by side, then FZ-58. Design in [ideas.md](ideas.md), "Repo notes in
+pane 2", amendment of 2026-10-29.
+
 ## Completion rule
 
 An agent finishing a turn is not a completed ticket. Done requires accepted

@@ -2090,6 +2090,25 @@ list or `info`, and the personal store `~/notez/personal/<project>/` as an
 extra root found by one stat on the folder name. All left out of FZ-53 on
 2026-10-26.
 
+**Amendment 2026-10-29: the reader moves into pane 2.** Shipped as FZ-53,
+the inspector read the highlighted file on its few rows and was too short
+for it. Andreas's call: do what `graph` does and give the column to pane 2.
+In `notes` the main area splits into columns first; the left column stacks
+pane 1 over a metadata card as wide as pane 1 (name, path, project, kind,
+size, modified, created, where it lives, last commit date, "untracked" for
+a `.notez/` file), the right column is pane 2 at full height, split into
+the tree and a reader with its own focus and scroll, its border naming the
+file, its kind and size (FZ-62, #118). Markdown renders in that reader
+(FZ-59, `pulldown-cmark`, notez's renderer ported, tree-sitter left out).
+A `TODO.md` is a fourth kind, `todo`, drawn as a todoz board (sections,
+tri-state checkboxes, subtasks, tag dots, due dates) and pinned in a
+`todos` section at the top of the tree in both modes, with the personal
+board `~/notez/personal/<project>/TODO.md` as the one file of the deferred
+personal store that joins (FZ-63, #119). Read-only, as `changes` is:
+`Enter` on a board suspends to `todoz`. Rejected: a separate `todoz` pane 2
+view, since the boards are files the notes walk already finds and the
+question is still "what is written down about this repo".
+
 ## Changed files in pane 2
 
 **Status: ticketed as FZ-60, not built.** Agreed with Andreas 2026-10-28.

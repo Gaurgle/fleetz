@@ -14,7 +14,16 @@ notes are in [agent-log.md](agent-log.md).
 
 ## Baton
 
-**Released** 2026-10-28 16:55 CET by `claude-fable-5-1` (`claude
+**Held** since 2026-10-29 10:50 CET by `claude-fable-5-1` (`claude
+--agent fz-coordinator`, session
+`1ce7d882-5277-4dba-9921-5a102463d703`), taken on his first message of
+the day (the notes view reader proposal). Previous release confirmed:
+nothing was running. `main` `e7fe82c`, clean; worktrees `issue-88`
+(uncommitted) and `issue-96` (Ready to integrate, his look) kept by
+the sweep. The standing dispatch authority stays paused by his
+2026-10-28 stop until he says otherwise.
+
+Previous record: **Released** 2026-10-28 16:55 CET by `claude-fable-5-1` (`claude
 --agent fz-coordinator`, session `2883bc20-7992-4566-8140-9e302e7b1d25`)
 on his "ok. make that change, ship, and then stop for today?". Held
 from 16:04 ("yes, lets go"). The stamps this session wrote on the
@@ -186,6 +195,23 @@ Andreas.
 Owner authority, verbatim, newest first. A handoff preserves it; no agent
 can create or expand it. Spent entries are in the log ("Owner authority
 of 2026-10-17 to 2026-10-20" and earlier).
+
+- **2026-10-29, 10:50 to 11:10 CET, the notes reshape (issues
+  only, no dispatch yet).** His first message: "implement a better
+  file reader for 'notes' view in pane 2 ... do what is done to the
+  'graph' page ... have the inspector become as wide as pane1. the
+  inspector show only meta data ... pane 2 is extended to show both
+  notes navigation AND it gets an internal file reader, steal it from
+  'notez' ... also implement the file type, and put some stuff in the
+  border", then "we should have the dedicated 'todoz' reader as well,
+  and show TODOZ in pane2. PERHAPS as a part of the NOTEZ page?". To
+  the lead's four questions: "1. yes, amend 2. yes 3. exactly 4.
+  sure", which is: create FZ-62 and FZ-63, amend FZ-59, close FZ-57
+  into FZ-62 (done, #118, #119, #115 comment, #113 closed); the card
+  fields with the git last-commit date; the card only under pane 1
+  with pane 2 at full height; todoz read-only with `Enter` to `todoz`.
+  **Dispatch of FZ-62 was asked as question 5 and not answered**: the
+  2026-10-28 stop still holds until he says to run it.
 
 - **2026-10-27, 11:05 CET, standing dispatch authority.** "you, as
   the lead, have authority to decide what tickets to start on. if
@@ -488,12 +514,14 @@ since 2026-10-26 is Done and in the log (FZ-49, FZ-50, FZ-45, FZ-53,
 FZ-51 on 2026-10-26 and 27; FZ-56, FZ-55, FZ-61 on 2026-10-28).
 
 - **Next dispatch when he resumes the order (his word needed after
-  the 2026-10-28 stop):** FZ-57 (#113, small), FZ-60 (#116, the
-  `changes` view, Ready, conflicts by region with the notes
-  follow-ups in `app.rs`, `detail.rs`, `help.rs`, `main.rs`: share by
-  symbol as the workflow allows), FZ-58 (#114), FZ-59 (#115,
-  `pulldown-cmark` approved by him 2026-10-27 16:15), FZ-41 after
-  #96. His words on FZ-60: "its a go only if we dont have any other,
+  the 2026-10-28 stop):** FZ-62 (#118, the notes layout and reader,
+  `fz-worker`, filed 2026-10-29 and the one he is asking about),
+  then FZ-59 (#115, markdown in the reader, `pulldown-cmark` approved
+  2026-10-27 16:15) and FZ-63 (#119, todoz boards) side by side
+  sharing `detail.rs` by region, then FZ-58 (#114, the tree, after
+  FZ-62 since its rect changes), FZ-60 (#116, the `changes` view,
+  "a go only if we dont have any other, more important tickets"),
+  FZ-41 after #96. FZ-57 (#113) is closed into FZ-62. His words on FZ-60: "its a go only if we dont have any other,
   more important tickets to complete first"; the lead placed it after
   FZ-57 and ahead of FZ-58 and FZ-59 (new capability before polish),
   and he can move it. #96 waits for his look ("not sure here"). Two
