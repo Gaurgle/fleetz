@@ -98,6 +98,39 @@ pub fn kind_icon(kind: RepoKind) -> Option<&'static str> {
     }
 }
 
+/// The Nerd Font icon for a note file's kind, drawn before its name in the
+/// `notes` tree (FZ-62): Octicons' markdown and checklist marks, and Font
+/// Awesome's text and plain file pages.
+pub fn note_kind_glyph(kind: crate::notes::NoteKind) -> &'static str {
+    use crate::notes::NoteKind;
+    match kind {
+        NoteKind::Markdown => "\u{f48a}",
+        NoteKind::Todo => "\u{f45e}",
+        NoteKind::Text => "\u{f0f6}",
+        NoteKind::Other => "\u{f016}",
+    }
+}
+
+/// The plain-font stand-in for a note kind: one ASCII letter, as the other
+/// plain marks are one column in every monospace font.
+fn plain_note_kind_glyph(kind: crate::notes::NoteKind) -> &'static str {
+    use crate::notes::NoteKind;
+    match kind {
+        NoteKind::Markdown => "M",
+        NoteKind::Todo => "T",
+        NoteKind::Text => "X",
+        NoteKind::Other => "F",
+    }
+}
+
+/// The note kind's glyph in the active set (`active_icons`).
+pub fn note_kind_icon(kind: crate::notes::NoteKind) -> &'static str {
+    match active_icons() {
+        Icons::Nerd => note_kind_glyph(kind),
+        Icons::Plain => plain_note_kind_glyph(kind),
+    }
+}
+
 /// The color for a repo kind. Shared by the list glyph and the detail pane's
 /// owner line so the two can never disagree about what "org" looks like.
 pub fn kind_color(kind: RepoKind) -> Color {
@@ -808,6 +841,29 @@ mod tests {
         let glyph = glyph_span(&busy);
         assert_eq!(glyph.width(), GLYPH_W);
         assert_eq!(glyph.content.chars().count(), GLYPH_W);
+    }
+
+    /// Every note kind has its own glyph in both sets, each one column wide,
+    /// so the tree's names start in one column whatever the kind.
+    #[test]
+    fn note_kind_glyphs_are_distinct_and_one_column_in_both_sets() {
+        use crate::notes::NoteKind;
+        let kinds = [
+            NoteKind::Markdown,
+            NoteKind::Todo,
+            NoteKind::Text,
+            NoteKind::Other,
+        ];
+        for icons in [Icons::Nerd, Icons::Plain] {
+            set_active_icons(icons);
+            let glyphs: Vec<&str> = kinds.iter().map(|k| note_kind_icon(*k)).collect();
+            for (i, g) in glyphs.iter().enumerate() {
+                assert_eq!(Span::raw(*g).width(), 1, "{icons:?} {g:?}");
+                assert!(!glyphs[i + 1..].contains(g), "{icons:?} repeats {g:?}");
+            }
+        }
+        set_active_icons(Icons::Plain);
+        assert_eq!(note_kind_icon(NoteKind::Markdown), "M");
     }
 
     /// Only the colour moves. The detail pane right-aligns the group this sits

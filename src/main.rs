@@ -172,10 +172,18 @@ pub enum AppEvent {
         walk: app::NotesWalk,
         result: Result<notes::Notes, String>,
     },
-    /// The highlighted note's body, applied by `App::apply_note_read`.
+    /// The highlighted note's body and its metadata for the card, applied by
+    /// `App::apply_note_read` and `App::apply_note_facts`.
     NoteRead {
         read: app::NoteRead,
         text: Result<String, String>,
+        facts: notes::NoteFacts,
+    },
+    /// git's last commit for that note (FZ-62), sent after the body so the
+    /// reader never waits on git; applied by `App::apply_note_commit`.
+    NoteCommit {
+        read: app::NoteRead,
+        last: notes::LastCommit,
     },
     /// A slot digest's `git log --since` read for the row at `path` (FZ-45),
     /// applied by `App::apply_digest_log` under the key it was asked with.
@@ -1103,7 +1111,11 @@ async fn run_event_loop(
             AppEvent::Ci(answer) => app.apply_ci(*answer, chrono::Local::now()),
             AppEvent::CiDetail(answer) => app.apply_ci_detail(*answer, chrono::Local::now()),
             AppEvent::NotesWalked { walk, result } => app.apply_notes_walk(walk, result),
-            AppEvent::NoteRead { read, text } => app.apply_note_read(read, text),
+            AppEvent::NoteRead { read, text, facts } => {
+                app.apply_note_facts(&read, facts);
+                app.apply_note_read(read, text);
+            }
+            AppEvent::NoteCommit { read, last } => app.apply_note_commit(&read, last),
             AppEvent::DigestLog { path, key, commits } => {
                 app.apply_digest_log(&path, &key, commits)
             }
@@ -1325,12 +1337,14 @@ fn handle_mouse_input(
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.scroll_detail(DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(1),
+            FocusedPanel::Reader => app.scroll_reader(1),
             FocusedPanel::Contributions => {}
         },
         MouseEventKind::ScrollUp => match panel {
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.scroll_detail(-DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
+            FocusedPanel::Reader => app.scroll_reader(-1),
             FocusedPanel::Contributions => {}
         },
         _ => {}
@@ -1699,6 +1713,10 @@ async fn handle_normal_input(
         }
         KeyCode::Char('J') => app.scroll_next_panel(1),
         KeyCode::Char('K') => app.scroll_next_panel(-1),
+        // The `notes` reader pages from the tree or itself (FZ-62); `J`/`K`
+        // above scroll it a line through `scroll_next_panel`.
+        KeyCode::Char('H') if app.reader_pages() => app.page_reader(-1),
+        KeyCode::Char('L') if app.reader_pages() => app.page_reader(1),
         KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(1),
         KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(-1),
         // Must be matched before the plain `c` arm below, or ctrl-c switches
@@ -1768,6 +1786,7 @@ async fn handle_normal_input(
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
             FocusedPanel::Inspector => app.inspector_nav(1),
+            FocusedPanel::Reader => app.scroll_reader(1),
             FocusedPanel::Contributions => {
                 app.move_contrib_cursor(0, 1, chrono::Local::now().date_naive())
             }
@@ -1776,16 +1795,19 @@ async fn handle_normal_input(
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.detail_nav_up(),
             FocusedPanel::Inspector => app.inspector_nav(-1),
+            FocusedPanel::Reader => app.scroll_reader(-1),
             FocusedPanel::Contributions => {
                 app.move_contrib_cursor(0, -1, chrono::Local::now().date_naive())
             }
         },
         KeyCode::PageDown => match app.focused_panel {
             FocusedPanel::Inspector => app.scroll_inspector(10),
+            FocusedPanel::Reader => app.scroll_reader(10),
             _ => app.scroll_detail(10),
         },
         KeyCode::PageUp => match app.focused_panel {
             FocusedPanel::Inspector => app.scroll_inspector(-10),
+            FocusedPanel::Reader => app.scroll_reader(-10),
             _ => app.scroll_detail(-10),
         },
         KeyCode::Char('v') => app.toggle_view(),
@@ -1966,12 +1988,12 @@ async fn handle_normal_input(
 }
 
 /// The file `Enter` opens in $EDITOR: the `notes` view's highlighted file,
-/// while pane 2 or the inspector has focus. `None` leaves `Enter` to open
-/// lazygit on the repo.
+/// while pane 2, the reader or the card has focus. `None` leaves `Enter` to
+/// open lazygit on the repo.
 fn note_to_open(app: &App) -> Option<std::path::PathBuf> {
     let focused = matches!(
         app.focused_panel,
-        FocusedPanel::Detail | FocusedPanel::Inspector
+        FocusedPanel::Detail | FocusedPanel::Inspector | FocusedPanel::Reader
     );
     (app.notes_wanted() && focused)
         .then(|| app.notes_highlighted())
@@ -2963,16 +2985,47 @@ fn spawn_notes_walk(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, walk: app
     });
 }
 
-/// Read the highlighted note off the UI thread and send its body back.
+/// Read the highlighted note off the UI thread and send its body back with
+/// its metadata for the card (FZ-62), then its last commit from a bounded
+/// `git log`, "untracked" when git prints nothing. Two answers, body first:
+/// for a file git never saw it walks the whole history, and the reader
+/// shows the body without waiting for that.
 fn spawn_note_read(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, read: app::NoteRead) {
     let tx = tx.clone();
     tokio::spawn(async move {
         let path = read.path.clone();
-        let text = tokio::task::spawn_blocking(move || notes::read_body(&path))
+        let read_both = tokio::task::spawn_blocking(move || {
+            (notes::read_body(&path), notes::file_facts(&path))
+        })
+        .await;
+        let (text, facts) = match read_both {
+            Ok((text, facts)) => (text, facts),
+            Err(e) => (Err(e.to_string()), notes::NoteFacts::default()),
+        };
+        let _ = tx.send(AppEvent::NoteRead {
+            read: read.clone(),
+            text,
+            facts,
+        });
+        let rel = read.path.strip_prefix(&read.root).unwrap_or(&read.path);
+        let rel = rel.to_string_lossy();
+        // Literal, so a name with `:` or glob characters is a path, not
+        // pathspec magic.
+        let args = [
+            "--literal-pathspecs",
+            "log",
+            "-1",
+            "--format=%cI",
+            "--",
+            &rel,
+        ];
+        let last = git::run_git(&read.root, &args)
             .await
-            .map_err(|e| e.to_string())
-            .and_then(|r| r);
-        let _ = tx.send(AppEvent::NoteRead { read, text });
+            .filter(|out| out.status.success())
+            .map_or(notes::LastCommit::Untracked, |out| {
+                notes::last_commit_from(&String::from_utf8_lossy(&out.stdout))
+            });
+        let _ = tx.send(AppEvent::NoteCommit { read, last });
     });
 }
 
@@ -11697,6 +11750,156 @@ mod tests {
         app.focused_panel = FocusedPanel::Detail;
         app.history_view = app::HistoryView::Info;
         assert_eq!(note_to_open(&app), None, "another view opens lazygit");
+    }
+
+    /// `Enter` on the focused reader opens the file it shows (FZ-62).
+    #[test]
+    fn enter_on_the_reader_opens_its_note() {
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.repos = vec![RepoStatus {
+            path: Some("/repo".to_string()),
+            ..test_repo()
+        }];
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Notes;
+        let walk = app::NotesWalk {
+            key: "/repo".to_string(),
+            root: "/repo".into(),
+            generation: 0,
+        };
+        let files = vec![notes::NoteFile {
+            rel: "notez/a.md".into(),
+            notez: Some("notez".into()),
+        }];
+        app.apply_notes_walk(walk, Ok(notes::Notes { files }));
+        app.focus_panel(FocusedPanel::Reader);
+        assert_eq!(app.focused_panel, FocusedPanel::Reader);
+        assert_eq!(
+            note_to_open(&app),
+            Some(std::path::PathBuf::from("/repo/notez/a.md"))
+        );
+    }
+
+    /// The next answer `spawn_note_read` sent, split into its two kinds.
+    async fn next_note_answer(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    ) -> Result<
+        (app::NoteRead, Result<String, String>, notes::NoteFacts),
+        (app::NoteRead, notes::LastCommit),
+    > {
+        match rx.recv().await {
+            Some(AppEvent::NoteRead { read, text, facts }) => Ok((read, text, facts)),
+            Some(AppEvent::NoteCommit { read, last }) => Err((read, last)),
+            _ => panic!("not a note answer"),
+        }
+    }
+
+    /// The card's facts are read off the UI thread (FZ-62): `spawn_note_read`
+    /// returns before anything is sent. The body and its metadata come
+    /// first and git's last commit after, so the reader never waits on git
+    /// (review F4): a date for a committed file, "untracked" for one git
+    /// never saw, and a name with glob characters read literally (review
+    /// F5: `notez/*.md` would otherwise match the committed `plan.md`). A
+    /// commit answer for a file no longer highlighted is dropped.
+    #[tokio::test]
+    async fn spawn_note_read_reads_the_body_and_facts_off_the_ui_thread() {
+        let scratch = std::env::temp_dir().join("fleetz_test_note_read_seam");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let repo = hist_repo(&scratch, "repo", "n@example.com");
+        std::fs::create_dir_all(repo.join("notez")).unwrap();
+        std::fs::create_dir_all(repo.join(".notez")).unwrap();
+        std::fs::write(repo.join("notez/plan.md"), "# Plan\n").unwrap();
+        std::fs::write(repo.join("notez/*.md"), "star\n").unwrap();
+        std::fs::write(repo.join(".notez/scratch.md"), "scratch\n").unwrap();
+        wt_sh(&repo, &["git", "add", "notez/plan.md"]);
+        hist_commit(&repo, "2026-10-01", "plan");
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let answer = |rel: &str| app::NoteRead {
+            path: repo.join(rel),
+            root: repo.clone(),
+            generation: 0,
+        };
+        spawn_note_read(&tx, answer("notez/plan.md"));
+        // A current-thread test runtime has not run the task yet: had the
+        // read run inline, its answer would already be here.
+        assert!(rx.try_recv().is_err(), "read on the calling thread");
+        let Ok((read, text, facts)) = next_note_answer(&mut rx).await else {
+            panic!("the body comes first");
+        };
+        assert_eq!(read.path, repo.join("notez/plan.md"));
+        assert_eq!(text, Ok("# Plan\n".to_string()));
+        assert_eq!(facts.size, Some(7));
+        assert!(facts.modified.is_some());
+        let Err((read, last)) = next_note_answer(&mut rx).await else {
+            panic!("then the commit");
+        };
+        assert_eq!(read.path, repo.join("notez/plan.md"));
+        let notes::LastCommit::At(date) = last else {
+            panic!("committed: {last:?}");
+        };
+        assert!(date.starts_with("2026-10-01T12:00:00"), "{date}");
+
+        for (rel, size) in [(".notez/scratch.md", 8), ("notez/*.md", 5)] {
+            spawn_note_read(&tx, answer(rel));
+            let Ok((_, _, facts)) = next_note_answer(&mut rx).await else {
+                panic!("{rel}: the body comes first");
+            };
+            assert_eq!(facts.size, Some(size), "{rel}");
+            let Err((_, last)) = next_note_answer(&mut rx).await else {
+                panic!("{rel}: then the commit");
+            };
+            assert_eq!(last, notes::LastCommit::Untracked, "{rel}");
+        }
+
+        // Landed in the app: the commit of a file the cursor has left is
+        // dropped, and the highlighted file's lands.
+        let key = repo.to_string_lossy().into_owned();
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.repos = vec![RepoStatus {
+            path: Some(key.clone()),
+            ..test_repo()
+        }];
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Notes;
+        let walk = app::NotesWalk {
+            key: key.clone(),
+            root: repo.clone(),
+            generation: 0,
+        };
+        let files = ["notez/plan.md", "notez/zz.md"]
+            .map(|rel| notes::NoteFile {
+                rel: rel.into(),
+                notez: Some("notez".into()),
+            })
+            .to_vec();
+        app.apply_notes_walk(walk, Ok(notes::Notes { files }));
+        let plan = app.claim_note_read().expect("plan");
+        spawn_note_read(&tx, plan.clone());
+        app.select_commit_down();
+        let other = app.claim_note_read().expect("the other file");
+        let Ok((read, text, facts)) = next_note_answer(&mut rx).await else {
+            panic!("body");
+        };
+        app.apply_note_facts(&read, facts);
+        app.apply_note_read(read, text);
+        let Err((read, last)) = next_note_answer(&mut rx).await else {
+            panic!("commit");
+        };
+        app.apply_note_commit(&read, last);
+        let held = app.note_body.as_ref().expect("held");
+        assert_eq!(held.path, other.path);
+        assert_eq!(
+            (&held.text, &held.facts, &held.last_commit),
+            (&None, &None, &None),
+            "nothing of the file the cursor left"
+        );
+        app.apply_note_commit(&other, notes::LastCommit::Untracked);
+        assert_eq!(
+            app.note_body.as_ref().and_then(|b| b.last_commit.clone()),
+            Some(notes::LastCommit::Untracked)
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     fn ci_key() -> app::RemoteKey {

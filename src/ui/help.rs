@@ -41,7 +41,7 @@ const GROUPS: [Group; 6] = [
             },
             Row {
                 key: "PgUp/PgDn",
-                desc: &["page detail or inspector"],
+                desc: &["page detail; H/L reader"],
             },
             Row {
                 key: "Tab ⇧Tab",
@@ -80,7 +80,7 @@ const GROUPS: [Group; 6] = [
             // row to spare at 80x24.
             Row {
                 key: "B m",
-                desc: &["info remotes / notes .md"],
+                desc: &["remotes; notez / markdown"],
             },
             Row {
                 key: "c",
