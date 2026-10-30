@@ -3,17 +3,16 @@
 The baton between leads: at most 60 lines, read on every start. GitHub
 (the issues and https://github.com/users/Gaurgle/projects/1) holds status,
 each ticket's issue holds its record and rulings, `docs/agent-log.md` holds
-finished work, the owner's dated words and the practical notes (the
-pre-0.8.0 baton is archived there verbatim, moved 2026-10-30). Also read
+finished work, the owner's dated words and the practical notes. Also read
 `release-plan.md`.
 
 ## Current lead
 
-None. Released 2026-10-29 14:00 CET by `claude-fable-5-1` (session
-`1ce7d882`) on "we can paus for today when this is done". Nothing running.
+Session `018zBNkN`, took over 2026-10-30 19:35 CET on `claude-fable-5-1`;
+the client switched it to `claude-opus-5-5` at 19:38 (not the lead's
+choice). Two `fz-worker` running since 19:40 (FZ-63, FZ-60).
 Leads run on the `at-a` machine as well as this one: worktree state is
 per machine, reconcile with `git worktree list` before trusting any list.
-Migrated to Relay 0.8.0 on 2026-10-30 by the advisor session, no lead active.
 
 ## Standing authority
 
@@ -24,7 +23,8 @@ Migrated to Relay 0.8.0 on 2026-10-30 by the advisor session, no lead active.
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
 
-Paused by his stop of 2026-10-29 15:35: nothing new starts until his word.
+His stop of 2026-10-29 15:35 lifted 2026-10-30 19:38 for tickets that
+need no input from him ("Dispatch the ones my input is not needed").
 Astra is the preferred lead, Fable when Astra is unavailable. Never `cargo
 install`, tag or release. UI rules from his FZ-45 look (2026-10-27) apply
 to every UI ticket; see the archive in the log.
@@ -35,6 +35,8 @@ to every UI ticket; see the archive in the log.
   `feat/115-markdown-reader`, branch CI 40876859246 green, verified in a
   scratch merge with `main`. Merge with `Closes #115` on his word.
 - #96: Ready to integrate, gate owner look. #88 (FZ-38): parked, uncommitted.
+- FZ-63 (#119), FZ-60 (#116): In progress from `41ecd76`, worktrees
+  `issue-119`, `issue-116` here; records on the issues.
 
 ## Open questions
 
@@ -42,19 +44,16 @@ to every UI ticket; see the archive in the log.
   only, or own. A dependency decision, then a ticket on his yes.
 - #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
 - #81 and #79: his answer on the existing footer and header test edits.
-- Pane 1 wheel coalescing ticket needs his yes; the flaky `clipboard::tests`
-  issue needs his yes.
+- Pane 1 wheel coalescing ticket and the flaky `clipboard::tests` issue
+  need his yes.
 
 ## Next step
 
-On his word: merge FZ-59, then FZ-63 (#119) and FZ-58 (#114) as the two
-worker slots, FZ-60 (#116) after them, FZ-41 after #96. FZ-52 not before
-0.8.0 and his explicit word. Try FZ-59: `cargo run --release
---manifest-path .claude/worktrees/issue-115/Cargo.toml` on the machine
-that holds the worktree.
+Review FZ-63 and FZ-60 as they report; both stop at Ready to integrate
+for his look. FZ-58 (#114) after FZ-63 merges (same tree). On his word:
+merge FZ-59 and #96, then FZ-41. FZ-52 not before 0.8.0 and his word.
+Try FZ-59: `cargo run --release --manifest-path
+.claude/worktrees/issue-115/Cargo.toml` on the machine that holds it.
 
-## Start the lead
-
-From the repo root: `claude --agent fz-coordinator` (normal permissions,
-Claude subscription, no provider override). A Codex lead starts from
-`AGENTS.md`.
+Start a lead from the repo root: `claude --agent fz-coordinator` (normal
+permissions, subscription, no provider override); Codex from `AGENTS.md`.

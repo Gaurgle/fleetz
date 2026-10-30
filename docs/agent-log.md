@@ -1621,6 +1621,15 @@ covered are Done, released or parked. The live parts of the 2026-10-17
   run it in a free slot; all slots were free, so it was dispatched at
   once. A small look change under the 2026-10-02 standing instruction.
 
+### Owner words of 2026-10-30
+
+- **2026-10-30, about 19:38 CET.** To the lead (session `018zBNkN`),
+  which had reported the 2026-10-29 15:35 stop and asked whether to merge
+  FZ-59 or dispatch: "Dispatch the ones my input is not keeded". Read as:
+  the stop is lifted for tickets that need no input from him; merges
+  gated on his look stay his. Dispatched FZ-63 (#119) and FZ-60 (#116);
+  FZ-58 held behind FZ-63 (same tree), ruling on #119 and #116.
+
 ### Rulings and one-time releases on finished tickets
 
 Owner releases here were given for single tickets that are Done; they do
