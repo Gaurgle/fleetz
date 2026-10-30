@@ -1629,6 +1629,11 @@ covered are Done, released or parked. The live parts of the 2026-10-17
   the stop is lifted for tickets that need no input from him; merges
   gated on his look stay his. Dispatched FZ-63 (#119) and FZ-60 (#116);
   FZ-58 held behind FZ-63 (same tree), ruling on #119 and #116.
+- **2026-10-30, between 19:45 and 20:10 CET.** Three existing-test edits
+  for FZ-60 approved (two questions, "Approve the edit", "Approve both");
+  FZ-63 `Enter` on a board: "todoz where a scope fits". Both on the issues.
+- **2026-10-30, 20:11 CET.** "stop for today after this": running
+  workers finish their turn, no new dispatch or review.
 
 ### Rulings and one-time releases on finished tickets
 

@@ -23,8 +23,8 @@ per machine, reconcile with `git worktree list` before trusting any list.
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
 
-His stop of 2026-10-29 15:35 lifted 2026-10-30 19:38 for tickets that
-need no input from him ("Dispatch the ones my input is not needed").
+Stopped 2026-10-30 20:11 ("stop for today after this"): the two running
+workers finish their turn, then nothing new until his word.
 Astra is the preferred lead, Fable when Astra is unavailable. Never `cargo
 install`, tag or release. UI rules from his FZ-45 look (2026-10-27) apply
 to every UI ticket; see the archive in the log.
@@ -35,8 +35,9 @@ to every UI ticket; see the archive in the log.
   `feat/115-markdown-reader`, branch CI 40876859246 green, verified in a
   scratch merge with `main`. Merge with `Closes #115` on his word.
 - #96: Ready to integrate, gate owner look. #88 (FZ-38): parked, uncommitted.
-- FZ-63 (#119), FZ-60 (#116): In progress from `41ecd76`, worktrees
-  `issue-119`, `issue-116` here; records on the issues.
+- FZ-63 (#119): rework round 1 (B1 Enter to todoz, C1, C2) after review
+  of `936c88bf9c1e`; FZ-60 (#116): building after three test edits he
+  approved. Both from `41ecd76`, worktrees `issue-119`, `issue-116` here.
 
 ## Open questions
 
@@ -49,8 +50,8 @@ to every UI ticket; see the archive in the log.
 
 ## Next step
 
-Review FZ-63 and FZ-60 as they report; both stop at Ready to integrate
-for his look. FZ-58 (#114) after FZ-63 merges (same tree). On his word:
+On his word: run `scripts/relay-scope` and the reviewer on FZ-63 and
+FZ-60; both stop at Ready to integrate for his look. FZ-58 (#114) after FZ-63 merges (same tree). On his word:
 merge FZ-59 and #96, then FZ-41. FZ-52 not before 0.8.0 and his word.
 Try FZ-59: `cargo run --release --manifest-path
 .claude/worktrees/issue-115/Cargo.toml` on the machine that holds it.
