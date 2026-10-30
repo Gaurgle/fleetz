@@ -71,6 +71,7 @@ and blink, watch mode re-sweeps on an interval.
 | `docs/repoz-print-design.md` | Proposed design: bash repoz rebuilt as a print mode of this binary, repoz's look held by a golden test, decisions D1 to D9, tickets FZ-46 to FZ-51, owner items O1 to O8 (naming deferred) |
 | `docs/coverage-cache-design.md` | Design for GitHub coverage and cache isolation (FZ-09): what the payload covers, the cache keyed by account, host and version, decisions C1 to C9, tickets FZ-09a to f, owner items accepted 2026-10-02 |
 | `.claude/agents/` | Claude-native workforce: `fz-coordinator`, `fz-worker`, `fz-reviewer`, `fz-small` |
+| `.claude/rules/` | Domain invariants, one path-scoped file per area; loaded when a matching source file is touched |
 | `docs/superpowers/` | Dated plans and specs, paired, for landed work |
 
 Read the relevant `docs/ideas.md` section before building anything it covers:
@@ -131,212 +132,21 @@ uses.
 
 ## Domain invariants - do not violate
 
-**`ui::panel_rects` must produce the same rectangles `render` draws.** It exists
-so mouse clicks can be hit-tested against what is on screen. Shared geometry
-lives in one function called by both (`detail::split_inspector`, and
-`ui::contributions::split_main_area` for the strip, over `dock_bottom`; the
-`notes` layout splits columns first with `detail::split_main`, stacks pane 1
-over the card with `split_inspector`, and splits pane 2 into tree and reader
-with `detail::split_notes_pane`); never
-reintroduce a second copy of that arithmetic. Drift here misroutes clicks silently, with nothing
-failing.
+The invariants are binding wherever the session runs. They live in
+`.claude/rules/`, one file per area, path-scoped so a session loads a file
+when it reads or edits a matching source file and pays for nothing else. A
+loader without path scoping (Codex, a subagent that skips project rules)
+reads the file for the module it is about to change:
 
-**`App::visible_repos` order must match the order the repo list draws.** The
-cursor walks one while the eye walks the other. A free-text query switches both
-to one ranked list, otherwise both group by section; both key off
-`App::has_text_query()`. Within a section the order is push recency, as repoz
-lists it (`sort_by_activity`), applied after the pass dedupe below.
+| File | Loads for | Holds |
+|---|---|---|
+| `.claude/rules/discovery.md` | `discovery.rs`, `main.rs`, `model.rs` | pass order, carrier rows, origin-first clone matching, pass 3 dedupe, dot-prefixed clones, hidden directories, repoz parity |
+| `.claude/rules/github.md` | `github.rs`, `cache.rs`, `contributions.rs`, `app.rs`, `main.rs` | batch on GraphQL, `first:` billing, launch from cache, fetch widening, `contributionsCollection` caching, cache only `data` |
+| `.claude/rules/ui.md` | `ui/`, `app.rs`, `contributions.rs`, `model.rs` | `panel_rects` and `render`, `visible_repos` order, one color ladder, contribution day glyph, `contributionLevel`, status vocabulary |
+| `.claude/rules/git-graph.md` | `git.rs`, `graph.rs`, `ui/detail.rs` | computed graph, commit list and graph on the same refs |
 
-**Discovery pass order is load-bearing** (`main.rs::assemble_view`). Pass 1
-scans the configured roots, pass 2 sweeps `$HOME`, pass 3 picks up local-only
-repos, and only then is anything "not cloned". A local clone wins over that
-fallback only through its exact origin, or through an unambiguous folder name
-in passes 1 and 2, or a repo under a hidden path reports as absent. A pass 3
-clone with no remote does not suppress the not-cloned row: it cannot say which
-repo it is.
-
-**GitHub-owned fields live on one carrier row per remote identity**, chosen at
-load and marked by the row's `owner` (`main.rs::build_repo_status`,
-`mark_local_carriers`). The poll, the moved-remote check, the startup fetch
-baseline and the activity sort follow that mark through one predicate
-(`carries`, `names_remote`), keyed by owner and name. A local-only row carries
-a repo only through its stored origin, never by name: matching by name put a
-stranger's CI badge on a same-named clone. Name-only matching survives in one
-place, a row or payload entry with no owner (a cache from before the field was
-asked for), and the first network poll upgrades it. Sweeps never touch the
-mark, so a poll and a sweep can land in either order. A carrier row the poll
-did not return keeps its GitHub fields and is marked "not in the last poll"
-(`App::not_in_last_poll`, a set of remote keys, never a row field): drawn
-dimmed, it no longer holds the 15 s `Pending` poll floor. Clearing those
-fields was rejected because a blank lamp reads as "no CI". A successful poll
-on another account rebuilds the rows from its dataset; a poll with no account
-key never does.
-
-**A clone is matched by its `origin` remote first, and by its folder name only
-where the remote cannot decide** (`discovery::Wanted::match_clone`). The folder
-name counts when there is no usable origin and the name is unambiguous across
-the full dataset, or when the origin names an unknown repo of the same owner
-(a rename). A folder name is only a convention: a clone of `portfolio-site` in
-`~/repos/DevOps_Portfolio` reported as not cloned, and an unconditional
-fallback let a checkout whose origin named another owner claim the row. The
-remote is read from `.git/config`, not `git remote get-url`, since it runs for
-every candidate in both sweeps. The owner is part of the key, so a clone of
-someone else's same-named repo can't claim yours. A linked worktree has no
-config of its own and keeps the name match, or it would race its main clone for
-the row. When several clones match one repo, the primary is chosen by a fixed
-order (exact remote, github.com host, a `.git` directory, earlier root,
-shallower path, then path), never by filesystem order
-(`discovery::CheckoutRank`, which assembly reuses for local carriers). Matching
-diverges from repoz on purpose: repoz still matches clones on names only.
-
-**Pass 3 dedupes by canonical path only** (`main.rs::unclaimed_local`, the raw
-path when `canonicalize` fails), as repoz does, so one directory reached
-through two root spellings is one row. A dirty extra checkout, or a same-named
-local-only repo, gets its own row, which carries GitHub fields only if it is
-its remote's carrier. Deduping by folder name hid a dirty second checkout and
-drew two same-named local repos as one. The canonical path is a comparison key
-only: a row displays the path as its root was spelled.
-
-**A local clone may be dot-prefixed when its GitHub repo is not** (`dotfiles`
-lives at `~/.dotfiles`). Discovery matches both spellings and reports the
-undotted name: match, glyph lookup and dedupe all key on the GitHub owner and
-name (`discovery::matched_name`, `discovery::repo_name_for_path`). A
-local-only row is matched only through its stored origin, so a remote-less
-`~/.dotfiles` outside the window shows no kind glyph.
-
-**Hidden directories are traversed inside a configured scan root, but not in
-the `$HOME` sweep.** A root you named (`repo_dir`, `extra_dirs`) yields its
-repos hidden or not, as repoz does; the `$HOME` sweep blanket-skips
-dot-directories, since descending every `~/.local` and `~/.npm` costs far more
-than it finds. `PRUNE_DIRS` applies to both and mirrors repoz's `PRUNE_EXPR`.
-
-**Discovery parity with repoz is enforced by test, not by memory.**
-`discovery::repoz_parity` runs `repoz -d` against a fixture tree and diffs the
-paths, skipping loudly when repoz is absent. Fixture repos are deliberately
-dirty so a pure-local repoz run reports them all, and the fixture root is
-canonicalized: repoz resolves `/var` to `/private/var` and fleetz does not.
-
-**One color ladder per concept.** `badges::status_color` is the single source
-for what a sync state looks like; the detail pane calls it rather than keeping
-its own. `ui::filter_color` maps a quick filter to the same color its badge
-already uses. Two ladders always drift.
-
-Contribution intensity is the one place with two ladders, green for GitHub and
-blue for local, because the two count different things. Both are reached
-through one `colors::contrib_ladder(source)`, which the cells and the Less/More
-legend call, so a source cannot leave half the strip on the other palette.
-
-Both ladders are spaced evenly in CIELAB **L***, in saturation as well as
-lightness: even *luminance* is the wrong metric and leaves the middles too
-dark. The greens are tuned from github.com's, not sampled. The blue tops out
-lower, carrying 0.07 of luminance to green's 0.72, so at the green's top the
-bluest colour sRGB has reads as paper. Even L*, rate parity and chroma are the
-invariants, not equal luminance; tests pin each, and `colors.rs` has the why.
-
-**A contribution day is a Nerd Font square icon, not a block element.** The
-icon is drawn by the font to sit on the text line, so it lines up with the
-`Mon`/`Wed`/`Fri` labels. A half block cannot: it fills the top or bottom half
-of the cell and sits a quarter row off the label's centre either way, which is
-how the strip looked for a long time. The three sizes are three icons measured
-in the font (`CellSize::glyph`), each one column wide as ratatui lays it out,
-which the grid's column arithmetic and `slot_at`'s click routing depend on.
-
-**The GitHub strip draws GitHub's `contributionLevel`, not a bucket of the
-count.** github.com trims outliers before scaling each year and the rule is
-not reproducible: measured over three years, a year whose busiest day had 83
-contributions was scaled as if the top were 47, and one with an 86-day as if
-it were 10. Quartiles of the max drew a 38-commit day two shades paler than
-github.com. The field is free (cost 1, nodeCount 0, with and without it). The
-`recent` window's levels are never used: its `from` rotates, so they are on a
-scale that changes every few minutes. Days it overwrites are put on the year
-window's scale by example (`Calendar::derive_missing_levels`), and a payload
-cached before the field was asked for falls back to `intensity`.
-
-**The compact history graph is computed, not parsed.** `git::graph` asks for
-`%p` and `crate::graph` derives the topology, as lazygit does. Re-adding
-`--graph` brings back filler rows carrying no commit -- which forced row and
-commit indices apart everywhere -- and single-column diagonals, undrawable in
-box characters. `%p` not `%P`, or a parent hash is spelled differently from the
-child's own `%h` and every pipe dangles. The expanded view still reproduces
-git's own drawing.
-
-**The commit list and the graph must walk the same refs.** `git::commits` and
-`git::graph` are two `git log` runs and the detail pane joins them by hash: the
-churn beside a subject, and everything the inspector draws, is a graph row
-looked up in the commit list. Reading HEAD in one and the union of the local
-branches in the other left a side-branch commit drawn but unfindable, and the
-views that indexed rather than resolved it named the row below the caret. `-n`
-caps the union, not each ref, so the wider read returns the same 200 commits
-for the same cost.
-
-**Status vocabulary is split by kind.** Counters are numeric (`3↓ 2↑ 4!`),
-categorical states are words (`not cloned`). A not-cloned repo has all counters
-at zero and must never render as synced: `RepoStatus::is_synced()` excludes it
-deliberately.
-
-**Batch on GraphQL, target on git.** Opposite cost shapes, and the code leans
-on both. One GraphQL call returns every repo's state, so never split it into
-per-repo queries: the rate limit has a floor of one point per call, so fifty
-small queries cost more than one big one and tell you less. `git fetch` is
-priced per remote, so use the poll's `pushed_at` diff to find which remotes
-moved (`remotes_that_moved`) and fetch only those.
-
-**GraphQL bills the `first:` you ask for, not what comes back**, and nested
-connections multiply. The org fallback asked 25 orgs x 50 repos to fetch 17
-from 4: 83% of the query's nodes, pricing the poll at 26 points, or 3120/hour
-at the 30s interval against a 5000/hour budget. One fleetz idled at 62% of the
-account and four exhausted it; sized to what it retrieves (`MAX_ORGS`,
-`ORG_REPO_LIMIT`) the identical result costs 3. Measure with `rateLimit { cost
-nodeCount }` before and after: two comments in `github.rs` disagreed about this
-for months and the optimistic one was wrong. `totalCount` and `pageInfo` on a
-connection the query already pages are free (measured for FZ-09b: cost 3 and
-1030 nodes with and without them), which is how the coverage note knows
-"50 of 95" at no cost.
-
-The first poll has no previous dataset to diff, and fetching every repo past
-the cutoff cost ~0.8s each. It uses a disk baseline: `FETCH_HEAD`'s mtime is
-when that clone last fetched, so a remote pushed before then is already in hand
-(`stale_remotes`). Unknowns must fetch -- no `pushed_at` means no GitHub match,
-no `FETCH_HEAD` means never fetched -- or the fleet looks more current than it
-is.
-
-**Launch paints from the cache, however stale.** Blocking on the GraphQL
-dataset cost 6-9s before the first frame, so startup passes
-`CacheMode::AnyCached` and the first tick's poll replaces it. That only works
-if the poll is due: a cache-served load is not an attempt and must leave
-`GithubFreshness::last_attempt` unset (`DatasetSource::Cache`), or launch
-shows the last session's numbers for a whole interval. The file is keyed by
-format version, host, account and `repo_limit` (`cache::KeyedCache`): launch
-reads this credential's saved copy after one `gh` lookup bounded at 2 s
-(`github::LAUNCH_LOOKUP_BOUND`), and a credential with no saved copy paints
-nothing and waits for GitHub, never another account's data. The unkeyed
-legacy file is read only while no account has a keyed file. Signed out, or
-after a lookup that timed out, launch shows the newest saved copy. Never
-re-add `-p` to the key (`cache.rs`), which decides whether PR data is
-*drawn*, not whether it is fetched.
-
-**Never widen the GitHub fetch without checking the cache.** Results are cached
-on disk (`cache.rs`); `r` is a local sweep plus a poll, `R` a full reload that
-bypasses the cache, and under a known rate limit both send nothing (`r` sweeps,
-`R` rebuilds from the dataset in memory; FZ-10b, `docs/api-budget-design.md`
-4.3). Polls pace themselves on the budget headers and back off on failures
-(`ApiBudget`, `GithubBackoff` in `app.rs`); never add an unconditional retry.
-A field with no `first:` is free, which is how the contribution calendars ride
-along at no cost; one with a `first:` is not, and a request never is.
-
-**GitHub caches `contributionsCollection` against the `from` date alone**, so
-the `recent` window rotates its `from` and must keep doing so: a fixed one
-re-reads its own stale answer all day, and the strip drew 3 against
-github.com's 11. The merged range is fixed at seven days, not derived from the
-window, because a cached payload was built under a rotation the parser cannot
-recover. Measurements, and the undocumented behaviour this leans on, are at
-`contributions.rs::ROTATION_HOLD_SECS`.
-
-**Only a response carrying `data` may be cached** (`accept_response`). GraphQL
-errors arrive as HTTP 200, so a rate limit is a plausible 95-byte body. Caching
-it before checking `errors` overwrote the good payload and took the
-`read_stale` fallback with it, which the offline and non-2xx paths both need:
-the dashboard went blank until a poll succeeded.
+A new invariant goes into the file whose paths it governs; a cross-cutting
+one goes here.
 
 ## Relationship to repoz
 
