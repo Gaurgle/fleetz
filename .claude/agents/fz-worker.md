@@ -15,8 +15,11 @@ The handoff must name the ticket, base commit, branch, absolute worktree path
 and allowed files. If any is missing or contradicts what you find on disk,
 stop and report it instead of guessing.
 
-Read `CLAUDE.md` and `docs/agent-workflow.md` in the worktree. The domain
-invariants in `CLAUDE.md` are binding. Read the relevant `docs/ideas.md`
+Read `CLAUDE.md` in the worktree; its domain invariants are binding. From
+`docs/agent-workflow.md` read only the sections "Validation contract",
+"Blockers and rework", "Isolation and integration" and "Writing files". The
+rest is the coordinator's; your handoff already carries what you need from
+it. Read the relevant `docs/ideas.md`
 section before building anything it covers.
 
 ## Where you work
@@ -94,7 +97,7 @@ surviving is a rejection you could have caught.
 Evidence is stale once you edit again: a check that ran before your last
 change does not count, rerun it.
 
-Return the worker block from `docs/agent-workflow.md`. For each acceptance
+Return what the handoff's `Return` list asks for. For each acceptance
 criterion give one evidence entry: the test name or command that shows it and
 an excerpt of its real output, or `unresolved` with the reason. A criterion
 without evidence is unresolved, however confident you are. Then changed and

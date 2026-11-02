@@ -97,7 +97,10 @@ workflow alongside the Relay workers and reviewer.
    background command; the harness tells you when it ends.
 5. Verify the result against current `main` yourself: fmt, clippy with
    warnings denied, and the full test suite on the combined result.
-6. Merge under the safe-merge rule, or stop and ask if it does not apply.
+6. Run `scripts/relay-gate <worktree> <accepted diff id> <verified-on>`
+   (see "Safe-merge rule" in `docs/agent-workflow.md`). Merge only on exit
+   0 under the safe-merge rule; otherwise fix what it names, or stop at
+   Ready to integrate and ask.
    The merge commit is `Merge branch '<branch>' (#<issue>)` with
    `Closes #<issue>` in its body.
    Either way report with the owner-facing format, including the command to

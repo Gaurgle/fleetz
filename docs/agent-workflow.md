@@ -1,4 +1,4 @@
-<!-- relay-template: 0.8.0; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
+<!-- relay-template: 0.8.1; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
 <!-- relay-board: owner=Gaurgle project=1 prefix=FZ -->
 # Agent workflow for the release effort
 
@@ -281,8 +281,9 @@ escalate with the evidence.
 7. After the reviewer accepts, the coordinator commits exactly the reviewed
    diff on the ticket branch and pushes the branch, which runs CI. It verifies
    integration against current `main` in an isolated checkout, reports conflicts
-   and runs checks on the combined result, then merges under the safe-merge
-   rule. If `main` moves, revalidate the changed integration result before merging.
+   and runs checks on the combined result, runs `scripts/relay-gate`, then
+   merges under the safe-merge rule. If `main` moves, revalidate the changed
+   integration result before merging; the gate refuses until you do.
    Worktree checks alone do not establish integration safety. Wait for CI with
    `gh run watch <run-id> --exit-status` as a background command, so the
    harness reports when it ends; never poll with short sleeps.
@@ -331,6 +332,16 @@ The coordinator may merge a ticket branch into `main` and push when all hold:
 - The ticket's acceptance does not rest on Andreas's judgment. Interaction,
   layout and look need him to try the branch build first.
 
+The first four are checked by a script, not by reading:
+`scripts/relay-gate <worktree> <accepted diff id> <verified-on>`, where
+`<verified-on>` is the `main` commit the combined checks ran on. It proves
+the committed tree is the accepted diff id, the pushed branch is that
+commit, scope and guarded files hold, CI at that commit is green and nothing
+landed after the combined checks. Merge only on exit 0, and record its
+result as the gate in the ticket record. `--guarded-approved` only with
+Andreas's ruling on the issue. Persistence and cache formats, external
+contracts and owner-look acceptance stay the coordinator's judgment.
+
 Merge with `git merge --no-ff` so one ticket is one revertable unit. Stage only
 the ticket's files, never `git add -A`. After the push, confirm CI on `main`;
 if it is red, revert the merge, push the revert and report. If a condition
@@ -372,7 +383,7 @@ Every piece of Relay state has one home, chosen by when it is read:
   (`gh issue comment --edit-last` or the comment's URL). It holds base,
   branch, worktree, worker and reviewer with model and effort, each review
   as diff id plus verdict and tokens, commit SHA, CI run id, the combined
-  verify SHA, the gate (`none`, `owner look`, `dependency`, `ci red`) and
+  verify SHA, the gate (`relay-gate holds`, `owner look`, `dependency`, `ci red`) and
   links to rulings. SHAs and run ids, not timestamps, say where a ticket
   is. Rulings stay separate comments, posted when made.
 - **Read never on the start path: the log**, [agent-log.md](agent-log.md).
@@ -408,6 +419,14 @@ four homes, or nowhere:
 - nowhere: most tickets, and a valid answer.
 
 The lesson is never kept in the baton, and the log notes which home got it.
+
+**Forget at the milestone.** Rules only accumulate unless something takes
+them out. At each milestone retro, and when a role's model family changes,
+the lead goes through the rules in `.claude/agents/`, this file and the
+path-scoped rules, and for each asks which failure in the log or on the
+issues it prevents and whether that failure has occurred since the last model
+change. Rules with no answer are proposed to the owner for removal; they are
+cut only with the owner's yes, and the log notes what went.
 Post every ruling on a ticket (scope, design or test decisions) as a comment
 on its issue when it is made.
 
@@ -480,8 +499,9 @@ Allowed files: <paths; read other files as needed>
 Pointers: <file:line for each place the change lands; design doc sections by heading; never "read all of">
 Dependencies accepted: <IDs or none>
 
-Read applicable repository instructions and docs/agent-workflow.md.
-Deliver exactly this ticket's outcome. Keep unrelated improvements out.
+Read applicable repository instructions, and from docs/agent-workflow.md
+only "Validation contract", "Blockers and rework", "Isolation and
+integration" and "Writing files". Deliver exactly this ticket's outcome. Keep unrelated improvements out.
 Read from the pointers with ranges, not whole files.
 Verify the reported issue before fixing it; report contradictory evidence.
 Do not change dependencies, CI, persistence schemas or external API contracts
