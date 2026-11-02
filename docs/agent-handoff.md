@@ -8,10 +8,10 @@ finished work, the owner's dated words and the practical notes. Also read
 
 ## Current lead
 
-Session `e47a3967`, `claude-fable-5-1`, `at-a` machine, took over
-2026-11-02 13:50 CET from the baton released 2026-10-30 20:17 by
-`018zBNkN`. Nothing running. Worktrees are per machine: `issue-119` and
-`issue-116` live on the other one; check `git worktree list` first.
+Session `018zBNkN`, `claude-fable-5-1`, `jean-1`, took over 2026-11-02
+20:16 CET from `e47a3967` on `at-a` (smbp, Tailscale offline since about
+19:20, confirmed with Andreas). Nothing running. Worktrees are per
+machine: `issue-119`, `issue-116` and `issue-115` are on `at-a` only.
 
 ## Standing authority
 
