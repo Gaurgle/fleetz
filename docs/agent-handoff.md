@@ -8,11 +8,10 @@ finished work, the owner's dated words and the practical notes. Also read
 
 ## Current lead
 
-None. Released 2026-10-30 20:17 CET by session `018zBNkN` (took over
-19:35 on `claude-fable-5-1`, client switched it to `claude-opus-5-5` at
-19:38). Nothing running: both workers reported and stopped.
-Leads run on the `at-a` machine as well as this one: worktree state is
-per machine, reconcile with `git worktree list` before trusting any list.
+Session `e47a3967`, `claude-fable-5-1`, `at-a` machine, took over
+2026-11-02 13:50 CET from the baton released 2026-10-30 20:17 by
+`018zBNkN`. Nothing running. Worktrees are per machine: `issue-119` and
+`issue-116` live on the other one; check `git worktree list` first.
 
 ## Standing authority
 
@@ -37,7 +36,9 @@ to every UI ticket; see the archive in the log.
 - #96: Ready to integrate, gate owner look. #88 (FZ-38): parked, uncommitted.
 - FZ-63 (#119): round 1 fixed, diff `b68ed43af0f5` unreviewed; README
   `Enter` row still to fix. FZ-60 (#116): built, diff `47ed96878515`,
-  unreviewed. Both from `41ecd76`, uncommitted in `issue-119`, `issue-116`.
+  unreviewed. Both from `41ecd76`, uncommitted in `issue-119`, `issue-116`
+  on the other machine. Both ids are pre-0.8.1: rerun `scripts/relay-scope
+  <worktree> 41ecd76` there and replace them before any review.
 
 ## Open questions
 
