@@ -30,12 +30,9 @@ Never `cargo install`, tag or release. UI rules from his FZ-45 look
 
 ## In flight
 
-- FZ-59 (#115): Ready to integrate, gate owner look. `b5b4168` on
-  `feat/115-markdown-reader`, branch CI 40876859246 green, verified in a
-  scratch merge with `main`. Merge with `Closes #115` on his word.
-  Checked out on jean-1 too (`issue-115`, release build done).
-- #96 (`19a21d6`): Ready to integrate, gate owner look; on jean-1 as
-  `issue-96`, release build done. #88 (FZ-38): parked, uncommitted on at-a.
+- FZ-59 (#115, `b5b4168`, CI 40876859246 green) and #96 (`19a21d6`):
+  Ready to integrate, gate owner look; worktrees `issue-115` and
+  `issue-96` on jean-1 and at-a. #88 (FZ-38): parked, uncommitted on at-a.
 - FZ-63 (#119): round 1 fixed, diff `b68ed43af0f5` unreviewed; README
   `Enter` row still to fix. FZ-60 (#116): built, diff `47ed96878515`,
   unreviewed. Both from `41ecd76`, uncommitted in `issue-119`, `issue-116`
