@@ -1634,6 +1634,11 @@ covered are Done, released or parked. The live parts of the 2026-10-17
   FZ-63 `Enter` on a board: "todoz where a scope fits". Both on the issues.
 - **2026-10-30, 20:11 CET.** "stop for today after this": running
   workers finish their turn, no new dispatch or review.
+- **2026-11-02, 20:18 CET.** On jean-1, the at-a lead's machine offline:
+  "good. lets keep wroking then. you choose tickets as you see fit best".
+  Read as: the 10-30 stop is lifted; the 2026-10-27 standing authority to
+  choose and dispatch applies, with its limits (two workers plus one
+  small, look items stop for him, FZ-52 and the bump need his word).
 
 ### Rulings and one-time releases on finished tickets
 

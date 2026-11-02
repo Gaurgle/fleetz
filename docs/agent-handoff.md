@@ -22,8 +22,9 @@ machine: `issue-119`, `issue-116` and `issue-115` are on `at-a` only.
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
 
-Stopped 2026-10-30 20:11 ("stop for today after this"): nothing new until
-his word. Astra is the preferred lead, Fable when Astra is unavailable.
+The 10-30 stop was lifted 2026-11-02 20:18 ("lets keep working then. you
+choose tickets as you see fit best", log). Astra is the preferred lead,
+Fable when Astra is unavailable.
 Never `cargo install`, tag or release. UI rules from his FZ-45 look
 (2026-10-27) apply to every UI ticket; see the archive in the log.
 
@@ -32,7 +33,9 @@ Never `cargo install`, tag or release. UI rules from his FZ-45 look
 - FZ-59 (#115): Ready to integrate, gate owner look. `b5b4168` on
   `feat/115-markdown-reader`, branch CI 40876859246 green, verified in a
   scratch merge with `main`. Merge with `Closes #115` on his word.
-- #96: Ready to integrate, gate owner look. #88 (FZ-38): parked, uncommitted.
+  Checked out on jean-1 too (`issue-115`, release build done).
+- #96 (`19a21d6`): Ready to integrate, gate owner look; on jean-1 as
+  `issue-96`, release build done. #88 (FZ-38): parked, uncommitted on at-a.
 - FZ-63 (#119): round 1 fixed, diff `b68ed43af0f5` unreviewed; README
   `Enter` row still to fix. FZ-60 (#116): built, diff `47ed96878515`,
   unreviewed. Both from `41ecd76`, uncommitted in `issue-119`, `issue-116`
@@ -50,11 +53,11 @@ Never `cargo install`, tag or release. UI rules from his FZ-45 look
 
 ## Next step
 
-On his word: FZ-63 README line (round 2), then re-review; review FZ-60.
-Both stop at Ready to integrate for his look. FZ-58 (#114) after FZ-63 merges (same tree). On his word:
-merge FZ-59 and #96, then FZ-41. FZ-52 not before 0.8.0 and his word.
-Try FZ-59: `cargo run --release --manifest-path
-.claude/worktrees/issue-115/Cargo.toml` on the machine that holds it.
+His look on FZ-59 and #96 (`cargo run --release --manifest-path
+.claude/worktrees/issue-115/Cargo.toml`, same with `issue-96`), then
+gate and merge; FZ-41 (#97) is dispatched once #96 is on `main`. On at-a
+when it is back: FZ-63 README line (round 2) and re-review, review
+FZ-60, FZ-58 (#114) after FZ-63 merges. FZ-52 not before 0.8.0 and his word.
 
 Start a lead from the repo root: `claude --agent fz-coordinator` (normal
 permissions, subscription, no provider override); Codex from `AGENTS.md`.
