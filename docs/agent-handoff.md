@@ -22,11 +22,10 @@ Session `e47a3967`, `claude-fable-5-1`, `at-a` machine, took over
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
 
-Stopped 2026-10-30 20:11 ("stop for today after this"): nothing new
-until his word.
-Astra is the preferred lead, Fable when Astra is unavailable. Never `cargo
-install`, tag or release. UI rules from his FZ-45 look (2026-10-27) apply
-to every UI ticket; see the archive in the log.
+Stopped 2026-10-30 20:11 ("stop for today after this"): nothing new until
+his word. Astra is the preferred lead, Fable when Astra is unavailable.
+Never `cargo install`, tag or release. UI rules from his FZ-45 look
+(2026-10-27) apply to every UI ticket; see the archive in the log.
 
 ## In flight
 
