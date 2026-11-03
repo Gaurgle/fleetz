@@ -1177,10 +1177,12 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
     }
 
-    // The `ci` view: the freshness line, pinned with the header so it stays
-    // in sight while the runs scroll, then one row per held run.
+    // The `ci` view: the freshness line and, while runs are listed, the
+    // headline naming their columns, both pinned with the header so they
+    // stay in sight while the runs scroll; then one row per held run.
     if view == HistoryView::Ci {
         lines.push(crate::ui::ci::first_line(app, chrono::Local::now()));
+        lines.extend(crate::ui::ci::headline(app, width, chrono::Local::now()));
         pinned_rows = lines.len();
         let count = app.selected_commit_count();
         let selected = app.detail_selected().min(count.saturating_sub(1));

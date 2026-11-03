@@ -23,11 +23,24 @@ pub const INFO_RUNS: usize = 3;
 /// The `info` section's pointer to the full list, while no runs are held.
 pub const RUNS_HINT: &str = "] for runs";
 
-/// Column caps, so one long workflow or branch name cannot take the title's
-/// room. Longer names truncate with `…`.
-const WORKFLOW_MAX: usize = 16;
-const BRANCH_MAX: usize = 24;
-const EVENT_MAX: usize = 17;
+/// Column caps, so one long workflow, branch or trigger cannot take the
+/// title's room. Longer names truncate with `…`.
+const WORKFLOW_MAX: usize = 40;
+const BRANCH_MAX: usize = 30;
+const EVENT_MAX: usize = 18;
+
+/// The narrowest title worth drawing. Below it the trigger goes first, to
+/// give the title room, and then the title itself.
+const TITLE_MIN: usize = 20;
+
+/// How far the workflow name truncates before the branch gives way; past
+/// both, the two shrink to nothing and duration and age stay.
+const WORKFLOW_MIN: usize = 8;
+const BRANCH_MIN: usize = 6;
+
+/// The headline's words, one per column after the lamp's: workflow,
+/// branch, trigger, title, duration, age.
+const HEADINGS: [&str; 6] = ["workflow", "branch", "trigger", "title", "duration", "age"];
 
 /// Blank columns between two run columns.
 const COLUMN_GAP: &str = "  ";
@@ -78,7 +91,7 @@ pub fn run_rows(
         return Vec::new();
     };
     let dim_pending = app.watch_mode && !app.blink_on;
-    let widths = Widths::of(&state.runs, now);
+    let widths = Widths::of(&state.runs, now).headed();
     state
         .runs
         .iter()
@@ -87,6 +100,23 @@ pub fn run_rows(
             run_line(run, &widths, width, now, dim_pending).marked(i == selected, focused)
         })
         .collect()
+}
+
+/// The headline over the run rows (FZ-40): each shown column's word, dim,
+/// in the columns `run_rows` draws at the same `width`. `None` while no
+/// runs are listed. Not a run, so not a cursor stop.
+pub fn headline(app: &App, width: usize, now: DateTime<Local>) -> Option<Line<'static>> {
+    let state = app.selected_ci().and_then(|(_, state)| state)?;
+    if state.runs.is_empty() {
+        return None;
+    }
+    let columns = Widths::of(&state.runs, now).headed().fit(width);
+    let mut text = " ".repeat(MARKER_W + 2);
+    text.extend(cells(&columns, HEADINGS).into_iter().map(|(_, cell)| cell));
+    Some(Line::from(Span::styled(
+        text,
+        Style::default().fg(colors::OVERLAY),
+    )))
 }
 
 /// The `info` view's `ci` section under its label, from what is in hand and
@@ -322,17 +352,124 @@ impl Widths {
         }
     }
 
-    /// Every column but the title's, with the marker, the lamp and the gaps.
-    fn fixed(&self) -> usize {
-        MARKER_W
-            + 2
-            + self.workflow
-            + self.branch
-            + self.event
-            + self.duration
-            + self.age
-            + COLUMN_GAP.len() * 5
+    /// Wide enough for the headline's words too, so a column of `ci`
+    /// names still reads `workflow` over it.
+    fn headed(self) -> Self {
+        let [workflow, branch, event, _, duration, age] = HEADINGS.map(str::len);
+        Self {
+            workflow: self.workflow.max(workflow),
+            branch: self.branch.max(branch),
+            event: self.event.max(event),
+            duration: self.duration.max(duration),
+            age: self.age.max(age),
+        }
     }
+
+    /// The columns a row `width` wide shows (spec "Amendment 2026-10-22"):
+    /// every column while the title keeps `TITLE_MIN`, the title taking the
+    /// slack; then without the trigger; then without the title; then the
+    /// workflow name truncates to `WORKFLOW_MIN`, then the branch to
+    /// `BRANCH_MIN`, then both to nothing. Duration and age always stay.
+    fn fit(&self, width: usize) -> Columns {
+        let gap = COLUMN_GAP.len();
+        let core = |workflow: usize, branch: usize| {
+            MARKER_W
+                + 2
+                + workflow
+                + if branch > 0 { gap + branch } else { 0 }
+                + gap
+                + self.duration
+                + gap
+                + self.age
+        };
+        let mut columns = Columns {
+            workflow: self.workflow,
+            branch: self.branch,
+            event: None,
+            title: None,
+            slack: 0,
+            duration: self.duration,
+            age: self.age,
+        };
+        let base = core(self.workflow, self.branch);
+        let with_event = base + gap + self.event;
+        if width >= with_event + gap + TITLE_MIN {
+            columns.event = Some(self.event);
+            columns.title = Some(width - with_event - gap);
+        } else if width >= base + gap + TITLE_MIN {
+            columns.title = Some(width - base - gap);
+        } else {
+            let mut over = base.saturating_sub(width);
+            let mut give = |column: &mut usize, floor: usize| {
+                let given = column.saturating_sub(floor).min(over);
+                *column -= given;
+                over -= given;
+            };
+            give(&mut columns.workflow, WORKFLOW_MIN);
+            give(&mut columns.branch, BRANCH_MIN);
+            give(&mut columns.workflow, 0);
+            give(&mut columns.branch, 0);
+            columns.slack = width.saturating_sub(core(columns.workflow, columns.branch));
+        }
+        columns
+    }
+}
+
+/// What one row `width` wide shows, from `Widths::fit`: the run rows and the
+/// headline both lay out through it, so the words sit over their columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Columns {
+    workflow: usize,
+    /// Zero once the branch has shrunk away, its gap with it.
+    branch: usize,
+    event: Option<usize>,
+    title: Option<usize>,
+    /// Blank columns before the duration while there is no title to fill.
+    slack: usize,
+    duration: usize,
+    age: usize,
+}
+
+/// Which column a cell is, for its style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cell {
+    Workflow,
+    Branch,
+    Event,
+    Title,
+    Duration,
+    Age,
+    Blank,
+}
+
+/// The cells of a row after the lamp, gaps included: `text` is the workflow,
+/// branch, trigger, title, duration and age, each padded or truncated with
+/// `…` to its column, the duration and the age right-aligned.
+fn cells(columns: &Columns, text: [&str; 6]) -> Vec<(Cell, String)> {
+    let [workflow, branch, event, title, duration, age] = text;
+    let pad = |text: &str, w: usize| format!("{:<w$}", crate::ui::truncate(text, w));
+    let gap = || (Cell::Blank, COLUMN_GAP.to_string());
+    let mut out = vec![(Cell::Workflow, pad(workflow, columns.workflow))];
+    if columns.branch > 0 {
+        out.extend([gap(), (Cell::Branch, pad(branch, columns.branch))]);
+    }
+    if let Some(w) = columns.event {
+        out.extend([gap(), (Cell::Event, pad(event, w))]);
+    }
+    match columns.title {
+        Some(w) => out.extend([gap(), (Cell::Title, pad(title, w))]),
+        None => out.push((Cell::Blank, " ".repeat(columns.slack))),
+    }
+    out.extend([
+        gap(),
+        (
+            Cell::Duration,
+            format!("{duration:>w$}", w = columns.duration),
+        ),
+        gap(),
+        (Cell::Age, format!("{age:>w$}", w = columns.age)),
+    ]);
+    out
 }
 
 /// One run row before the cursor is applied.
@@ -362,7 +499,8 @@ impl RunLine {
 }
 
 /// The cells of one run row (spec section E): lamp, workflow, branch, event,
-/// title, duration, age. The title takes whatever `width` leaves.
+/// title, duration, age, as many as `width` holds (`Widths::fit`). The title
+/// takes whatever `width` leaves.
 pub fn run_line(
     run: &WorkflowRun,
     widths: &Widths,
@@ -376,37 +514,37 @@ pub fn run_line(
     // `ci_display` draws no lamp for a repo without CI; a run always has
     // one, so a run with no verdict gets the same ring in that grey.
     let glyph = if glyph.is_empty() { "◉" } else { glyph };
-    let pad = |text: &str, w: usize| format!("{:<w$}", crate::ui::truncate(text, w));
-    let title_w = width.saturating_sub(widths.fixed());
     let dim = Style::default().fg(colors::OVERLAY);
-    let spans = vec![
-        Span::styled(format!("{glyph} "), Style::default().fg(color)),
-        Span::styled(
-            pad(workflow_text(run), widths.workflow),
-            Style::default()
-                .fg(colors::TEXT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(COLUMN_GAP),
-        Span::styled(
-            pad(branch_text(run), widths.branch),
-            Style::default().fg(colors::SAPPHIRE),
-        ),
-        Span::raw(COLUMN_GAP),
-        Span::styled(pad(&run.event, widths.event), dim),
-        Span::raw(COLUMN_GAP),
-        Span::styled(pad(&run.title, title_w), Style::default().fg(colors::TEXT)),
-        Span::raw(COLUMN_GAP),
-        Span::styled(
-            format!("{:>w$}", run_duration(run, utc_now), w = widths.duration),
-            dim,
-        ),
-        Span::raw(COLUMN_GAP),
-        Span::styled(
-            format!("{:>w$}", run_age(run, utc_now), w = widths.age),
-            dim,
-        ),
+    let duration = run_duration(run, utc_now);
+    let age = run_age(run, utc_now);
+    let text = [
+        workflow_text(run),
+        branch_text(run),
+        run.event.as_str(),
+        run.title.as_str(),
+        duration.as_str(),
+        age.as_str(),
     ];
+    let mut spans = vec![Span::styled(
+        format!("{glyph} "),
+        Style::default().fg(color),
+    )];
+    spans.extend(
+        cells(&widths.fit(width), text)
+            .into_iter()
+            .map(|(cell, text)| match cell {
+                Cell::Workflow => Span::styled(
+                    text,
+                    Style::default()
+                        .fg(colors::TEXT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Cell::Branch => Span::styled(text, Style::default().fg(colors::SAPPHIRE)),
+                Cell::Title => Span::styled(text, Style::default().fg(colors::TEXT)),
+                Cell::Event | Cell::Duration | Cell::Age => Span::styled(text, dim),
+                Cell::Blank => Span::raw(text),
+            }),
+    );
     RunLine(spans, width)
 }
 
@@ -1168,7 +1306,7 @@ mod tests {
             .expect("the first line");
         let held = runs();
         for (i, run) in held.iter().enumerate() {
-            let row = &rows[first + 1 + i];
+            let row = &rows[first + 2 + i];
             assert!(row.contains(&head(run)), "row {i}: {row}");
             assert_eq!(row.contains('▸'), i == 0, "cursor on the first: {row}");
         }
@@ -1251,6 +1389,179 @@ mod tests {
         let click = hits.at(hits.body.x + 4, y).expect("a run row");
         app.click_detail(&click);
         assert_eq!(app.detail_selected(), 2);
+    }
+
+    // --- The `ci` view's width (FZ-40) ---
+
+    /// His screenshot's workflow, on a manual dispatch from `main`.
+    const RELEASE: &str = "Release Traffic preview OTA";
+
+    /// The fixture's runs with a fourth run named as in his screenshot.
+    fn runs_with_release() -> Vec<WorkflowRun> {
+        let mut runs = runs();
+        let mut release = runs[1].clone();
+        release.workflow = Some(RELEASE.to_string());
+        release.branch = Some("main".to_string());
+        release.event = "workflow_dispatch".to_string();
+        runs.push(release);
+        runs
+    }
+
+    /// His look on #95: at 170 columns the workflow was cut at 18
+    /// characters beside 60 empty ones. Fails while the column is capped
+    /// short of the name.
+    #[test]
+    fn at_170_columns_the_workflow_name_is_drawn_in_full() {
+        let mut app = app();
+        landed(&mut app, runs_with_release(), Local::now());
+        let (rects, buffer) = draw(&app, 170, 50);
+        let detail = rects.detail.expect("detail pane laid out");
+        let rows: Vec<String> = (detail.y..detail.y + detail.height)
+            .map(|y| row_text(&buffer, y))
+            .collect();
+        assert!(
+            rows.iter().any(|r| r.contains(RELEASE)),
+            "{RELEASE} cut: {rows:#?}"
+        );
+    }
+
+    /// The headline and the run rows of `runs_with_release` at `width`, as
+    /// text. Headed widths: workflow 27, branch 30, trigger 17, duration 8,
+    /// age 7; so every column from 123, no trigger from 104, no title from
+    /// 82, and below 82 the workflow name gives way.
+    fn laid_out(width: usize) -> (String, Vec<String>) {
+        let now = local("2026-10-21T13:16:30+02:00");
+        let mut app = app();
+        landed(&mut app, runs_with_release(), now);
+        let headline = headline(&app, width, now).expect("runs are listed");
+        let rows = run_rows(&app, width, now, 0, false);
+        (line_text(&headline), rows.iter().map(line_text).collect())
+    }
+
+    /// The fixture's long branch, as its capped column draws it.
+    fn capped_branch() -> String {
+        crate::ui::truncate("feat/79-date-the-failed-attempt", BRANCH_MAX)
+    }
+
+    #[test]
+    fn a_wide_row_shows_every_column_under_its_word() {
+        let (head_row, rows) = laid_out(170);
+        assert_eq!(
+            head_row.split_whitespace().collect::<Vec<_>>(),
+            HEADINGS,
+            "{head_row}"
+        );
+        let release = &rows[3];
+        for cell in [
+            RELEASE,
+            "main",
+            "workflow_dispatch",
+            runs()[1].title.as_str(),
+        ] {
+            assert!(release.contains(cell), "{cell} missing: {release}");
+        }
+        assert!(rows[0].contains(&capped_branch()), "{}", rows[0]);
+        for row in &rows {
+            assert_eq!(row.chars().count(), 170, "the title fills: {row}");
+            assert!(row.ends_with("ago"), "{row}");
+        }
+        // In columns, not bytes: the lamp is wider in UTF-8 than the blank
+        // the headline holds for it.
+        let at = |row: &str, text: &str| row[..row.find(text).unwrap()].chars().count();
+        assert_eq!(at(&head_row, "workflow"), at(release, RELEASE));
+        assert_eq!(at(&head_row, "branch"), at(release, "main"));
+        assert_eq!(at(&head_row, "trigger"), at(release, "workflow_dispatch"));
+        assert_eq!(at(&head_row, "title"), at(release, &runs()[1].title));
+    }
+
+    #[test]
+    fn the_trigger_goes_first() {
+        let (head_row, rows) = laid_out(110);
+        assert!(!head_row.contains("trigger"), "{head_row}");
+        assert!(head_row.contains("title"), "{head_row}");
+        let release = &rows[3];
+        assert!(!release.contains("workflow_dispatch"), "{release}");
+        assert!(release.contains(RELEASE), "{release}");
+        assert!(release.contains(&head(&runs()[1])), "{release}");
+        assert_eq!(release.chars().count(), 110);
+    }
+
+    #[test]
+    fn the_title_goes_second() {
+        let (head_row, rows) = laid_out(90);
+        assert_eq!(
+            head_row.split_whitespace().collect::<Vec<_>>(),
+            ["workflow", "branch", "duration", "age"],
+            "{head_row}"
+        );
+        assert!(!rows[3].contains(&head(&runs()[1])), "{}", rows[3]);
+        assert!(
+            rows[3].contains(RELEASE),
+            "nothing truncated yet: {}",
+            rows[3]
+        );
+        assert!(rows[0].contains(&capped_branch()), "{}", rows[0]);
+        for row in &rows {
+            assert_eq!(row.chars().count(), 90, "{row}");
+            assert!(row.ends_with("ago"), "{row}");
+        }
+    }
+
+    #[test]
+    fn then_the_workflow_name_truncates_and_the_branch_holds() {
+        let (head_row, rows) = laid_out(70);
+        assert!(head_row.starts_with("    workflow  "), "{head_row}");
+        assert!(rows[3].contains("Release Traffi…  main"), "{}", rows[3]);
+        assert!(rows[0].contains(&capped_branch()), "{}", rows[0]);
+        // Branch last: only past the workflow's floor.
+        let (_, rows) = laid_out(50);
+        assert!(rows[3].contains("Release…  main"), "{}", rows[3]);
+        assert!(rows[0].contains("feat/79-date-the…"), "{}", rows[0]);
+    }
+
+    #[test]
+    fn duration_and_age_stay_at_every_width() {
+        let now = local("2026-10-21T13:16:30+02:00").with_timezone(&Utc);
+        let held = runs_with_release();
+        for width in 23..=200 {
+            let (head_row, rows) = laid_out(width);
+            let words: Vec<&str> = head_row.split_whitespace().collect();
+            assert!(words.ends_with(&["duration", "age"]), "{width}: {head_row}");
+            assert!(head_row.ends_with("age"), "{width}: {head_row}");
+            for (row, run) in rows.iter().zip(&held) {
+                let age = run_age(run, now);
+                let before_age = row.strip_suffix(&age).expect("age last");
+                assert!(
+                    before_age.trim_end().ends_with(&run_duration(run, now)),
+                    "{width}: {row}"
+                );
+                assert!(row.chars().count() <= width, "{width}: {row}");
+            }
+        }
+    }
+
+    /// The headline sits between the first line and the runs, and the
+    /// cursor starts on the first run, not on it. No runs, no headline.
+    #[test]
+    fn the_headline_heads_the_runs_and_is_not_a_cursor_stop() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Detail;
+        landed(&mut app, runs(), Local::now());
+        let rows = detail_rows(&app);
+        let at = rows
+            .iter()
+            .position(|r| r.contains("workflow") && r.contains("duration"))
+            .expect("the headline");
+        assert!(rows[at - 1].contains("as of "), "{}", rows[at - 1]);
+        assert!(!rows[at].contains('▸'), "{}", rows[at]);
+        assert!(rows[at + 1].contains('▸'), "{}", rows[at + 1]);
+        assert!(rows[at + 1].contains(&head(&runs()[0])), "{}", rows[at + 1]);
+        assert_eq!(app.selected_commit_count(), 3, "runs only");
+
+        landed(&mut app, Vec::new(), Local::now());
+        assert!(headline(&app, 120, Local::now()).is_none());
+        let rows = detail_rows(&app);
+        assert!(rows.iter().all(|r| !r.contains("duration")), "{rows:#?}");
     }
 
     // --- The inspector's run bodies (FZ-30f) ---
