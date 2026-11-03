@@ -193,6 +193,17 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
         hints.push(Span::styled(" refresh", desc_style));
     }
     hints.push(gap.clone());
+    // From the `notes` tree or reader `p` flips the reader (FZ-59).
+    if app.reader_pages() {
+        hints.push(Span::styled("[p]", key_style));
+        if with_desc {
+            hints.push(Span::styled(
+                format!(" {}", reader_mode_hint(app)),
+                desc_style,
+            ));
+        }
+        hints.push(gap.clone());
+    }
     hints.push(Span::styled("[R]", lit(app.loading)));
     if with_desc {
         hints.push(Span::styled(" reload", desc_style));
@@ -248,6 +259,15 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
 /// Between the focused pane's keys and the global ones, wider than the gap
 /// between two keys, so the two groups read apart.
 const SEGMENT_GAP: &str = "   ";
+
+/// What `p` does from the `notes` tree or reader (FZ-59): show the source,
+/// or render it again.
+fn reader_mode_hint(app: &App) -> &'static str {
+    match app.reader_raw {
+        true => "render",
+        false => "raw",
+    }
+}
 
 /// The keys that belong to the focused pane, which open the hint row: they
 /// have no room beside what they change, so without this they were only in
@@ -793,6 +813,50 @@ mod tests {
                 global_row(&app)
             )
         );
+    }
+
+    /// FZ-59: from the `notes` tree or reader the global row adds `[p]`,
+    /// which flips the reader, `raw` while rendered and `render` while raw;
+    /// `[r]` refreshes there as everywhere, and `[p]` is hinted nowhere
+    /// else. The pane's own segment does not repeat it.
+    #[test]
+    fn the_global_p_hint_names_the_raw_toggle_in_the_notes_tree_and_reader() {
+        let mut app = app_in(View::Detail);
+        app.focused_panel = crate::app::FocusedPanel::Detail;
+        assert!(global_row(&app).starts_with("[enter] lazygit  [r] refresh  [R]"));
+
+        app.history_view = HistoryView::Notes;
+        let row = global_row(&app);
+        assert!(
+            row.starts_with("[enter] lazygit  [r] refresh  [p] raw  [R]"),
+            "{row}"
+        );
+        assert_eq!(
+            hint_row(&app, WIDE),
+            format!("[j/k] file  [[ ]] view  [J/K] read  [H/L] page   {row}")
+        );
+
+        app.focused_panel = crate::app::FocusedPanel::Reader;
+        app.toggle_reader_raw();
+        let row = global_row(&app);
+        assert!(
+            row.starts_with("[enter] lazygit  [r] refresh  [p] render  [R]"),
+            "{row}"
+        );
+        assert_eq!(
+            hint_row(&app, WIDE),
+            format!("[j/k] scroll  [H/L] page  [Enter] edit   {row}")
+        );
+
+        for panel in [
+            crate::app::FocusedPanel::RepoList,
+            crate::app::FocusedPanel::Inspector,
+        ] {
+            app.focused_panel = panel;
+            let row = global_row(&app);
+            assert!(row.contains("[r] refresh"), "{panel:?}");
+            assert!(!row.contains("[p]"), "{panel:?}");
+        }
     }
 
     /// `B` folds `info`'s remote branch summary and does nothing elsewhere,
