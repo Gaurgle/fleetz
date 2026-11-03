@@ -291,6 +291,25 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-11-03
 
+- **#96 (FZ-40), the pane 2 ci view heads its columns and uses the
+  pane's width.** Merged `98b63e5` at 14:00 CET on his look of the
+  same day (headline, shrink order and the 170-column case all passed,
+  "ye", "that's it"); feature commit `19a21d6` (base `91bba9f`, branch
+  `feat/96-ci-view-width`, worker and reviewer `claude-opus-5-5`
+  medium, accepted first on 2026-10-22), then a merge of `main`
+  `b8d394b` as `5c033a0` (README's `[` / `]` row conflicted; main's
+  row kept with the ci sentence spliced in; worker `fz-worker` and
+  reviewer `fz-reviewer`, both `claude-fable-5-1`, resolution diff
+  `ea4e8abeaed3` accepted; the reviewer corrected the worker's claim
+  that no main commit touched `ci.rs`: seven test lines had, merged
+  cleanly). Branch CI 41632786050, combined checks on `b8d394b` (fmt,
+  clippy, 1533 tests), `relay-gate` holds, `main` CI 41636623438. His
+  look raised three things outside the ticket: the inspector using
+  half its width (FZ-41, #97), no sign that its bodies can be stepped
+  (filed FZ-64, #120), and highlighting for the script and log (FZ-66,
+  route pending). Remembered: nothing to keep.
+  FZ-40: review accepted first; fix cycles 0; owner decisions 1; worker not read (merge cycle 2); review not read (merge cycle 1); models claude-opus-5-5/claude-opus-5-5, merge cycle claude-fable-5-1/claude-fable-5-1; usage not read; merge cycle worker 25519 tokens, reviewer 28988 tokens
+
 - **#115 (FZ-59), markdown rendered in the notes reader, `p` for the
   source.** Merged `4545a1f` at 13:25 CET on his "115 is good"; ticket
   commits `b5b4168` and `6ba3568` (base `ff730c4`, branch

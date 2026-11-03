@@ -30,11 +30,10 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
-- #96 (`19a21d6`): Ready to integrate, his look 11-03 passes points 1,
-  3, 4; his answer on the pane 2 rows pending; his inspector points go
-  to FZ-41 (#97). #88 (FZ-38): parked, uncommitted on at-a.
-- Reported 11-03, unfiled: notes tree wheel on a narrow window, the
-  highlight moves two rows a tick, the view one (needs his yes to file).
+- FZ-65 (#121): worker running in `issue-121` from `b8d394b`. FZ-64
+  (#120): worker running in `issue-120` from `98b63e5`, look change.
+  Records on the issues.
+- #88 (FZ-38): parked, uncommitted on at-a.
 - FZ-63 (#119), FZ-60 (#116): their unreviewed trees from `41ecd76` went
   with worktrees found on neither machine (11-03); redispatch on his word.
 
@@ -48,12 +47,11 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## Next step
 
-FZ-59 merged `4545a1f` 11-03. His word on #96's pane 2 rows (`cargo run
---release --manifest-path .claude/worktrees/issue-96/Cargo.toml`), then
-gate and merge; FZ-41 (#97) once #96 is on `main`, amended with a
-jobs/log/script mode line on his yes. Once the FZ-63 and
-FZ-60 trees are found (or redispatched from `main` on his word): FZ-63
-round 2 and re-review, review FZ-60, FZ-58 (#114) after FZ-63 merges.
+FZ-59 merged `4545a1f`, #96 merged `98b63e5`, both 11-03. FZ-64 and
+FZ-65 to review; FZ-41 (#97) after FZ-64 (keeps its tab line). FZ-66 (script
+and log highlighting in the inspector) is filed once he picks the YAML
+route (`syntect` or own). FZ-63 and FZ-60: redispatch from `main` on his
+word, FZ-58 (#114) after FZ-63 merges.
 FZ-52 not before 0.8.0 and his word.
 
 Start a lead from the repo root: `claude --agent fz-coordinator` (normal
