@@ -428,12 +428,19 @@ pub fn repo_row_spans(
     if !mark.is_empty() {
         spans.push(Span::styled(mark, Style::default().fg(colors::OVERLAY)));
     }
-    spans.push(Span::styled(
-        format!(" {dots} "),
-        Style::default().fg(colors::SURFACE),
-    ));
+    // The cursor's row wears the history lists' band (FZ-66). The band is
+    // `SURFACE` itself, so its dots step up to `OVERLAY` and bold to stay
+    // seen; `·` is one cell either way, so no column moves.
+    let dot_style = if is_selected {
+        Style::default()
+            .fg(colors::OVERLAY)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::SURFACE)
+    };
+    spans.push(Span::styled(format!(" {dots} "), dot_style));
     spans.extend(badge_spans);
-    spans
+    if is_selected { wash(spans) } else { spans }
 }
 
 /// A commit's age, rendered fresh on every draw. Empty when git handed back
@@ -2650,7 +2657,7 @@ const MIN_MESSAGE_W: usize = 24;
 /// The band has to cover the row rather than the text, so the caller pads to
 /// the pane width before this: a wash that stops where the message stops
 /// reads as a highlight on the words, not a cursor on the line.
-fn wash(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+pub(crate) fn wash(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
     spans
         .into_iter()
         .map(|s| {
@@ -7405,6 +7412,107 @@ mod tests {
             list_colors(&app, "fresh"),
             (colors::SURFACE, colors::PR_CLR)
         );
+    }
+
+    // --- FZ-66: the cursor's row in pane 1 wears a band ---
+
+    /// Two repos with two PRs each, so every row carries a badge group.
+    fn two_repo_app() -> crate::app::App {
+        let mut repos = vec![
+            repo("alpha", RepoKind::Public, Some("alice")),
+            repo("beta", RepoKind::Public, Some("alice")),
+        ];
+        for r in &mut repos {
+            r.pr_count = 2;
+        }
+        crate::app::App::new(repos, "t".to_string(), 120, 40)
+    }
+
+    #[test]
+    fn the_cursor_row_wears_the_band_and_bold_dots_and_others_do_not() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let app = two_repo_app();
+        let (w, h) = (60u16, 12u16);
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| render_repo_list(f, f.area(), &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        // Inside the border and the one column of padding on each side.
+        let inner = 2..w - 2;
+        let row_of = |name: &str| {
+            (0..h)
+                .find(|&y| {
+                    let row: String = (0..w).map(|x| buf[(x, y)].symbol()).collect();
+                    row.contains(&format!(" {name} "))
+                })
+                .expect("row drawn")
+        };
+        let (a, b) = (row_of("alpha"), row_of("beta"));
+        let (on, off) = if buf[(2, a)].symbol() == "▸" {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        assert_eq!(buf[(2, on)].symbol(), "▸", "one row is the cursor's");
+        assert_eq!(buf[(2, off)].symbol(), " ");
+
+        for x in inner.clone() {
+            assert_eq!(buf[(x, on)].bg, colors::SELECTED_BG, "band at x {x}");
+            assert_eq!(buf[(x, off)].bg, TermColor::Reset, "no band at x {x}");
+        }
+        let dots = |y: u16| -> Vec<u16> {
+            inner
+                .clone()
+                .filter(|&x| buf[(x, y)].symbol() == "·")
+                .collect()
+        };
+        assert!(!dots(on).is_empty() && !dots(off).is_empty());
+        for x in dots(on) {
+            let cell = &buf[(x, on)];
+            assert_eq!(cell.fg, colors::OVERLAY, "cursor dot at x {x}");
+            assert!(cell.modifier.contains(Modifier::BOLD), "bold at x {x}");
+        }
+        for x in dots(off) {
+            let cell = &buf[(x, off)];
+            assert_eq!(cell.fg, colors::SURFACE, "dot at x {x}");
+            assert!(!cell.modifier.contains(Modifier::BOLD), "plain at x {x}");
+        }
+    }
+
+    #[test]
+    fn the_band_and_bold_dots_move_no_column() {
+        use ratatui::buffer::Buffer;
+        use ratatui::widgets::Widget;
+
+        let app = two_repo_app();
+        let r = &app.repos[0];
+        let width = 40u16;
+        let drawn = |selected: bool| {
+            let line = Line::from(repo_row_spans(
+                r,
+                selected,
+                width as usize,
+                false,
+                false,
+                None,
+            ));
+            let cells = line.width();
+            let area = Rect::new(0, 0, width + 10, 1);
+            let mut buf = Buffer::empty(area);
+            line.render(area, &mut buf);
+            let symbols: Vec<String> = (0..area.width)
+                .map(|x| buf[(x, 0)].symbol().to_string())
+                .collect();
+            (cells, symbols)
+        };
+        let (on_w, on) = drawn(true);
+        let (off_w, off) = drawn(false);
+        assert_eq!(on_w, width as usize, "the cursor's row fills its width");
+        assert_eq!(on_w, off_w, "same number of cells");
+        let badge_at = |s: &[String]| s.iter().position(|c| c == "P").expect("PR badge");
+        assert_eq!(badge_at(&on), badge_at(&off), "badges in the same column");
+        assert_eq!(on[2..], off[2..], "only the marker differs");
     }
 
     /// The detail pane of the selected repo, as text, and the colour of its
