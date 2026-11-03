@@ -8,10 +8,11 @@ finished work, the owner's dated words and the practical notes. Also read
 
 ## Current lead
 
-Session `018zBNkN`, `claude-fable-5-1`, `jean-1`, took over 2026-11-02
-20:16 CET from `e47a3967` on `at-a` (smbp, Tailscale offline since about
-19:20, confirmed with Andreas). Nothing running. Worktrees are per
-machine: `issue-119`, `issue-116` and `issue-115` are on `at-a` only.
+Session `11cc93e2`, `claude-fable-5-1`, `at-a` (smbp), took over 2026-11-03
+12:00 CET from `018zBNkN` on `jean-1` (stopped, confirmed by Andreas).
+Nothing running. Worktrees are per machine: `issue-115`, `issue-96` and
+`issue-88` are here; `issue-119` and `issue-116` appear on neither
+machine's `git worktree list` so far (ssh to `jean-1` refused, 11-03).
 
 ## Standing authority
 
@@ -24,9 +25,8 @@ machine: `issue-119`, `issue-116` and `issue-115` are on `at-a` only.
 
 The 10-30 stop was lifted 2026-11-02 20:18 ("lets keep working then. you
 choose tickets as you see fit best", log). Astra is the preferred lead,
-Fable when Astra is unavailable.
-Never `cargo install`, tag or release. UI rules from his FZ-45 look
-(2026-10-27) apply to every UI ticket; see the archive in the log.
+Fable when Astra is unavailable. Never `cargo install`, tag or release.
+UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
@@ -45,16 +45,16 @@ Never `cargo install`, tag or release. UI rules from his FZ-45 look
   only, or own. A dependency decision, then a ticket on his yes.
 - #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
 - #81 and #79: his answer on the existing footer and header test edits.
-- Pane 1 wheel coalescing ticket and the flaky `clipboard::tests` issue
-  need his yes.
+- Pane 1 wheel coalescing ticket, flaky `clipboard::tests` issue: his yes.
 
 ## Next step
 
 His look on FZ-59 and #96 (`cargo run --release --manifest-path
 .claude/worktrees/issue-115/Cargo.toml`, same with `issue-96`), then
-gate and merge; FZ-41 (#97) is dispatched once #96 is on `main`. On at-a
-when it is back: FZ-63 README line (round 2) and re-review, review
-FZ-60, FZ-58 (#114) after FZ-63 merges. FZ-52 not before 0.8.0 and his word.
+gate and merge; FZ-41 (#97) once #96 is on `main`. Once the FZ-63 and
+FZ-60 trees are found (or redispatched from `main` on his word): FZ-63
+round 2 and re-review, review FZ-60, FZ-58 (#114) after FZ-63 merges.
+FZ-52 not before 0.8.0 and his word.
 
 Start a lead from the repo root: `claude --agent fz-coordinator` (normal
 permissions, subscription, no provider override); Codex from `AGENTS.md`.
