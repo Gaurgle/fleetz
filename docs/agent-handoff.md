@@ -28,10 +28,10 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
-- FZ-66 (#122, pane 1 selection band and bold dots): worker running
-  since 16:20 CET from `9c30075`, small-look authority, record on the
-  issue. FZ-67 (`{`/`}` from pane 2 step the CI bodies): proposed 11-03
-  on his ask, filed and dispatched on his yes. FZ-65 (#121): built, diff
+- FZ-67 (#123, the notes preview inside pane 2): worker running since
+  16:45 CET from `423ef9d`, stops for his look; record on the issue.
+  FZ-68 (`{`/`}` from pane 2 step the CI bodies): proposed 11-03 on his
+  ask, filed and dispatched on his yes. FZ-65 (#121): built, diff
   `9f4018d7160d` unreviewed, held for his wheel decision (wheel selects
   as built, or scrolls with the highlight clamped) and his yes to a
   ticket for the wrapped-row follow mismatch. Records on the issues.
@@ -49,9 +49,9 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## Next step
 
-Merged 11-03: FZ-59 `4545a1f`, #96 `98b63e5`, FZ-64 `cbb6cfb`. Next:
-FZ-66 to review, FZ-65 on his wheel answer, FZ-67 on his yes, FZ-41
-(#97) after them
+Merged 11-03: FZ-59 `4545a1f`, #96 `98b63e5`, FZ-64 `cbb6cfb`, FZ-66
+`423ef9d`. Next: FZ-67 to review and his look, FZ-65 on his wheel
+answer, FZ-68 on his yes, FZ-41 (#97) after them
 (keeps the tab line). Script and log highlighting in the inspector is
 filed once he picks the YAML route (`syntect` or own). FZ-63, FZ-60 on
 his word, FZ-58 (#114) after FZ-63. FZ-52 not before 0.8.0 and his word.

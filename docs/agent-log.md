@@ -291,6 +291,34 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-11-03
 
+- **#122 (FZ-66), pane 1's cursor row wears a band and bold dots.**
+  Merged `423ef9d` at 16:40 CET under the small-look authority of
+  2026-10-02 (a colour and small-row change, no look asked); ticket
+  commit `a2792ae` (base `9c30075`, branch
+  `feat/122-pane1-selection-band`, worker `fz-worker` and reviewer
+  `fz-reviewer`, both `claude-fable-5-1`, lead session `11cc93e2`).
+  Filed on his ask of 16:05 CET ("selection should have a light
+  highlight, and the dots '...' should be bold, but ONLY IF the dots
+  boldness wont make the characters wider"). Ruled at dispatch: the
+  width condition holds by construction, `·` and `…` are one cell each
+  and bold never moves a terminal column, pinned by a same-width test;
+  the dots on the washed row go bold in `OVERLAY` because `SELECTED_BG`
+  and `SURFACE` are the same RGB. Built: `repo_row_spans` washes the
+  selected row through the history lists' `wash`, two tests. The worker
+  flagged that the slot digest shares the row and got the band across
+  its pane 1 part only; ruled a defect before review (a band that stops
+  partway reads as a highlight on words), rework round 1 padded and
+  washed the digest's cursor line in `digest::render_pane`, one test.
+  Review 1 (diff `103395124f3d`) accepted, no blockers; two pre-existing
+  low notes (a truncated name can leave a narrow row one cell over
+  `col_width`; `digest::width_of` counts chars). Branch CI 41665311836,
+  combined checks on `3b83671`, `relay-gate` holds, `main` CI
+  41665919214. One flaky timing test seen by the worker under load
+  (`a_two_hundred_row_fleet_filters_within_the_input_budget`), green on
+  rerun. Remembered: `repo_row_spans` is shared with the slot digest, in
+  `.claude/rules/ui.md`.
+  FZ-66: review accepted first; fix cycles 1; owner decisions 0; worker 13; review 5; models claude-fable-5-1/claude-fable-5-1; usage worker 46930 + 63340 tokens, reviewer 38210 tokens
+
 - **#120 (FZ-64), the inspector's top border names the CI bodies as
   tabs.** Merged `cbb6cfb` at 15:30 CET on his "120 is good!"; ticket
   commit `93704e8` (base `98b63e5`, branch `feat/120-inspector-ci-tabs`,
