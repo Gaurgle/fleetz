@@ -11,6 +11,7 @@
 //! the mark would undo the point of drawing one.
 
 use ratatui::Frame;
+use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use crate::app::App;
@@ -70,15 +71,25 @@ pub fn render(frame: &mut Frame, rects: &PanelRects, app: &App) {
     // as the handle. Absent when the terminal is too short for an inspector,
     // in which case there is no horizontal divider to advertise.
     if let Some(inspector) = rects.inspector
-        && inspector.width >= GRIP_COLS
+        && let Some((left, right)) = inspector_grip_span(inspector)
     {
         let y = inspector.y;
-        let left = inspector.x + (inspector.width - GRIP_COLS) / 2;
         let fg = grip_color(app, Divider::Horizontal);
-        for x in left..left + GRIP_COLS {
+        for x in left..right {
             paint(frame, x, y, GRIP_HORIZONTAL, fg);
         }
     }
+}
+
+/// The columns the inspector's grip covers on its top border, `left..right`,
+/// or `None` when the pane is too narrow to carry one. The inspector's title
+/// line reads it to keep its tabs clear of the mark (FZ-64).
+pub fn inspector_grip_span(inspector: Rect) -> Option<(u16, u16)> {
+    if inspector.width < GRIP_COLS {
+        return None;
+    }
+    let left = inspector.x + (inspector.width - GRIP_COLS) / 2;
+    Some((left, left + GRIP_COLS))
 }
 
 /// A grip is furniture at rest and lights up while its own divider is being

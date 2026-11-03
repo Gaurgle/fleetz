@@ -2195,9 +2195,21 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-/// The inspector's title on a run: `inspector  jobs`, `log` or `script`.
-pub fn ci_inspector_label(app: &App) -> String {
-    format!("inspector  {}", app.ci_body.label())
+/// The inspector's body tabs on a run (FZ-64), `[/] JOBS · LOG · SCRIPT`,
+/// right of a title that no longer names the body. The shown one wears the
+/// `ci` tab's colour, the view whose run it details.
+fn ci_body_switcher(app: &App, focused: bool, budget: usize) -> Line<'static> {
+    let labels: Vec<String> = crate::app::CiBody::ALL
+        .iter()
+        .map(|b| b.label().to_uppercase())
+        .collect();
+    tab_switcher(
+        &labels,
+        app.ci_body.index(),
+        colors::history_view_color(HistoryView::Ci),
+        focused,
+        budget,
+    )
 }
 
 /// The inspector while pane 2 shows `ci` (FZ-30f): the highlighted run in
@@ -2211,16 +2223,29 @@ fn render_ci_inspector(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         colors::SURFACE
     };
-    let block = Block::default()
+    let title = crate::ui::panel_title(crate::ui::INSPECTOR_NUM, "inspector", focused);
+    // Two corners and a column of border either side, as pane 2 spends.
+    let mut budget = (area.width as usize)
+        .saturating_sub(2)
+        .saturating_sub(span_width(&title.spans) + 2);
+    // The resize grip is painted over the middle of this border after the
+    // panes, so the tabs keep to the cells right of it, a column of rule
+    // between, short of the corner.
+    if let Some((_, grip_right)) = crate::ui::grips::inspector_grip_span(area) {
+        let corner = (area.x + area.width).saturating_sub(1);
+        budget = budget.min(corner.saturating_sub(grip_right + 1) as usize);
+    }
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
         .padding(Padding::new(2, 2, 1, 0))
-        .title_top(crate::ui::panel_title(
-            crate::ui::INSPECTOR_NUM,
-            &ci_inspector_label(app),
-            focused,
-        ));
+        .title_top(title);
+    // Only a highlighted run has bodies to step (`App::press_bracket`'s own
+    // condition); loading, empty or offline, the brackets step pane 2.
+    if app.ci_highlighted_run().is_some() {
+        block = block.title_top(ci_body_switcher(app, focused, budget));
+    }
     let inner = block.inner(area);
     let (body, marked) = crate::ui::ci::inspector_lines(app, chrono::Local::now());
     // Each body line's first wrapped row, and one past the last, so the
@@ -3047,13 +3072,37 @@ fn view_name(view: HistoryView) -> String {
 /// tight for all four and it shows the active one alone, which is the half
 /// that cannot be dropped.
 fn view_switcher(active: HistoryView, focused: bool, budget: usize) -> Line<'static> {
+    let labels: Vec<String> = HistoryView::ALL.iter().map(|v| view_name(*v)).collect();
+    let index = HistoryView::ALL
+        .iter()
+        .position(|v| *v == active)
+        .unwrap_or(0);
+    tab_switcher(
+        &labels,
+        index,
+        colors::history_view_color(active),
+        focused,
+        budget,
+    )
+}
+
+/// A border's `[/]` tab line: pane 2's views (`view_switcher`) and the CI
+/// inspector's bodies (FZ-64) share it, so the two read and collapse alike.
+/// `labels` are drawn as given, `labels[active]` bold in `on`; too tight for
+/// all of them within `budget` and it shows the active one alone.
+fn tab_switcher(
+    labels: &[String],
+    active: usize,
+    on: ratatui::style::Color,
+    focused: bool,
+    budget: usize,
+) -> Line<'static> {
     // The active tab wears its own view's colour in either state: which mode
     // the pane is in is worth reading from across the screen, and it is the
     // one thing here that a dimmed switcher must still say. Everything around
     // it -- the keys, the separators, the inactive tabs -- drops back when the
     // pane is not focused, so a bright switcher never pulls the eye to a pane
     // you are not in.
-    let on = colors::history_view_color(active);
     let (key, slash, dot, off) = if focused {
         (
             colors::TEXT,
@@ -3080,24 +3129,21 @@ fn view_switcher(active: HistoryView, focused: bool, budget: usize) -> Line<'sta
     ];
 
     // " [/] " + every label + " · " between each + a trailing space.
-    let labels: usize = HistoryView::ALL
-        .iter()
-        .map(|v| view_name(*v).chars().count())
-        .sum();
-    let full = 5 + labels + 3 * (HistoryView::COUNT - 1) + 1;
+    let width: usize = labels.iter().map(|l| l.chars().count()).sum();
+    let full = 5 + width + 3 * labels.len().saturating_sub(1) + 1;
 
     if full <= budget {
-        for (i, view) in HistoryView::ALL.iter().enumerate() {
+        for (i, label) in labels.iter().enumerate() {
             if i > 0 {
                 spans.push(Span::styled(" · ", Style::default().fg(dot)));
             }
-            spans.push(match *view == active {
-                true => Span::styled(view_name(*view), bold(on)),
-                false => Span::styled(view_name(*view), Style::default().fg(off)),
+            spans.push(match i == active {
+                true => Span::styled(label.clone(), bold(on)),
+                false => Span::styled(label.clone(), Style::default().fg(off)),
             });
         }
-    } else {
-        spans.push(Span::styled(view_name(active), bold(on)));
+    } else if let Some(label) = labels.get(active) {
+        spans.push(Span::styled(label.clone(), bold(on)));
     }
     spans.push(Span::raw(" "));
     Line::from(spans).right_aligned()
