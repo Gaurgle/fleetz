@@ -28,8 +28,9 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
-- FZ-67 (#123, the notes preview inside pane 2): worker running since
-  16:45 CET from `423ef9d`, stops for his look; record on the issue.
+- FZ-67 (#123, the notes preview inside pane 2): worker stopped before
+  edits (16:55 CET) for his word on four existing tests, rulings on the
+  issue; from `423ef9d`, resumes on his yes, stops for his look.
   FZ-68 (`{`/`}` from pane 2 step the CI bodies): proposed 11-03 on his
   ask, filed and dispatched on his yes. FZ-65 (#121): built, diff
   `9f4018d7160d` unreviewed, held for his wheel decision (wheel selects
