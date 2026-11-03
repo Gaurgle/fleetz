@@ -40,7 +40,8 @@ pub const SUBTEXT: Color = Color::Rgb(166, 173, 200);
 
 pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers, borders
 
-/// Background of the selected row in the repo pane's history lists.
+/// Background of the selected row in the repo pane's history lists, and of
+/// the cursor's row in the repo list (FZ-66).
 ///
 /// A whole-row wash rather than a bolded hash. Bold marks one token; the eye
 /// still has to find which token, and in a list two hundred rows long that is
