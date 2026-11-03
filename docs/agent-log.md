@@ -291,6 +291,12 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-11-03
 
+Owner's words, 2026-11-03: on FZ-67's four existing tests, 16:54 CET,
+"yes, as long as they serve as test, and aren't rewritten for the sake
+of passing" (on #123); 17:15 CET "you can start wrapping up for today.
+finish the worker", then "find a good place to stop, no stress". The
+lead stopped with FZ-67 at Ready to integrate for his look.
+
 - **#122 (FZ-66), pane 1's cursor row wears a band and bold dots.**
   Merged `423ef9d` at 16:40 CET under the small-look authority of
   2026-10-02 (a colour and small-row change, no look asked); ticket
