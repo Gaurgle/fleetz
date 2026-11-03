@@ -93,9 +93,10 @@ pub fn split_main(area: Rect, repo_list_pct: u16) -> (Rect, Rect) {
     (h[0], h[1])
 }
 
-/// Split pane 2 of the `notes` layout into the file tree and the reader
-/// beside it (FZ-62). Shared by `render` and `ui::panel_rects`, as the other
-/// splits are, so a click lands in the pane drawn under it.
+/// Split pane 2's body of the `notes` layout, under its pinned header
+/// (`notes_pane_body`), into the file tree and the preview beside it (FZ-62,
+/// FZ-67). Shared by `render` and `ui::panel_rects`, as the other splits
+/// are, so a click lands in the pane drawn under it.
 ///
 /// The tree takes the repo list's rule within pane 2 (35%, capped at
 /// `REPO_LIST_MAX_COLS`): it is a list of names, and the reader is what
@@ -123,6 +124,12 @@ fn notes_tree_floor() -> u16 {
         .unwrap_or(0);
     u16::try_from(line).unwrap_or(u16::MAX) + 2 * crate::ui::PANE_CONTENT_INSET
 }
+
+/// Rows pane 2's body keeps under a pinned header, or the header is not
+/// pinned. On a short pane the history is what you came for, and a header
+/// taking half the height to repeat what the frame's own title already says
+/// is the worse trade.
+const MIN_BODY_ROWS: u16 = 6;
 
 /// Columns past which the repo list is only drawing longer dots: two borders,
 /// two columns of padding, the marker and kind glyph, a generous name, the
@@ -180,7 +187,7 @@ pub fn render(
 ) {
     render_repo_list(frame, list_area, app);
     render_detail_pane(frame, detail_area, app);
-    // The `notes` layout's reader, beside the tree (FZ-62).
+    // The `notes` layout's preview, inside pane 2 beside the tree (FZ-67).
     if let Some(reader_area) = reader_area {
         render_reader(frame, reader_area, app);
     }
@@ -615,11 +622,8 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         colors::SURFACE
     };
-    let panel = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
-        .padding(Padding::new(1, 1, 1, 0));
+    let pane = area;
+    let panel = pane2_block(border_color);
 
     // On a section header pane 2 is that section's digest (FZ-45). The repo
     // views keep their state underneath and come back when the cursor
@@ -672,217 +676,31 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     let inner = panel.inner(area);
     frame.render_widget(panel, area);
 
-    // One pinned row directly under the title, then the scrolling body. The
-    // readout has to sit outside the paragraph: the whole body scrolls as a
-    // unit, so a line inside it would scroll away exactly when it is needed,
-    // which is when the commit list has been scrolled past.
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
+    let rows = pane_rows(inner);
     render_selected_commit_readout(frame, rows[0], app);
     let area = rows[1];
     let width = area.width as usize;
 
-    let mut lines: Vec<Line> = Vec::new();
-
-    // The pane's header block reads left-to-right as local-to-remote: what is
-    // on this disk sits on the left of each row, what is on GitHub sits flush
-    // right. The identity pair already worked that way; the rest of the block
-    // now says so out loud rather than mixing "how it is doing" with "where
-    // it lives" in one run of tokens.
-    //
-    //   ○ 3 behind, 1 ahead                               ● Gaurgle
-    //   ~/repos/fleetz              git@github.com:Gaurgle/fleetz.git
-    //   * main · 1 stash               2 open PRs #13 · CI ◉ passed
-    //
-    // Each row right-aligns its own remote half independently and drops it
-    // when it will not fit. Owner and name used to be placed together or not
-    // at all, because they were one fact stacked over two rows; row two now
-    // carries the remote URL instead, which spells the name out anyway.
-    let status_color = badges::status_color(repo);
-    // `✓` when synced, matching the list badge, and never `◉`: the ringed disk
-    // belongs to CI alone now.
-    let status_icon = if repo.is_synced() { "✓" } else { "○" };
-    let path_str = repo.path.as_deref().unwrap_or("not cloned");
-
-    // Row 1 left: how it is doing relative to the remote.
-    let row1_left = vec![Span::styled(
-        format!("{status_icon} {}", repo.long_status()),
-        Style::default().fg(status_color),
-    )];
-
-    // Under row 1, while the last fetch failed: the counts beside it are
-    // against the remote refs of the last fetch that worked, and when that
-    // was. Then git's own reason, already stripped of credentials.
-    let mut fetch_rows: Vec<Line> = Vec::new();
-    if let Some(text) = crate::ui::fetch_failure_line(&repo.fetch, chrono::Local::now()) {
-        fetch_rows.push(Line::from(Span::styled(
-            format!("  {text}"),
-            Style::default().fg(colors::PEACH),
-        )));
-        if let Some(detail) = repo.fetch.failure().and_then(|f| f.detail.as_deref()) {
-            fetch_rows.push(Line::from(Span::styled(
-                format!("    {detail}"),
-                Style::default().fg(colors::OVERLAY),
-            )));
-        }
-    }
-
-    // Row 2 left: where it lives on this machine.
-    let row2_left = vec![Span::styled(
-        format!("  {path_str}"),
-        Style::default().fg(colors::OVERLAY),
-    )];
-
-    // Row 3 left: facts that exist only on this disk.
-    let mut row3_left: Vec<Span> = Vec::new();
-    if let Some(head) = repo.branches.iter().find(|b| b.is_head) {
-        row3_left.push(Span::styled(
-            "  * ",
-            Style::default().fg(colors::ref_color(crate::model::RefKind::Head)),
-        ));
-        row3_left.push(Span::styled(
-            head.name.clone(),
-            Style::default().fg(colors::ref_color(crate::model::RefKind::Head)),
-        ));
-    }
-    // Stashes carry the same glyph the repo list uses, so the eye can find
-    // them here the way it learned to find them there. Neither is drawn in
-    // OVERLAY: that is for paths and furniture, and at that brightness real
-    // news reads as decoration you have already dismissed.
-    // Each carries the colour its badge uses (one colour per concept): the
-    // stash count is STASH_CLR and the worktree count is WORKTREE_CLR, so the
-    // header fact is recognised as the same thing the list row flags.
-    let mut local_extra: Vec<(String, ratatui::style::Color)> = Vec::new();
-    if repo.stash_count > 0 {
-        let noun = if repo.stash_count == 1 {
-            "stash"
-        } else {
-            "stashes"
-        };
-        local_extra.push((
-            format!("{} {} {noun}", badges::stash_icon(), repo.stash_count),
-            colors::STASH_CLR,
-        ));
-    }
-    if !repo.worktrees.is_empty() {
-        let noun = if repo.worktrees.len() == 1 {
-            "worktree"
-        } else {
-            "worktrees"
-        };
-        local_extra.push((
-            format!("{} {noun}", repo.worktrees.len()),
-            colors::WORKTREE_CLR,
-        ));
-    }
-    for (extra, color) in local_extra {
-        if row3_left.is_empty() {
-            row3_left.push(Span::raw("  "));
-        } else {
-            row3_left.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
-        }
-        row3_left.push(Span::styled(extra, Style::default().fg(color)));
-    }
-
-    // Row 3 right: facts that live on GitHub. From an earlier refresh when
-    // the last poll did not return this repo: the same values, in the list's
-    // grey, the lamp held still.
-    let not_in_last_poll = app.is_not_in_last_poll(repo);
-    let mut row3_right: Vec<Span> = Vec::new();
-    if repo.pr_count > 0 {
-        let label = if repo.pr_count == 1 { "PR" } else { "PRs" };
-        let mut text = format!("{} open {label}", repo.pr_count);
-        // The numbers themselves, so the pane names the PR rather than only
-        // counting it. Capped so a busy repo cannot push CI off the row.
-        if !repo.prs.is_empty() {
-            let shown: Vec<String> = repo
-                .prs
-                .iter()
-                .take(PR_NUMBERS_SHOWN)
-                .map(|pr| format!("#{}", pr.number))
-                .collect();
-            text.push(' ');
-            text.push_str(&shown.join(" "));
-            if repo.prs.len() > PR_NUMBERS_SHOWN {
-                text.push('+');
-            }
-        }
-        let pr_color = if not_in_last_poll {
-            badges::EARLIER_REFRESH
-        } else {
-            colors::PR_CLR
-        };
-        row3_right.push(Span::styled(text, Style::default().fg(pr_color)));
-    }
-    if repo.ci_status != CiStatus::Unknown {
-        let (ci_sym, ci_color, ci_label) =
-            badges::ci_display(&repo.ci_status, app.watch_mode && !app.blink_on);
-        let ci_color = if not_in_last_poll {
-            badges::EARLIER_REFRESH
-        } else {
-            ci_color
-        };
-        if !row3_right.is_empty() {
-            row3_right.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
-        }
-        row3_right.push(Span::styled(
-            format!("CI {ci_sym} {ci_label}"),
-            Style::default().fg(ci_color),
-        ));
-    }
-
-    // Right halves. Owner on row 1, the remote locator on row 2, GitHub's own
-    // state on row 3.
-    let (owner_group, owner_w) = owner_spans(repo);
-    // Drawn without userinfo, so a token kept in an HTTPS remote never
-    // reaches the screen. Display only: matching and `owner_display` read
-    // the stored URL.
-    let (remote_loc, remote_loc_w) = match repo.remote_url.as_deref() {
-        Some(url) => {
-            let shown = crate::git::redact_userinfo(url);
-            let shown_w = shown.chars().count();
-            (
-                vec![Span::styled(shown, Style::default().fg(colors::OVERLAY))],
-                shown_w,
-            )
-        }
-        None => name_spans(repo),
+    // FZ-67: in the `notes` layout the header pins across the whole pane and
+    // the body under it is the tree's, beside the preview.
+    let notes_split = match app.notes_layout() {
+        true => notes_pane_body(pane, app),
+        false => None,
     };
-    let row3_right_w = span_width(&row3_right);
-
-    let mut row1 = row1_left;
-    let mut row2 = row2_left;
-    let mut row3 = row3_left;
-    for (line, right, right_w) in [
-        (&mut row1, owner_group, owner_w),
-        (&mut row2, remote_loc, remote_loc_w),
-        (&mut row3, row3_right, row3_right_w),
-    ] {
-        if right.is_empty() {
-            continue;
+    let mut lines: Vec<Line> = header_lines(app, repo, width);
+    let (area, width) = match notes_split {
+        Some((header, body)) => {
+            let (tree, _) = split_notes_pane(body);
+            match header {
+                Some(header) => frame.render_widget(Paragraph::new(lines.split_off(0)), header),
+                // Unpinned on a short pane: the header scrolls with the tree,
+                // laid out at the tree's width.
+                None => lines = header_lines(app, repo, tree.width as usize),
+            }
+            (tree, tree.width as usize)
         }
-        if let Some(gap) = identity_gap(width, span_width(line), right_w) {
-            line.push(Span::raw(" ".repeat(gap)));
-            line.extend(right);
-        }
-    }
-
-    lines.push(Line::from(row1));
-    lines.extend(fetch_rows);
-    lines.push(Line::from(row2));
-    if !row3.is_empty() {
-        lines.push(Line::from(row3));
-    }
-    if not_in_last_poll {
-        lines.push(Line::from(Span::styled(
-            format!("  {EARLIER_REFRESH_NOTE}"),
-            Style::default().fg(badges::EARLIER_REFRESH),
-        )));
-    }
-    lines.push(Line::from(""));
-    // The view's own title, in the colour its tab wears up in the frame. The
-    // tab is what you aim at; this is what confirms you landed, and saying it
-    // twice in two colours would have made the pair read as two things.
-    lines.extend(headliner(app.history_view, width));
+        None => (area, width),
+    };
 
     // Everything above this point identifies the repo -- what state it is in,
     // where it lives, which branch is out, and which of its views you are in.
@@ -1296,10 +1114,6 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // content instead of a fixed cap. Clamping here alone only fixed the
     // display: the offset itself kept climbing, so scrolling back stalled for
     // as many keypresses as it had overshot.
-    // Pinned only when the pane can spare the rows. On a short pane the
-    // history is what you came for, and a header taking half the height to
-    // repeat what the frame's own title already says is the worse trade.
-    const MIN_BODY_ROWS: u16 = 6;
     // Two rungs, widest first. The branches block is the only thing that
     // explains the repo's behind count, and it was the first thing to scroll
     // away: stepping the commit cursor pushed it off the top and left the
@@ -1414,6 +1228,252 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
+}
+
+/// Pane 2 of the `notes` layout under its frame and readout row (FZ-67):
+/// the rows its header pins across the whole pane, `None` when the pane is
+/// too short to spare them, and the body under it that `split_notes_pane`
+/// splits into the tree and the preview. `None` when pane 2 shows no tree
+/// (a section's digest, or no repo). Shared by `render_detail_pane` and
+/// `ui::panel_rects`, so the preview is hit-tested where it is drawn.
+pub fn notes_pane_body(pane: Rect, app: &App) -> Option<(Option<Rect>, Rect)> {
+    let repo = app.selected_repo()?;
+    let below = pane_rows(pane2_block(colors::SURFACE).inner(pane))[1];
+    let header_rows =
+        u16::try_from(header_lines(app, repo, below.width as usize).len()).unwrap_or(u16::MAX);
+    if below.height < header_rows.saturating_add(MIN_BODY_ROWS) {
+        return Some((None, below));
+    }
+    let split =
+        Layout::vertical([Constraint::Length(header_rows), Constraint::Min(1)]).split(below);
+    Some((Some(split[0]), split[1]))
+}
+
+/// Pane 2's frame, every view's: rounded, a column of padding either side
+/// and a row above the readout.
+fn pane2_block(border_color: ratatui::style::Color) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .padding(Padding::new(1, 1, 1, 0))
+}
+
+/// Pane 2 inside its frame: one pinned row directly under the title, then
+/// the scrolling body. The readout has to sit outside the paragraph: the
+/// whole body scrolls as a unit, so a line inside it would scroll away
+/// exactly when it is needed, which is when the commit list has been
+/// scrolled past.
+fn pane_rows(inner: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner)
+}
+
+/// Pane 2's identity header, pinned above every repo view: how the repo is
+/// doing, where it lives, what is out, then the view's headliner.
+fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // The pane's header block reads left-to-right as local-to-remote: what is
+    // on this disk sits on the left of each row, what is on GitHub sits flush
+    // right. The identity pair already worked that way; the rest of the block
+    // now says so out loud rather than mixing "how it is doing" with "where
+    // it lives" in one run of tokens.
+    //
+    //   ○ 3 behind, 1 ahead                               ● Gaurgle
+    //   ~/repos/fleetz              git@github.com:Gaurgle/fleetz.git
+    //   * main · 1 stash               2 open PRs #13 · CI ◉ passed
+    //
+    // Each row right-aligns its own remote half independently and drops it
+    // when it will not fit. Owner and name used to be placed together or not
+    // at all, because they were one fact stacked over two rows; row two now
+    // carries the remote URL instead, which spells the name out anyway.
+    let status_color = badges::status_color(repo);
+    // `✓` when synced, matching the list badge, and never `◉`: the ringed disk
+    // belongs to CI alone now.
+    let status_icon = if repo.is_synced() { "✓" } else { "○" };
+    let path_str = repo.path.as_deref().unwrap_or("not cloned");
+
+    // Row 1 left: how it is doing relative to the remote.
+    let row1_left = vec![Span::styled(
+        format!("{status_icon} {}", repo.long_status()),
+        Style::default().fg(status_color),
+    )];
+
+    // Under row 1, while the last fetch failed: the counts beside it are
+    // against the remote refs of the last fetch that worked, and when that
+    // was. Then git's own reason, already stripped of credentials.
+    let mut fetch_rows: Vec<Line> = Vec::new();
+    if let Some(text) = crate::ui::fetch_failure_line(&repo.fetch, chrono::Local::now()) {
+        fetch_rows.push(Line::from(Span::styled(
+            format!("  {text}"),
+            Style::default().fg(colors::PEACH),
+        )));
+        if let Some(detail) = repo.fetch.failure().and_then(|f| f.detail.as_deref()) {
+            fetch_rows.push(Line::from(Span::styled(
+                format!("    {detail}"),
+                Style::default().fg(colors::OVERLAY),
+            )));
+        }
+    }
+
+    // Row 2 left: where it lives on this machine.
+    let row2_left = vec![Span::styled(
+        format!("  {path_str}"),
+        Style::default().fg(colors::OVERLAY),
+    )];
+
+    // Row 3 left: facts that exist only on this disk.
+    let mut row3_left: Vec<Span> = Vec::new();
+    if let Some(head) = repo.branches.iter().find(|b| b.is_head) {
+        row3_left.push(Span::styled(
+            "  * ",
+            Style::default().fg(colors::ref_color(crate::model::RefKind::Head)),
+        ));
+        row3_left.push(Span::styled(
+            head.name.clone(),
+            Style::default().fg(colors::ref_color(crate::model::RefKind::Head)),
+        ));
+    }
+    // Stashes carry the same glyph the repo list uses, so the eye can find
+    // them here the way it learned to find them there. Neither is drawn in
+    // OVERLAY: that is for paths and furniture, and at that brightness real
+    // news reads as decoration you have already dismissed.
+    // Each carries the colour its badge uses (one colour per concept): the
+    // stash count is STASH_CLR and the worktree count is WORKTREE_CLR, so the
+    // header fact is recognised as the same thing the list row flags.
+    let mut local_extra: Vec<(String, ratatui::style::Color)> = Vec::new();
+    if repo.stash_count > 0 {
+        let noun = if repo.stash_count == 1 {
+            "stash"
+        } else {
+            "stashes"
+        };
+        local_extra.push((
+            format!("{} {} {noun}", badges::stash_icon(), repo.stash_count),
+            colors::STASH_CLR,
+        ));
+    }
+    if !repo.worktrees.is_empty() {
+        let noun = if repo.worktrees.len() == 1 {
+            "worktree"
+        } else {
+            "worktrees"
+        };
+        local_extra.push((
+            format!("{} {noun}", repo.worktrees.len()),
+            colors::WORKTREE_CLR,
+        ));
+    }
+    for (extra, color) in local_extra {
+        if row3_left.is_empty() {
+            row3_left.push(Span::raw("  "));
+        } else {
+            row3_left.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
+        }
+        row3_left.push(Span::styled(extra, Style::default().fg(color)));
+    }
+
+    // Row 3 right: facts that live on GitHub. From an earlier refresh when
+    // the last poll did not return this repo: the same values, in the list's
+    // grey, the lamp held still.
+    let not_in_last_poll = app.is_not_in_last_poll(repo);
+    let mut row3_right: Vec<Span> = Vec::new();
+    if repo.pr_count > 0 {
+        let label = if repo.pr_count == 1 { "PR" } else { "PRs" };
+        let mut text = format!("{} open {label}", repo.pr_count);
+        // The numbers themselves, so the pane names the PR rather than only
+        // counting it. Capped so a busy repo cannot push CI off the row.
+        if !repo.prs.is_empty() {
+            let shown: Vec<String> = repo
+                .prs
+                .iter()
+                .take(PR_NUMBERS_SHOWN)
+                .map(|pr| format!("#{}", pr.number))
+                .collect();
+            text.push(' ');
+            text.push_str(&shown.join(" "));
+            if repo.prs.len() > PR_NUMBERS_SHOWN {
+                text.push('+');
+            }
+        }
+        let pr_color = if not_in_last_poll {
+            badges::EARLIER_REFRESH
+        } else {
+            colors::PR_CLR
+        };
+        row3_right.push(Span::styled(text, Style::default().fg(pr_color)));
+    }
+    if repo.ci_status != CiStatus::Unknown {
+        let (ci_sym, ci_color, ci_label) =
+            badges::ci_display(&repo.ci_status, app.watch_mode && !app.blink_on);
+        let ci_color = if not_in_last_poll {
+            badges::EARLIER_REFRESH
+        } else {
+            ci_color
+        };
+        if !row3_right.is_empty() {
+            row3_right.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
+        }
+        row3_right.push(Span::styled(
+            format!("CI {ci_sym} {ci_label}"),
+            Style::default().fg(ci_color),
+        ));
+    }
+
+    // Right halves. Owner on row 1, the remote locator on row 2, GitHub's own
+    // state on row 3.
+    let (owner_group, owner_w) = owner_spans(repo);
+    // Drawn without userinfo, so a token kept in an HTTPS remote never
+    // reaches the screen. Display only: matching and `owner_display` read
+    // the stored URL.
+    let (remote_loc, remote_loc_w) = match repo.remote_url.as_deref() {
+        Some(url) => {
+            let shown = crate::git::redact_userinfo(url);
+            let shown_w = shown.chars().count();
+            (
+                vec![Span::styled(shown, Style::default().fg(colors::OVERLAY))],
+                shown_w,
+            )
+        }
+        None => name_spans(repo),
+    };
+    let row3_right_w = span_width(&row3_right);
+
+    let mut row1 = row1_left;
+    let mut row2 = row2_left;
+    let mut row3 = row3_left;
+    for (line, right, right_w) in [
+        (&mut row1, owner_group, owner_w),
+        (&mut row2, remote_loc, remote_loc_w),
+        (&mut row3, row3_right, row3_right_w),
+    ] {
+        if right.is_empty() {
+            continue;
+        }
+        if let Some(gap) = identity_gap(width, span_width(line), right_w) {
+            line.push(Span::raw(" ".repeat(gap)));
+            line.extend(right);
+        }
+    }
+
+    lines.push(Line::from(row1));
+    lines.extend(fetch_rows);
+    lines.push(Line::from(row2));
+    if !row3.is_empty() {
+        lines.push(Line::from(row3));
+    }
+    if not_in_last_poll {
+        lines.push(Line::from(Span::styled(
+            format!("  {EARLIER_REFRESH_NOTE}"),
+            Style::default().fg(badges::EARLIER_REFRESH),
+        )));
+    }
+    lines.push(Line::from(""));
+    // The view's own title, in the colour its tab wears up in the frame. The
+    // tab is what you aim at; this is what confirms you landed, and saying it
+    // twice in two colours would have made the pair read as two things.
+    lines.extend(headliner(app.history_view, width));
+    lines
 }
 
 /// Where the detail pane's scrolling body drew its rows on the last frame,
@@ -1874,7 +1934,10 @@ fn render_notes_card(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// The reader's border title: the file's name, kind and size, then for a
+/// The preview's left border title, inside pane 2 (FZ-67).
+const READER_LABEL: &str = " notes preview ";
+
+/// The reader's right border title: the file's name, kind and size, then for a
 /// markdown file whether it is drawn rendered or raw, as in
 /// `README.md · markdown · 4.2 KiB · rendered`. The size waits for the read.
 fn reader_title(app: &App) -> Option<String> {
@@ -1933,13 +1996,21 @@ fn render_reader(frame: &mut Frame, area: Rect, app: &App) {
             .add_modifier(Modifier::BOLD),
         false => Style::default().fg(colors::OVERLAY),
     };
+    let label = Line::from(Span::styled(READER_LABEL, title_style));
+    let label_width = label.width();
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
-        .padding(Padding::new(1, 1, 0, 0));
-    if let Some(title) = reader_title(app) {
-        block = block.title_top(Line::from(Span::styled(title, title_style)).left_aligned());
+        .padding(Padding::new(1, 1, 0, 0))
+        .title_top(label.left_aligned());
+    // The file's facts on the right of the same border, dropped whole when
+    // the border cannot hold both with a column between them (FZ-67).
+    let room = (area.width as usize).saturating_sub(2);
+    if let Some(facts) = reader_title(app).map(|t| Line::from(Span::styled(t, title_style)))
+        && label_width + 1 + facts.width() <= room
+    {
+        block = block.title_top(facts.right_aligned());
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -7935,15 +8006,19 @@ mod tests {
         app
     }
 
+    /// Pane 2 in the `notes` layout, 120 columns wide: the tree takes its
+    /// share beside the preview (FZ-67), and at this width that share holds
+    /// its longest message, `notez: no notez/ or .notez/ directory`, on one
+    /// row.
     fn notes_pane_text(app: &crate::app::App) -> String {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
-        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
         term.draw(|f| render_detail_pane(f, f.area(), app)).unwrap();
         let buf = term.backend().buffer().clone();
         (0..30u16)
             .map(|y| {
-                (0..100u16)
+                (0..120u16)
                     .map(|x| buf[(x, y)].symbol())
                     .collect::<String>()
             })
@@ -8106,7 +8181,8 @@ mod tests {
         app.apply_note_facts(&read, facts);
         app.apply_note_read(read, Ok(body.join("\n")));
 
-        let draw = |app: &crate::app::App| drawn_rows(50, 12, |f| render_reader(f, f.area(), app));
+        // Wide enough for `notes preview` and the facts on one border (FZ-67).
+        let draw = |app: &crate::app::App| drawn_rows(70, 12, |f| render_reader(f, f.area(), app));
         let rows = draw(&app);
         assert!(
             rows[0].contains("README.md · markdown · 4.2 KiB"),
@@ -8307,9 +8383,10 @@ mod tests {
     }
 
     /// The `notes` layout as painted and as hit-tested agree: a click inside
-    /// the tree, the reader and the card lands on each, each pane's border
-    /// is drawn where its rectangle says, pane 2 runs the full height beside
-    /// pane 1 and the card, and the card is as wide as pane 1.
+    /// the preview, on a tree row and inside the card lands on each, each
+    /// pane's border is drawn where its rectangle says, pane 2 runs the full
+    /// height beside pane 1 and the card with the preview inside it under
+    /// the pinned header (FZ-67), and the card is as wide as pane 1.
     #[test]
     fn notes_clicks_land_on_the_tree_the_reader_and_the_card() {
         let (w, h) = (140u16, 44u16);
@@ -8320,7 +8397,7 @@ mod tests {
         let area = Rect::new(0, 0, w, h);
         let rows = drawn_rows(w, h, |f| crate::ui::render(f, &app));
         let rects = crate::ui::panel_rects(area, &app);
-        let tree = rects.detail.expect("tree");
+        let pane2 = rects.detail.expect("pane 2");
         let reader = rects.reader.expect("reader");
         let card = rects.inspector.expect("card");
 
@@ -8329,18 +8406,27 @@ mod tests {
             (rects.repo_list.x, rects.repo_list.width)
         );
         assert_eq!(card.y, rects.repo_list.y + rects.repo_list.height);
-        assert_eq!(tree.y, rects.repo_list.y, "pane 2 starts at the top");
-        assert_eq!(tree.bottom(), card.bottom(), "and runs the full height");
-        assert_eq!(reader.y, tree.y);
-        assert_eq!(reader.height, tree.height);
+        assert_eq!(pane2.y, rects.repo_list.y, "pane 2 starts at the top");
+        assert_eq!(pane2.bottom(), card.bottom(), "and runs the full height");
+        // Inside pane 2's border, under its title, readout and pinned
+        // header, and in its right part, which leaves the tree the left.
         assert!(
-            reader.x > tree.right() - 1,
-            "the reader is right of the tree"
+            reader.x > pane2.x + 1 && reader.right() < pane2.right(),
+            "the reader is inside pane 2's width: {reader:?} in {pane2:?}"
+        );
+        assert!(
+            reader.y > pane2.y + 2 && reader.bottom() < pane2.bottom(),
+            "the reader is under pane 2's header: {reader:?} in {pane2:?}"
+        );
+        assert!(
+            reader.x > pane2.x + pane2.width / 4,
+            "the tree keeps the left of pane 2"
         );
 
         let cell = |x: u16, y: u16| rows[y as usize].chars().nth(x as usize).unwrap();
         for (rect, panel, title) in [
-            (tree, FocusedPanel::Detail, "[2]"),
+            (pane2, FocusedPanel::Detail, "[2]"),
+            (reader, FocusedPanel::Reader, "notes preview"),
             (reader, FocusedPanel::Reader, "a.md · markdown"),
             (card, FocusedPanel::Inspector, "[3] file"),
         ] {
@@ -8352,14 +8438,39 @@ mod tests {
                 .take(rect.width as usize)
                 .collect();
             assert!(top.contains(title), "{panel:?} title: {top}");
-            let (mx, my) = (rect.x + rect.width / 2, rect.y + rect.height / 2);
-            assert_eq!(rects.at(mx, my), Some(panel), "click mid {panel:?}");
             assert_eq!(
                 rects.at(rect.x, rect.y),
                 Some(panel),
                 "click corner {panel:?}"
             );
         }
+        for (rect, panel) in [
+            (reader, FocusedPanel::Reader),
+            (card, FocusedPanel::Inspector),
+        ] {
+            let (mx, my) = (rect.x + rect.width / 2, rect.y + rect.height / 2);
+            assert_eq!(rects.at(mx, my), Some(panel), "click mid {panel:?}");
+        }
+        // Pane 2's middle is the preview's now; the tree's file row is
+        // pane 2's own.
+        let (fy, fx) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(y, r)| {
+                let x = r
+                    .chars()
+                    .take(reader.x as usize)
+                    .collect::<String>()
+                    .find("a.md")?;
+                Some((y as u16, r[..x].chars().count() as u16))
+            })
+            .expect("the tree draws a.md left of the preview");
+        assert!(pane2.contains(ratatui::layout::Position { x: fx, y: fy }));
+        assert_eq!(
+            rects.at(fx, fy),
+            Some(FocusedPanel::Detail),
+            "click a tree row"
+        );
         assert!(
             rows.iter().any(|r| r.contains("hello")),
             "the body is drawn"
@@ -8370,6 +8481,212 @@ mod tests {
             Some(crate::ui::Divider::Horizontal)
         );
         assert_eq!(rects.divider_at(reader.x + 2, card.y), None);
+    }
+
+    /// FZ-67: pane 2 keeps one outer border in the `notes` layout, its
+    /// title and view tabs across the whole pane, and the preview is a box
+    /// of its own inside it, titled `notes preview`, right of the tree.
+    /// Fails while the reader is a sibling pane with its top on pane 2's.
+    #[test]
+    fn the_notes_preview_is_a_box_inside_pane_2() {
+        let (w, h) = (140u16, 44u16);
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        app.contributions_folded = true;
+        let rows = drawn_rows(w, h, |f| crate::ui::render(f, &app));
+        let rects = crate::ui::panel_rects(Rect::new(0, 0, w, h), &app);
+        let pane2 = rects.detail.expect("pane 2");
+        let reader = rects.reader.expect("preview");
+        let span = |y: u16, from: u16, to: u16| -> String {
+            rows[y as usize]
+                .chars()
+                .skip(from as usize)
+                .take((to - from) as usize)
+                .collect()
+        };
+
+        // One border on pane 2's top row: its two corners and nothing
+        // between them that opens a second box.
+        let top = span(pane2.y, pane2.x, pane2.right());
+        assert!(top.starts_with('╭') && top.ends_with('╮'), "{top}");
+        assert_eq!(top.matches('╭').count(), 1, "one outer border: {top}");
+        assert!(top.contains("[2]"), "the pane's title: {top}");
+        assert!(top.contains("NOTES"), "the view tabs: {top}");
+        let bottom = span(pane2.bottom() - 1, pane2.x, pane2.right());
+        assert!(bottom.starts_with('╰') && bottom.ends_with('╯'), "{bottom}");
+
+        // The preview's own box, inside pane 2 and titled.
+        let preview_top = span(reader.y, reader.x, reader.right());
+        assert!(preview_top.starts_with('╭'), "{preview_top}");
+        assert!(preview_top.contains("notes preview"), "{preview_top}");
+        assert!(
+            pane2.contains(ratatui::layout::Position {
+                x: reader.x,
+                y: reader.y
+            }) && reader.right() < pane2.right()
+                && reader.bottom() < pane2.bottom(),
+            "{reader:?} in {pane2:?}"
+        );
+
+        // The tree on the left of the same body: its mode line on the
+        // preview's top row, before the preview's corner.
+        let left = span(reader.y, pane2.x, reader.x);
+        assert!(left.contains("notes: [notez]"), "the tree: {left}");
+    }
+
+    /// FZ-67: the preview's border carries the file's facts on its right
+    /// where it can hold them beside `notes preview`, and only `notes
+    /// preview` where it cannot. Fails while the facts are the left title.
+    #[test]
+    fn the_preview_border_drops_the_facts_whole_when_narrow() {
+        let mut app = notes_view_app(&[("notez/README.md", Some("notez"))]);
+        let read = app.claim_note_read().expect("a read");
+        let facts = crate::notes::NoteFacts {
+            size: Some(4300),
+            ..Default::default()
+        };
+        app.apply_note_facts(&read, facts);
+        app.apply_note_read(read, Ok("body".to_string()));
+        let facts = "README.md · markdown · 4.2 KiB · rendered";
+
+        let wide = drawn_rows(70, 6, |f| render_reader(f, f.area(), &app));
+        assert!(wide[0].starts_with("╭ notes preview "), "{}", wide[0]);
+        assert!(wide[0].contains(&format!(" {facts} ╮")), "{}", wide[0]);
+
+        let narrow = drawn_rows(50, 6, |f| render_reader(f, f.area(), &app));
+        assert!(narrow[0].starts_with("╭ notes preview "), "{}", narrow[0]);
+        assert!(
+            !narrow[0].contains("README"),
+            "dropped whole: {}",
+            narrow[0]
+        );
+        assert!(!narrow[0].contains("·"), "no fragment: {}", narrow[0]);
+    }
+
+    /// FZ-67: in the `notes` layout `detail` is all of pane 2 and `reader`
+    /// the preview inside it, so `at` answers the preview inside it and
+    /// pane 2 on a tree row. A section's digest and an empty fleet draw no
+    /// preview, and `panel_rects` says so.
+    #[test]
+    fn panel_rects_nest_the_preview_inside_pane_2() {
+        let area = Rect::new(0, 0, 140, 44);
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        let rects = crate::ui::panel_rects(area, &app);
+        let pane2 = rects.detail.expect("pane 2");
+        let reader = rects.reader.expect("preview");
+        assert_eq!(pane2.intersection(reader), reader, "reader inside detail");
+        assert!(pane2.width > reader.width && pane2.height > reader.height);
+        let (cx, cy) = (reader.x + reader.width / 2, reader.y + reader.height / 2);
+        assert_eq!(rects.at(cx, cy), Some(FocusedPanel::Reader));
+        assert_eq!(
+            rects.at(reader.right() - 1, reader.bottom() - 1),
+            Some(FocusedPanel::Reader)
+        );
+        // A tree row: left of the preview, on its rows.
+        assert_eq!(
+            rects.at(pane2.x + 3, reader.y + 2),
+            Some(FocusedPanel::Detail)
+        );
+        // Pane 2's header, above the preview, is pane 2's too.
+        assert_eq!(rects.at(cx, pane2.y + 1), Some(FocusedPanel::Detail));
+
+        // A local-only repo's section always draws its header.
+        app.repos[0].location = crate::model::RepoLocation::LocalOnly;
+        let section = crate::digest::Section::of(&app.repos[0]);
+        app.land_on(crate::app::ListRow::Header(section));
+        assert!(app.digest(chrono::Local::now()).is_some(), "on the digest");
+        let rects = crate::ui::panel_rects(area, &app);
+        assert_eq!(rects.reader, None, "the digest draws no preview");
+        let rows = drawn_rows(140, 44, |f| crate::ui::render(f, &app));
+        assert!(!rows.join("\n").contains("notes preview"));
+
+        let mut empty = crate::app::App::new(Vec::new(), "t".to_string(), 140, 44);
+        empty.view = crate::app::View::Detail;
+        empty.history_view = HistoryView::Notes;
+        assert_eq!(crate::ui::panel_rects(area, &empty).reader, None);
+        let rows = drawn_rows(140, 44, |f| crate::ui::render(f, &empty));
+        assert!(!rows.join("\n").contains("notes preview"));
+    }
+
+    /// FZ-67: a click on the tree's second file selects it with the tree
+    /// inside pane 2's body: the hit map is built from the tree's rect, so
+    /// the row under the pointer is the file drawn there.
+    #[test]
+    fn a_click_on_the_second_file_selects_it_inside_pane_2() {
+        let (w, h) = (140u16, 44u16);
+        let mut app =
+            notes_view_app(&[("notez/a.md", Some("notez")), ("notez/b.md", Some("notez"))]);
+        app.contributions_folded = true;
+        let rows = drawn_rows(w, h, |f| crate::ui::render(f, &app));
+        let reader = crate::ui::panel_rects(Rect::new(0, 0, w, h), &app)
+            .reader
+            .expect("preview");
+        let (y, x) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(y, r)| {
+                let left: String = r.chars().take(reader.x as usize).collect();
+                let x = left.find("b.md")?;
+                Some((y as u16, left[..x].chars().count() as u16))
+            })
+            .expect("b.md drawn in the tree");
+        assert_eq!(app.detail_selected(), 0);
+        let body = app.detail_hits.borrow().body;
+        assert!(
+            body.right() < reader.x,
+            "the hit map is the tree's, left of the preview: {body:?}, {reader:?}"
+        );
+        let click = app.detail_hits.borrow().at(x, y).expect("a hit on b.md");
+        app.click_detail(&click);
+        assert_eq!(app.detail_selected(), 1, "the second file is selected");
+        assert_eq!(
+            app.notes_highlighted_file().map(|f| f.rel.clone()),
+            Some("notez/b.md".into())
+        );
+    }
+
+    /// FZ-67: on a pane too short to pin the header over the tree and the
+    /// preview, the header scrolls with the tree in the tree's column, laid
+    /// out at the tree's width: its rows do not wrap, so the mode line sits
+    /// right under them, and the preview keeps its box beside it. Fails
+    /// while the fallback keeps the header laid out for the whole pane.
+    #[test]
+    fn a_short_notes_pane_scrolls_the_header_with_the_tree() {
+        let (w, h) = (140u16, 18u16);
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        app.contributions_folded = true;
+        let pane2 = crate::ui::panel_rects(Rect::new(0, 0, w, h), &app)
+            .detail
+            .expect("pane 2");
+        let (header, body) = notes_pane_body(pane2, &app).expect("a tree");
+        assert_eq!(header, None, "too short to pin the header");
+        let (tree, _) = split_notes_pane(body);
+
+        let rows = drawn_rows(w, h, |f| crate::ui::render(f, &app));
+        let reader = crate::ui::panel_rects(Rect::new(0, 0, w, h), &app)
+            .reader
+            .expect("preview");
+        let cell = |x: u16, y: u16| rows[y as usize].chars().nth(x as usize).unwrap();
+        assert_eq!(cell(reader.x, reader.y), '╭', "the preview's corner");
+        let left = |y: u16| -> String {
+            rows[y as usize]
+                .chars()
+                .skip(tree.x as usize)
+                .take((reader.x - tree.x) as usize)
+                .collect()
+        };
+
+        // The header's first row, the repo's state, opens the tree column.
+        let repo = app.selected_repo().expect("a repo");
+        let state = repo.long_status();
+        assert!(left(tree.y).contains(&state), "{}", left(tree.y));
+        // Laid out at the tree's width, one row per line: the mode line is
+        // the row after the last header line.
+        let header_rows = header_lines(&app, repo, tree.width as usize).len() as u16;
+        let mode = left(tree.y + header_rows);
+        assert!(mode.contains("notes: [notez]"), "{}", rows.join("\n"));
+
+        let body = app.detail_hits.borrow().body;
+        assert!(body.right() < reader.x, "{body:?}, {reader:?}");
     }
 
     /// The tree is wide enough for its mode line whole, `(m)` included, in

@@ -18,8 +18,9 @@ so mouse clicks can be hit-tested against what is on screen. Shared geometry
 lives in one function called by both (`detail::split_inspector`, and
 `ui::contributions::split_main_area` for the strip, over `dock_bottom`; the
 `notes` layout splits columns first with `detail::split_main`, stacks pane 1
-over the card with `split_inspector`, and splits pane 2 into tree and reader
-with `detail::split_notes_pane`); never
+over the card with `split_inspector`, takes pane 2's body under its pinned
+header with `detail::notes_pane_body` and splits that body into tree and
+preview with `detail::split_notes_pane`); never
 reintroduce a second copy of that arithmetic. Drift here misroutes clicks silently, with nothing
 failing.
 
