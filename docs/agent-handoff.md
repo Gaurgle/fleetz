@@ -53,9 +53,8 @@ Merged 11-03: FZ-59 `4545a1f`, #96 `98b63e5`, FZ-64 `cbb6cfb`. Next:
 FZ-66 to review, FZ-65 on his wheel answer, FZ-67 on his yes, FZ-41
 (#97) after them
 (keeps the tab line). Script and log highlighting in the inspector is
-filed once he picks the YAML route (`syntect` or own). FZ-63 and FZ-60:
-redispatch from `main` on his word, FZ-58 (#114) after FZ-63 merges.
-FZ-52 not before 0.8.0 and his word.
+filed once he picks the YAML route (`syntect` or own). FZ-63, FZ-60 on
+his word, FZ-58 (#114) after FZ-63. FZ-52 not before 0.8.0 and his word.
 
 Start a lead from the repo root: `claude --agent fz-coordinator` (normal
 permissions, subscription, no provider override); Codex from `AGENTS.md`.
