@@ -41,7 +41,7 @@ const GROUPS: [Group; 6] = [
             },
             Row {
                 key: "PgUp/PgDn",
-                desc: &["page detail or inspector"],
+                desc: &["page detail; H/L reader"],
             },
             Row {
                 key: "Tab ⇧Tab",
@@ -76,9 +76,12 @@ const GROUPS: [Group; 6] = [
                 key: "[ ]",
                 desc: &["previous / next repo view"],
             },
+            // One row for the two in-view expanders and the `notes` reader's
+            // rendered / source toggle (FZ-59): neither column has a row to
+            // spare at 80x24.
             Row {
-                key: "B",
-                desc: &["info: all remote branches"],
+                key: "B m p",
+                desc: &["remotes; notez/md; source"],
             },
             Row {
                 key: "c",
@@ -136,7 +139,7 @@ const GROUPS: [Group; 6] = [
             },
             Row {
                 key: "t",
-                desc: &["pick the activity window"],
+                desc: &["activity / digest window"],
             },
         ],
     },
@@ -145,7 +148,7 @@ const GROUPS: [Group; 6] = [
         rows: &[
             Row {
                 key: "Enter",
-                desc: &["lazygit in this repo"],
+                desc: &["lazygit; note; digest repo"],
             },
             Row {
                 key: "e",
@@ -160,6 +163,10 @@ const GROUPS: [Group; 6] = [
                 desc: &["first PR in the browser"],
             },
             Row {
+                key: "l a x O",
+                desc: &["ci: log rerun cancel open"],
+            },
+            Row {
                 key: "y",
                 desc: &["copy hash (or click it)"],
             },
@@ -170,9 +177,8 @@ const GROUPS: [Group; 6] = [
             Row {
                 key: ",",
                 desc: &[
-                    "settings: sweep and poll",
-                    "intervals, watch, view,",
-                    "work hours, pane sizes,",
+                    "settings: sweep, poll,",
+                    "watch, view, work, panes,",
                     "contrib, loading, icons",
                 ],
             },

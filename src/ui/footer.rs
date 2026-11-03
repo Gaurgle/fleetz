@@ -193,6 +193,17 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
         hints.push(Span::styled(" refresh", desc_style));
     }
     hints.push(gap.clone());
+    // From the `notes` tree or reader `p` flips the reader (FZ-59).
+    if app.reader_pages() {
+        hints.push(Span::styled("[p]", key_style));
+        if with_desc {
+            hints.push(Span::styled(
+                format!(" {}", reader_mode_hint(app)),
+                desc_style,
+            ));
+        }
+        hints.push(gap.clone());
+    }
     hints.push(Span::styled("[R]", lit(app.loading)));
     if with_desc {
         hints.push(Span::styled(" reload", desc_style));
@@ -249,6 +260,15 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
 /// between two keys, so the two groups read apart.
 const SEGMENT_GAP: &str = "   ";
 
+/// What `p` does from the `notes` tree or reader (FZ-59): show the source,
+/// or render it again.
+fn reader_mode_hint(app: &App) -> &'static str {
+    match app.reader_raw {
+        true => "render",
+        false => "raw",
+    }
+}
+
 /// The keys that belong to the focused pane, which open the hint row: they
 /// have no room beside what they change, so without this they were only in
 /// the help overlay. Keys the global row already hints are not repeated,
@@ -271,15 +291,26 @@ fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
             ("[e]".into(), "edit"),
             ("[o]".into(), "shell"),
         ],
+        // The `ci` view's cursor walks runs, and its handoffs act on the
+        // highlighted one (FZ-30e).
+        FocusedPanel::Detail if app.history_view == HistoryView::Ci => vec![
+            ("[j/k]".into(), "run"),
+            ("[[ ]]".into(), "view"),
+            ("[l]".into(), "log"),
+            ("[a]".into(), "rerun"),
+            ("[x]".into(), "cancel"),
+            ("[O]".into(), "open"),
+        ],
+        // The `notes` tree (FZ-62): its cursor walks files, and the shifted
+        // keys read the file beside it without leaving the tree.
+        FocusedPanel::Detail if app.notes_layout() => vec![
+            ("[j/k]".into(), "file"),
+            ("[[ ]]".into(), "view"),
+            ("[J/K]".into(), "read"),
+            ("[H/L]".into(), "page"),
+        ],
         FocusedPanel::Detail => vec![
-            // The `ci` view's cursor walks runs, not commits.
-            (
-                "[j/k]".into(),
-                match app.history_view {
-                    HistoryView::Ci => "run",
-                    _ => "commit",
-                },
-            ),
+            ("[j/k]".into(), "commit"),
             ("[[ ]]".into(), "view"),
             ("[J/K]".into(), "inspector"),
         ],
@@ -302,6 +333,12 @@ fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
             ("[+/-]".into(), "size"),
             (format!("[{}]", crate::ui::INSPECTOR_NUM), "fold"),
         ],
+        // The `notes` view's reader (FZ-62): `Enter` opens the file it shows.
+        FocusedPanel::Reader => vec![
+            ("[j/k]".into(), "scroll"),
+            ("[H/L]".into(), "page"),
+            ("[Enter]".into(), "edit"),
+        ],
         FocusedPanel::Contributions => vec![
             ("[h/l]".into(), "week"),
             ("[j/k]".into(), "day"),
@@ -313,6 +350,20 @@ fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
     // `B` folds `info`'s remote branch summary and does nothing elsewhere.
     if pane == FocusedPanel::Detail && app.history_view == HistoryView::Info {
         keys.push(("[B]".into(), "remotes"));
+    }
+    // On a section header pane 2 is the slot digest (FZ-45): its keys
+    // replace the list's and pane 2's.
+    if app.on_header().is_some() && matches!(pane, FocusedPanel::RepoList | FocusedPanel::Detail) {
+        let walk = if pane == FocusedPanel::Detail {
+            "line"
+        } else {
+            "move"
+        };
+        keys = vec![
+            ("[j/k]".into(), walk),
+            ("[t]".into(), "digest window"),
+            ("[Enter]".into(), "go to repo"),
+        ];
     }
 
     let key_style = Style::default()
@@ -554,6 +605,7 @@ mod tests {
             remote_branches: vec![],
             work_key: None,
             fetch: crate::model::FetchFacts::default(),
+            authors: Default::default(),
         }
     }
 
@@ -757,10 +809,54 @@ mod tests {
         assert_eq!(
             hint_row(&app, WIDE),
             format!(
-                "[j/k] run  [[ ]] view  [J/K] inspector   {}",
+                "[j/k] run  [[ ]] view  [l] log  [a] rerun  [x] cancel  [O] open   {}",
                 global_row(&app)
             )
         );
+    }
+
+    /// FZ-59: from the `notes` tree or reader the global row adds `[p]`,
+    /// which flips the reader, `raw` while rendered and `render` while raw;
+    /// `[r]` refreshes there as everywhere, and `[p]` is hinted nowhere
+    /// else. The pane's own segment does not repeat it.
+    #[test]
+    fn the_global_p_hint_names_the_raw_toggle_in_the_notes_tree_and_reader() {
+        let mut app = app_in(View::Detail);
+        app.focused_panel = crate::app::FocusedPanel::Detail;
+        assert!(global_row(&app).starts_with("[enter] lazygit  [r] refresh  [R]"));
+
+        app.history_view = HistoryView::Notes;
+        let row = global_row(&app);
+        assert!(
+            row.starts_with("[enter] lazygit  [r] refresh  [p] raw  [R]"),
+            "{row}"
+        );
+        assert_eq!(
+            hint_row(&app, WIDE),
+            format!("[j/k] file  [[ ]] view  [J/K] read  [H/L] page   {row}")
+        );
+
+        app.focused_panel = crate::app::FocusedPanel::Reader;
+        app.toggle_reader_raw();
+        let row = global_row(&app);
+        assert!(
+            row.starts_with("[enter] lazygit  [r] refresh  [p] render  [R]"),
+            "{row}"
+        );
+        assert_eq!(
+            hint_row(&app, WIDE),
+            format!("[j/k] scroll  [H/L] page  [Enter] edit   {row}")
+        );
+
+        for panel in [
+            crate::app::FocusedPanel::RepoList,
+            crate::app::FocusedPanel::Inspector,
+        ] {
+            app.focused_panel = panel;
+            let row = global_row(&app);
+            assert!(row.contains("[r] refresh"), "{panel:?}");
+            assert!(!row.contains("[p]"), "{panel:?}");
+        }
     }
 
     /// `B` folds `info`'s remote branch summary and does nothing elsewhere,
@@ -897,5 +993,32 @@ mod tests {
         // Muscle memory: the rightmost hint should not move as hints are added.
         assert!(text(&keybind_hints(&app_in(View::Detail), true)).ends_with(" quit"));
         assert!(text(&keybind_hints(&app_in(View::Detail), false)).ends_with("[q]"));
+    }
+
+    /// FZ-45: on a section header the focused pane hints the digest's keys.
+    #[test]
+    fn a_header_stop_hints_the_digest_keys() {
+        use crate::digest::tests::repo;
+        use crate::model::RepoLocation;
+        let mut app = App::new(
+            vec![
+                repo("a", RepoLocation::Primary),
+                repo("b", RepoLocation::LocalOnly),
+            ],
+            String::new(),
+            120,
+            40,
+        );
+        app.view = View::Detail;
+        app.land_on(crate::app::ListRow::Header(
+            crate::digest::Section::LocalChanges,
+        ));
+        let list = text(&focus_hints(&app, true));
+        assert_eq!(list, "[j/k] move  [t] digest window  [Enter] go to repo");
+        app.focused_panel = FocusedPanel::Detail;
+        assert!(text(&focus_hints(&app, true)).starts_with("[j/k] line  [t]"));
+        app.land_on(crate::app::ListRow::Repo(1));
+        app.focused_panel = FocusedPanel::RepoList;
+        assert!(text(&focus_hints(&app, true)).contains("[t] window"));
     }
 }

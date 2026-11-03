@@ -256,6 +256,9 @@ pub fn history_view_color(view: crate::app::HistoryView) -> Color {
         // tab would read as a verdict. `WATCH_OFF` holds the same value and
         // is deliberately not this constant.
         HistoryView::Ci => MAROON,
+        // Yellow, the paper of a notes pad (FZ-53): the one tab hue left
+        // that is neither the HEAD marker's teal nor a lamp's colour.
+        HistoryView::Notes => YELLOW,
     }
 }
 

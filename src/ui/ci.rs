@@ -980,6 +980,7 @@ mod tests {
             remote_branches: vec![],
             work_key: None,
             fetch: model::FetchFacts::default(),
+            authors: Default::default(),
         }
     }
 
@@ -1894,7 +1895,7 @@ mod tests {
         app.press_bracket(false);
         assert_eq!(
             app.history_view,
-            HistoryView::Info,
+            HistoryView::Notes,
             "pane 2 cycles its views"
         );
         assert_eq!(app.ci_body, CiBody::Log);
@@ -2328,7 +2329,7 @@ mod tests {
         app.press_bracket(false);
         assert_eq!(app.history_view, HistoryView::Ci);
         app.press_bracket(false);
-        assert_eq!(app.history_view, HistoryView::Info, "on through ci");
+        assert_eq!(app.history_view, HistoryView::Notes, "on through ci");
         assert_eq!(app.ci_body, CiBody::Jobs, "no body stepped");
     }
 
@@ -2339,7 +2340,7 @@ mod tests {
         let mut app = app();
         app.focused_panel = FocusedPanel::Inspector;
         app.press_bracket(false);
-        assert_eq!(app.history_view, HistoryView::Info);
+        assert_eq!(app.history_view, HistoryView::Notes);
         assert_eq!(app.ci_body, CiBody::Jobs);
     }
 

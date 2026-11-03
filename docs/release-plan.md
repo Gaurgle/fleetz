@@ -250,6 +250,43 @@ not needed to keep building.
 Three slots are in force: two `fz-worker` plus one `fz-small`, each with its
 own reviewer, merges one at a time.
 
+## repoz convergence: accepted 2026-10-23
+
+Andreas's direction (2026-10-23): bash repoz becomes a print mode of this
+binary, built on fleetz's code, with repoz's look unchanged; the binary
+then takes the name `repoz` (print mode is a flag of it), and repository
+renames come last and are his. Design accepted:
+[repoz-print-design.md](repoz-print-design.md); phases and order:
+[2026-10-23-repoz-convergence-plan.md](superpowers/plans/2026-10-23-repoz-convergence-plan.md).
+Tickets FZ-46 to FZ-52 (#102 to #108), milestone `repoz convergence`,
+Backlog, none dispatched. FZ-46 to FZ-51 run one at a time in a worker
+slot beside the batches above once P1 (the fixture hook in bash repoz)
+lands and he says go; FZ-52 (the rename) waits for 0.8.0 and his explicit
+word. Publishing, which replacing the public repoz needs, belongs to the
+release row (FZ-20, #3).
+
+FZ-53 (the `notes` view in pane 2: notez tree, markdown toggle, inspector)
+was agreed 2026-10-26, filed in Backlog under M4 at P2, not dispatched.
+Design in [ideas.md](ideas.md), "Repo notes in pane 2".
+
+FZ-55 (#111, scroll margin on every list and reveal on expand, a notez
+port), FZ-56 (#112, search by owner, organisation and contributor),
+and the three follow-ups from his look at FZ-53 (FZ-57 #113 the notes
+view names its modes, FZ-58 #114 a notez-style tree browser, FZ-59
+#115 rendered markdown, which waits on his dependency decision) were
+filed 2026-10-27 on Andreas's word under M3 at P2. His "keep 4" settled
+FZ-55's margin.
+
+On 2026-10-29 Andreas reshaped the notes view: the inspector was too
+short to read in, so FZ-62 (#118, pane 2 splits into tree and reader,
+the inspector becomes a metadata card as wide as pane 1, file kinds)
+and FZ-63 (#119, todoz boards drawn as boards, pinned at the top of
+the tree, read-only, `Enter` to `todoz`) were filed Ready under M4 at
+P2; FZ-57 was closed into FZ-62 and FZ-59 amended to render in the
+reader with `pulldown-cmark`. Order: FZ-62, then FZ-59 and FZ-63 side
+by side, then FZ-58. Design in [ideas.md](ideas.md), "Repo notes in
+pane 2", amendment of 2026-10-29.
+
 ## Completion rule
 
 An agent finishing a turn is not a completed ticket. Done requires accepted

@@ -2046,3 +2046,144 @@ that does not match what `Config` reads, and a value that does not survive being
 written. Both are covered, the second by an actual save and load through a temp
 file, because a row that saves happily and changes nothing is the failure worth
 guarding.
+
+## Repo notes in pane 2
+
+**Status: ticketed as FZ-53, not built.** Agreed with Andreas 2026-10-26.
+
+**Problem.** Notes about a repo live in that repo (`notez/`, committed, and
+`.notez/`, gitignored scratch, at the top level or beside a module) and in
+`README.md`, `CLAUDE.md` and `docs/`. Reading any of them means leaving the
+dashboard for an editor and finding the file by hand. The repo under the
+cursor is the one you want to read about.
+
+**Shape.** A seventh pane 2 view, `notes`, following the ruling under
+"Branches" above: the fleetz equivalent of a lazygit panel is a pane 2 view,
+which inherits the header, scroll and selection arrays, tab strip and docked
+inspector. Pane 2 draws a tree of every `notez/` and `.notez/` directory in the
+selected repo, at any depth, each a section headed by its relative path; the
+inspector shows the highlighted file, read on highlight; `Enter` suspends to
+`$EDITOR` on it the way `e` opens the repo. One key toggles the tree between
+notez-only and every markdown file in the repo, grouped by directory.
+
+**No index.** The data is one walk of the selected repo, on demand, in the
+background, only while the view is on screen and after the `ci` dwell
+(`App::ci_wanted` is the pattern): never fleet-wide, never ahead of time, held
+in memory per repo for the session and re-walked when a sweep lands or a
+suspend returns. The walk applies `PRUNE_DIRS` and skips hidden directories
+except `.notez`, so `target/` and `node_modules/` cost nothing. A fleet-wide
+notes search would need an index and is a different feature; the per-repo
+question is the one pane 2 answers.
+
+**Rejected: a single master note per repo.** A fleetz-owned file (own store
+keyed by remote identity, or `notez/fleetz.md`) is simpler to add to and
+works for not-cloned rows, but it is one more notes system beside the vault
+and reads nothing that already exists. A `notez/fleetz.md` is just a file the
+tree already shows, so the idea costs nothing to keep open.
+
+**Rejected: `notez-core` as a dependency.** It would pin fleetz to the vault
+format for the sake of path rules a directory walk already finds.
+
+**Deferred.** Quick-add from a one-line prompt (the filter prompt is already a
+text input; `N` could append a timestamped line), a has-notes mark in the repo
+list or `info`, and the personal store `~/notez/personal/<project>/` as an
+extra root found by one stat on the folder name. All left out of FZ-53 on
+2026-10-26.
+
+**Amendment 2026-10-29: the reader moves into pane 2.** Shipped as FZ-53,
+the inspector read the highlighted file on its few rows and was too short
+for it. Andreas's call: do what `graph` does and give the column to pane 2.
+In `notes` the main area splits into columns first; the left column stacks
+pane 1 over a metadata card as wide as pane 1 (name, path, project, kind,
+size, modified, created, where it lives, last commit date, "untracked" for
+a `.notez/` file), the right column is pane 2 at full height, split into
+the tree and a reader with its own focus and scroll, its border naming the
+file, its kind and size (FZ-62, #118). Markdown renders in that reader
+(FZ-59, `pulldown-cmark`, notez's renderer ported, tree-sitter left out).
+A `TODO.md` is a fourth kind, `todo`, drawn as a todoz board (sections,
+tri-state checkboxes, subtasks, tag dots, due dates) and pinned in a
+`todos` section at the top of the tree in both modes, with the personal
+board `~/notez/personal/<project>/TODO.md` as the one file of the deferred
+personal store that joins (FZ-63, #119). Read-only, as `changes` is:
+`Enter` on a board suspends to `todoz`. Rejected: a separate `todoz` pane 2
+view, since the boards are files the notes walk already finds and the
+question is still "what is written down about this repo".
+
+## Changed files in pane 2
+
+**Status: ticketed as FZ-60, not built.** Agreed with Andreas 2026-10-28.
+
+**Problem.** The repo list says a repo is dirty (`4!`) and ahead (`2↑`) and
+stops there. Which files those are, and whether the dirt is a forgotten
+scratch directory or half a feature, means leaving the dashboard for a shell
+and `git status`. The repo under the cursor is the one you want to know
+about.
+
+**Shape.** An eighth pane 2 view, `changes`, following the ruling under
+"Branches view": the fleetz equivalent of a lazygit panel is a pane 2 view,
+inheriting the header, scroll and selection arrays, tab strip and docked
+inspector. It lists the files that have not left this machine, in two
+sections:
+
+```
+uncommitted (4)
+  M  src/app.rs           +12  -3
+  M  src/git.rs            +4  -4
+  A  docs/foo.md          +40  -0    staged
+  ?? scratch/
+unpushed (2 ahead of origin/main)
+  M  src/ui/detail.rs     +88 -12
+  D  src/old.rs
+```
+
+`uncommitted` is `git status --porcelain` with its two status columns kept
+(staged versus unstaged, `??` for untracked) and `git diff --numstat` churn
+beside each tracked file; untracked directories stay collapsed as porcelain
+reports them, so a forgotten `target/` costs one line. `unpushed` is `git
+diff --name-status --numstat @{u}..HEAD`, the files touched by the commits
+the `ahead` counter counts. A branch with no upstream says so in one line
+and draws no `unpushed` section: it never pretends every commit is
+unpushed. Detached HEAD likewise.
+
+**Base toggle.** One key in the view swaps the base of the second section
+from the upstream to the repo's default branch (`git::default_branch`,
+`origin/HEAD` with the main/master fallback) and renames the section `on
+branch vs main (N)`: the branch's whole divergence, pushed or not, which on
+a feature branch is the PR's file list. Default is the upstream, decided
+2026-10-28: the question the dirty and ahead counters raise is "what has
+not left this machine", and the toggle answers the other one in place, the
+way `m` widens the notes tree.
+
+**Inspector.** The highlighted file's diff: `git diff HEAD -- <path>` for
+the uncommitted section (staged and unstaged in one), `git diff <base>..HEAD
+-- <path>` for the other, added and removed lines in the green and red the
+churn column already owns. An untracked file shows its body under
+`notes::BODY_CAP`. `Enter` suspends to `$EDITOR` on the file as the notes
+view does; `y` copies the repo-relative path.
+
+**On demand, as notes.** The reads run only while the view is on screen for
+the highlighted repo, after the `ci` dwell, off the UI thread, landing as an
+`AppEvent`; held per repo for the session; re-read when a sweep lands or a
+suspend returns. Never fleet-wide, never ahead of time. The sweep already
+runs `status --porcelain` per repo (`dirty_count`, `dirty_paths`) and
+throws the paths away; carrying them on `RepoStatus` would paint the first
+section without a dwell. Left for later, on purpose: the on-demand pattern is
+the established one and keeps the sweep untouched, and the dwell is the same
+one `ci` and `notes` live with.
+
+**Read-only.** No staging, no commit, no discard. Decided 2026-10-28: fleetz
+is what you sit in, lazygit is what you commit from, and write actions are
+where a dashboard starts needing confirmations and an undo.
+
+**Rejected: "differs from main" as the default.** On a feature branch that
+list includes everything already pushed and reviewed, which is not what a
+dirty counter is asking about. Kept as the toggle.
+
+**Rejected: a fleet-wide changed-files index.** Every porcelain path for
+every repo, every sweep, to answer a per-repo question; the sweep's count is
+enough for the list and the view answers the rest on demand.
+
+**Deferred.** Linked worktrees as further sections (the Worktrees section of
+`info` counts their dirt but this view lists the main checkout only in v1);
+the porcelain paths carried from the sweep to skip the dwell; the file list
+in `-d` print mode.

@@ -19,3 +19,4 @@ dirs = "6"
 libc = "0.2"
 shellexpand = "3"
 toml_edit = "0.25.13"
+pulldown-cmark = { version = "=0.13.4", default-features = false }

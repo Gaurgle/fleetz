@@ -5,10 +5,13 @@ pub mod colors;
 pub mod compact;
 pub mod contributions;
 pub mod detail;
+pub mod digest;
 pub mod footer;
 pub mod grips;
 pub mod help;
 pub mod intro;
+pub mod markdown;
+pub mod scroll;
 pub mod settings;
 pub mod timewindow;
 
@@ -466,6 +469,9 @@ pub struct PanelRects {
     pub inspector: Option<Rect>,
     /// Whether that inspector is folded, which leaves it nothing to resize.
     pub inspector_folded: bool,
+    /// The `notes` layout's reader, right of the tree that `detail` holds
+    /// there (FZ-62); None in every other layout.
+    pub reader: Option<Rect>,
     /// The contribution strip, when it is open and the area had room for it.
     pub contributions: Option<Rect>,
 }
@@ -499,6 +505,9 @@ impl PanelRects {
         if self.detail.is_some_and(|r| r.contains(p)) {
             return Some(FocusedPanel::Detail);
         }
+        if self.reader.is_some_and(|r| r.contains(p)) {
+            return Some(FocusedPanel::Reader);
+        }
         if self.inspector.is_some_and(|r| r.contains(p)) {
             return Some(FocusedPanel::Inspector);
         }
@@ -520,10 +529,13 @@ impl PanelRects {
         if col.abs_diff(split_x) <= GRAB_SLOP {
             return Some(Divider::Vertical);
         }
-        // A folded inspector has no height to drag.
+        // A folded inspector has no height to drag. Bounded on the right
+        // too: the `notes` card spans pane 1 only, and pane 2 beside it has
+        // no divider on that row.
         if let Some(inspector) = self.inspector
             && !self.inspector_folded
             && col >= inspector.x
+            && col < inspector.x + inspector.width
             && row.abs_diff(inspector.y) <= GRAB_SLOP
         {
             return Some(Divider::Horizontal);
@@ -613,6 +625,32 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
                 detail: None,
                 inspector: None,
                 inspector_folded: false,
+                reader: None,
+                contributions,
+            }
+        }
+        // The `notes` layout (FZ-62) splits columns first: pane 1 over the
+        // card in the left column, which the inspector's request, clamp and
+        // fold size as they size the inspector, and pane 2 at full height on
+        // the right, split into the tree and the reader.
+        View::Detail if app.notes_layout() => {
+            let (body, contributions) = contributions::split_main_area(main, strip_folded);
+            let (left, pane2) = detail::split_main(body, app.repo_list_pct);
+            let (repo_list, card) = detail::split_inspector(
+                left,
+                app.inspector_pct,
+                app.shows_inspector(),
+                app.inspector_folded,
+            );
+            let (tree, reader) = detail::split_notes_pane(pane2);
+            PanelRects {
+                main,
+                body,
+                repo_list,
+                detail: Some(tree),
+                inspector: card,
+                inspector_folded: app.inspector_folded,
+                reader: Some(reader),
                 contributions,
             }
         }
@@ -640,6 +678,7 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
                 detail: Some(detail),
                 inspector,
                 inspector_folded: app.inspector_folded,
+                reader: None,
                 contributions,
             }
         }
@@ -916,7 +955,14 @@ pub fn render(frame: &mut Frame, app: &App) {
         match app.view {
             View::Detail => {
                 if let Some(detail_area) = rects.detail {
-                    detail::render(frame, rects.repo_list, detail_area, rects.inspector, app);
+                    detail::render(
+                        frame,
+                        rects.repo_list,
+                        detail_area,
+                        rects.inspector,
+                        rects.reader,
+                        app,
+                    );
                 }
             }
             View::Compact => compact::render(frame, rects.main, app),
@@ -1200,6 +1246,7 @@ mod tests {
             detail: Some(Rect::new(36, 1, 64, 24)),
             inspector: Some(Rect::new(0, 25, 100, 16)),
             inspector_folded: false,
+            reader: None,
             contributions: None,
         }
     }
@@ -1647,6 +1694,7 @@ mod tests {
             detail: None,
             inspector: None,
             inspector_folded: false,
+            reader: None,
             contributions: None,
         };
         assert_eq!(empty.repo_list_pct_at(10), 0);

@@ -12,7 +12,10 @@ this conversation.
 
 ## On start
 
-Run `scripts/relay-check` and include its drift lines in your report, then
+Run `scripts/relay-check` and include its drift lines in your report. If it
+exits non-zero (the baton is over its limit or authority has expired), fix
+the baton before anything else: move finished detail to `docs/agent-log.md`
+and the issues, and ask Andreas about expired entries. Then
 `scripts/relay-sweep main` to clear merged ticket worktrees. Read
 `docs/agent-handoff.md`, `docs/agent-workflow.md` and
 `docs/release-plan.md`. Check `git status --short`, the current `main` commit,
@@ -58,11 +61,34 @@ workflow alongside the Relay workers and reviewer.
 1. Record `git status --short` and the base commit. Create the ticket branch
    and worktree yourself under `.claude/worktrees/<ticket>`, for example
    `git worktree add -b fix/fz-02-preserve-github-state .claude/worktrees/fz-02 <base>`.
+   Write the allowed files to `<worktree>/.claude/relay-scope` (format in
+   `scripts/relay-scope`); the guard hook enforces it on every write. To
+   change a scope later, `rm` the file and write it again. For a
+   merge-resolution cycle, list the ticket's allowed files plus the
+   conflicted files; the script then judges the staged tree against
+   `MERGE_HEAD` by itself.
 2. Fill the worker template from `docs/agent-workflow.md` and dispatch
    `fz-worker` (or `fz-small` for a truly small task). Pass the ticket, base,
    branch, absolute worktree path and allowed files, not this conversation.
-3. Dispatch `fz-reviewer` as a separate invocation with the reviewer template
-   and the worker's report. Changes after review get re-reviewed.
+   Fill `Pointers` with `file:line` locations and the named sections of any
+   design doc; never write "read all of". A worker that reads a whole
+   module or document carries it in every later turn, and that is where a
+   ticket's tokens go.
+   Post the ticket record on the issue (format in "Records" in
+   `docs/agent-workflow.md`) and keep it current at each state change; the
+   baton holds one line per ticket pointing at it.
+3. When the worker reports, run `scripts/relay-scope <worktree> <base>`.
+   Out-of-scope or guarded files go back to the worker, or to Andreas if
+   the ticket needs them; do not spend the reviewer on that. Record the diff
+   id in the handoff, then dispatch `fz-reviewer` as a separate invocation
+   with the reviewer template, the worker's report and the scope output.
+   Changes after review get re-reviewed. On `needs evidence` or `needs
+   change`, use the rework template in `docs/agent-workflow.md`; if the
+   resubmitted diff id equals one already reviewed, do not dispatch the
+   reviewer again, the worker is stuck.
+   On a blocker, check the claim against the worker's scope and tools first:
+   re-scope, reassign (worker to small, or the reverse) or answer the missing
+   fact, before counting it as a fix cycle.
    Record the accepted revision, including new files, so it survives a handoff.
 4. Once the reviewer accepts, commit exactly the reviewed diff on the ticket
    branch (Conventional Commits, no `Co-Authored-By`, ending with
@@ -71,7 +97,10 @@ workflow alongside the Relay workers and reviewer.
    background command; the harness tells you when it ends.
 5. Verify the result against current `main` yourself: fmt, clippy with
    warnings denied, and the full test suite on the combined result.
-6. Merge under the safe-merge rule, or stop and ask if it does not apply.
+6. Run `scripts/relay-gate <worktree> <accepted diff id> <verified-on>`
+   (see "Safe-merge rule" in `docs/agent-workflow.md`). Merge only on exit
+   0 under the safe-merge rule; otherwise fix what it names, or stop at
+   Ready to integrate and ask.
    The merge commit is `Merge branch '<branch>' (#<issue>)` with
    `Closes #<issue>` in its body.
    Either way report with the owner-facing format, including the command to
@@ -101,11 +130,20 @@ and end the loop with a report at the first stop condition.
 
 Before you stop, or when Astra returns, update `docs/agent-handoff.md` with
 the current state, open worktrees, pending reviews and the next authorized
-step, so either lead can resume from the files alone. Keep the handoff short:
-finished tickets and earlier lead records go to `docs/agent-log.md`.
-Preserve authorization evidence and its limits. Record whether workers are
-stopped or still running, and mark the baton released. Read the clock before
-recording a timestamp.
+step, so either lead can resume from the files alone. Keep the handoff
+within its 60-line limit: finished tickets, earlier lead records and the
+owner's dated words go to `docs/agent-log.md`, ticket detail to the record
+on the issue. Take the token numbers for the metrics line from the
+completion notices of the worker and reviewer; write `not read` only when
+the harness showed none. Preserve authorization evidence and its limits:
+the standing-authority table keeps what holds, the log keeps the dated
+words. Record whether workers are stopped or still running, and mark the
+baton released. Read the clock before recording a timestamp.
+
+When a ticket closes, answer the remember-at-end question in "Records":
+what did the reviewer find, or what did you rule, that one sentence in the
+right home would have prevented? Write that sentence to its home or record
+"nothing to keep". Do not keep it in the baton.
 
 ## Limits
 

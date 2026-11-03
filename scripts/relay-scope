@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# Checks a ticket worktree against its scope file before the reviewer is
+# dispatched. Report only: it never edits.
+#
+# The lead writes <worktree>/.claude/relay-scope at dispatch: one allowed path
+# per line, blank lines and # comments ignored. A line ending in / covers the
+# directory and everything under it; any other line is a shell glob on the
+# worktree-relative path (* also matches /). The same file drives the
+# write-time guard hook on the Claude side.
+#
+# Prints every changed or untracked file outside the scope, every guarded
+# file touched (dependencies, lockfiles, CI) whether in scope or not, and a
+# diff id: the first 12 characters of the git tree id of the reviewed content
+# (tracked changes plus untracked files, never .claude/relay-scope). The lead
+# records it at review time, so an unchanged resubmission is caught without
+# another review, and scripts/relay-gate checks that the committed tree has
+# the same id, so the merged commit is exactly what the reviewer accepted.
+#
+# Normal cycle: the diff is the worktree against <base-commit>, the ticket's
+# base. Merge-resolution cycle (the worktree has MERGE_HEAD, a merge of the
+# integration branch staged and uncommitted): the diff is the staged tree
+# against MERGE_HEAD, which is the ticket's own changes plus the resolution,
+# so the scope file must list the ticket's allowed files plus the conflicted
+# files. <base-commit> is then optional and ignored. Unstaged edits during a
+# merge are reported separately, since the reviewer sees only the index.
+#
+# Usage: scripts/relay-scope <worktree> [<base-commit>]
+# Exit: 0 in scope, 1 out of scope, 2 no scope file or bad arguments.
+
+set -uo pipefail
+
+wt=${1:-}
+base=${2:-}
+if [ -z "$wt" ]; then
+  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+fi
+wt=$(cd "$wt" 2>/dev/null && pwd -P) || { echo "No such worktree: $1"; exit 2; }
+scope="$wt/.claude/relay-scope"
+[ -f "$scope" ] || { echo "No scope file: $scope"; exit 2; }
+
+merge_head=$(git -C "$wt" rev-parse -q --verify MERGE_HEAD 2>/dev/null || true)
+if [ -n "$merge_head" ]; then
+  echo "Merge in progress: comparing the staged tree with MERGE_HEAD ${merge_head:0:7}."
+  unstaged=$(git -C "$wt" diff --name-only)
+  if [ -n "$unstaged" ]; then
+    printf 'Unstaged during merge (not in the reviewed index): %s\n' "$unstaged" | tr '\n' ' '
+    echo
+  fi
+  changed=$(git -C "$wt" diff --cached --name-only "$merge_head")
+else
+  [ -n "$base" ] || { echo "No base commit given and no merge in progress."; exit 2; }
+  changed=$(git -C "$wt" diff --name-only "$base" 2>/dev/null) || {
+    echo "Cannot diff against $base in $wt"; exit 2; }
+fi
+untracked=$(git -C "$wt" ls-files --others --exclude-standard)
+
+patterns=()
+while IFS= read -r line; do
+  line=${line%%#*}
+  line=${line#"${line%%[![:space:]]*}"}
+  line=${line%"${line##*[![:space:]]}"}
+  [ -n "$line" ] && patterns+=("$line")
+done < "$scope"
+
+in_scope() {
+  local path=$1 pat
+  for pat in "${patterns[@]}"; do
+    case "$pat" in
+      */) [[ "$path" == "$pat"* ]] && return 0 ;;
+      *)
+        # shellcheck disable=SC2254
+        case "$path" in $pat) return 0 ;; esac
+        [[ "$path" == "$pat/"* ]] && return 0 ;;
+    esac
+  done
+  return 1
+}
+
+guarded() {
+  case "$1" in
+    Cargo.toml|Cargo.lock|*/Cargo.toml|package.json|package-lock.json|pnpm-lock.yaml|yarn.lock|\
+    go.mod|go.sum|pyproject.toml|poetry.lock|requirements*.txt|Gemfile|Gemfile.lock|\
+    .github/workflows/*|.gitlab-ci.yml|Dockerfile|*/Dockerfile|docker-compose*.yml)
+      return 0 ;;
+  esac
+  return 1
+}
+
+status=0
+count=0
+while IFS= read -r path; do
+  [ -z "$path" ] && continue
+  count=$((count + 1))
+  if ! in_scope "$path"; then
+    echo "Out of scope: $path"
+    status=1
+  fi
+  guarded "$path" && echo "Guarded file changed (owner approval per safe-merge): $path"
+done <<EOF
+$changed
+$untracked
+EOF
+
+echo "Files changed or added: $count"
+# The diff id is the tree a commit of this content would have. During a
+# merge that is the staged index as it stands; otherwise everything in the
+# worktree, staged into a scratch copy of the index so the real one is
+# untouched.
+if [ -n "$merge_head" ]; then
+  tree=$(git -C "$wt" write-tree) || { echo "Cannot write the staged tree (unresolved conflicts?)"; exit 2; }
+else
+  tmp=$(mktemp -d) || exit 2
+  trap 'rm -rf "$tmp"' EXIT
+  index=$(git -C "$wt" rev-parse --path-format=absolute --git-path index)
+  [ -f "$index" ] && cp "$index" "$tmp/index"
+  export GIT_INDEX_FILE="$tmp/index"
+  git -C "$wt" add -A && git -C "$wt" rm -q --cached --ignore-unmatch .claude/relay-scope >/dev/null \
+    && tree=$(git -C "$wt" write-tree) || { echo "Cannot compute the diff id"; exit 2; }
+  unset GIT_INDEX_FILE
+fi
+echo "Diff id: ${tree:0:12}"
+[ "$status" -eq 0 ] && echo "In scope."
+exit "$status"

@@ -5,12 +5,15 @@ mod cli;
 mod clipboard;
 mod config;
 mod contributions;
+mod digest;
 mod discovery;
 mod fuzzy;
 mod git;
 mod github;
 mod graph;
 mod model;
+mod notes;
+mod report;
 mod time;
 mod ui;
 mod window_state;
@@ -163,6 +166,42 @@ pub enum AppEvent {
     /// jobs, a job's whole log or the workflow file, applied by
     /// `App::apply_ci_detail`.
     CiDetail(Box<ci::DetailAnswer>),
+    /// A `notes` view walk of one repo (FZ-53), applied by
+    /// `App::apply_notes_walk`.
+    NotesWalked {
+        walk: app::NotesWalk,
+        result: Result<notes::Notes, String>,
+    },
+    /// The highlighted note's body and its metadata for the card, applied by
+    /// `App::apply_note_read` and `App::apply_note_facts`, and a markdown
+    /// body rendered at the read's `render_width` (FZ-59), applied by
+    /// `App::apply_note_rendered` in the same turn so the reader never
+    /// draws the source first.
+    NoteRead {
+        read: app::NoteRead,
+        text: Result<String, String>,
+        facts: notes::NoteFacts,
+        rendered: Option<app::RenderedNote>,
+    },
+    /// The held markdown body rendered again at a new reader width
+    /// (`App::claim_note_render`).
+    NoteRendered {
+        render: app::NoteRender,
+        rendered: app::RenderedNote,
+    },
+    /// git's last commit for that note (FZ-62), sent after the body so the
+    /// reader never waits on git; applied by `App::apply_note_commit`.
+    NoteCommit {
+        read: app::NoteRead,
+        last: notes::LastCommit,
+    },
+    /// A slot digest's `git log --since` read for the row at `path` (FZ-45),
+    /// applied by `App::apply_digest_log` under the key it was asked with.
+    DigestLog {
+        path: String,
+        key: digest::LogKey,
+        commits: Vec<model::Commit>,
+    },
 }
 
 /// Why a load ran, which decides what the loop does with the result.
@@ -373,6 +412,17 @@ fn tilde_display(path: &Path) -> String {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    // Print mode returns here, before every terminal call below (the size
+    // query, raw mode, the alternate screen, the input thread): it writes
+    // text to stdout and exits (D1, pinned by `report::tests`).
+    if args.print {
+        let mut stdout = io::stdout().lock();
+        let status = report::print(&args, &mut stdout).await?;
+        if status != 0 {
+            std::process::exit(status);
+        }
+        return Ok(());
+    }
     let config = config::Config::load();
     let repo_dir = std::env::var("REPO_CHECK_DIR")
         .map(std::path::PathBuf::from)
@@ -397,6 +447,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.refresh_interval = args.interval.unwrap_or(config.refresh_interval);
     app.window = initial_window;
     app.dirty_mode = mode == Mode::Dirty;
+    app.work_hours = (config.work_start, config.work_end);
     app.loading = true;
     // The strip's source, or "off" to start it folded, is persisted, so a
     // dashboard set up once comes back that way. `c` and `4` still change it
@@ -997,6 +1048,19 @@ async fn run_event_loop(
                 for request in app.claim_ci_details(now, instant) {
                     spawn_ci_detail(&tx, request);
                 }
+                if let Some(walk) = app.claim_notes_walk(instant) {
+                    spawn_notes_walk(&tx, walk);
+                }
+                if let Some(read) = app.claim_note_read() {
+                    spawn_note_read(&tx, read);
+                }
+                if let Some(render) = app.claim_note_render() {
+                    spawn_note_render(&tx, render);
+                }
+                app.settle_hover(instant);
+                for request in app.claim_digest_logs(now) {
+                    spawn_digest_log(&tx, request);
+                }
             }
             AppEvent::Input(Event::Key(key)) => {
                 // Any keypress takes the loading field down. Skip means skip:
@@ -1055,12 +1119,30 @@ async fn run_event_loop(
                 start_account_rebuild(app, &tx, args, config, repo_dir);
             }
             AppEvent::SweepDone { at } => {
-                app.sweep_started = None;
-                app.last_refreshed = Some(at);
-                app.needs_redraw = true;
+                app.sweep_landed(at);
             }
             AppEvent::Ci(answer) => app.apply_ci(*answer, chrono::Local::now()),
             AppEvent::CiDetail(answer) => app.apply_ci_detail(*answer, chrono::Local::now()),
+            AppEvent::NotesWalked { walk, result } => app.apply_notes_walk(walk, result),
+            AppEvent::NoteRead {
+                read,
+                text,
+                facts,
+                rendered,
+            } => {
+                app.apply_note_facts(&read, facts);
+                if let Some(rendered) = rendered {
+                    app.apply_note_rendered(&read.path, read.generation, rendered);
+                }
+                app.apply_note_read(read, text);
+            }
+            AppEvent::NoteRendered { render, rendered } => {
+                app.apply_note_rendered(&render.path, render.generation, rendered);
+            }
+            AppEvent::NoteCommit { read, last } => app.apply_note_commit(&read, last),
+            AppEvent::DigestLog { path, key, commits } => {
+                app.apply_digest_log(&path, &key, commits)
+            }
         }
 
         if app.should_quit {
@@ -1213,6 +1295,8 @@ fn handle_mouse_input(
     }
 
     let Some(panel) = rects.at(m.column, m.row) else {
+        // Off every pane: a pending header hover is cancelled (FZ-45).
+        app.clear_hover();
         return;
     };
     // A click or a wheel ends a bracket streak, as a key does.
@@ -1244,7 +1328,18 @@ fn handle_mouse_input(
             if panel == FocusedPanel::Detail {
                 click_detail(app, m.column, m.row, clipboard::copy);
             }
+            // A click on a row of pane 1, a section header included (FZ-45),
+            // lands the cursor there, resolved against the last frame.
+            if panel == FocusedPanel::RepoList {
+                app.click_list(m.column, m.row);
+            }
         }
+        // The pointer resting on a section header lands on it after a dwell,
+        // settled on the tick (FZ-45); leaving the list cancels it.
+        MouseEventKind::Moved if panel == FocusedPanel::RepoList => {
+            app.hover_list(m.column, m.row, std::time::Instant::now())
+        }
+        MouseEventKind::Moved => app.clear_hover(),
         // Scroll the panel under the cursor without changing focus.
         //
         // The strip is a horizontal timeline, so every wheel axis moves it
@@ -1266,12 +1361,14 @@ fn handle_mouse_input(
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.scroll_detail(DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(1),
+            FocusedPanel::Reader => app.scroll_reader(1),
             FocusedPanel::Contributions => {}
         },
         MouseEventKind::ScrollUp => match panel {
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.scroll_detail(-DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
+            FocusedPanel::Reader => app.scroll_reader(-1),
             FocusedPanel::Contributions => {}
         },
         _ => {}
@@ -1627,8 +1724,26 @@ async fn handle_normal_input(
         // arrow carrying the SHIFT modifier. `PageUp`/`PageDown` still scroll
         // the focused detail pane itself, which is the gesture this used to
         // be. See `App::shift_scroll_target`.
+        // On a header the next pane is the digest's (FZ-45).
+        KeyCode::Char('J') if app.on_header().is_some() => app.digest_scroll_next_panel(1),
+        KeyCode::Char('K') if app.on_header().is_some() => app.digest_scroll_next_panel(-1),
+        KeyCode::Down
+            if key.modifiers.contains(KeyModifiers::SHIFT) && app.on_header().is_some() =>
+        {
+            app.digest_scroll_next_panel(1)
+        }
+        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) && app.on_header().is_some() => {
+            app.digest_scroll_next_panel(-1)
+        }
         KeyCode::Char('J') => app.scroll_next_panel(1),
         KeyCode::Char('K') => app.scroll_next_panel(-1),
+        // The `notes` reader pages from the tree or itself (FZ-62); `J`/`K`
+        // above scroll it a line through `scroll_next_panel`.
+        KeyCode::Char('H') if app.reader_pages() => app.page_reader(-1),
+        KeyCode::Char('L') if app.reader_pages() => app.page_reader(1),
+        // From the tree or the reader, `p` flips rendered markdown and its
+        // source (FZ-59); `r` still refreshes there, below.
+        KeyCode::Char('p') if app.reader_pages() => app.toggle_reader_raw(),
         KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(1),
         KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(-1),
         // Must be matched before the plain `c` arm below, or ctrl-c switches
@@ -1636,7 +1751,7 @@ async fn handle_normal_input(
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.should_quit = true;
         }
-        // `[` and `]` step the repo pane's body between its six views --
+        // `[` and `]` step the repo pane's body between its seven views --
         // lazygit's own binding for the same gesture, and unlike a shifted
         // letter it gives backwards for free.
         // On the focused inspector while pane 2 shows `ci`, they step its
@@ -1673,10 +1788,32 @@ async fn handle_normal_input(
         KeyCode::End if app.focused_panel == FocusedPanel::Contributions => {
             app.jump_contrib_cursor(true, chrono::Local::now().date_naive())
         }
+        // On a section header pane 2 draws the digest and the inspector its
+        // line (FZ-45): `j`/`k` there walk the digest's lines and scroll the
+        // inspector instead of the hidden repo's views.
+        KeyCode::Char('j' | 'k') | KeyCode::Down | KeyCode::Up
+            if app.on_header().is_some()
+                && matches!(
+                    app.focused_panel,
+                    FocusedPanel::Detail | FocusedPanel::Inspector
+                ) =>
+        {
+            let delta = if matches!(key.code, KeyCode::Char('j') | KeyCode::Down) {
+                1
+            } else {
+                -1
+            };
+            if app.focused_panel == FocusedPanel::Detail {
+                app.digest_nav(delta);
+            } else {
+                app.scroll_digest_inspector(delta);
+            }
+        }
         KeyCode::Char('j') | KeyCode::Down => match app.focused_panel {
             FocusedPanel::RepoList => app.move_down(),
             FocusedPanel::Detail => app.detail_nav_down(),
             FocusedPanel::Inspector => app.inspector_nav(1),
+            FocusedPanel::Reader => app.scroll_reader(1),
             FocusedPanel::Contributions => {
                 app.move_contrib_cursor(0, 1, chrono::Local::now().date_naive())
             }
@@ -1685,16 +1822,19 @@ async fn handle_normal_input(
             FocusedPanel::RepoList => app.move_up(),
             FocusedPanel::Detail => app.detail_nav_up(),
             FocusedPanel::Inspector => app.inspector_nav(-1),
+            FocusedPanel::Reader => app.scroll_reader(-1),
             FocusedPanel::Contributions => {
                 app.move_contrib_cursor(0, -1, chrono::Local::now().date_naive())
             }
         },
         KeyCode::PageDown => match app.focused_panel {
             FocusedPanel::Inspector => app.scroll_inspector(10),
+            FocusedPanel::Reader => app.scroll_reader(10),
             _ => app.scroll_detail(10),
         },
         KeyCode::PageUp => match app.focused_panel {
             FocusedPanel::Inspector => app.scroll_inspector(-10),
+            FocusedPanel::Reader => app.scroll_reader(-10),
             _ => app.scroll_detail(-10),
         },
         KeyCode::Char('v') => app.toggle_view(),
@@ -1710,6 +1850,17 @@ async fn handle_normal_input(
             app.set_status("\u{27f3} Fetching all…".to_string(), false);
             start_sweep(app, tx, true, args.author.clone(), true);
         }
+        // On a file in the `notes` view, $EDITOR on that file (FZ-53).
+        KeyCode::Enter if note_to_open(app).is_some() => {
+            let file = note_to_open(app).unwrap_or_default();
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+            suspend_and_run(terminal, &editor, &[&file.to_string_lossy()])?;
+            app.invalidate_notes();
+        }
+        // On a header, Enter goes to the digest line's repo row (FZ-45).
+        KeyCode::Enter if app.on_header().is_some() => {
+            app.jump_to_digest_line(chrono::Local::now())
+        }
         KeyCode::Enter => {
             // Open lazygit in selected repo
             if let Some(repo) = app.selected_repo()
@@ -1717,6 +1868,7 @@ async fn handle_normal_input(
             {
                 let expanded = shellexpand::tilde(path).to_string();
                 suspend_and_run(terminal, "lazygit", &["-p", &expanded])?;
+                app.invalidate_notes();
             }
         }
         KeyCode::Char('e') => {
@@ -1727,8 +1879,12 @@ async fn handle_normal_input(
                 let expanded = shellexpand::tilde(path).to_string();
                 let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
                 suspend_and_run(terminal, &editor, &[&expanded])?;
+                app.invalidate_notes();
             }
         }
+        // The `notes` view's tree: notes directories only, or every
+        // markdown file. Nothing elsewhere.
+        KeyCode::Char('m') => app.toggle_notes_markdown(),
         KeyCode::Char('o') => {
             // Open shell in repo dir
             if let Some(repo) = app.selected_repo()
@@ -1737,6 +1893,7 @@ async fn handle_normal_input(
                 let expanded = shellexpand::tilde(path).to_string();
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
                 suspend_and_run_in_dir(terminal, &shell, &[], &expanded)?;
+                app.invalidate_notes();
             }
         }
         KeyCode::Char('g') => {
@@ -1766,6 +1923,9 @@ async fn handle_normal_input(
         KeyCode::Char('b') | KeyCode::Char('s') => {
             open_branch_overlay(app).await;
         }
+        // On a header, `t` cycles the digest's window instead (FZ-45): slot,
+        // today, yesterday, week.
+        KeyCode::Char('t') if app.on_header().is_some() => app.cycle_digest_window(),
         // Time window overlay: pick how far back "activity" reaches. Not
         // available in -d mode, which never fetched a GitHub dataset.
         KeyCode::Char('t') => {
@@ -1789,6 +1949,11 @@ async fn handle_normal_input(
         KeyCode::Char('=') => app.reset_pane_sizes(),
         KeyCode::Char(',') => {
             app.overlay = Overlay::Settings(settings_overlay(app, config));
+        }
+        // The `ci` view's handoffs on the highlighted run (FZ-30e). Ahead of
+        // `O`, which keeps opening the first PR everywhere else.
+        KeyCode::Char('l' | 'a' | 'x' | 'O') if ci_handoff_applies(app) => {
+            ci_handoff_key(app, terminal, tx, key.code)?;
         }
         KeyCode::Char('O') => {
             // Open first PR in browser (Shift+O)
@@ -1849,6 +2014,19 @@ async fn handle_normal_input(
     Ok(())
 }
 
+/// The file `Enter` opens in $EDITOR: the `notes` view's highlighted file,
+/// while pane 2, the reader or the card has focus. `None` leaves `Enter` to
+/// open lazygit on the repo.
+fn note_to_open(app: &App) -> Option<std::path::PathBuf> {
+    let focused = matches!(
+        app.focused_panel,
+        FocusedPanel::Detail | FocusedPanel::Inspector | FocusedPanel::Reader
+    );
+    (app.notes_wanted() && focused)
+        .then(|| app.notes_highlighted())
+        .flatten()
+}
+
 /// Suspend the TUI, run a command, then resume. Input reading is paused for
 /// the whole child run so the reader thread cannot swallow its keystrokes.
 fn suspend_and_run(
@@ -1893,6 +2071,149 @@ fn suspend_and_run_in_dir(
     enable_raw_mode().map_err(|e| e.to_string())?;
     terminal.clear().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// A `ci` view handoff key, acting on the highlighted run (FZ-30e).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunKey {
+    /// `l`: the run's log in the inspector.
+    Log,
+    /// `a`: rerun it ("again").
+    Rerun,
+    /// `x`: cancel it.
+    Cancel,
+    /// `O`: its page in the browser.
+    Open,
+}
+
+impl RunKey {
+    fn from_code(code: KeyCode) -> Option<Self> {
+        match code {
+            KeyCode::Char('l') => Some(Self::Log),
+            KeyCode::Char('a') => Some(Self::Rerun),
+            KeyCode::Char('x') => Some(Self::Cancel),
+            KeyCode::Char('O') => Some(Self::Open),
+            _ => None,
+        }
+    }
+}
+
+/// What a handoff key does with a run it allows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RunHandoff {
+    /// Show the run's `log` body in the inspector, without leaving fleetz.
+    Inspect,
+    /// Suspend fleetz and run `gh` with these arguments.
+    Gh(Vec<String>),
+    /// Open this URL with `OPENER`, as `O` opens a PR.
+    Open(String),
+}
+
+/// Whether the handoff keys act: pane 2 focused and showing `ci`. Anywhere
+/// else they keep their other meanings.
+fn ci_handoff_applies(app: &App) -> bool {
+    app.focused_panel == FocusedPanel::Detail && app.ci_wanted()
+}
+
+/// What `key` does to `run` of `owner`/`name`, or the status line note when
+/// the run does not allow it. The inspector's `log` body reads a job's log
+/// only once it has finished and `gh` will not rerun a run still going, so
+/// both wait for a finished run; `gh` cancels only a run in progress or
+/// queued. Every `gh` call names the repo with `-R`, so it works from any
+/// directory.
+fn run_handoff_for(
+    run: &ci::WorkflowRun,
+    key: RunKey,
+    owner: &str,
+    name: &str,
+) -> Result<RunHandoff, &'static str> {
+    let finished = run.status.as_deref() == Some("completed");
+    let failed = run.conclusion.as_deref() == Some("failure");
+    let (verb, flag) = match key {
+        RunKey::Open => return Ok(RunHandoff::Open(run.url.clone())),
+        RunKey::Log if !finished => return Err("run has not finished"),
+        RunKey::Rerun if !finished => return Err("run has not finished"),
+        RunKey::Cancel if !run.is_live() => return Err("run is not in progress"),
+        RunKey::Log => return Ok(RunHandoff::Inspect),
+        RunKey::Rerun => ("rerun", failed.then_some("--failed")),
+        RunKey::Cancel => ("cancel", None),
+    };
+    let mut args = vec!["run".to_string(), verb.to_string(), run.id.to_string()];
+    args.extend(flag.map(str::to_string));
+    args.extend(["-R".to_string(), format!("{owner}/{name}")]);
+    Ok(RunHandoff::Gh(args))
+}
+
+/// The handoff `key` asks for on the highlighted run, with the repo's CI
+/// target; `None` on an empty view or a row with no GitHub identity, and
+/// `None` with the reason on the status line when the run does not allow it.
+fn resolve_run_handoff(
+    app: &mut App,
+    key: RunKey,
+) -> Option<(RunHandoff, (app::RemoteKey, String, String))> {
+    let target = app.selected_repo().and_then(ci::target)?;
+    let run = app.highlighted_ci_run()?;
+    match run_handoff_for(run, key, &target.1, &target.2) {
+        Ok(handoff) => Some((handoff, target)),
+        Err(note) => {
+            app.set_status(note.to_string(), false);
+            None
+        }
+    }
+}
+
+/// Run a `ci` view key: `l` shows the run's log in the inspector, the
+/// others hand off. Back from `gh`, the run's repo polls at once
+/// (`ci_poll_after_handoff`) so the rerun or cancel shows.
+fn ci_handoff_key(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    code: KeyCode,
+) -> Result<(), String> {
+    let Some(key) = RunKey::from_code(code) else {
+        return Ok(());
+    };
+    let Some((handoff, target)) = resolve_run_handoff(app, key) else {
+        return Ok(());
+    };
+    match handoff {
+        RunHandoff::Gh(args) => {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            suspend_and_run(terminal, "gh", &args)?;
+            if let Some(request) = ci_poll_after_handoff(app, target, chrono::Local::now()) {
+                spawn_ci_poll(tx, request);
+            }
+        }
+        RunHandoff::Open(url) => {
+            let _ = StdCommand::new(OPENER).arg(&url).status();
+        }
+        RunHandoff::Inspect => app.inspect_ci_log(),
+    }
+    Ok(())
+}
+
+/// The CI poll to start for `target` back from a `gh` handoff, with its
+/// lock taken: due at once, skipping the 10 s or 60 s interval and the
+/// dwell, but never under `-d`, with a poll already out, or while a rate
+/// limit, the budget or a backoff holds the repo (`ci::poll_due`). It skips
+/// the interval and the budget pace's stretch of it, but never a pause or a
+/// backoff.
+fn ci_poll_after_handoff(
+    app: &mut App,
+    target: (app::RemoteKey, String, String),
+    now: chrono::DateTime<chrono::Local>,
+) -> Option<ci::CiRequest> {
+    let (key, owner, name) = target;
+    if app.dirty_mode {
+        return None;
+    }
+    let due = {
+        let mut cadence = app.ci_cadence(&key, ci::DWELL, now);
+        cadence.last_attempt = None;
+        ci::poll_due(&cadence)
+    };
+    due.then(|| app.claim_ci_poll(key, owner, name))
 }
 
 /// Hand the terminal to a child process: mouse capture off, then the
@@ -2675,6 +2996,127 @@ fn spawn_ci_detail(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, request: c
     tokio::spawn(async move {
         let answer = ci::fetch_detail(request).await;
         let _ = tx.send(AppEvent::CiDetail(Box::new(answer)));
+    });
+}
+
+/// Walk a repo for the `notes` view off the UI thread and send the tree back.
+fn spawn_notes_walk(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, walk: app::NotesWalk) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let root = walk.root.clone();
+        let result = tokio::task::spawn_blocking(move || notes::walk(&root))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.map_err(|e| e.to_string()));
+        let _ = tx.send(AppEvent::NotesWalked { walk, result });
+    });
+}
+
+/// Read the highlighted note off the UI thread and send its body back with
+/// its metadata for the card (FZ-62), then its last commit from a bounded
+/// `git log`, "untracked" when git prints nothing. Two answers, body first:
+/// for a file git never saw it walks the whole history, and the reader
+/// shows the body without waiting for that. A markdown body is rendered in
+/// the same blocking task at the read's `render_width` (FZ-59): a capped
+/// file costs more than a keypress frame.
+fn spawn_note_read(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, read: app::NoteRead) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let path = read.path.clone();
+        let render_width = read.render_width;
+        let read_both = tokio::task::spawn_blocking(move || {
+            let text = notes::read_body(&path);
+            let rendered = match (&text, render_width) {
+                (Ok(body), Some(width)) => Some(render_note(body, width)),
+                _ => None,
+            };
+            (text, notes::file_facts(&path), rendered)
+        })
+        .await;
+        let (text, facts, rendered) = match read_both {
+            Ok(answer) => answer,
+            Err(e) => (Err(e.to_string()), notes::NoteFacts::default(), None),
+        };
+        let _ = tx.send(AppEvent::NoteRead {
+            read: read.clone(),
+            text,
+            facts,
+            rendered,
+        });
+        let rel = read.path.strip_prefix(&read.root).unwrap_or(&read.path);
+        let rel = rel.to_string_lossy();
+        // Literal, so a name with `:` or glob characters is a path, not
+        // pathspec magic.
+        let args = [
+            "--literal-pathspecs",
+            "log",
+            "-1",
+            "--format=%cI",
+            "--",
+            &rel,
+        ];
+        let last = git::run_git(&read.root, &args)
+            .await
+            .filter(|out| out.status.success())
+            .map_or(notes::LastCommit::Untracked, |out| {
+                notes::last_commit_from(&String::from_utf8_lossy(&out.stdout))
+            });
+        let _ = tx.send(AppEvent::NoteCommit { read, last });
+    });
+}
+
+/// `body` as the reader draws it rendered at `width` (FZ-59).
+/// A body `notes::read_body` cut at the cap ends in its marker line, which
+/// is not the note's markdown: it is rendered without it and drawn after
+/// it, plain, as the raw reader draws it, so an open fence or table cannot
+/// swallow it.
+fn render_note(body: &str, width: u16) -> app::RenderedNote {
+    let marker = format!("… cut at {} KiB", notes::BODY_CAP / 1024);
+    let suffix = format!("\n{marker}");
+    let (markdown, cut) = match body.strip_suffix(&suffix) {
+        Some(markdown) => (markdown, true),
+        None => (body, false),
+    };
+    let mut lines = ui::markdown::render_markdown(markdown, width);
+    if cut {
+        let plain = ratatui::style::Style::default().fg(ui::colors::TEXT);
+        lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+            marker, plain,
+        )));
+    }
+    app::RenderedNote { width, lines }
+}
+
+/// Render the held markdown body again at a new reader width, off the UI
+/// thread, and send it back (`App::claim_note_render`).
+fn spawn_note_render(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, render: app::NoteRender) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let rendered = tokio::task::spawn_blocking(move || {
+            let rendered = render_note(&render.text, render.width);
+            (render, rendered)
+        })
+        .await;
+        if let Ok((render, rendered)) = rendered {
+            let _ = tx.send(AppEvent::NoteRendered { render, rendered });
+        }
+    });
+}
+
+/// Run a slot digest's `git log --since` in the background (FZ-45) and send
+/// the commits back: never on the UI thread.
+fn spawn_digest_log(
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    request: digest::LogRequest,
+) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let commits = git::commits_since(&request.dir, request.key.cutoff).await;
+        let _ = tx.send(AppEvent::DigestLog {
+            path: request.path,
+            key: request.key,
+            commits,
+        });
     });
 }
 
@@ -3468,6 +3910,7 @@ async fn dirty_mode_status(path: &Path, author: Option<&str>) -> Option<RepoStat
         remote_branches: remote,
         work_key: None,
         fetch: model::FetchFacts::from_disk(git::last_successful_fetch_at(path)),
+        authors: Default::default(),
     })
 }
 
@@ -4003,6 +4446,7 @@ async fn assemble_view_held(
             work_key: None,
             // Nothing on disk to fetch into.
             fetch: model::FetchFacts::default(),
+            authors: Default::default(),
         });
     }
 
@@ -4197,6 +4641,7 @@ async fn local_only_status(
         remote_branches: remote,
         work_key: None,
         fetch: model::FetchFacts::from_disk(git::last_successful_fetch_at(path)),
+        authors: Default::default(),
     })
 }
 
@@ -4301,6 +4746,7 @@ async fn build_repo_status(
         remote_branches: remote,
         work_key,
         fetch: model::FetchFacts::from_disk(git::last_successful_fetch_at(path)),
+        authors: Default::default(),
     }
 }
 
@@ -4577,6 +5023,7 @@ mod tests {
             remote_branches: vec![],
             work_key: None,
             fetch: model::FetchFacts::default(),
+            authors: Default::default(),
         }
     }
 
@@ -11342,6 +11789,352 @@ mod tests {
         app
     }
 
+    /// `Enter` opens the `notes` view's highlighted file while pane 2 or the
+    /// inspector has focus, and lazygit everywhere else, a row with no file
+    /// included. Fails while `Enter` only ever opens lazygit.
+    #[test]
+    fn enter_opens_the_highlighted_note_only_in_the_notes_view() {
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.repos = vec![RepoStatus {
+            path: Some("/repo".to_string()),
+            ..test_repo()
+        }];
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Notes;
+        app.focused_panel = FocusedPanel::Detail;
+        assert_eq!(note_to_open(&app), None, "nothing walked yet");
+
+        let walk = app::NotesWalk {
+            key: "/repo".to_string(),
+            root: "/repo".into(),
+            generation: 0,
+        };
+        let files = vec![notes::NoteFile {
+            rel: "notez/a.md".into(),
+            notez: Some("notez".into()),
+        }];
+        app.apply_notes_walk(walk, Ok(notes::Notes { files }));
+        let file = Some(std::path::PathBuf::from("/repo/notez/a.md"));
+        assert_eq!(note_to_open(&app), file);
+        app.focused_panel = FocusedPanel::Inspector;
+        assert_eq!(note_to_open(&app), file);
+
+        app.focused_panel = FocusedPanel::RepoList;
+        assert_eq!(note_to_open(&app), None, "the repo list opens lazygit");
+        app.focused_panel = FocusedPanel::Detail;
+        app.history_view = app::HistoryView::Info;
+        assert_eq!(note_to_open(&app), None, "another view opens lazygit");
+    }
+
+    /// `Enter` on the focused reader opens the file it shows (FZ-62).
+    #[test]
+    fn enter_on_the_reader_opens_its_note() {
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.repos = vec![RepoStatus {
+            path: Some("/repo".to_string()),
+            ..test_repo()
+        }];
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Notes;
+        let walk = app::NotesWalk {
+            key: "/repo".to_string(),
+            root: "/repo".into(),
+            generation: 0,
+        };
+        let files = vec![notes::NoteFile {
+            rel: "notez/a.md".into(),
+            notez: Some("notez".into()),
+        }];
+        app.apply_notes_walk(walk, Ok(notes::Notes { files }));
+        app.focus_panel(FocusedPanel::Reader);
+        assert_eq!(app.focused_panel, FocusedPanel::Reader);
+        assert_eq!(
+            note_to_open(&app),
+            Some(std::path::PathBuf::from("/repo/notez/a.md"))
+        );
+    }
+
+    /// FZ-59 owner ruling: `p` flips the `notes` reader between rendered
+    /// and source from the tree and from the reader, and `r` refreshes there
+    /// as everywhere. Fails while `r` is the toggle or `p` is unbound.
+    #[tokio::test]
+    async fn p_flips_the_notes_reader_and_r_still_refreshes() {
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let backend = CrosstermBackend::new(io::stdout());
+        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
+        let mut terminal =
+            Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
+        let mut app = App::new(Vec::new(), String::new(), 120, 44);
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Notes;
+        // No poll leaves the process: `r` below only sets its status.
+        app.dirty_mode = true;
+        let repo_dir = Path::new("/nonexistent");
+
+        for (panel, raw) in [(FocusedPanel::Detail, true), (FocusedPanel::Reader, false)] {
+            app.focused_panel = panel;
+            handle_normal_input(
+                &mut app,
+                &mut terminal,
+                press('p'),
+                &tx,
+                &args,
+                &config,
+                repo_dir,
+            )
+            .await
+            .unwrap();
+            assert_eq!(app.reader_raw, raw, "p from {panel:?}");
+
+            app.status_message = None;
+            handle_normal_input(
+                &mut app,
+                &mut terminal,
+                press('r'),
+                &tx,
+                &args,
+                &config,
+                repo_dir,
+            )
+            .await
+            .unwrap();
+            assert_eq!(app.reader_raw, raw, "r flipped the reader from {panel:?}");
+            let status = app.status_message.as_ref().map(|m| m.text.as_str());
+            assert_eq!(
+                status,
+                Some("Refreshing…"),
+                "r did not refresh from {panel:?}"
+            );
+        }
+    }
+
+    /// The next answer `spawn_note_read` sent, split into its two kinds.
+    async fn next_note_answer(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    ) -> Result<
+        (app::NoteRead, Result<String, String>, notes::NoteFacts),
+        (app::NoteRead, notes::LastCommit),
+    > {
+        match rx.recv().await {
+            Some(AppEvent::NoteRead {
+                read,
+                text,
+                facts,
+                rendered: _,
+            }) => Ok((read, text, facts)),
+            Some(AppEvent::NoteCommit { read, last }) => Err((read, last)),
+            _ => panic!("not a note answer"),
+        }
+    }
+
+    /// The card's facts are read off the UI thread (FZ-62): `spawn_note_read`
+    /// returns before anything is sent. The body and its metadata come
+    /// first and git's last commit after, so the reader never waits on git
+    /// (review F4): a date for a committed file, "untracked" for one git
+    /// never saw, and a name with glob characters read literally (review
+    /// F5: `notez/*.md` would otherwise match the committed `plan.md`). A
+    /// commit answer for a file no longer highlighted is dropped.
+    #[tokio::test]
+    async fn spawn_note_read_reads_the_body_and_facts_off_the_ui_thread() {
+        let scratch = std::env::temp_dir().join("fleetz_test_note_read_seam");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let repo = hist_repo(&scratch, "repo", "n@example.com");
+        std::fs::create_dir_all(repo.join("notez")).unwrap();
+        std::fs::create_dir_all(repo.join(".notez")).unwrap();
+        std::fs::write(repo.join("notez/plan.md"), "# Plan\n").unwrap();
+        std::fs::write(repo.join("notez/*.md"), "star\n").unwrap();
+        std::fs::write(repo.join(".notez/scratch.md"), "scratch\n").unwrap();
+        wt_sh(&repo, &["git", "add", "notez/plan.md"]);
+        hist_commit(&repo, "2026-10-01", "plan");
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let answer = |rel: &str| app::NoteRead {
+            path: repo.join(rel),
+            root: repo.clone(),
+            generation: 0,
+            render_width: None,
+        };
+        spawn_note_read(&tx, answer("notez/plan.md"));
+        // A current-thread test runtime has not run the task yet: had the
+        // read run inline, its answer would already be here.
+        assert!(rx.try_recv().is_err(), "read on the calling thread");
+        let Ok((read, text, facts)) = next_note_answer(&mut rx).await else {
+            panic!("the body comes first");
+        };
+        assert_eq!(read.path, repo.join("notez/plan.md"));
+        assert_eq!(text, Ok("# Plan\n".to_string()));
+        assert_eq!(facts.size, Some(7));
+        assert!(facts.modified.is_some());
+        let Err((read, last)) = next_note_answer(&mut rx).await else {
+            panic!("then the commit");
+        };
+        assert_eq!(read.path, repo.join("notez/plan.md"));
+        let notes::LastCommit::At(date) = last else {
+            panic!("committed: {last:?}");
+        };
+        assert!(date.starts_with("2026-10-01T12:00:00"), "{date}");
+
+        for (rel, size) in [(".notez/scratch.md", 8), ("notez/*.md", 5)] {
+            spawn_note_read(&tx, answer(rel));
+            let Ok((_, _, facts)) = next_note_answer(&mut rx).await else {
+                panic!("{rel}: the body comes first");
+            };
+            assert_eq!(facts.size, Some(size), "{rel}");
+            let Err((_, last)) = next_note_answer(&mut rx).await else {
+                panic!("{rel}: then the commit");
+            };
+            assert_eq!(last, notes::LastCommit::Untracked, "{rel}");
+        }
+
+        // Landed in the app: the commit of a file the cursor has left is
+        // dropped, and the highlighted file's lands.
+        let key = repo.to_string_lossy().into_owned();
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.repos = vec![RepoStatus {
+            path: Some(key.clone()),
+            ..test_repo()
+        }];
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Notes;
+        let walk = app::NotesWalk {
+            key: key.clone(),
+            root: repo.clone(),
+            generation: 0,
+        };
+        let files = ["notez/plan.md", "notez/zz.md"]
+            .map(|rel| notes::NoteFile {
+                rel: rel.into(),
+                notez: Some("notez".into()),
+            })
+            .to_vec();
+        app.apply_notes_walk(walk, Ok(notes::Notes { files }));
+        let plan = app.claim_note_read().expect("plan");
+        spawn_note_read(&tx, plan.clone());
+        app.select_commit_down();
+        let other = app.claim_note_read().expect("the other file");
+        let Ok((read, text, facts)) = next_note_answer(&mut rx).await else {
+            panic!("body");
+        };
+        app.apply_note_facts(&read, facts);
+        app.apply_note_read(read, text);
+        let Err((read, last)) = next_note_answer(&mut rx).await else {
+            panic!("commit");
+        };
+        app.apply_note_commit(&read, last);
+        let held = app.note_body.as_ref().expect("held");
+        assert_eq!(held.path, other.path);
+        assert_eq!(
+            (&held.text, &held.facts, &held.last_commit),
+            (&None, &None, &None),
+            "nothing of the file the cursor left"
+        );
+        app.apply_note_commit(&other, notes::LastCommit::Untracked);
+        assert_eq!(
+            app.note_body.as_ref().and_then(|b| b.last_commit.clone()),
+            Some(notes::LastCommit::Untracked)
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// FZ-59: a capped markdown file costs more to render than a keypress
+    /// frame (`docs/performance-baseline.md`), so it is rendered off the UI
+    /// thread: with the read, at the read's width, in the same answer as
+    /// the body, and again at a new width by `spawn_note_render`. Neither
+    /// call has sent anything when it returns.
+    #[tokio::test]
+    async fn markdown_renders_off_the_ui_thread_with_the_read_and_on_a_resize() {
+        let scratch = std::env::temp_dir().join("fleetz_test_note_render_seam");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("notez")).unwrap();
+        let path = scratch.join("notez/plan.md");
+        std::fs::write(&path, "# Plan\n\nship it\n").unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let read = app::NoteRead {
+            path: path.clone(),
+            root: scratch.clone(),
+            generation: 3,
+            render_width: Some(30),
+        };
+        spawn_note_read(&tx, read);
+        assert!(rx.try_recv().is_err(), "rendered on the calling thread");
+        let Some(AppEvent::NoteRead { text, rendered, .. }) = rx.recv().await else {
+            panic!("the body comes first");
+        };
+        let body = text.expect("read");
+        let rendered = rendered.expect("rendered with the read");
+        assert_eq!(rendered, render_note(&body, 30));
+        let first: String = rendered.lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(first, "Plan", "rendered, not the source");
+
+        let render = app::NoteRender {
+            path: path.clone(),
+            generation: 3,
+            width: 12,
+            text: body.clone(),
+        };
+        spawn_note_render(&tx, render.clone());
+        assert!(rx.try_recv().is_err(), "re-rendered on the calling thread");
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::NoteRendered {
+                    render: got,
+                    rendered,
+                }) => {
+                    assert_eq!(got, render);
+                    assert_eq!(rendered, render_note(&body, 12));
+                    break;
+                }
+                Some(AppEvent::NoteCommit { .. }) => continue,
+                _ => panic!("not a render"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// FZ-59 review: a capped body's `… cut at 256 KiB` line, as
+    /// `notes::read_body` really writes it, is not parsed as markdown. Cut
+    /// inside an open fence or a table it stays its own last line, plain,
+    /// rather than a code line or a table cell; the line above it is still
+    /// the fence's or the table's.
+    #[test]
+    fn the_cut_marker_is_its_own_plain_line_after_a_fence_or_a_table() {
+        let scratch = std::env::temp_dir().join("fleetz_test_note_cut_marker");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let text_of = |line: &ratatui::text::Line<'_>| -> String {
+            line.spans.iter().map(|s| s.content.as_ref()).collect()
+        };
+        let fence = format!("```\n{}", "x\n".repeat(notes::BODY_CAP));
+        let table = format!("| a | b |\n|---|---|\n{}", "| 1 | 2 |\n".repeat(30_000));
+        for (name, source, above) in [("fence.md", fence, "  x"), ("table.md", table, "1 │")] {
+            let path = scratch.join(name);
+            std::fs::write(&path, source).unwrap();
+            let body = notes::read_body(&path).expect("read");
+            assert!(body.ends_with("\n… cut at 256 KiB"), "{name}: cut");
+            let lines = render_note(&body, 40).lines;
+            let last = lines.last().expect("lines");
+            assert_eq!(text_of(last), "… cut at 256 KiB", "{name}");
+            assert_eq!(last.spans.len(), 1, "{name}: one plain span");
+            assert_eq!(last.spans[0].style.fg, Some(ui::colors::TEXT), "{name}");
+            let marked = lines
+                .iter()
+                .filter(|l| text_of(l).contains("cut at"))
+                .count();
+            assert_eq!(marked, 1, "{name}: the marker is nowhere else");
+            let before = text_of(&lines[lines.len() - 2]);
+            assert!(before.starts_with(above), "{name}: {before:?}");
+        }
+        let short = render_note("# T\n\nbody", 40).lines;
+        assert!(!short.iter().any(|l| text_of(l).contains("cut at")));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     fn ci_key() -> app::RemoteKey {
         (Some("gaurgle".to_string()), "fleetz".to_string())
     }
@@ -11893,7 +12686,7 @@ mod tests {
             views,
             vec![
                 (HistoryView::Ci, CiBody::Jobs),
-                (HistoryView::Info, CiBody::Jobs),
+                (HistoryView::Notes, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Log),
@@ -11970,5 +12763,679 @@ mod tests {
             &app.ci[&ci_key()].freshness.outcome,
             app::Outcome::Failed(f) if f.kind == github::FailureKind::TimedOut
         ));
+    }
+
+    // FZ-30e: the `ci` view's handoffs to `gh` and the browser.
+
+    /// `ci_app` with its runs landed, pane 2 focused on `ci`, the cursor on
+    /// run `index` of the fixture (in progress, success, failure).
+    fn handoff_app(index: usize) -> App {
+        let mut app = ci_app();
+        ci_landed(&mut app, at(12, 0, 0));
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Ci;
+        app.focused_panel = FocusedPanel::Detail;
+        app.detail_selections[app::HistoryView::Ci.index()] = index;
+        app
+    }
+
+    fn argv(args: &[&str]) -> RunHandoff {
+        RunHandoff::Gh(args.iter().map(|a| a.to_string()).collect())
+    }
+
+    #[test]
+    fn the_highlighted_run_is_the_one_the_ci_cursor_is_on() {
+        let app = handoff_app(1);
+        assert_eq!(app.highlighted_ci_run(), Some(&ci_runs()[1]));
+        let past = handoff_app(9);
+        assert_eq!(
+            past.highlighted_ci_run(),
+            Some(&ci_runs()[2]),
+            "clamped onto the last run, as the view draws the cursor"
+        );
+        assert_eq!(ci_app().highlighted_ci_run(), None, "nothing held");
+    }
+
+    /// `l` stays in fleetz: a finished run, failed or not, is shown in the
+    /// inspector, and no `gh run view --log` is built. Fails while `l`
+    /// hands the terminal to `gh`.
+    #[test]
+    fn l_shows_a_finished_run_in_the_inspector_with_no_gh_command() {
+        for (index, conclusion) in [(1, "success"), (2, "failure")] {
+            let mut app = handoff_app(index);
+            let (handoff, target) = resolve_run_handoff(&mut app, RunKey::Log).unwrap();
+            assert_eq!(handoff, RunHandoff::Inspect, "{conclusion}");
+            assert_eq!(target, (ci_key(), "gaurgle".into(), "fleetz".into()));
+            assert_eq!(yank_status(&app), None, "{conclusion}");
+        }
+    }
+
+    /// The inspector opens if folded, takes focus and shows the `log`
+    /// body of the run under the cursor, whose failed job is the marked one.
+    #[test]
+    fn l_focuses_the_inspector_on_the_runs_log_body() {
+        let mut app = handoff_app(2);
+        app.inspector_folded = true;
+        app.inspect_ci_log();
+        assert_eq!(app.focused_panel, FocusedPanel::Inspector);
+        assert!(!app.inspector_folded, "a folded inspector opens");
+        assert_eq!(app.ci_body, app::CiBody::Log);
+        assert!(app.inspects_ci_run());
+        assert_eq!(
+            app.ci_inspected.map(|(id, _)| id),
+            Some(ci_runs()[2].id),
+            "the highlighted run"
+        );
+        assert_eq!(
+            app.selected_ci()
+                .and_then(|(_, s)| s)
+                .and_then(|s| s.expanded),
+            Some(ci_runs()[2].id),
+            "the poll reads the run's jobs now the inspector is open"
+        );
+        assert!(app.needs_redraw);
+    }
+
+    #[test]
+    fn a_reruns_a_finished_run_and_only_the_failed_jobs_of_a_failed_one() {
+        let runs = ci_runs();
+        assert_eq!(
+            run_handoff_for(&runs[1], RunKey::Rerun, "gaurgle", "fleetz"),
+            Ok(argv(&[
+                "run",
+                "rerun",
+                "39590683935",
+                "-R",
+                "gaurgle/fleetz"
+            ]))
+        );
+        assert_eq!(
+            run_handoff_for(&runs[2], RunKey::Rerun, "gaurgle", "fleetz"),
+            Ok(argv(&[
+                "run",
+                "rerun",
+                "37958308363",
+                "--failed",
+                "-R",
+                "gaurgle/fleetz"
+            ]))
+        );
+    }
+
+    /// Only `failure` means failed: a run that timed out or was cancelled
+    /// gets a whole rerun.
+    #[test]
+    fn a_timed_out_or_cancelled_run_gets_a_whole_rerun() {
+        for conclusion in ["timed_out", "cancelled"] {
+            let run = ci::WorkflowRun {
+                conclusion: Some(conclusion.to_string()),
+                ..ci_runs()[1].clone()
+            };
+            assert_eq!(
+                run_handoff_for(&run, RunKey::Rerun, "gaurgle", "fleetz"),
+                Ok(argv(&[
+                    "run",
+                    "rerun",
+                    "39590683935",
+                    "-R",
+                    "gaurgle/fleetz"
+                ])),
+                "{conclusion}"
+            );
+        }
+    }
+
+    #[test]
+    fn x_cancels_only_a_run_in_progress_or_queued() {
+        let runs = ci_runs();
+        assert_eq!(
+            run_handoff_for(&runs[0], RunKey::Cancel, "gaurgle", "fleetz"),
+            Ok(argv(&[
+                "run",
+                "cancel",
+                "39590684061",
+                "-R",
+                "gaurgle/fleetz"
+            ]))
+        );
+        let queued = ci::WorkflowRun {
+            status: Some("queued".to_string()),
+            ..runs[0].clone()
+        };
+        assert_eq!(
+            run_handoff_for(&queued, RunKey::Cancel, "gaurgle", "fleetz"),
+            Ok(argv(&[
+                "run",
+                "cancel",
+                "39590684061",
+                "-R",
+                "gaurgle/fleetz"
+            ]))
+        );
+        for finished in [&runs[1], &runs[2]] {
+            assert_eq!(
+                run_handoff_for(finished, RunKey::Cancel, "gaurgle", "fleetz"),
+                Err("run is not in progress")
+            );
+        }
+    }
+
+    /// `gh` has no log for a run still going and will not rerun one, so
+    /// fleetz says so rather than handing over a command that only fails.
+    #[test]
+    fn a_run_still_going_has_no_log_or_rerun_yet() {
+        let live = &ci_runs()[0];
+        for key in [RunKey::Log, RunKey::Rerun] {
+            assert_eq!(
+                run_handoff_for(live, key, "gaurgle", "fleetz"),
+                Err("run has not finished"),
+                "{key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn capital_o_opens_the_run_page_whatever_its_state() {
+        for run in ci_runs() {
+            assert_eq!(
+                run_handoff_for(&run, RunKey::Open, "gaurgle", "fleetz"),
+                Ok(RunHandoff::Open(run.url.clone()))
+            );
+        }
+    }
+
+    #[test]
+    fn the_handoff_keys_are_l_a_x_and_capital_o() {
+        let keys: Vec<Option<RunKey>> = ['l', 'a', 'x', 'O', 'o', 'L', 'X']
+            .into_iter()
+            .map(|c| RunKey::from_code(KeyCode::Char(c)))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                Some(RunKey::Log),
+                Some(RunKey::Rerun),
+                Some(RunKey::Cancel),
+                Some(RunKey::Open),
+                None,
+                None,
+                None
+            ]
+        );
+    }
+
+    /// Only pane 2, focused, showing `ci`: anywhere else the keys keep
+    /// their old meaning (`O` the first PR, `l` the strip's day cursor).
+    #[test]
+    fn the_handoffs_apply_only_with_pane_2_focused_on_ci() {
+        assert!(ci_handoff_applies(&handoff_app(0)));
+        for view in app::HistoryView::ALL {
+            if view == app::HistoryView::Ci {
+                continue;
+            }
+            let mut app = handoff_app(0);
+            app.history_view = view;
+            assert!(!ci_handoff_applies(&app), "{view:?}");
+        }
+        for panel in [
+            FocusedPanel::RepoList,
+            FocusedPanel::Inspector,
+            FocusedPanel::Contributions,
+        ] {
+            let mut app = handoff_app(0);
+            app.focused_panel = panel;
+            assert!(!ci_handoff_applies(&app), "{panel:?}");
+        }
+        let mut compact = handoff_app(0);
+        compact.view = app::View::Compact;
+        assert!(!ci_handoff_applies(&compact), "compact draws no pane 2");
+    }
+
+    #[test]
+    fn a_handoff_targets_the_rows_repo_and_the_highlighted_run() {
+        let mut app = handoff_app(2);
+        let (handoff, (key, owner, name)) = resolve_run_handoff(&mut app, RunKey::Rerun).unwrap();
+        assert_eq!(
+            handoff,
+            argv(&[
+                "run",
+                "rerun",
+                "37958308363",
+                "--failed",
+                "-R",
+                "gaurgle/fleetz"
+            ])
+        );
+        assert_eq!(
+            (key, owner.as_str(), name.as_str()),
+            (ci_key(), "gaurgle", "fleetz")
+        );
+        assert_eq!(yank_status(&app), None, "nothing to note");
+    }
+
+    #[test]
+    fn an_empty_ci_view_does_nothing() {
+        let mut app = ci_app();
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Ci;
+        app.focused_panel = FocusedPanel::Detail;
+        for key in [RunKey::Log, RunKey::Rerun, RunKey::Cancel, RunKey::Open] {
+            assert_eq!(resolve_run_handoff(&mut app, key), None, "{key:?}");
+        }
+        assert_eq!(yank_status(&app), None);
+        let mut no_runs = handoff_app(0);
+        no_runs.ci.get_mut(&ci_key()).unwrap().runs.clear();
+        assert_eq!(resolve_run_handoff(&mut no_runs, RunKey::Open), None);
+    }
+
+    #[test]
+    fn a_row_without_a_github_identity_hands_nothing_off() {
+        let mut app = handoff_app(0);
+        app.repos[0].owner = None;
+        assert_eq!(resolve_run_handoff(&mut app, RunKey::Open), None);
+        assert_eq!(yank_status(&app), None);
+    }
+
+    #[test]
+    fn a_refused_handoff_says_why_on_the_status_line() {
+        let mut app = handoff_app(1);
+        assert_eq!(resolve_run_handoff(&mut app, RunKey::Cancel), None);
+        assert_eq!(
+            yank_status(&app),
+            Some(("run is not in progress".to_string(), false))
+        );
+        let mut live = handoff_app(0);
+        assert_eq!(resolve_run_handoff(&mut live, RunKey::Log), None);
+        assert_eq!(
+            yank_status(&live),
+            Some(("run has not finished".to_string(), false))
+        );
+    }
+
+    /// Back from `gh`, the repo polls at once rather than at its next 10 or
+    /// 60 s slot, so a rerun or a cancel shows up without waiting.
+    #[test]
+    fn back_from_gh_the_runs_repo_polls_at_once() {
+        let mut app = handoff_app(1);
+        let start = std::time::Instant::now();
+        let settled = start + std::time::Duration::from_secs(1);
+        ci_poll_request(&mut app, at(12, 0, 0), start);
+        assert_eq!(
+            ci_poll_request(&mut app, at(12, 0, 5), settled),
+            None,
+            "not due on its own until 12:00:10"
+        );
+        let target = ci::target(&app.repos[0]).unwrap();
+        let request =
+            ci_poll_after_handoff(&mut app, target.clone(), at(12, 0, 5)).expect("polled at once");
+        assert_eq!(request.key, ci_key());
+        assert!(app.ci[&ci_key()].inflight);
+        assert_eq!(
+            ci_poll_after_handoff(&mut app, target, at(12, 0, 6)),
+            None,
+            "one poll out at a time"
+        );
+    }
+
+    /// The immediate poll skips the interval, nothing else: a rate limit or
+    /// `-d` still sends nothing.
+    #[test]
+    fn back_from_gh_a_rate_limited_or_dirty_mode_repo_does_not_poll() {
+        let failure = github::Failure::rate_limit("API rate limit exceeded");
+        let budget = reading("tok", 0, at(12, 40, 0), at(12, 0, 10));
+        let mut limited = ci_failure_lands(failure, Some(budget));
+        limited.view = app::View::Detail;
+        limited.history_view = app::HistoryView::Ci;
+        let target = ci::target(&limited.repos[0]).unwrap();
+        assert_eq!(
+            ci_poll_after_handoff(&mut limited, target.clone(), at(12, 1, 0)),
+            None
+        );
+        let mut dirty = handoff_app(1);
+        dirty.dirty_mode = true;
+        assert_eq!(
+            ci_poll_after_handoff(&mut dirty, target, at(12, 1, 0)),
+            None
+        );
+    }
+}
+
+/// FZ-45: section headers as cursor stops and the slot digest, driven
+/// through the key handler and checked against what the renderer draws.
+#[cfg(test)]
+mod digest_handler_tests {
+    use super::*;
+    use crate::digest::tests::repo;
+
+    const W: u16 = 120;
+    const H: u16 = 44;
+
+    /// Two github activity rows, one local changes row, two also active.
+    fn sectioned_app() -> App {
+        let repos = vec![
+            repo("alpha", RepoLocation::Primary),
+            repo("bravo", RepoLocation::Primary),
+            repo("charlie", RepoLocation::LocalOnly),
+            repo("delta", RepoLocation::Elsewhere),
+            repo("echo", RepoLocation::NotCloned),
+        ];
+        let mut app = App::new(repos, String::new(), W, H);
+        app.view = app::View::Detail;
+        app.focused_panel = FocusedPanel::RepoList;
+        let pushed = chrono::Utc::now() - chrono::Duration::minutes(1);
+        app.dataset = ["alpha", "bravo", "delta", "echo"]
+            .iter()
+            .map(|name| github::GithubRepo {
+                name: name.to_string(),
+                pushed_at: pushed,
+                pr_count: 0,
+                prs: vec![],
+                ci_status: model::CiStatus::Unknown,
+                ci_workflow: None,
+                ci_duration: None,
+                repo_kind: model::RepoKind::Unknown,
+                owner: None,
+                disk_usage: None,
+            })
+            .collect();
+        app
+    }
+
+    fn screen(app: &App) -> Vec<String> {
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(W, H)).unwrap();
+        terminal.draw(|f| ui::render(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..H)
+            .map(|y| (0..W).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+            .collect()
+    }
+
+    /// The pane 1 row the renderer marks as the cursor's, trimmed.
+    fn marked_row(app: &App) -> (usize, String) {
+        let rows = screen(app);
+        let list = app.list_hits.get().area;
+        let found: Vec<(usize, String)> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(y, row)| {
+                let cells: String = row
+                    .chars()
+                    .skip(list.x as usize)
+                    .take(list.width as usize)
+                    .collect();
+                cells
+                    .trim_start()
+                    .starts_with('▸')
+                    .then(|| (y, cells.trim().to_string()))
+            })
+            .collect();
+        assert_eq!(found.len(), 1, "one marked row: {found:?}");
+        found.into_iter().next().unwrap()
+    }
+
+    async fn press_key(app: &mut App, code: KeyCode) {
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let backend = CrosstermBackend::new(io::stdout());
+        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, W, H));
+        let mut terminal =
+            Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
+        handle_normal_input(
+            app,
+            &mut terminal,
+            KeyEvent::new(code, KeyModifiers::NONE),
+            &tx,
+            &args,
+            &config,
+            Path::new("/nonexistent"),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn j_and_k_stop_on_every_header_in_the_order_the_list_draws() {
+        let mut app = sectioned_app();
+        press_key(&mut app, KeyCode::Char('k')).await;
+        assert_eq!(
+            app.on_header(),
+            Some(digest::Section::GithubActivity),
+            "k from the first repo lands on its header"
+        );
+        let mut walked = vec![marked_row(&app)];
+        for _ in 0..8 {
+            press_key(&mut app, KeyCode::Char('j')).await;
+            walked.push(marked_row(&app));
+        }
+        let ys: Vec<usize> = walked.iter().map(|(y, _)| *y).collect();
+        let texts: Vec<&str> = walked.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(
+            ys.windows(2).take(7).all(|w| w[0] < w[1]),
+            "the cursor walks down the drawn rows: {walked:?}"
+        );
+        assert_eq!(ys[7], ys[8], "j stops at the last row");
+        let expected = [
+            "github activity",
+            "alpha",
+            "bravo",
+            "local changes",
+            "charlie",
+            "also active",
+            "delta",
+            "echo",
+        ];
+        for (text, want) in texts.iter().zip(expected) {
+            assert!(text.contains(want), "{text:?} is not {want:?}: {texts:?}");
+        }
+        // And back up through the same stops.
+        for want in expected.iter().rev().skip(1) {
+            press_key(&mut app, KeyCode::Char('k')).await;
+            assert!(marked_row(&app).1.contains(want), "k back to {want}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_compact_grid_has_no_header_stops() {
+        let mut app = sectioned_app();
+        app.view = app::View::Compact;
+        app.selected = 2;
+        press_key(&mut app, KeyCode::Char('k')).await;
+        assert_eq!(app.selected, 1, "k skips the local changes header");
+        assert_eq!(app.on_header(), None);
+    }
+
+    #[tokio::test]
+    async fn on_a_header_pane_2_draws_the_digest_and_leaving_restores_its_view() {
+        let mut app = sectioned_app();
+        app.history_view = app::HistoryView::Commits;
+        let before = screen(&app).join("\n");
+        assert!(before.contains("COMMITS"), "{before}");
+
+        press_key(&mut app, KeyCode::Char('k')).await;
+        let on_header = screen(&app).join("\n");
+        assert!(on_header.contains("2 repos · 0 commits"), "{on_header}");
+        assert!(on_header.contains("pushed 1m ago"), "{on_header}");
+        assert!(!on_header.contains("COMMITS"), "{on_header}");
+
+        press_key(&mut app, KeyCode::Char('j')).await;
+        assert_eq!(app.history_view, app::HistoryView::Commits);
+        assert_eq!(app.selected, 0);
+        let after = screen(&app).join("\n");
+        assert!(after.contains("COMMITS"), "{after}");
+        assert!(!after.contains("2 repos · 0 commits"), "{after}");
+    }
+
+    #[tokio::test]
+    async fn t_cycles_the_digest_window_and_leaves_the_overlay_shut() {
+        let mut app = sectioned_app();
+        press_key(&mut app, KeyCode::Char('k')).await;
+        let mut seen = vec![app.digest_window];
+        for _ in 0..4 {
+            press_key(&mut app, KeyCode::Char('t')).await;
+            assert!(matches!(app.overlay, Overlay::None), "t opened the overlay");
+            seen.push(app.digest_window);
+        }
+        use digest::DigestWindow::*;
+        assert_eq!(seen, vec![Slot, Today, Yesterday, Week, Slot]);
+        let drawn = screen(&app).join("\n");
+        assert!(drawn.contains("slot · today · yesterday · week"), "{drawn}");
+
+        // Off the header `t` is the time window overlay again.
+        press_key(&mut app, KeyCode::Char('j')).await;
+        press_key(&mut app, KeyCode::Char('t')).await;
+        assert!(matches!(app.overlay, Overlay::TimeWindow(_)));
+    }
+
+    #[tokio::test]
+    async fn enter_on_a_digest_line_lands_on_its_repo_row() {
+        let mut app = sectioned_app();
+        app.selected = 3;
+        press_key(&mut app, KeyCode::Char('k')).await;
+        assert_eq!(app.on_header(), Some(digest::Section::AlsoActive));
+        app.focused_panel = FocusedPanel::Detail;
+        press_key(&mut app, KeyCode::Char('j')).await;
+        assert_eq!(app.digest_selected, 1, "j walks the digest in pane 2");
+        assert_eq!(app.on_header(), Some(digest::Section::AlsoActive));
+        press_key(&mut app, KeyCode::Enter).await;
+        assert_eq!(app.on_header(), None);
+        assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("echo"));
+        assert_eq!(app.focused_panel, FocusedPanel::RepoList);
+    }
+
+    #[test]
+    fn a_click_or_a_hover_on_a_header_lands_on_it() {
+        let mut app = sectioned_app();
+        let rows = screen(&app);
+        let list = app.list_hits.get().area;
+        let y_of = |label: &str| {
+            rows.iter()
+                .position(|r| r.contains(label))
+                .unwrap_or_else(|| panic!("{label} not drawn")) as u16
+        };
+        let x = list.x + 2;
+        app.click_list(x, y_of("local changes"));
+        assert_eq!(app.on_header(), Some(digest::Section::LocalChanges));
+        app.click_list(x, y_of("delta"));
+        assert_eq!(app.on_header(), None);
+        assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("delta"));
+        // A rested hover lands on a header and on nothing else.
+        screen(&app);
+        let t0 = std::time::Instant::now();
+        app.hover_list(x, y_of("bravo"), t0);
+        app.settle_hover(t0 + app::HOVER_DWELL);
+        assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("delta"));
+        app.hover_list(x, y_of("also active"), t0);
+        app.settle_hover(t0 + app::HOVER_DWELL);
+        assert_eq!(app.on_header(), Some(digest::Section::AlsoActive));
+        // The blank row between sections is not a stop.
+        let gap = y_of("also active") - 1;
+        app.click_list(x, gap);
+        assert_eq!(app.on_header(), Some(digest::Section::AlsoActive));
+    }
+
+    /// Review F6: a pointer passing over a header lands nowhere; one resting
+    /// on it for `HOVER_DWELL` lands there.
+    #[test]
+    fn a_hover_lands_on_a_header_only_after_the_pointer_rests() {
+        let mut app = sectioned_app();
+        let rows = screen(&app);
+        let x = app.list_hits.get().area.x + 2;
+        let y_of = |label: &str| rows.iter().position(|r| r.contains(label)).unwrap() as u16;
+        let ms = std::time::Duration::from_millis;
+        let t0 = std::time::Instant::now();
+        app.hover_list(x, y_of("also active"), t0);
+        app.settle_hover(t0 + ms(100));
+        assert_eq!(app.on_header(), None, "not rested yet");
+        app.hover_list(x, y_of("delta"), t0 + ms(150));
+        app.settle_hover(t0 + ms(1000));
+        assert_eq!(app.on_header(), None, "passed over, not rested on");
+        assert_eq!(app.selected, 0);
+
+        let t1 = t0 + ms(2000);
+        app.hover_list(x, y_of("also active"), t1);
+        app.hover_list(x, y_of("also active"), t1 + ms(200));
+        app.settle_hover(t1 + app::HOVER_DWELL - ms(1));
+        assert_eq!(
+            app.on_header(),
+            None,
+            "the dwell runs from the first arrival"
+        );
+        app.settle_hover(t1 + app::HOVER_DWELL);
+        assert_eq!(app.on_header(), Some(digest::Section::AlsoActive));
+
+        // Leaving the list cancels a pending hover.
+        app.hover_list(x, y_of("local changes"), t1);
+        app.clear_hover();
+        app.settle_hover(t1 + ms(5000));
+        assert_eq!(app.on_header(), Some(digest::Section::AlsoActive));
+    }
+
+    /// Review B1: the compact grid never writes `list_hits`, so a click
+    /// there after a detail frame must not resolve against that frame.
+    #[test]
+    fn a_click_in_compact_after_a_detail_frame_leaves_the_selection() {
+        let mut app = sectioned_app();
+        let rows = screen(&app);
+        let x = app.list_hits.get().area.x + 2;
+        let y = rows.iter().position(|r| r.contains("echo")).unwrap() as u16;
+        app.toggle_view();
+        assert_eq!(app.view, app::View::Compact);
+        app.click_list(x, y);
+        let t0 = std::time::Instant::now();
+        app.hover_list(x, y - 3, t0);
+        app.settle_hover(t0 + app::HOVER_DWELL);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("alpha"));
+    }
+
+    /// Review F5: on a header `J`/`K` drive the digest's pane 2 cursor and
+    /// the digest inspector, never the hidden repo's detail or `ci` bodies.
+    #[tokio::test]
+    async fn shift_j_on_a_header_drives_the_digest_panes() {
+        let mut app = sectioned_app();
+        app.history_view = app::HistoryView::Ci;
+        press_key(&mut app, KeyCode::Char('k')).await;
+        assert!(app.on_header().is_some());
+        app.detail_max_scroll.set(10);
+        app.inspector_max_scroll.set(10);
+        press_key(&mut app, KeyCode::Char('J')).await;
+        assert_eq!(app.digest_selected, 1, "J from the list walks the digest");
+        assert_eq!(app.detail_scroll(), 0, "the hidden view did not scroll");
+        assert_eq!(app.detail_selected(), 0);
+
+        app.focused_panel = FocusedPanel::Detail;
+        press_key(&mut app, KeyCode::Char('J')).await;
+        assert_eq!(
+            app.inspector_scroll, 1,
+            "J from pane 2 scrolls the digest inspector"
+        );
+        assert_eq!(app.ci_body_scrolls, [0; 3], "not the hidden `ci` bodies");
+        press_key(&mut app, KeyCode::Char('K')).await;
+        assert_eq!(app.inspector_scroll, 0);
+        assert_eq!(app.history_view, app::HistoryView::Ci);
+    }
+
+    /// Review F7: `g` puts `selected` back on 0, which is the github
+    /// activity section's first repo in the group too; the header the cursor
+    /// stood on must not come back with it.
+    #[tokio::test]
+    async fn a_group_change_does_not_bring_the_header_back() {
+        let mut app = sectioned_app();
+        app.group_names = vec!["work".to_string()];
+        app.repos[0].groups = vec!["work".to_string()];
+        app.repos[2].groups = vec!["work".to_string()];
+        press_key(&mut app, KeyCode::Char('k')).await;
+        assert_eq!(app.on_header(), Some(digest::Section::GithubActivity));
+        press_key(&mut app, KeyCode::Char('g')).await;
+        assert_eq!(app.active_group, Some(0));
+        assert!(
+            app.list_rows()
+                .contains(&app::ListRow::Header(digest::Section::GithubActivity))
+        );
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.on_header(), None);
+        assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("alpha"));
     }
 }

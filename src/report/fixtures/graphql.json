@@ -1,0 +1,44 @@
+{"data":{"viewer":{
+  "y0":{"contributionCalendar":{"weeks":[{"contributionDays":[
+    {"date":"2026-03-10","contributionCount":2,"contributionLevel":"FIRST_QUARTILE"},
+    {"date":"2026-03-11","contributionCount":1,"contributionLevel":"FIRST_QUARTILE"}
+  ]}]}},
+  "repositories":{
+    "totalCount":3,
+    "pageInfo":{"hasNextPage":false},
+    "nodes":[
+      {"name":"alpha-tool","nameWithOwner":"fixture-user/alpha-tool","isPrivate":true,"isArchived":false,"diskUsage":12,
+       "owner":{"__typename":"User","login":"fixture-user"},
+       "pushedAt":"2026-03-12T10:00:00Z",
+       "pullRequests":{"totalCount":1,"nodes":[
+         {"number":7,"title":"Teach the parser comments","author":{"login":"fixture-user"},"createdAt":"2026-03-11T12:00:00Z","url":"https://github.com/fixture-user/alpha-tool/pull/7","reviewDecision":null}
+       ]},
+       "defaultBranchRef":{"target":{"statusCheckRollup":null,"checkSuites":{"nodes":[]}}}},
+      {"name":"elsewhere-app","nameWithOwner":"fixture-user/elsewhere-app","isPrivate":false,"isArchived":false,"diskUsage":8,
+       "owner":{"__typename":"User","login":"fixture-user"},
+       "pushedAt":"2026-03-05T10:00:00Z",
+       "pullRequests":{"totalCount":0,"nodes":[]},
+       "defaultBranchRef":{"target":{"statusCheckRollup":null,"checkSuites":{"nodes":[]}}}},
+      {"name":"ghost-repo","nameWithOwner":"fixture-user/ghost-repo","isPrivate":false,"isArchived":false,"diskUsage":4,
+       "owner":{"__typename":"User","login":"fixture-user"},
+       "pushedAt":"2026-02-20T10:00:00Z",
+       "pullRequests":{"totalCount":0,"nodes":[]},
+       "defaultBranchRef":{"target":{"statusCheckRollup":null,"checkSuites":{"nodes":[]}}}}
+    ]
+  },
+  "organizations":{
+    "totalCount":1,
+    "pageInfo":{"hasNextPage":false},
+    "nodes":[{"repositories":{
+      "totalCount":1,
+      "pageInfo":{"hasNextPage":false},
+      "nodes":[
+        {"name":"orgproj","nameWithOwner":"fixture-org/orgproj","isPrivate":false,"isArchived":false,"diskUsage":6,
+         "owner":{"__typename":"Organization","login":"fixture-org"},
+         "pushedAt":"2026-03-11T10:00:00Z",
+         "pullRequests":{"totalCount":0,"nodes":[]},
+         "defaultBranchRef":{"target":{"statusCheckRollup":null,"checkSuites":{"nodes":[]}}}}
+      ]
+    }}]
+  }
+}}}

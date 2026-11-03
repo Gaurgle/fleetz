@@ -1,9 +1,13 @@
 # Fleetz agent instructions
 
-Read [CLAUDE.md](CLAUDE.md) first. Its project rules, domain invariants, ship
-policy and validation requirements apply to Claude and Codex alike. The
-release-effort ship policy is an explicit specialization of the default house
-rule, not permission for every session to commit, push or merge.
+Read [CLAUDE.md](CLAUDE.md) first. Its project rules, ship policy and
+validation requirements apply to Claude and Codex alike. The domain
+invariants live in `.claude/rules/`, one file per area with the source files
+it governs in its frontmatter; Claude loads one when it touches a matching
+file, and Codex reads the file for the module it is about to change (the
+table in CLAUDE.md says which). The release-effort ship policy is an explicit
+specialization of the default house rule, not permission for every session
+to commit, push or merge.
 
 Apply instructions by scope: shared global defaults, any project family rules,
 this repository's rules, then instructions in the module being changed. Read

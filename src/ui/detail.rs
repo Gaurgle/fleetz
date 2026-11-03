@@ -6,7 +6,7 @@ use ratatui::widgets::{
     Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap,
 };
 
-use crate::app::{App, FocusedPanel, HistoryView};
+use crate::app::{App, FocusedPanel, HistoryView, ListRow};
 use crate::model::{CiStatus, Commit, RepoStatus};
 use crate::ui::badges;
 use crate::ui::colors;
@@ -93,6 +93,37 @@ pub fn split_main(area: Rect, repo_list_pct: u16) -> (Rect, Rect) {
     (h[0], h[1])
 }
 
+/// Split pane 2 of the `notes` layout into the file tree and the reader
+/// beside it (FZ-62). Shared by `render` and `ui::panel_rects`, as the other
+/// splits are, so a click lands in the pane drawn under it.
+///
+/// The tree takes the repo list's rule within pane 2 (35%, capped at
+/// `REPO_LIST_MAX_COLS`): it is a list of names, and the reader is what
+/// wants the width. Floored at `notes_tree_floor`, the width that holds the
+/// mode line whole, or half the pane when that is less, so a small terminal
+/// keeps a reader to read in.
+pub fn split_notes_pane(pane: Rect) -> (Rect, Rect) {
+    let rule = (pane.width * crate::app::DEFAULT_REPO_LIST_PCT / 100).min(REPO_LIST_MAX_COLS);
+    let width = rule.max(notes_tree_floor().min(pane.width / 2));
+    let h = Layout::horizontal([Constraint::Length(width), Constraint::Min(0)])
+        .spacing(1)
+        .split(pane);
+    (h[0], h[1])
+}
+
+/// The narrowest the `notes` tree is drawn where pane 2 has the room: its
+/// mode line in either mode, plus the pane's border and padding on each
+/// side. Measured from the line itself, so new words move the floor with
+/// them rather than cutting the `(m)` off.
+fn notes_tree_floor() -> u16 {
+    let line = [false, true]
+        .map(|all| notes_mode_line_for(all).width())
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+    u16::try_from(line).unwrap_or(u16::MAX) + 2 * crate::ui::PANE_CONTENT_INSET
+}
+
 /// Columns past which the repo list is only drawing longer dots: two borders,
 /// two columns of padding, the marker and kind glyph, a generous name, the
 /// dot fill, and the widest badge run a row can carry (`1PR 1 3↓ 2↑ 5!`).
@@ -116,7 +147,17 @@ const INSPECTOR_FILE_CAP: usize = 30;
 /// Interior width from which the inspector shows the changed files in a lane
 /// beside the message rather than under it. Half of this leaves each lane
 /// about fifty columns, enough for a subject line or a stat plus a path.
-const INSPECTOR_TWO_LANE_WIDTH: u16 = 100;
+pub const INSPECTOR_TWO_LANE_WIDTH: u16 = 100;
+
+/// The row a capped list ends on: how many entries it left out. The one
+/// overflow marker the panes use (the inspector's file list, the slot
+/// digest's lists).
+pub fn more_line(hidden: usize) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("… and {hidden} more"),
+        Style::default().fg(colors::OVERLAY),
+    ))
+}
 
 /// Render the detail view: the repo list on the left (35% of the width by
 /// default, capped at `REPO_LIST_MAX_COLS`; see `split_main`) and the detail
@@ -134,10 +175,15 @@ pub fn render(
     list_area: Rect,
     detail_area: Rect,
     inspector_area: Option<Rect>,
+    reader_area: Option<Rect>,
     app: &App,
 ) {
     render_repo_list(frame, list_area, app);
     render_detail_pane(frame, detail_area, app);
+    // The `notes` layout's reader, beside the tree (FZ-62).
+    if let Some(reader_area) = reader_area {
+        render_reader(frame, reader_area, app);
+    }
     // The inspector is docked under the detail pane only when there's room --
     // on a short terminal the detail pane keeps the whole column.
     if let Some(inspector_area) = inspector_area {
@@ -151,76 +197,40 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     // and horizontal padding (2, from `Padding::horizontal(1)` on the block).
     let col_width = area.width.saturating_sub(4) as usize;
 
-    let selected_idx = app.selected_repo_index().unwrap_or(usize::MAX);
     let dim_pending = app.watch_mode && !app.blink_on;
 
-    // Tracks where in the flattened `items` (repos interleaved with section
-    // header rows) the selected repo lands, so ListState can be told to keep
-    // that exact row in view -- rather than the repo's position among just
-    // the repos, which would drift once header rows are counted in.
-    let mut selected_display_idx = None;
-    let mut push_repos = |items: &mut Vec<ListItem<'static>>, repos: &[(usize, &RepoStatus)]| {
-        for (idx, repo) in repos {
-            if *idx == selected_idx {
-                selected_display_idx = Some(items.len());
+    // The rows come from `App::list_rows`, the list the cursor walks and
+    // clicks resolve against, so the three cannot disagree about what sits
+    // where. While searching it is one ranked set under "results"; otherwise
+    // the sections (github activity, local changes, also active), each headed
+    // once another is present, which `App::section_rank` orders the cursor to
+    // match. The cursor's row, a section header included (FZ-45), is told to
+    // ListState so that exact row is kept in view.
+    let visible = app.visible_repos();
+    let total = visible.len();
+    let rows_drawn = app.list_rows();
+    let cursor = app.cursor_row(&rows_drawn);
+    for (i, row) in rows_drawn.iter().enumerate() {
+        let on_cursor = cursor == Some(i);
+        items.push(match *row {
+            ListRow::Results => section_header_item("results"),
+            ListRow::Gap => ListItem::new(Line::from("")),
+            ListRow::Header(section) if on_cursor => selected_header_item(section.label()),
+            ListRow::Header(section) => section_header_item(section.label()),
+            ListRow::Repo(pos) => {
+                let repo = visible[pos].1;
+                repo_list_item(
+                    repo,
+                    on_cursor,
+                    col_width,
+                    dim_pending,
+                    app.is_not_in_last_poll(repo),
+                    app.search_match_field(repo).and_then(|f| f.mark()),
+                )
             }
-            items.push(repo_list_item(
-                repo,
-                *idx == selected_idx,
-                col_width,
-                dim_pending,
-                app.is_not_in_last_poll(repo),
-            ));
-        }
-    };
-
-    let total;
-    if app.has_text_query() {
-        // While searching, the list is one set ranked best-match-first (see
-        // `App::visible_repos`). Sections would fight that ordering, since a
-        // repo's section says nothing about how well it matched.
-        let results = app.visible_repos();
-        total = results.len();
-        items.push(section_header_item("results"));
-        push_repos(&mut items, &results);
-    } else {
-        let primary = app.primary_repos();
-        let elsewhere = app.elsewhere_repos();
-        let local_only = app.local_only_repos();
-        total = primary.len() + elsewhere.len() + local_only.len();
-
-        // "github activity" section -- only labeled when another section
-        // follows, matching how a lone unlabeled list reads fine but three
-        // stacked groups need every one of them named to tell them apart.
-        if !primary.is_empty() && (!elsewhere.is_empty() || !local_only.is_empty()) {
-            items.push(section_header_item("github activity"));
-        }
-        push_repos(&mut items, &primary);
-
-        // "local changes" second: work sitting on this machine and nowhere
-        // else is a worklist, and it reads before repos you merely have a
-        // copy of. Set off by a blank row so it is its own block rather than
-        // butting up against the entry above (only when something precedes
-        // it). `App::section_rank` orders the cursor to match; the two must
-        // not disagree.
-        if !local_only.is_empty() {
-            if !items.is_empty() {
-                items.push(ListItem::new(Line::from("")));
-            }
-            items.push(section_header_item("local changes"));
-            push_repos(&mut items, &local_only);
-        }
-
-        // "also active" last, set off by the same blank row so the three
-        // groups are spaced identically.
-        if !elsewhere.is_empty() {
-            if !items.is_empty() {
-                items.push(ListItem::new(Line::from("")));
-            }
-            items.push(section_header_item("also active"));
-            push_repos(&mut items, &elsewhere);
-        }
+        });
     }
+    let selected_display_idx = cursor;
 
     let focused = app.focused_panel == FocusedPanel::RepoList;
     let border_color = if focused {
@@ -260,10 +270,32 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     // A fresh ListState each frame is fine -- ratatui's List recomputes the
     // scroll offset from `.select()` on every render, so the selected row is
     // always brought into view without needing to persist offset ourselves.
-    let list = List::new(items);
+    // The padding keeps the pane 2 margin past the cursor, shrunk by ratatui
+    // in a short pane as `scrolloff_for` shrinks it (FZ-55).
+    let list = List::new(items).scroll_padding(usize::from(crate::app::SCROLLOFF));
     let mut state = ListState::default();
     state.select(selected_display_idx);
     frame.render_stateful_widget(list, rows[2], &mut state);
+    // Where the rows landed, for clicks and hovers (FZ-45).
+    app.list_hits.set(crate::app::ListHits {
+        area: rows[2],
+        offset: state.offset(),
+    });
+}
+
+/// A section header the list cursor stands on (FZ-45): the marker repo rows
+/// wear, and the label lit, so the stop reads as the cursor's.
+fn selected_header_item(label: &str) -> ListItem<'static> {
+    ListItem::new(Line::from(vec![
+        Span::raw("▸ "),
+        Span::styled(
+            label.to_string(),
+            Style::default()
+                .fg(colors::MAUVE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ──", Style::default().fg(colors::SURFACE)),
+    ]))
 }
 
 /// Right-aligned readout of which commit the pane's cursor is on, pinned under
@@ -330,7 +362,35 @@ fn repo_list_item(
     col_width: usize,
     dim_pending: bool,
     not_in_last_poll: bool,
+    match_mark: Option<&'static str>,
 ) -> ListItem<'static> {
+    ListItem::new(Line::from(repo_row_spans(
+        repo,
+        is_selected,
+        col_width,
+        dim_pending,
+        not_in_last_poll,
+        match_mark,
+    )))
+}
+
+/// Widest a repo row is drawn: the repo list's column cap less its two
+/// borders and two padding columns. The slot digest (FZ-45) draws its rows'
+/// shared columns at this width, as pane 1 does at its default size.
+pub const REPO_ROW_MAX_W: usize = REPO_LIST_MAX_COLS as usize - 4;
+
+/// A repo row's spans, `col_width` wide: marker, kind glyph, name, dot fill
+/// and the badge group flush right. The one grammar a repo row has: the repo
+/// list draws it, and so do the slot digest's lines (FZ-45), so every
+/// indicator keeps its place and its colour in both.
+pub fn repo_row_spans(
+    repo: &RepoStatus,
+    is_selected: bool,
+    col_width: usize,
+    dim_pending: bool,
+    not_in_last_poll: bool,
+    match_mark: Option<&'static str>,
+) -> Vec<Span<'static>> {
     let marker = if is_selected { "▸ " } else { "  " };
     let name_style = if is_selected {
         Style::default()
@@ -348,11 +408,15 @@ fn repo_list_item(
     // as in repoz. Truncate the name rather than let it overflow when narrow.
     let (badge_spans, badge_w) = badges::badge_spans_marked(repo, dim_pending, not_in_last_poll);
     let right_len = badge_w + 1; // +1 for space after dots
-    let reserved = badges::MARKER_W + badges::GLYPH_W + 1 + right_len;
+    // A search hit on the owner or an author says so after the name (FZ-56),
+    // in the filter strip's dim, so it does not read as a name match.
+    let mark = match_mark.map(|m| format!(" {m}")).unwrap_or_default();
+    let mark_w = mark.chars().count();
+    let reserved = badges::MARKER_W + badges::GLYPH_W + 1 + right_len + mark_w;
     let name_budget = col_width.saturating_sub(reserved).max(3);
     let name = crate::ui::truncate(&repo.name, name_budget);
 
-    let left_len = badges::MARKER_W + badges::GLYPH_W + name.chars().count() + 1; // +1 for space before dots
+    let left_len = badges::MARKER_W + badges::GLYPH_W + name.chars().count() + mark_w + 1; // +1 for space before dots
     let dot_count = col_width.saturating_sub(left_len + right_len).max(1);
     let dots = "·".repeat(dot_count);
 
@@ -360,11 +424,16 @@ fn repo_list_item(
         Span::raw(marker.to_string()),
         badges::glyph_span(repo),
         Span::styled(name, name_style),
-        Span::styled(format!(" {dots} "), Style::default().fg(colors::SURFACE)),
     ];
+    if !mark.is_empty() {
+        spans.push(Span::styled(mark, Style::default().fg(colors::OVERLAY)));
+    }
+    spans.push(Span::styled(
+        format!(" {dots} "),
+        Style::default().fg(colors::SURFACE),
+    ));
     spans.extend(badge_spans);
-
-    ListItem::new(Line::from(spans))
+    spans
 }
 
 /// A commit's age, rendered fresh on every draw. Empty when git handed back
@@ -544,6 +613,15 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
         .padding(Padding::new(1, 1, 1, 0));
+
+    // On a section header pane 2 is that section's digest (FZ-45). The repo
+    // views keep their state underneath and come back when the cursor
+    // leaves the header.
+    if let Some(digest) = app.digest(chrono::Local::now()) {
+        *app.detail_hits.borrow_mut() = DetailHits::default();
+        crate::ui::digest::render_pane(frame, area, panel, app, &digest, focused);
+        return;
+    }
 
     let repo = match app.selected_repo() {
         Some(r) => r,
@@ -809,6 +887,9 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // out. Starts at the identity header and grows to take the local branches
     // in; every view that draws no branches keeps the header's own count.
     let mut pinned_rows = header_rows;
+    // The first line and line count of `info`'s remote-only names, when `B`
+    // has them expanded, for the reveal below (FZ-55).
+    let mut expanded_remotes: Option<(usize, usize)> = None;
 
     // Branches. Info lists worktrees in a section of their own; the branches
     // view still draws each inline under the branch it has checked out.
@@ -866,6 +947,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         // place; the `branches` view lists them all with their state.
         if !repo.remote_only_branches.is_empty() {
             if app.expand_remote_branches {
+                expanded_remotes = Some((lines.len(), repo.remote_only_branches.len()));
                 for name in &repo.remote_only_branches {
                     lines.push(Line::from(vec![
                         Span::styled(format!("  {name}"), Style::default().fg(colors::OVERLAY)),
@@ -1113,6 +1195,20 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.extend(rows);
     }
 
+    // The `notes` view: which tree is drawn, pinned with the header, then
+    // the tree, one cursor stop per file.
+    if view == HistoryView::Notes {
+        lines.push(notes_mode_line(app));
+        pinned_rows = lines.len();
+        let base = lines.len();
+        let (rows, tops, selected) = notes_rows(app, repo, width);
+        if let Some(row) = selected {
+            selected_block = Some((base + row, base + row));
+        }
+        block_tops.extend(tops.into_iter().map(|t| base + t));
+        lines.extend(rows);
+    }
+
     // PRs
     // Gated on `-p`: the header row already names the open PRs by number, so
     // this section is the opt-in detail rather than the news itself.
@@ -1270,6 +1366,25 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         scroll = scroll.min(max_scroll);
         app.set_detail_scroll(scroll);
         app.follow_selection.set(false);
+    }
+
+    // Reveal on expand: on the frame `B` opens the remote-only names, scroll
+    // just far enough to show them (`scroll::reveal_offset`). Only the frame
+    // the flag flips, so scrolling back up afterwards is left alone, and only
+    // when the expand opened rows in the scrolling body.
+    let opened = app.expand_remote_branches && !app.remotes_drawn_expanded.get();
+    app.remotes_drawn_expanded.set(app.expand_remote_branches);
+    if opened && let Some((first, count)) = expanded_remotes {
+        let first = first.saturating_sub(shed);
+        let row = |range: std::ops::Range<usize>| -> u16 {
+            let rows: usize = lines[range].iter().map(|l| line_rows(l, area.width)).sum();
+            rows.min(u16::MAX as usize) as u16
+        };
+        let folder = row(0..first);
+        let rows = row(first..first + count);
+        scroll =
+            crate::ui::scroll::reveal_offset(rows, folder, scroll, area.height).min(max_scroll);
+        app.set_detail_scroll(scroll);
     }
 
     // The graph's cursor is a row, so the wash goes on after the block layout
@@ -1453,6 +1568,429 @@ fn mark_cursor_row(lines: &mut [Line<'static>], cursor: u16, width: usize) {
     lines[row] = Line::from(spans);
 }
 
+/// The `notes` tree's two modes in the words the mode line, the empty states
+/// and the help overlay's `m` row all use (FZ-57). `markdown` rather than
+/// `all markdown`: the help row has 26 columns at 80x24, and the shorter
+/// word still says what the second mode adds.
+const NOTES_MODES: [&str; 2] = ["notez", "markdown"];
+
+/// The `notes` view's first line: both modes as a two-state switch, the
+/// active one bracketed and lit as the tab strip lights its view, the other
+/// dim, and the key that flips them (FZ-57): `notes: [notez] markdown  (m)`.
+fn notes_mode_line(app: &App) -> Line<'static> {
+    notes_mode_line_for(app.notes_all_markdown)
+}
+
+/// `notes_mode_line` for either mode, so the tree's width floor can measure
+/// the line it has to hold (`notes_tree_floor`).
+fn notes_mode_line_for(all_markdown: bool) -> Line<'static> {
+    let on = colors::history_view_color(HistoryView::Notes);
+    let active = usize::from(all_markdown);
+    let mut spans = vec![Span::styled(
+        "notes: ",
+        Style::default().fg(colors::OVERLAY),
+    )];
+    for (i, mode) in NOTES_MODES.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(match i == active {
+            true => Span::styled(
+                format!("[{mode}]"),
+                Style::default().fg(on).add_modifier(Modifier::BOLD),
+            ),
+            false => Span::styled(mode.to_string(), Style::default().fg(colors::SUBTEXT)),
+        });
+    }
+    spans.push(Span::styled("  (", Style::default().fg(colors::OVERLAY)));
+    spans.push(Span::styled(
+        "m",
+        Style::default()
+            .fg(colors::TEXT)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(")", Style::default().fg(colors::OVERLAY)));
+    Line::from(spans)
+}
+
+/// The `notes` view's tree for `repo` (FZ-53): its lines, the line each file
+/// starts on, in cursor order, and the line the cursor's file is on. A row
+/// with nothing to list says why in one line.
+fn notes_rows(
+    app: &App,
+    repo: &RepoStatus,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<usize>, Option<usize>) {
+    let say = |text: String| {
+        let line = Line::from(Span::styled(text, Style::default().fg(colors::OVERLAY)));
+        (vec![line], Vec::new(), None)
+    };
+    if repo.path.is_none() {
+        return say("not cloned: no notes to read".to_string());
+    }
+    let notes = match app
+        .selected_notes()
+        .and_then(|(_, state)| state?.tree.as_ref())
+    {
+        None => return say("reading notes…".to_string()),
+        Some(Err(e)) => return say(format!("could not read the repo: {e}")),
+        Some(Ok(notes)) => notes,
+    };
+    let rows = notes.rows(app.notes_all_markdown);
+    if rows.is_empty() {
+        // Named by the mode it belongs to, in the mode line's words.
+        return say(match app.notes_all_markdown {
+            false => format!("{}: no notez/ or .notez/ directory", NOTES_MODES[0]),
+            true => format!("{}: no markdown files", NOTES_MODES[1]),
+        });
+    }
+    let files = rows
+        .iter()
+        .filter(|r| matches!(r, crate::notes::Row::File { .. }))
+        .count();
+    let cursor = app.detail_selected().min(files.saturating_sub(1));
+    let mut lines = Vec::with_capacity(rows.len());
+    let mut tops = Vec::with_capacity(files);
+    let mut selected = None;
+    for row in rows {
+        match row {
+            crate::notes::Row::Section(label) => {
+                if !lines.is_empty() {
+                    lines.push(Line::from(""));
+                }
+                lines.push(Line::from(section_label(&label)));
+            }
+            crate::notes::Row::Dir { depth, name } => {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}{name}/", "  ".repeat(depth)),
+                    Style::default().fg(colors::OVERLAY),
+                )));
+            }
+            crate::notes::Row::File { depth, name, file } => {
+                let is_sel = tops.len() == cursor;
+                if is_sel {
+                    selected = Some(lines.len());
+                }
+                tops.push(lines.len());
+                // The kind's glyph before the name (FZ-62), dim so the name
+                // stays what the eye reads.
+                let glyph = notes
+                    .files
+                    .get(file)
+                    .map_or("", |f| badges::note_kind_icon(f.kind()));
+                let mut spans = vec![
+                    Span::styled(
+                        if is_sel { "▸ " } else { "  " },
+                        Style::default().fg(colors::SAPPHIRE),
+                    ),
+                    Span::raw("  ".repeat(depth)),
+                    Span::styled(format!("{glyph} "), Style::default().fg(colors::OVERLAY)),
+                    Span::styled(name, Style::default().fg(colors::TEXT)),
+                ];
+                if is_sel {
+                    spans = wash(pad_to(spans, width));
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+    }
+    (lines, tops, selected)
+}
+
+/// The card's title in the `notes` layout, folded or open: it describes the
+/// file, so it is named for it rather than for the commit inspector it
+/// replaces there.
+const NOTES_CARD_LABEL: &str = "file";
+
+/// The width of the card's label column: the longest label and a space.
+const CARD_LABEL_W: usize = 12;
+
+/// The highlighted note's body as last read, when it is that file's.
+fn held_note_body(app: &App) -> Option<&crate::app::NoteBody> {
+    let path = app.notes_highlighted()?;
+    app.note_body.as_ref().filter(|b| b.path == path)
+}
+
+/// A file time as the card writes it, in local time, to the minute.
+fn card_time(at: std::time::SystemTime) -> String {
+    chrono::DateTime::<chrono::Local>::from(at)
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
+}
+
+/// git's `%cI` date as the card writes it, the way `card_time` writes a file
+/// time; git's own spelling when it does not parse.
+fn card_commit_time(iso: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(iso) {
+        Ok(at) => at
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
+        Err(_) => iso.to_string(),
+    }
+}
+
+/// The card's lines for the highlighted file (FZ-62): one labelled line per
+/// fact. Size, times and the last commit wait for the background read
+/// (`spawn_note_read`); created is left out where the filesystem keeps no
+/// birth time.
+fn notes_card_lines(app: &App) -> Vec<Line<'static>> {
+    let dim = |text: &str| {
+        Line::from(Span::styled(
+            text.to_string(),
+            Style::default().fg(colors::OVERLAY),
+        ))
+    };
+    let Some(file) = app.notes_highlighted_file() else {
+        return vec![dim("no file selected")];
+    };
+    let row = |label: &str, value: String, color: ratatui::style::Color| {
+        Line::from(vec![
+            Span::styled(
+                format!("{label:<CARD_LABEL_W$}"),
+                Style::default().fg(colors::OVERLAY),
+            ),
+            Span::styled(value, Style::default().fg(color)),
+        ])
+    };
+    let name = file
+        .rel
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let project = app
+        .selected_repo()
+        .map(|r| r.name.clone())
+        .unwrap_or_default();
+    let lives = match &file.notez {
+        Some(dir) => format!("{}/", dir.display()),
+        None => "the repo".to_string(),
+    };
+    let mut lines = vec![
+        row("name", name, colors::TEXT),
+        row("path", file.rel.display().to_string(), colors::TEXT),
+        row("project", project, colors::SAPPHIRE),
+        row("kind", file.kind().label().to_string(), colors::TEXT),
+        row("lives in", lives, colors::TEXT),
+    ];
+    let held = held_note_body(app);
+    let Some(facts) = held.and_then(|b| b.facts.as_ref()) else {
+        lines.push(dim("reading…"));
+        return lines;
+    };
+    if let Some(size) = facts.size {
+        lines.push(row("size", crate::notes::size_label(size), colors::TEXT));
+    }
+    if let Some(at) = facts.modified {
+        lines.push(row("modified", card_time(at), colors::TEXT));
+    }
+    if let Some(at) = facts.created {
+        lines.push(row("created", card_time(at), colors::TEXT));
+    }
+    // git answers after the body (`AppEvent::NoteCommit`).
+    use crate::notes::LastCommit;
+    lines.push(match held.and_then(|b| b.last_commit.as_ref()) {
+        Some(LastCommit::At(iso)) => row("last commit", card_commit_time(iso), colors::TEXT),
+        Some(LastCommit::Untracked) => row("last commit", "untracked".to_string(), colors::OVERLAY),
+        None => row("last commit", "reading…".to_string(), colors::OVERLAY),
+    });
+    lines
+}
+
+/// Draw `lines` wrapped into `inner` from `scroll`, clamped to what this
+/// frame measured, and report the largest useful offset through `max`.
+fn render_scrolled(
+    frame: &mut Frame,
+    inner: Rect,
+    lines: &[Line<'static>],
+    scroll: u16,
+    max: &std::cell::Cell<u16>,
+) {
+    let wrapped: Vec<Line<'static>> = lines
+        .iter()
+        .flat_map(|l| wrap_line(l, inner.width as usize))
+        .collect();
+    render_rows(frame, inner, &wrapped, scroll, max);
+}
+
+/// Draw `rows`, one per screen row as given, into `inner` from `scroll`,
+/// clamped to what this frame measured, and report the largest useful
+/// offset through `max`. Only the rows on screen are copied.
+fn render_rows(
+    frame: &mut Frame,
+    inner: Rect,
+    rows: &[Line<'static>],
+    scroll: u16,
+    max: &std::cell::Cell<u16>,
+) {
+    let max_scroll = u16::try_from(rows.len())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(inner.height);
+    max.set(max_scroll);
+    let visible: Vec<Line> = rows
+        .iter()
+        .skip(scroll.min(max_scroll) as usize)
+        .take(inner.height as usize)
+        .cloned()
+        .collect();
+    frame.render_widget(Paragraph::new(visible), inner);
+}
+
+/// The card where the inspector was, under pane 1 in the `notes` layout
+/// (FZ-62): the highlighted file's facts, scrolled by the inspector's own
+/// offset, since it is that pane (`[3]`, its size and its fold).
+fn render_notes_card(frame: &mut Frame, area: Rect, app: &App) {
+    let focused = app.focused_panel == FocusedPanel::Inspector;
+    let border_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .padding(Padding::new(1, 1, 0, 0))
+        .title_top(crate::ui::panel_title(
+            crate::ui::INSPECTOR_NUM,
+            NOTES_CARD_LABEL,
+            focused,
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    render_scrolled(
+        frame,
+        inner,
+        &notes_card_lines(app),
+        app.inspector_scroll,
+        &app.inspector_max_scroll,
+    );
+}
+
+/// The reader's border title: the file's name, kind and size, then for a
+/// markdown file whether it is drawn rendered or raw, as in
+/// `README.md · markdown · 4.2 KiB · rendered`. The size waits for the read.
+fn reader_title(app: &App) -> Option<String> {
+    let file = app.notes_highlighted_file()?;
+    let name = file.rel.file_name()?.to_string_lossy().into_owned();
+    let mut title = format!(" {name} · {}", file.kind().label());
+    if let Some(size) = held_note_body(app)
+        .and_then(|b| b.facts.as_ref())
+        .and_then(|f| f.size)
+    {
+        title.push_str(&format!(" · {}", crate::notes::size_label(size)));
+    }
+    if file.kind().is_markdown() {
+        title.push_str(match app.reader_raw {
+            true => " · raw",
+            false => " · rendered",
+        });
+    }
+    title.push(' ');
+    Some(title)
+}
+
+/// The held body's markdown render, when the reader draws one: a markdown
+/// file, `p` not on raw, and a render landed (FZ-59). Until one lands the
+/// reader shows the source.
+fn reader_render(app: &App) -> Option<&crate::app::RenderedNote> {
+    let markdown = app
+        .notes_highlighted_file()
+        .is_some_and(|f| f.kind().is_markdown());
+    if !markdown || app.reader_raw {
+        return None;
+    }
+    let body = held_note_body(app)?;
+    matches!(body.text, Some(Ok(_)))
+        .then_some(body.rendered.as_ref())
+        .flatten()
+}
+
+/// The `notes` layout's reader, right of the tree in pane 2 (FZ-62): the
+/// highlighted file's body, wrapped to the pane, with its own scroll
+/// (`App::reader_scroll`). A markdown file is drawn rendered
+/// (`ui::markdown`, FZ-59), its rows laid out off the UI thread at the
+/// width this pass records; `p` shows its source, which every other kind
+/// always shows, raw as `notes::read_body` delivers it. A cut body says so
+/// on its last line, as the read leaves it.
+fn render_reader(frame: &mut Frame, area: Rect, app: &App) {
+    let focused = app.focused_panel == FocusedPanel::Reader;
+    let border_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
+    let title_style = match focused {
+        true => Style::default()
+            .fg(colors::LAVENDER)
+            .add_modifier(Modifier::BOLD),
+        false => Style::default().fg(colors::OVERLAY),
+    };
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .padding(Padding::new(1, 1, 0, 0));
+    if let Some(title) = reader_title(app) {
+        block = block.title_top(Line::from(Span::styled(title, title_style)).left_aligned());
+    }
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    // One `H`/`L` page and the render width, which only this pass can
+    // measure.
+    app.reader_view_height.set(inner.height);
+    app.reader_width.set(inner.width);
+    if let Some(rendered) = reader_render(app) {
+        let rows: std::borrow::Cow<[Line<'static>]> = match rendered.width == inner.width {
+            true => std::borrow::Cow::Borrowed(&rendered.lines),
+            // Laid out for the width before a resize, until the render
+            // at this one lands (`App::claim_note_render`).
+            false => std::borrow::Cow::Owned(
+                rendered
+                    .lines
+                    .iter()
+                    .flat_map(|l| wrap_line(l, inner.width as usize))
+                    .collect(),
+            ),
+        };
+        render_rows(
+            frame,
+            inner,
+            &rows,
+            app.reader_scroll,
+            &app.reader_max_scroll,
+        );
+        return;
+    }
+    let dim = |text: String| Line::from(Span::styled(text, Style::default().fg(colors::OVERLAY)));
+    let lines: Vec<Line<'static>> = match app.notes_highlighted_file() {
+        None => vec![dim("no file selected".to_string())],
+        Some(_) => match held_note_body(app).and_then(|b| b.text.as_ref()) {
+            None => vec![dim("reading…".to_string())],
+            Some(Err(e)) => vec![Line::from(Span::styled(
+                format!("could not read: {e}"),
+                Style::default().fg(colors::PEACH),
+            ))],
+            Some(Ok(text)) => text
+                .lines()
+                .map(|l| {
+                    Line::from(Span::styled(
+                        l.to_string(),
+                        Style::default().fg(colors::TEXT),
+                    ))
+                })
+                .collect(),
+        },
+    };
+    render_scrolled(
+        frame,
+        inner,
+        &lines,
+        app.reader_scroll,
+        &app.reader_max_scroll,
+    );
+}
+
 /// Render the `[3] inspector` pane: the full details of the commit the detail
 /// pane's cursor is on -- a two-line masthead (hash, then author · date), the
 /// full message (subject bold, body untruncated), and the per-file diffstat --
@@ -1483,17 +2021,31 @@ fn inspector_empty_text(app: &App) -> String {
 
 fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     if app.inspector_folded {
+        let label = match app.notes_layout() {
+            true => NOTES_CARD_LABEL,
+            false => "inspector",
+        };
         crate::ui::render_folded(
             frame,
             area,
             crate::ui::INSPECTOR_NUM,
-            "inspector",
+            label,
             app.focused_panel == FocusedPanel::Inspector,
         );
         return;
     }
+    // A digest line's detail (FZ-45), ahead of the `ci` view's run, which
+    // the digest hides.
+    if let Some(digest) = app.digest(chrono::Local::now()) {
+        crate::ui::digest::render_inspector(frame, area, app, &digest);
+        return;
+    }
     if app.inspects_ci_run() {
         render_ci_inspector(frame, area, app);
+        return;
+    }
+    if app.notes_wanted() {
+        render_notes_card(frame, area, app);
         return;
     }
     let focused = app.focused_panel == FocusedPanel::Inspector;
@@ -1589,10 +2141,7 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
             file_lines.push(file_stat_line(f));
         }
         if c.files.len() > INSPECTOR_FILE_CAP {
-            file_lines.push(Line::from(Span::styled(
-                format!("… and {} more", c.files.len() - INSPECTOR_FILE_CAP),
-                Style::default().fg(colors::OVERLAY),
-            )));
+            file_lines.push(more_line(c.files.len() - INSPECTOR_FILE_CAP));
         }
     }
 
@@ -2338,7 +2887,7 @@ fn refresh_date_line(rest: &str) -> Option<String> {
 /// `ceil(len / width)` while `Paragraph` breaks at spaces, so it under-reports
 /// every wrapped paragraph and the tail of a long commit body could not be
 /// scrolled to.
-fn wrap_line<'a>(line: &Line<'a>, width: usize) -> Vec<Line<'a>> {
+pub fn wrap_line<'a>(line: &Line<'a>, width: usize) -> Vec<Line<'a>> {
     let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     if width == 0 || text.chars().count() <= width {
         return vec![line.clone()];
@@ -4499,6 +5048,9 @@ mod tests {
             // `ci` lists runs, so it is drawn with the recorded runs held.
             let text = match view {
                 HistoryView::Ci => ci_view_text(92),
+                HistoryView::Notes => {
+                    notes_pane_text(&notes_view_app(&[("notez/a.md", Some("notez"))]))
+                }
                 _ => pane_text(view, 92),
             };
             assert!(
@@ -4867,7 +5419,7 @@ mod tests {
             app.history_view = view;
             // A run is not a commit; FZ-30f details runs.
             let expected = match view {
-                HistoryView::Ci => None,
+                HistoryView::Ci | HistoryView::Notes => None,
                 _ => Some("a1b2c3d"),
             };
             assert_eq!(
@@ -5236,6 +5788,7 @@ mod tests {
             remote_branches: vec![],
             work_key: None,
             fetch: crate::model::FetchFacts::default(),
+            authors: Default::default(),
         }
     }
 
@@ -6599,6 +7152,101 @@ mod tests {
         assert_eq!(walked, drawn, "cursor order disagrees with drawn order");
     }
 
+    /// FZ-56: the repo list drawn for a ranked owner and author search, as
+    /// screen rows, with the app that drew it.
+    fn draw_people_search(query: &str) -> (crate::app::App, Vec<String>) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut tools = repo("tools-kestrel", RepoKind::Public, Some("Gaurgle"));
+        tools.commits = vec![crate::model::Commit {
+            hash: "a1".to_string(),
+            message: "subject".to_string(),
+            body: String::new(),
+            author: "Andreas Roos".to_string(),
+            date: None,
+            insertions: 0,
+            deletions: 0,
+            files: vec![],
+        }];
+        let web = repo("tools-web", RepoKind::Org, Some("kestrel-labs"));
+        let mut scratch = repo("tools-scratch", RepoKind::Unknown, None);
+        scratch.location = RepoLocation::LocalOnly;
+        scratch.commits = tools.commits.clone();
+        scratch.commits[0].author = "Kestrel Hansen".to_string();
+
+        let mut app = crate::app::App::new(vec![scratch, web, tools], "t".to_string(), 120, 40);
+        app.search_query = query.to_string();
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| render_repo_list(f, f.area(), &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let screen = (0..40u16)
+            .map(|y| (0..120u16).map(|x| buf[(x, y)].symbol()).collect())
+            .collect();
+        (app, screen)
+    }
+
+    /// The ranked order drawn for an owner query is the order the cursor
+    /// walks, with the name hit first, then the organisation, then the
+    /// contributor: one list, so a click lands on the row it names.
+    #[test]
+    fn an_owner_search_draws_the_order_the_cursor_walks() {
+        let (app, screen) = draw_people_search("kestrel");
+        let names = ["tools-kestrel", "tools-web", "tools-scratch"];
+        let drawn: Vec<&str> = screen
+            .iter()
+            .filter_map(|row| names.into_iter().find(|n| row.contains(n)))
+            .collect();
+        let walked: Vec<&str> = app
+            .visible_repos()
+            .iter()
+            .map(|(_, r)| r.name.as_str())
+            .collect();
+        assert_eq!(drawn, names, "drew: {screen:#?}");
+        assert_eq!(walked, drawn, "cursor order disagrees with drawn order");
+    }
+
+    /// A hit on the owner, organisation or an author is marked after the
+    /// name, dimmed; a name hit carries no mark.
+    #[test]
+    fn a_non_name_search_hit_is_marked_with_its_field() {
+        let row = |screen: &[String], name: &str| {
+            screen
+                .iter()
+                .find(|row| row.contains(name))
+                .cloned()
+                .unwrap_or_else(|| panic!("{name} not drawn: {screen:#?}"))
+        };
+        let (_, screen) = draw_people_search("kestrel");
+        assert!(
+            row(&screen, "tools-kestrel").contains("tools-kestrel ·"),
+            "a name hit is unmarked"
+        );
+        assert!(row(&screen, "tools-web").contains("tools-web org ·"));
+        assert!(row(&screen, "tools-scratch").contains("tools-scratch author ·"));
+
+        let (_, screen) = draw_people_search("gaurgle");
+        assert!(row(&screen, "tools-kestrel").contains("tools-kestrel owner ·"));
+
+        // Dimmed in the strip's own grey, not a new color.
+        let (app, _) = draw_people_search("gaurgle");
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| render_repo_list(f, f.area(), &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let y = (0..40u16)
+            .find(|&y| {
+                (0..120u16)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("owner")
+            })
+            .unwrap();
+        let line: String = (0..120u16).map(|x| buf[(x, y)].symbol()).collect();
+        let x = line.find("owner").unwrap();
+        let x = line[..x].chars().count() as u16;
+        assert_eq!(buf[(x, y)].fg, colors::OVERLAY);
+    }
+
     /// A local-only repo has no `pushedAt` to date it by -- that is what puts
     /// it in "local changes" in the first place -- so `info` is the only
     /// place its age is legible. It is also the number the time window uses
@@ -6774,5 +7422,834 @@ mod tests {
         assert_eq!((off_hash.entry, off_hash.hash), (Some(2), None));
 
         assert_eq!(hits.at(12, 7), None, "below the last line");
+    }
+
+    // --- FZ-55: a scroll margin on every list, reveal on expand ---
+
+    /// Pane 1 drawn `height` rows tall: the `visible_repos` index of each repo
+    /// row on screen, top to bottom, and the index of the selected one.
+    fn drawn_repo_window(app: &crate::app::App, height: u16) -> (Vec<usize>, usize) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let names: Vec<String> = app
+            .visible_repos()
+            .iter()
+            .map(|(_, r)| format!(" {} ", r.name))
+            .collect();
+        let mut term = Terminal::new(TestBackend::new(60, height)).unwrap();
+        term.draw(|f| render_repo_list(f, f.area(), app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let drawn = (0..height)
+            .filter_map(|y| {
+                let row: String = (0..60u16).map(|x| buf[(x, y)].symbol()).collect();
+                names.iter().position(|n| row.contains(n.as_str()))
+            })
+            .collect();
+        let selected = format!(" {} ", app.selected_repo().expect("a selection").name);
+        let selected = names.iter().position(|n| *n == selected).expect("listed");
+        (drawn, selected)
+    }
+
+    /// Walks pane 1 down to the last repo and back, checking the drawn
+    /// window after every step: `margin` rows stay past the cursor on the
+    /// side it heads for, fewer only where the list itself runs out.
+    fn walk_repo_list(height: u16, margin: usize) {
+        let repos = (0..40)
+            .map(|i| repo(&format!("list-{i:02}"), RepoKind::Public, None))
+            .collect();
+        let mut app = crate::app::App::new(repos, "t".to_string(), 60, height);
+        let last = app.visible_repos().len() - 1;
+        let mut parked = false;
+        let check = |app: &crate::app::App, down: bool, parked: &mut bool| {
+            let (drawn, selected) = drawn_repo_window(app, height);
+            let pos = drawn
+                .iter()
+                .position(|&i| i == selected)
+                .expect("on screen");
+            let (above, below) = (pos, drawn.len() - 1 - pos);
+            if down {
+                assert!(
+                    below >= margin.min(last - selected),
+                    "cursor {selected} has {below} rows below it: {drawn:?}"
+                );
+                *parked |= drawn[0] > 0 && below == margin;
+            } else {
+                assert!(
+                    above >= margin.min(selected),
+                    "cursor {selected} has {above} rows above it: {drawn:?}"
+                );
+            }
+        };
+        for _ in 0..last {
+            app.move_down();
+            check(&app, true, &mut parked);
+        }
+        assert!(parked, "the list never scrolled with the margin held");
+        for _ in 0..last {
+            app.move_up();
+            check(&app, false, &mut parked);
+        }
+    }
+
+    /// Twenty rows less the border and the filter strip: sixteen list rows,
+    /// room for the full margin pane 2 keeps.
+    #[test]
+    fn the_repo_list_keeps_the_shared_margin_past_the_cursor() {
+        assert_eq!(crate::app::scrolloff_for(16), crate::app::SCROLLOFF);
+        walk_repo_list(20, usize::from(crate::app::SCROLLOFF));
+    }
+
+    /// Eight list rows cannot hold the full margin on each side of the
+    /// cursor, so it shrinks to (8 - 1) / 2 = 3 rather than pinning it.
+    #[test]
+    fn a_short_repo_list_shrinks_the_margin() {
+        assert_eq!(crate::app::scrolloff_for(8), 3);
+        walk_repo_list(12, 3);
+    }
+
+    /// A repo whose commits, reflog and local branches each run to `n`
+    /// one-row entries, so every one of those views overflows the pane.
+    fn long_lists_repo(n: usize) -> RepoStatus {
+        let mut r = busy_repo();
+        r.graph = (0..n)
+            .map(|i| crate::model::GraphLine {
+                lanes: vec![crate::graph::commit_cell()],
+                hash: format!("h{i:06}"),
+                is_merge: false,
+                refs: vec![],
+                author: "Gaurgle".to_string(),
+                message: format!("subject {i}"),
+            })
+            .collect();
+        r.reflog = (0..n)
+            .map(|i| crate::model::ReflogEntry {
+                hash: format!("h{i:06}"),
+                action: "commit".to_string(),
+                description: format!("subject {i}"),
+            })
+            .collect();
+        r.branches = (0..n)
+            .map(|i| crate::model::BranchStatus {
+                name: format!("branch-{i:02}"),
+                upstream: Some(format!("origin/branch-{i:02}")),
+                behind: 0,
+                ahead: 0,
+                is_head: i == 0,
+                tip: String::new(),
+            })
+            .collect();
+        r
+    }
+
+    /// Draws pane 2 `height` rows tall and returns the cursor's rows of
+    /// margin above and below it on screen, and the rows of content past it
+    /// either way, as the renderer measured them.
+    fn detail_cursor_margins(app: &crate::app::App, height: u16) -> (u16, u16, u16, u16) {
+        let body = draw_detail(app, height);
+        let top = app.detail_row_tops.borrow()[app.detail_selected()];
+        let pos = top - app.detail_scroll();
+        let content = app.detail_max_scroll.get() + body;
+        (pos, body - 1 - pos, top, content - 1 - top)
+    }
+
+    /// Draws pane 2 `height` rows tall and returns its scrolling body's
+    /// height, as the renderer measured it.
+    fn draw_detail(app: &crate::app::App, height: u16) -> u16 {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut term = Terminal::new(TestBackend::new(96, height)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), app)).unwrap();
+        app.detail_view_height.get()
+    }
+
+    /// Steps pane 2's cursor down `steps` entries and back with `j` and `k`,
+    /// checking the margin after every draw.
+    fn walk_detail(view: HistoryView, height: u16, steps: usize) {
+        let mut app = crate::app::App::new(vec![long_lists_repo(80)], "t".to_string(), 96, 40);
+        app.history_view = view;
+        app.focused_panel = crate::app::FocusedPanel::Detail;
+        let margin = crate::app::scrolloff_for(draw_detail(&app, height));
+        let mut parked = false;
+        for _ in 0..steps {
+            app.detail_nav_down();
+            let (_, below, _, past) = detail_cursor_margins(&app, height);
+            assert!(below >= margin.min(past), "{view:?}: {below} rows below");
+            parked |= app.detail_scroll() > 0 && below == margin;
+        }
+        assert!(parked, "{view:?}: never scrolled with the margin held");
+        for _ in 0..steps {
+            app.detail_nav_up();
+            let (above, _, before, _) = detail_cursor_margins(&app, height);
+            assert!(above >= margin.min(before), "{view:?}: {above} rows above");
+        }
+    }
+
+    /// `commits`, the longest list, through the cursor-follow path `j` and
+    /// `k` take: the full `SCROLLOFF` past the cursor in a tall pane, the
+    /// shrunken margin in a short one.
+    #[test]
+    fn the_commit_list_keeps_the_shared_margin_past_the_cursor() {
+        let mut app = crate::app::App::new(vec![long_lists_repo(80)], "t".to_string(), 96, 40);
+        app.history_view = HistoryView::Commits;
+        let tall = draw_detail(&app, 24);
+        assert_eq!(
+            crate::app::scrolloff_for(tall),
+            crate::app::SCROLLOFF,
+            "the pane is too short for the full margin: body {tall}"
+        );
+        walk_detail(HistoryView::Commits, 24, 60);
+
+        let short = draw_detail(&app, 10);
+        assert!(
+            crate::app::scrolloff_for(short) < crate::app::SCROLLOFF,
+            "body {short}"
+        );
+        walk_detail(HistoryView::Commits, 10, 60);
+    }
+
+    /// One margin for every view the cursor walks: each parks its cursor the
+    /// same `scrolloff_for` rows off the bottom, so a change to that function
+    /// moves all of them.
+    #[test]
+    fn every_history_view_parks_its_cursor_on_the_shared_margin() {
+        for view in [
+            HistoryView::Commits,
+            HistoryView::Reflog,
+            HistoryView::Branches,
+        ] {
+            let mut app = crate::app::App::new(vec![long_lists_repo(80)], "t".to_string(), 96, 40);
+            app.history_view = view;
+            app.focused_panel = crate::app::FocusedPanel::Detail;
+            draw_detail(&app, 24);
+            for _ in 0..40 {
+                app.detail_nav_down();
+                draw_detail(&app, 24);
+            }
+            let (_, below, _, _) = detail_cursor_margins(&app, 24);
+            let body = app.detail_view_height.get();
+            assert_eq!(below, crate::app::scrolloff_for(body), "{view:?}");
+            walk_detail(view, 24, 50);
+        }
+    }
+
+    /// Draws `info` `height` rows tall and returns the screen text.
+    fn info_text(app: &crate::app::App, height: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut term = Terminal::new(TestBackend::new(92, height)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..92u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Short enough that the branches block scrolls with the body (nine
+    /// rows, a margin of four), so the remote-only summary sits low in it
+    /// and the names `B` opens run past the bottom edge.
+    const REVEAL_HEIGHT: u16 = 18;
+
+    /// The body row, counted from the pane's top edge, holding `needle`.
+    fn text_row_of(text: &str, needle: &str) -> Option<usize> {
+        text.lines().position(|l| l.contains(needle))
+    }
+
+    /// `B` on a remotes list that overflows the pane scrolls it into view:
+    /// five names open one row past the bottom edge, and the reveal brings
+    /// the last onto the bottom row.
+    #[test]
+    fn expanding_the_remotes_reveals_the_rows_it_opened() {
+        let mut r = spread_repo();
+        r.remote_only_branches.truncate(5);
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), 92, 40);
+        app.history_view = HistoryView::Info;
+        let before = info_text(&app, REVEAL_HEIGHT);
+        assert!(before.contains("5 remote branches not fetched"), "{before}");
+        assert_eq!(app.detail_scroll(), 0);
+
+        app.expand_remote_branches = true;
+        let after = info_text(&app, REVEAL_HEIGHT);
+        assert_eq!(app.detail_scroll(), 1, "the pane did not move:\n{after}");
+        // The last text row sits above the bottom border.
+        assert_eq!(
+            text_row_of(&after, "spare-4 "),
+            Some(usize::from(REVEAL_HEIGHT) - 2),
+            "the last opened row is not on the bottom row:\n{after}"
+        );
+        assert!(after.contains("spare-0 "), "{after}");
+    }
+
+    /// Twelve names cannot all show in a nine-row body, so the reveal stops
+    /// with the first of them on the top margin rather than scrolling it off.
+    #[test]
+    fn a_reveal_taller_than_the_pane_stops_at_the_top_margin() {
+        let mut app = crate::app::App::new(vec![spread_repo()], "t".to_string(), 92, 40);
+        app.history_view = HistoryView::Info;
+        info_text(&app, REVEAL_HEIGHT);
+        app.expand_remote_branches = true;
+        let after = info_text(&app, REVEAL_HEIGHT);
+        assert!(app.detail_scroll() > 0, "the pane did not move:\n{after}");
+        let body_top = usize::from(REVEAL_HEIGHT - app.detail_view_height.get() - 1);
+        let margin = usize::from(crate::app::scrolloff_for(app.detail_view_height.get()));
+        assert_eq!(
+            text_row_of(&after, "spare-0 "),
+            Some(body_top + margin),
+            "the expanded row is not on the top margin:\n{after}"
+        );
+    }
+
+    /// Without the reveal the names open below the fold, which is the bug:
+    /// the same draw with the expand already recorded leaves the offset at 0.
+    /// Also covers "only on the frame it flips": scrolling back up after the
+    /// reveal is left alone.
+    #[test]
+    fn the_reveal_fires_once_per_expand() {
+        let mut app = crate::app::App::new(vec![spread_repo()], "t".to_string(), 92, 40);
+        app.history_view = HistoryView::Info;
+        info_text(&app, REVEAL_HEIGHT);
+        app.expand_remote_branches = true;
+        info_text(&app, REVEAL_HEIGHT);
+        assert!(app.detail_scroll() > 0);
+
+        app.set_detail_scroll(0);
+        let text = info_text(&app, REVEAL_HEIGHT);
+        assert_eq!(app.detail_scroll(), 0, "the reveal ran again:\n{text}");
+
+        // Collapsing never scrolls, and expanding again reveals again.
+        app.expand_remote_branches = false;
+        info_text(&app, REVEAL_HEIGHT);
+        assert_eq!(app.detail_scroll(), 0);
+        app.expand_remote_branches = true;
+        info_text(&app, REVEAL_HEIGHT);
+        assert!(app.detail_scroll() > 0, "a second expand did not reveal");
+    }
+
+    /// An expand that opens no rows (no remote-only branches, or a view that
+    /// does not draw them) leaves the pane where it was.
+    #[test]
+    fn an_expand_that_opens_nothing_does_not_scroll() {
+        let mut r = spread_repo();
+        r.remote_only_branches.clear();
+        let mut app = crate::app::App::new(vec![r], "t".to_string(), 92, 40);
+        app.history_view = HistoryView::Info;
+        info_text(&app, REVEAL_HEIGHT);
+        app.expand_remote_branches = true;
+        info_text(&app, REVEAL_HEIGHT);
+        assert_eq!(app.detail_scroll(), 0);
+
+        // `B` pressed in `commits`, then back to `info`: nothing opened on
+        // the frame it flipped, so nothing is revealed later.
+        let mut app = crate::app::App::new(vec![spread_repo()], "t".to_string(), 92, 40);
+        app.history_view = HistoryView::Commits;
+        info_text(&app, REVEAL_HEIGHT);
+        app.expand_remote_branches = true;
+        info_text(&app, REVEAL_HEIGHT);
+        app.history_view = HistoryView::Info;
+        app.set_detail_scroll(0);
+        info_text(&app, REVEAL_HEIGHT);
+        assert_eq!(app.detail_scroll(), 0);
+    }
+
+    // --- The `notes` view (FZ-53) ---
+
+    /// An app on `busy_repo` showing `notes`, with a walk of `files` landed.
+    fn notes_view_app(files: &[(&str, Option<&str>)]) -> crate::app::App {
+        let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), 100, 44);
+        app.view = crate::app::View::Detail;
+        app.history_view = HistoryView::Notes;
+        app.inspector_folded = false;
+        let key = app.repos[0].path.clone().expect("cloned");
+        let notes = crate::notes::Notes {
+            files: files
+                .iter()
+                .map(|(rel, notez)| crate::notes::NoteFile {
+                    rel: (*rel).into(),
+                    notez: notez.map(Into::into),
+                })
+                .collect(),
+        };
+        let walk = crate::app::NotesWalk {
+            root: key.clone().into(),
+            key,
+            generation: 0,
+        };
+        app.apply_notes_walk(walk, Ok(notes));
+        app
+    }
+
+    fn notes_pane_text(app: &crate::app::App) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..30u16)
+            .map(|y| {
+                (0..100u16)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The tree draws each notes directory as a section, nested directories
+    /// indented, and the caret on the cursor's file; the cursor walks files
+    /// only, so its second stop is the nested file, not the directory.
+    #[test]
+    fn the_notes_view_draws_sections_and_marks_the_file() {
+        let mut app = notes_view_app(&[
+            ("notez/a.md", Some("notez")),
+            ("notez/sub/b.md", Some("notez")),
+            ("crates/x/notez/c.md", Some("crates/x/notez")),
+            ("docs/guide.md", None),
+        ]);
+        app.select_commit_down();
+        let text = notes_pane_text(&app);
+        for want in [
+            "notes: [notez] markdown  (m)",
+            "notez/",
+            "  sub/",
+            "crates/x/notez/",
+        ] {
+            assert!(text.contains(want), "{want} missing:\n{text}");
+        }
+        let glyph = badges::note_kind_icon(crate::notes::NoteKind::Markdown);
+        assert!(
+            text.contains(&format!("▸   {glyph} b.md")),
+            "caret on the nested file:\n{text}"
+        );
+        assert!(!text.contains("guide.md"), "docs only under the toggle");
+        assert_eq!(app.detail_row_tops.borrow().len(), 3, "one stop per file");
+
+        app.toggle_notes_markdown();
+        let text = notes_pane_text(&app);
+        assert!(
+            text.contains("docs/") && text.contains("guide.md"),
+            "{text}"
+        );
+    }
+
+    /// Each empty case says what it is in one line.
+    #[test]
+    fn the_notes_view_says_why_it_lists_nothing() {
+        let app = notes_view_app(&[("docs/guide.md", None)]);
+        assert!(notes_pane_text(&app).contains("no notez/ or .notez/ directory"));
+
+        let mut app = notes_view_app(&[]);
+        app.notes.clear();
+        assert!(notes_pane_text(&app).contains("reading notes…"));
+
+        app.repos[0].path = None;
+        assert!(notes_pane_text(&app).contains("not cloned: no notes to read"));
+    }
+
+    /// The reader (FZ-62, formerly the inspector) reads the highlighted file:
+    /// its name in the border, then its body, or the read's error in place.
+    #[test]
+    fn the_notes_inspector_shows_the_body_or_the_error() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let draw = |app: &crate::app::App| {
+            let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
+            term.draw(|f| render_reader(f, f.area(), app)).unwrap();
+            let buf = term.backend().buffer().clone();
+            (0..12u16)
+                .map(|y| (0..60u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        let read = app.claim_note_read().expect("a read");
+        assert!(draw(&app).contains("reading…"));
+
+        app.apply_note_read(read.clone(), Ok("# Plan\nship it".to_string()));
+        let text = draw(&app);
+        for want in ["a.md · markdown", "# Plan", "ship it"] {
+            assert!(text.contains(want), "{want} missing:\n{text}");
+        }
+
+        app.note_body.as_mut().unwrap().text = None;
+        app.apply_note_read(read, Err("permission denied".to_string()));
+        assert!(draw(&app).contains("could not read: permission denied"));
+    }
+
+    // --- The `notes` reader and card (FZ-62), the mode line (FZ-57) ---
+
+    /// Draw `paint` into a `w` by `h` buffer and return its rows.
+    fn drawn_rows(w: u16, h: u16, paint: impl FnOnce(&mut Frame)) -> Vec<String> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(paint).unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect()
+    }
+
+    /// The first line names both modes, the active one bracketed, and `m`
+    /// moves the brackets; each empty state names the mode it belongs to.
+    #[test]
+    fn the_mode_line_marks_the_active_mode_and_m_moves_it() {
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        let text = notes_pane_text(&app);
+        assert!(text.contains("notes: [notez] markdown  (m)"), "{text}");
+
+        app.toggle_notes_markdown();
+        let text = notes_pane_text(&app);
+        assert!(text.contains("notes: notez [markdown]  (m)"), "{text}");
+
+        let mut app = notes_view_app(&[]);
+        assert!(notes_pane_text(&app).contains("notez: no notez/ or .notez/ directory"));
+        app.toggle_notes_markdown();
+        assert!(notes_pane_text(&app).contains("markdown: no markdown files"));
+    }
+
+    /// Each file wears its kind's glyph before its name, the Nerd Font icon
+    /// or, under `icons = "plain"`, its one-letter stand-in.
+    #[test]
+    fn the_tree_draws_each_files_kind_glyph_in_both_sets() {
+        use crate::notes::NoteKind;
+        let files = [
+            ("notez/TODO.md", NoteKind::Todo),
+            ("notez/diagram.png", NoteKind::Other),
+            ("notez/notes.txt", NoteKind::Text),
+            ("notez/plan.md", NoteKind::Markdown),
+        ];
+        let walk: Vec<(&str, Option<&str>)> =
+            files.iter().map(|(f, _)| (*f, Some("notez"))).collect();
+        for icons in [crate::app::Icons::Nerd, crate::app::Icons::Plain] {
+            badges::set_active_icons(icons);
+            let app = notes_view_app(&walk);
+            let text = notes_pane_text(&app);
+            for (rel, kind) in files {
+                let name = rel.trim_start_matches("notez/");
+                let want = format!("{} {name}", badges::note_kind_icon(kind));
+                assert!(text.contains(&want), "{icons:?}: {want} missing:\n{text}");
+            }
+        }
+        assert!(notes_pane_text(&notes_view_app(&walk)).contains("T TODO.md"));
+    }
+
+    /// The reader's border names the file, its kind and size, and its body
+    /// scrolls by its own offset: the tree's cursor stays where it was, and
+    /// a scrolled body starts further down.
+    #[test]
+    fn the_reader_titles_the_file_and_scrolls_its_body() {
+        let mut app = notes_view_app(&[("notez/README.md", Some("notez"))]);
+        app.focused_panel = FocusedPanel::Reader;
+        let read = app.claim_note_read().expect("a read");
+        let body: Vec<String> = (1..=40).map(|i| format!("line {i}")).collect();
+        let facts = crate::notes::NoteFacts {
+            size: Some(4300),
+            ..Default::default()
+        };
+        app.apply_note_facts(&read, facts);
+        app.apply_note_read(read, Ok(body.join("\n")));
+
+        let draw = |app: &crate::app::App| drawn_rows(50, 12, |f| render_reader(f, f.area(), app));
+        let rows = draw(&app);
+        assert!(
+            rows[0].contains("README.md · markdown · 4.2 KiB"),
+            "{}",
+            rows[0]
+        );
+        assert!(rows[1].contains("line 1 "), "{}", rows[1]);
+
+        assert_eq!(app.reader_view_height.get(), 10, "one H/L page measured");
+        app.scroll_reader(10);
+        let rows = draw(&app);
+        assert!(rows[1].contains("line 11"), "{}", rows.join("\n"));
+        assert!(!rows.join("\n").contains("line 1 "), "{}", rows.join("\n"));
+        assert_eq!(app.detail_selected(), 0, "the tree's cursor did not move");
+
+        // Past the end it parks on the last page, as the inspector does.
+        app.scroll_reader(1000);
+        let rows = draw(&app);
+        assert!(rows[10].contains("line 40"), "{}", rows.join("\n"));
+    }
+
+    // --- Rendered markdown in the reader (FZ-59) ---
+
+    const MARKDOWN_FIXTURE: &str = "# Plan\n\n- ship *it* now\n- run `cargo test`\n\n\
+                                    See [the docs](https://x.io).";
+
+    /// Draw the reader into a 60 by 12 buffer.
+    fn reader_buffer(app: &crate::app::App) -> ratatui::buffer::Buffer {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        term.draw(|f| render_reader(f, f.area(), app)).unwrap();
+        term.backend().buffer().clone()
+    }
+
+    fn buffer_rows(buf: &ratatui::buffer::Buffer) -> Vec<String> {
+        let area = buf.area;
+        (0..area.height)
+            .map(|y| (0..area.width).map(|x| buf[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    /// The style of the cell where `needle` starts on screen.
+    fn style_at(buf: &ratatui::buffer::Buffer, needle: &str) -> Style {
+        for (y, row) in buffer_rows(buf).iter().enumerate() {
+            let cells: Vec<char> = row.chars().collect();
+            let want: Vec<char> = needle.chars().collect();
+            if let Some(x) = cells.windows(want.len()).position(|w| w == want) {
+                return buf[(x as u16, y as u16)].style();
+            }
+        }
+        panic!("{needle} not on screen:\n{}", buffer_rows(buf).join("\n"));
+    }
+
+    /// Land `text` as the reader's body the way the event loop does: the
+    /// read claimed at the width the reader last drew, rendered with it.
+    fn land_rendered(app: &mut crate::app::App, text: &str) {
+        reader_buffer(app);
+        let read = app.claim_note_read().expect("a read");
+        let width = read.render_width.expect("a markdown read renders");
+        let lines = crate::ui::markdown::render_markdown(text, width);
+        let rendered = crate::app::RenderedNote { width, lines };
+        app.apply_note_rendered(&read.path, read.generation, rendered);
+        app.apply_note_read(read, Ok(text.to_string()));
+    }
+
+    /// FZ-59: a markdown file draws rendered by default, through the
+    /// `colors.rs` tokens: the heading in the title colour, bold, without
+    /// its `#`; list bullets; emphasis italic; code in the code colour; a
+    /// link's text in the link colour beside its url. The border says
+    /// `rendered`; `p` shows the source unchanged and the border says `raw`.
+    #[test]
+    fn the_reader_renders_markdown_and_r_shows_the_source() {
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        land_rendered(&mut app, MARKDOWN_FIXTURE);
+        let buf = reader_buffer(&app);
+        let text = buffer_rows(&buf).join("\n");
+        for want in [
+            "a.md · markdown · rendered",
+            "Plan",
+            "• ship it now",
+            "• run cargo test",
+            "See the docs (https://x.io).",
+        ] {
+            assert!(text.contains(want), "{want} missing:\n{text}");
+        }
+        assert!(!text.contains("# Plan"), "the heading's # is gone:\n{text}");
+        let heading = style_at(&buf, "Plan");
+        assert_eq!(heading.fg, Some(colors::LAVENDER), "the title colour");
+        assert!(heading.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            style_at(&buf, "it now")
+                .add_modifier
+                .contains(Modifier::ITALIC)
+        );
+        assert_eq!(style_at(&buf, "cargo test").fg, Some(colors::SUBTEXT));
+        assert_eq!(style_at(&buf, "the docs").fg, Some(colors::SAPPHIRE));
+        assert_eq!(style_at(&buf, "(https").fg, Some(colors::OVERLAY));
+
+        app.toggle_reader_raw();
+        let text = buffer_rows(&reader_buffer(&app)).join("\n");
+        assert!(text.contains("a.md · markdown · raw"), "{text}");
+        for line in MARKDOWN_FIXTURE.lines().filter(|l| !l.is_empty()) {
+            assert!(text.contains(line), "source line {line:?} missing:\n{text}");
+        }
+    }
+
+    /// FZ-59: the scroll bound counts rendered rows, not source lines: 40
+    /// source lines that render as one paragraph of a few rows do not
+    /// scroll, and raw they scroll by the source's 40 rows.
+    #[test]
+    fn the_rendered_reader_scrolls_by_rendered_rows() {
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        let body: Vec<String> = (1..=40).map(|i| format!("line {i}")).collect();
+        let body = body.join("\n");
+        land_rendered(&mut app, &body);
+        let rows = crate::ui::markdown::render_markdown(&body, app.reader_width.get()).len();
+        reader_buffer(&app);
+        let height = app.reader_view_height.get();
+        let want = u16::try_from(rows).unwrap().saturating_sub(height);
+        assert_eq!(app.reader_max_scroll.get(), want, "{rows} rendered rows");
+        assert!(rows < 40, "one paragraph, {rows} rows");
+
+        app.toggle_reader_raw();
+        reader_buffer(&app);
+        assert_eq!(app.reader_max_scroll.get(), 40 - height, "raw rows");
+    }
+
+    /// FZ-59: a text file is always raw: no render is asked for, its border
+    /// names no mode, and `p` does not change what it shows.
+    #[test]
+    fn a_text_file_stays_raw_whatever_the_toggle() {
+        let mut app = notes_view_app(&[("notez/notes.txt", Some("notez"))]);
+        reader_buffer(&app);
+        let read = app.claim_note_read().expect("a read");
+        assert_eq!(read.render_width, None, "no render for text");
+        app.apply_note_read(read, Ok("# not a heading".to_string()));
+        let before = buffer_rows(&reader_buffer(&app)).join("\n");
+        assert!(before.contains("notes.txt · text "), "{before}");
+        assert!(!before.contains("rendered") && !before.contains("raw"));
+        assert!(before.contains("# not a heading"), "{before}");
+        app.toggle_reader_raw();
+        assert_eq!(buffer_rows(&reader_buffer(&app)).join("\n"), before);
+    }
+
+    /// The card says every fact for a file: name, path, project, kind,
+    /// where it lives, size, modified, created and the last commit, which
+    /// is "untracked" when git knew nothing of the file.
+    #[test]
+    fn the_card_renders_every_fact_and_untracked() {
+        let mut app = notes_view_app(&[(".notez/scratch.md", Some(".notez"))]);
+        let read = app.claim_note_read().expect("a read");
+        let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_790_000_000);
+        app.apply_note_facts(
+            &read,
+            crate::notes::NoteFacts {
+                size: Some(812),
+                modified: Some(at),
+                created: Some(at),
+            },
+        );
+        let draw = |app: &crate::app::App| {
+            drawn_rows(50, 14, |f| render_inspector(f, f.area(), app)).join("\n")
+        };
+        // Before git answers the date says it is still being read.
+        assert!(draw(&app).contains("last commit reading…"));
+        app.apply_note_commit(&read, crate::notes::LastCommit::Untracked);
+        let text = draw(&app);
+        let project = app.repos[0].name.clone();
+        let stamp = card_time(at);
+        for want in [
+            "[3] file",
+            "name        scratch.md",
+            "path        .notez/scratch.md",
+            &format!("project     {project}"),
+            "kind        markdown",
+            "lives in    .notez/",
+            "size        812 B",
+            &format!("modified    {stamp}"),
+            &format!("created     {stamp}"),
+            "last commit untracked",
+        ] {
+            assert!(text.contains(want), "{want} missing:\n{text}");
+        }
+
+        app.apply_note_commit(
+            &read,
+            crate::notes::LastCommit::At("2026-10-29T10:50:00+01:00".to_string()),
+        );
+        let text = draw(&app);
+        let committed = card_commit_time("2026-10-29T10:50:00+01:00");
+        assert!(text.contains(&format!("last commit {committed}")), "{text}");
+
+        // Folded, it keeps its one title row.
+        app.inspector_folded = true;
+        let rows = drawn_rows(50, 1, |f| render_inspector(f, f.area(), &app));
+        assert!(rows[0].contains("[3] file"), "{}", rows[0]);
+    }
+
+    /// The `notes` layout as painted and as hit-tested agree: a click inside
+    /// the tree, the reader and the card lands on each, each pane's border
+    /// is drawn where its rectangle says, pane 2 runs the full height beside
+    /// pane 1 and the card, and the card is as wide as pane 1.
+    #[test]
+    fn notes_clicks_land_on_the_tree_the_reader_and_the_card() {
+        let (w, h) = (140u16, 44u16);
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        app.contributions_folded = true;
+        let read = app.claim_note_read().expect("a read");
+        app.apply_note_read(read, Ok("hello".to_string()));
+        let area = Rect::new(0, 0, w, h);
+        let rows = drawn_rows(w, h, |f| crate::ui::render(f, &app));
+        let rects = crate::ui::panel_rects(area, &app);
+        let tree = rects.detail.expect("tree");
+        let reader = rects.reader.expect("reader");
+        let card = rects.inspector.expect("card");
+
+        assert_eq!(
+            (card.x, card.width),
+            (rects.repo_list.x, rects.repo_list.width)
+        );
+        assert_eq!(card.y, rects.repo_list.y + rects.repo_list.height);
+        assert_eq!(tree.y, rects.repo_list.y, "pane 2 starts at the top");
+        assert_eq!(tree.bottom(), card.bottom(), "and runs the full height");
+        assert_eq!(reader.y, tree.y);
+        assert_eq!(reader.height, tree.height);
+        assert!(
+            reader.x > tree.right() - 1,
+            "the reader is right of the tree"
+        );
+
+        let cell = |x: u16, y: u16| rows[y as usize].chars().nth(x as usize).unwrap();
+        for (rect, panel, title) in [
+            (tree, FocusedPanel::Detail, "[2]"),
+            (reader, FocusedPanel::Reader, "a.md · markdown"),
+            (card, FocusedPanel::Inspector, "[3] file"),
+        ] {
+            assert_eq!(cell(rect.x, rect.y), '╭', "{panel:?} corner");
+            assert_eq!(cell(rect.right() - 1, rect.bottom() - 1), '╯', "{panel:?}");
+            let top: String = rows[rect.y as usize]
+                .chars()
+                .skip(rect.x as usize)
+                .take(rect.width as usize)
+                .collect();
+            assert!(top.contains(title), "{panel:?} title: {top}");
+            let (mx, my) = (rect.x + rect.width / 2, rect.y + rect.height / 2);
+            assert_eq!(rects.at(mx, my), Some(panel), "click mid {panel:?}");
+            assert_eq!(
+                rects.at(rect.x, rect.y),
+                Some(panel),
+                "click corner {panel:?}"
+            );
+        }
+        assert!(
+            rows.iter().any(|r| r.contains("hello")),
+            "the body is drawn"
+        );
+        // The card's top edge grabs the divider; the same row in pane 2 does not.
+        assert_eq!(
+            rects.divider_at(card.x + 2, card.y),
+            Some(crate::ui::Divider::Horizontal)
+        );
+        assert_eq!(rects.divider_at(reader.x + 2, card.y), None);
+    }
+
+    /// The tree is wide enough for its mode line whole, `(m)` included, in
+    /// both modes on a whole rendered frame: at 140 columns the 30-column
+    /// floor left 27 text columns and drew `(m` (FZ-62 review F3).
+    #[test]
+    fn the_tree_holds_its_mode_line_whole_on_a_140_column_frame() {
+        for w in [120u16, 140, 150] {
+            let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+            for want in [
+                "notes: [notez] markdown  (m)",
+                "notes: notez [markdown]  (m)",
+            ] {
+                let rows = drawn_rows(w, 44, |f| crate::ui::render(f, &app));
+                assert!(
+                    rows.iter().any(|r| r.contains(want)),
+                    "{w} columns: {want} cut:\n{}",
+                    rows.join("\n")
+                );
+                app.toggle_notes_markdown();
+            }
+        }
+    }
+
+    /// Off the `notes` view the usual layout holds: no reader, the
+    /// inspector across the full width.
+    #[test]
+    fn the_notes_layout_is_the_notes_views_alone() {
+        let area = Rect::new(0, 0, 140, 44);
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        assert!(crate::ui::panel_rects(area, &app).reader.is_some());
+        app.history_view = HistoryView::Info;
+        let rects = crate::ui::panel_rects(area, &app);
+        assert_eq!(rects.reader, None);
+        assert_eq!(rects.inspector.map(|r| r.width), Some(140));
     }
 }
