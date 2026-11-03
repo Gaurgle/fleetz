@@ -289,6 +289,36 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-11-03
+
+- **#115 (FZ-59), markdown rendered in the notes reader, `p` for the
+  source.** Merged `4545a1f` at 13:25 CET on his "115 is good"; ticket
+  commits `b5b4168` and `6ba3568` (base `ff730c4`, branch
+  `feat/115-markdown-reader`, worker and reviewer `claude-opus-5-5`
+  medium for the two 10-29 rounds, `claude-fable-5-1` for the 11-03
+  rework, lead session `11cc93e2`). Route 1, `pulldown-cmark` plus
+  fleetz's own span builder over `colors.rs` tokens, his dependency
+  approval of 2026-10-27 16:15. Review 1 (`05f39d765f06`) needs
+  change, re-review (`269ad2bafe53`, `365d09fe44f4` under 0.8.1)
+  accepted; branch CI 40876859246. His look of 11-03: the rendering
+  passed ("feel is good"), but the toggle sat on `r`, the global
+  refresh key, and the reader seemed unreachable from the tree. Lead
+  ruling: the toggle moves to `p` (unbound), works from tree and
+  reader, `r` stays refresh everywhere; the worker showed `Tab` does
+  reach the reader (two `Tab`s from the repo list, none while the tree
+  cursor is on a section header, FZ-62 design), so no focus change.
+  Rework diff `e11485894e98` accepted (the three edited tests were
+  this ticket's own; help row `B m p` since 80x24 has no spare row);
+  CI 41627071003, combined checks on `4b97360`, `relay-gate
+  --guarded-approved` holds. The first gate run failed because the
+  lead had committed the baton between the combined checks and the
+  gate: commit the baton after the gate. Remembered: a view-local key
+  must not shadow a global one, now in `.claude/rules/ui.md`.
+  Follow-ups not ticketed: syntax highlighting of fenced code and the
+  CI script (route pending); the reviewer's optional rename of
+  `the_reader_renders_markdown_and_r_shows_the_source`.
+  FZ-59: review changes 1; fix cycles 1; owner decisions 2; worker 5 (rework only; 10-29 rounds not read); review 2 (rework only); models claude-opus-5-5 then claude-fable-5-1/claude-opus-5-5 then claude-fable-5-1; usage rework worker 58765 tokens, rework reviewer 43672 tokens; 10-29 rounds not read
+
 ### Merged on 2026-10-29
 
 - **#118 (FZ-62), the notes view reads in pane 2, with a metadata

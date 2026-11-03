@@ -65,6 +65,10 @@ scale that changes every few minutes. Days it overwrites are put on the year
 window's scale by example (`Calendar::derive_missing_levels`), and a payload
 cached before the field was asked for falls back to `intensity`.
 
+**A view-local key never shadows a global one.** `r` is refresh in every
+view, `notes` included; a view that needs a new action takes a key that is
+unbound everywhere (FZ-59's toggle moved from `r` to `p` on his look).
+
 **Status vocabulary is split by kind.** Counters are numeric (`3↓ 2↑ 4!`),
 categorical states are words (`not cloned`). A not-cloned repo has all counters
 at zero and must never render as synced: `RepoStatus::is_synced()` excludes it

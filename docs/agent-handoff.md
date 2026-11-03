@@ -30,28 +30,28 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
-- FZ-59 (#115): his look 11-03 moved the toggle `r` to `p`; rework diff
-  `e11485894e98` accepted, committed `6ba3568`, CI 41627071003 and the
-  combined checks on `75491ef` running; gate: his short try of `p`. #96 (`19a21d6`): Ready to integrate,
-  his look 11-03 passes points 1, 3, 4; his answer on the pane 2 rows
-  pending. #88 (FZ-38): parked, uncommitted on at-a.
-- FZ-63 (#119) and FZ-60 (#116): built from `41ecd76`, unreviewed,
-  uncommitted; their worktrees `issue-119`, `issue-116` are on neither
-  machine (11-03), so both need a redispatch from `main` on his word.
+- #96 (`19a21d6`): Ready to integrate, his look 11-03 passes points 1,
+  3, 4; his answer on the pane 2 rows pending; his inspector points go
+  to FZ-41 (#97). #88 (FZ-38): parked, uncommitted on at-a.
+- Reported 11-03, unfiled: notes tree wheel on a narrow window, the
+  highlight moves two rows a tick, the view one (needs his yes to file).
+- FZ-63 (#119), FZ-60 (#116): their unreviewed trees from `41ecd76` went
+  with worktrees found on neither machine (11-03); redispatch on his word.
 
 ## Open questions
 
-- Syntax highlighting route: tree-sitter as notez (eleven crates), markdown
-  only, or own. A dependency decision, then a ticket on his yes.
+- Highlighting route (fenced code and the CI YAML): `syntect` proposed
+  11-03, tree-sitter as notez, or own. His decision, then a ticket.
 - #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
 - #81 and #79: his answer on the existing footer and header test edits.
 - Pane 1 wheel coalescing ticket, flaky `clipboard::tests` issue: his yes.
 
 ## Next step
 
-His look on FZ-59 and #96 (`cargo run --release --manifest-path
-.claude/worktrees/issue-115/Cargo.toml`, same with `issue-96`), then
-gate and merge; FZ-41 (#97) once #96 is on `main`. Once the FZ-63 and
+FZ-59 merged `4545a1f` 11-03. His word on #96's pane 2 rows (`cargo run
+--release --manifest-path .claude/worktrees/issue-96/Cargo.toml`), then
+gate and merge; FZ-41 (#97) once #96 is on `main`, amended with a
+jobs/log/script mode line on his yes. Once the FZ-63 and
 FZ-60 trees are found (or redispatched from `main` on his word): FZ-63
 round 2 and re-review, review FZ-60, FZ-58 (#114) after FZ-63 merges.
 FZ-52 not before 0.8.0 and his word.
