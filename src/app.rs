@@ -2470,7 +2470,7 @@ pub struct App {
     /// Columns the reader's body drew on the last frame: the width a
     /// markdown body is rendered at (FZ-59), off the UI thread.
     pub reader_width: std::cell::Cell<u16>,
-    /// `r` in the `notes` layout: the reader shows markdown as its source.
+    /// `p` in the `notes` layout: the reader shows markdown as its source.
     /// One flag for the session, not per file; other kinds are always raw.
     pub reader_raw: bool,
     /// The section header the list cursor stands on (FZ-45), lifted off the
@@ -3428,7 +3428,7 @@ impl App {
 
     /// The width to render the highlighted file at: the reader's last
     /// drawn width, when the file is markdown and the reader has drawn.
-    /// Rendered whatever `reader_raw` says, so `r` flips at once.
+    /// Rendered whatever `reader_raw` says, so `p` flips at once.
     fn markdown_render_width(&self) -> Option<u16> {
         let width = self.reader_width.get();
         let markdown = self
@@ -3486,7 +3486,7 @@ impl App {
         }
     }
 
-    /// `r` in the `notes` layout: flip the reader between rendered markdown
+    /// `p` in the `notes` layout: flip the reader between rendered markdown
     /// and its source, for every markdown file this session.
     pub fn toggle_reader_raw(&mut self) {
         if !self.notes_layout() {
@@ -9377,7 +9377,7 @@ mod tests {
         assert_eq!(app.note_body.as_ref().unwrap().rendered, Some(fresh));
     }
 
-    /// FZ-59: `r` flips the reader between rendered and raw for the
+    /// FZ-59: `p` flips the reader between rendered and raw for the
     /// session, in the `notes` layout only.
     #[test]
     fn the_raw_toggle_flips_for_the_session_in_the_notes_layout_only() {

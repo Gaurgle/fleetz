@@ -1741,9 +1741,9 @@ async fn handle_normal_input(
         // above scroll it a line through `scroll_next_panel`.
         KeyCode::Char('H') if app.reader_pages() => app.page_reader(-1),
         KeyCode::Char('L') if app.reader_pages() => app.page_reader(1),
-        // From the tree or the reader, `r` flips rendered markdown and its
-        // source (FZ-59); elsewhere it refreshes, below.
-        KeyCode::Char('r') if app.reader_pages() => app.toggle_reader_raw(),
+        // From the tree or the reader, `p` flips rendered markdown and its
+        // source (FZ-59); `r` still refreshes there, below.
+        KeyCode::Char('p') if app.reader_pages() => app.toggle_reader_raw(),
         KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(1),
         KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => app.scroll_next_panel(-1),
         // Must be matched before the plain `c` arm below, or ctrl-c switches
@@ -11852,6 +11852,62 @@ mod tests {
             note_to_open(&app),
             Some(std::path::PathBuf::from("/repo/notez/a.md"))
         );
+    }
+
+    /// FZ-59 owner ruling: `p` flips the `notes` reader between rendered
+    /// and source from the tree and from the reader, and `r` refreshes there
+    /// as everywhere. Fails while `r` is the toggle or `p` is unbound.
+    #[tokio::test]
+    async fn p_flips_the_notes_reader_and_r_still_refreshes() {
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let backend = CrosstermBackend::new(io::stdout());
+        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
+        let mut terminal =
+            Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
+        let mut app = App::new(Vec::new(), String::new(), 120, 44);
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Notes;
+        // No poll leaves the process: `r` below only sets its status.
+        app.dirty_mode = true;
+        let repo_dir = Path::new("/nonexistent");
+
+        for (panel, raw) in [(FocusedPanel::Detail, true), (FocusedPanel::Reader, false)] {
+            app.focused_panel = panel;
+            handle_normal_input(
+                &mut app,
+                &mut terminal,
+                press('p'),
+                &tx,
+                &args,
+                &config,
+                repo_dir,
+            )
+            .await
+            .unwrap();
+            assert_eq!(app.reader_raw, raw, "p from {panel:?}");
+
+            app.status_message = None;
+            handle_normal_input(
+                &mut app,
+                &mut terminal,
+                press('r'),
+                &tx,
+                &args,
+                &config,
+                repo_dir,
+            )
+            .await
+            .unwrap();
+            assert_eq!(app.reader_raw, raw, "r flipped the reader from {panel:?}");
+            let status = app.status_message.as_ref().map(|m| m.text.as_str());
+            assert_eq!(
+                status,
+                Some("Refreshing…"),
+                "r did not refresh from {panel:?}"
+            );
+        }
     }
 
     /// The next answer `spawn_note_read` sent, split into its two kinds.

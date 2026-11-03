@@ -1889,7 +1889,7 @@ fn reader_title(app: &App) -> Option<String> {
 }
 
 /// The held body's markdown render, when the reader draws one: a markdown
-/// file, `r` not on raw, and a render landed (FZ-59). Until one lands the
+/// file, `p` not on raw, and a render landed (FZ-59). Until one lands the
 /// reader shows the source.
 fn reader_render(app: &App) -> Option<&crate::app::RenderedNote> {
     let markdown = app
@@ -1908,7 +1908,7 @@ fn reader_render(app: &App) -> Option<&crate::app::RenderedNote> {
 /// highlighted file's body, wrapped to the pane, with its own scroll
 /// (`App::reader_scroll`). A markdown file is drawn rendered
 /// (`ui::markdown`, FZ-59), its rows laid out off the UI thread at the
-/// width this pass records; `r` shows its source, which every other kind
+/// width this pass records; `p` shows its source, which every other kind
 /// always shows, raw as `notes::read_body` delivers it. A cut body says so
 /// on its last line, as the read leaves it.
 fn render_reader(frame: &mut Frame, area: Rect, app: &App) {
@@ -8021,7 +8021,7 @@ mod tests {
     /// `colors.rs` tokens: the heading in the title colour, bold, without
     /// its `#`; list bullets; emphasis italic; code in the code colour; a
     /// link's text in the link colour beside its url. The border says
-    /// `rendered`; `r` shows the source unchanged and the border says `raw`.
+    /// `rendered`; `p` shows the source unchanged and the border says `raw`.
     #[test]
     fn the_reader_renders_markdown_and_r_shows_the_source() {
         let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
@@ -8080,7 +8080,7 @@ mod tests {
     }
 
     /// FZ-59: a text file is always raw: no render is asked for, its border
-    /// names no mode, and `r` does not change what it shows.
+    /// names no mode, and `p` does not change what it shows.
     #[test]
     fn a_text_file_stays_raw_whatever_the_toggle() {
         let mut app = notes_view_app(&[("notez/notes.txt", Some("notez"))]);
