@@ -30,9 +30,11 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
-- FZ-65 (#121): worker running in `issue-121` from `b8d394b`. FZ-64
-  (#120): worker running in `issue-120` from `98b63e5`, look change.
-  Records on the issues.
+- FZ-64 (#120): Ready to integrate, `93704e8` on `feat/120-inspector-ci-tabs`,
+  gate holds on `ae49f50`; waits on his look. FZ-65 (#121): built, diff
+  `9f4018d7160d` unreviewed, held for his wheel decision (wheel selects
+  as built, or scrolls with the highlight clamped) and his yes to a
+  ticket for the wrapped-row follow mismatch. Records on the issues.
 - #88 (FZ-38): parked, uncommitted on at-a.
 - FZ-63 (#119), FZ-60 (#116): their unreviewed trees from `41ecd76` went
   with worktrees found on neither machine (11-03); redispatch on his word.
