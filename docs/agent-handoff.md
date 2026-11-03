@@ -28,8 +28,8 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
-- FZ-67 (#123, notes preview inside pane 2): worker stopped before edits
-  for his word on four existing tests (rulings on the issue); his look.
+- FZ-67 (#123, notes preview inside pane 2): worker resumed 16:55 CET on
+  his yes to four test edits (his words and rulings on the issue); his look.
   FZ-68 (`{`/`}` from pane 2 step the CI bodies): proposed 11-03 on his
   ask, filed and dispatched on his yes. FZ-65 (#121): built, diff
   `9f4018d7160d` unreviewed, held for his wheel decision (wheel selects
