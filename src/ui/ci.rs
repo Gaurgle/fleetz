@@ -1889,7 +1889,7 @@ mod tests {
         let (rects, buffer) = draw(&app, 160, 50);
         let inspector = rects.inspector.expect("inspector laid out");
         let title = row_text(&buffer, inspector.y);
-        assert!(title.contains("[3] inspector  log"), "{title}");
+        assert!(title.contains("[/] JOBS · LOG · SCRIPT"), "{title}");
 
         app.focused_panel = FocusedPanel::Detail;
         app.press_bracket(false);
@@ -1899,6 +1899,132 @@ mod tests {
             "pane 2 cycles its views"
         );
         assert_eq!(app.ci_body, CiBody::Log);
+    }
+
+    /// The cell where `needle` starts on row `y`, which must hold it.
+    fn cell_of<'a>(buffer: &'a Buffer, y: u16, needle: &str) -> &'a ratatui::buffer::Cell {
+        let row = row_text(buffer, y);
+        let byte = row
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} not on row {y}: {row}"));
+        let x = row[..byte].chars().count() as u16;
+        &buffer[(x, y)]
+    }
+
+    /// FZ-64: with room, the inspector's top border names every body as a
+    /// tab, as pane 2's names its views: the shown one bright in the `ci`
+    /// tab's colour, the others dim, and the title no longer repeats the
+    /// body's word.
+    #[test]
+    fn the_inspector_border_names_every_body_with_the_shown_one_lit() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.ci_body = CiBody::Log;
+        let (rects, buffer) = draw(&app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        assert!(title.contains("[/] JOBS · LOG · SCRIPT "), "{title}");
+        assert!(title.contains("[3] inspector "), "{title}");
+        assert!(!title.contains("inspector  log"), "{title}");
+        assert!(
+            title.trim_end().ends_with("SCRIPT ╮"),
+            "at the right: {title}"
+        );
+
+        let lit = cell_of(&buffer, inspector.y, "LOG");
+        assert_eq!(lit.fg, colors::history_view_color(HistoryView::Ci));
+        assert!(lit.modifier.contains(Modifier::BOLD));
+        for dim in ["JOBS", "SCRIPT"] {
+            assert_eq!(
+                cell_of(&buffer, inspector.y, dim).fg,
+                colors::SUBTEXT,
+                "{dim}"
+            );
+        }
+    }
+
+    /// FZ-64: a border too narrow for all three keeps the shown body alone,
+    /// as pane 2 drops to `[/] CI`.
+    #[test]
+    fn a_narrow_inspector_border_keeps_the_shown_body_alone() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.ci_body = CiBody::Script;
+        let (rects, buffer) = draw(&app, 40, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        assert!(title.contains("[/] SCRIPT "), "{title}");
+        assert!(!title.contains("JOBS"), "{title}");
+        assert!(!title.contains("LOG"), "{title}");
+        let lit = cell_of(&buffer, inspector.y, "SCRIPT");
+        assert_eq!(lit.fg, colors::history_view_color(HistoryView::Ci));
+        assert!(lit.modifier.contains(Modifier::BOLD));
+    }
+
+    /// FZ-64: the commit inspector keeps its plain title; the tabs belong to
+    /// a run only.
+    #[test]
+    fn the_commit_inspector_border_has_no_body_tabs() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.history_view = HistoryView::Commits;
+        assert!(!app.inspects_ci_run());
+        let (rects, buffer) = draw(&app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        // The title, then nothing but the rule (and its resize grip) to the
+        // corner.
+        let rest = title
+            .trim_end()
+            .strip_prefix("╭ [3] inspector ")
+            .unwrap_or_else(|| panic!("{title}"));
+        assert!(
+            rest.ends_with('╮') && rest.chars().all(|c| matches!(c, '─' | '⠶' | '╮')),
+            "{title}"
+        );
+    }
+
+    /// FZ-64: the resize grip sits mid-border and is painted after the
+    /// panes, so where the tabs would run under it they drop to the shown
+    /// body alone, clear of the mark. Before, widths 44 to 56 drew
+    /// `⠶⠶⠶⠶⠶⠶/] JOBS · LOG · SCRIPT`.
+    #[test]
+    fn the_inspector_tabs_never_run_under_the_resize_grip() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.ci_body = CiBody::Log;
+        for width in 44..=56 {
+            let (rects, buffer) = draw(&app, width, 50);
+            let inspector = rects.inspector.expect("inspector laid out");
+            let title = row_text(&buffer, inspector.y);
+            let tabs = &title[title.find(" [/] ").unwrap_or_else(|| panic!("{title}"))..];
+            assert!(!tabs.contains('⠶'), "w={width}: {title}");
+            assert!(tabs.contains(" LOG "), "w={width}: {title}");
+            let lit = cell_of(&buffer, inspector.y, "LOG");
+            assert_eq!(
+                lit.fg,
+                colors::history_view_color(HistoryView::Ci),
+                "w={width}"
+            );
+            assert!(title.contains('⠶'), "the grip is still drawn: {title}");
+        }
+    }
+
+    /// FZ-64: a `ci` view with no run to inspect (loading here, and likewise
+    /// empty, offline or without a remote) has no bodies to step, and `[`/`]`
+    /// step pane 2 there, so its border shows no tabs.
+    #[test]
+    fn the_inspector_border_has_no_tabs_without_a_highlighted_run() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Inspector;
+        assert!(app.inspects_ci_run());
+        assert!(app.ci_highlighted_run().is_none());
+        let (rects, buffer) = draw(&app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        assert!(title.contains("[3] inspector "), "{title}");
+        assert!(!title.contains("[/]"), "{title}");
+        assert!(!title.contains("JOBS"), "{title}");
     }
 
     /// Each body keeps its own scroll; a different highlighted run starts
