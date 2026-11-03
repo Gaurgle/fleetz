@@ -291,6 +291,30 @@ first (from `git log --merges main`).
 
 ### Merged on 2026-11-03
 
+- **#120 (FZ-64), the inspector's top border names the CI bodies as
+  tabs.** Merged `cbb6cfb` at 15:30 CET on his "120 is good!"; ticket
+  commit `93704e8` (base `98b63e5`, branch `feat/120-inspector-ci-tabs`,
+  worker `fz-worker` and reviewer `fz-reviewer`, both `claude-fable-5-1`,
+  lead session `11cc93e2`). Filed the same day on his look at #96
+  ("nothing to indicate that you CAN step that pane. i want a solution
+  like pane2"). Built: `tab_switcher` in `detail.rs`, pane 2's `[/]`
+  builder lifted unchanged and shared, `ci_body_switcher`, the
+  `inspector  jobs` title word dropped, three tests. Review 1 (diff
+  `8d73b06b95e1`) needs change: the resize grip covered the tabs at
+  inspector widths 44 to 56 (pane 2's budget arithmetic knows no grip),
+  and the tabs showed without a highlighted run, where the brackets
+  step pane 2 instead. Rework: `grips::inspector_grip_span` as the one
+  home of the grip position, the budget capped right of it, the
+  switcher only with a run, two tests; re-review (diff `fe9ed3209cb7`)
+  accepted, width sweep and no-run probe rerun. Branch CI 41639080449,
+  combined checks on `ae49f50` and again on `3d539f2` after the baton
+  commit moved `main` (the lead's second time today: commit the baton
+  after the gate), `relay-gate` holds, `main` CI 41650050966. His look
+  raised `{`/`}` from pane 2 to step the bodies (FZ-66, on his yes).
+  Remembered: the inspector's top border carries the resize grip, now
+  in `.claude/rules/ui.md`.
+  FZ-64: review changes 1; fix cycles 1; owner decisions 1; worker 10; review 5; models claude-fable-5-1/claude-fable-5-1; usage worker 61725 + 77458 tokens, reviewer 50605 + 62421 tokens
+
 - **#96 (FZ-40), the pane 2 ci view heads its columns and uses the
   pane's width.** Merged `98b63e5` at 14:00 CET on his look of the
   same day (headline, shrink order and the 170-column case all passed,

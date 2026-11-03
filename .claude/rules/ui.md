@@ -65,6 +65,11 @@ scale that changes every few minutes. Days it overwrites are put on the year
 window's scale by example (`Calendar::derive_missing_levels`), and a payload
 cached before the field was asked for falls back to `intensity`.
 
+**The inspector's top border carries the resize grip.** `grips::render`
+paints six cells mid-border after the panes, so anything drawn on that
+border (the CI body tabs) budgets around `grips::inspector_grip_span`;
+pane 2's border has no grip and its arithmetic cannot be copied as is.
+
 **A view-local key never shadows a global one.** `r` is refresh in every
 view, `notes` included; a view that needs a new action takes a key that is
 unbound everywhere (FZ-59's toggle moved from `r` to `p` on his look).

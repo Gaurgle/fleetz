@@ -30,8 +30,8 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
-- FZ-64 (#120): Ready to integrate, `93704e8` on `feat/120-inspector-ci-tabs`,
-  gate holds on `ae49f50`; waits on his look. FZ-65 (#121): built, diff
+- FZ-66 (`{`/`}` from pane 2 step the CI bodies): proposed 11-03 on his
+  ask, filed and dispatched on his yes. FZ-65 (#121): built, diff
   `9f4018d7160d` unreviewed, held for his wheel decision (wheel selects
   as built, or scrolls with the highlight clamped) and his yes to a
   ticket for the wrapped-row follow mismatch. Records on the issues.
@@ -49,11 +49,11 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## Next step
 
-FZ-59 merged `4545a1f`, #96 merged `98b63e5`, both 11-03. FZ-64 and
-FZ-65 to review; FZ-41 (#97) after FZ-64 (keeps its tab line). FZ-66 (script
-and log highlighting in the inspector) is filed once he picks the YAML
-route (`syntect` or own). FZ-63 and FZ-60: redispatch from `main` on his
-word, FZ-58 (#114) after FZ-63 merges.
+Merged 11-03: FZ-59 `4545a1f`, #96 `98b63e5`, FZ-64 `cbb6cfb`. Next:
+FZ-65 on his wheel answer, FZ-66 on his yes, FZ-41 (#97) after them
+(keeps the tab line). Script and log highlighting in the inspector is
+filed once he picks the YAML route (`syntect` or own). FZ-63 and FZ-60:
+redispatch from `main` on his word, FZ-58 (#114) after FZ-63 merges.
 FZ-52 not before 0.8.0 and his word.
 
 Start a lead from the repo root: `claude --agent fz-coordinator` (normal
