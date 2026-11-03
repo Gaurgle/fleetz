@@ -30,14 +30,14 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
-- FZ-59 (#115, `b5b4168`, CI 40876859246 green) and #96 (`19a21d6`):
-  Ready to integrate, gate owner look; worktrees `issue-115` and
-  `issue-96` on jean-1 and at-a. #88 (FZ-38): parked, uncommitted on at-a.
-- FZ-63 (#119): round 1 fixed, diff `b68ed43af0f5` unreviewed; README
-  `Enter` row still to fix. FZ-60 (#116): built, diff `47ed96878515`,
-  unreviewed. Both from `41ecd76`, uncommitted in `issue-119`, `issue-116`
-  on the other machine. Both ids are pre-0.8.1: rerun `scripts/relay-scope
-  <worktree> 41ecd76` there and replace them before any review.
+- FZ-59 (#115): his look 11-03 moved the toggle `r` to `p`; rework diff
+  `e11485894e98` accepted, committed `6ba3568`, CI 41627071003 and the
+  combined checks on `75491ef` running; gate: his short try of `p`. #96 (`19a21d6`): Ready to integrate,
+  his look 11-03 passes points 1, 3, 4; his answer on the pane 2 rows
+  pending. #88 (FZ-38): parked, uncommitted on at-a.
+- FZ-63 (#119) and FZ-60 (#116): built from `41ecd76`, unreviewed,
+  uncommitted; their worktrees `issue-119`, `issue-116` are on neither
+  machine (11-03), so both need a redispatch from `main` on his word.
 
 ## Open questions
 
