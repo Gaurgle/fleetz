@@ -10,9 +10,7 @@ finished work, the owner's dated words and the practical notes. Also read
 
 Session `11cc93e2`, `claude-fable-5-1`, `at-a` (smbp), took over 2026-11-03
 12:00 CET from `018zBNkN` on `jean-1` (stopped, confirmed by Andreas).
-Nothing running. Worktrees are per machine: `issue-115`, `issue-96` and
-`issue-88` are here; `issue-119` and `issue-116` appear on neither
-machine's `git worktree list` so far (ssh to `jean-1` refused, 11-03).
+Worktrees are per machine; `issue-121`, `issue-122`, `issue-88` on at-a.
 
 ## Standing authority
 
@@ -38,8 +36,8 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
   as built, or scrolls with the highlight clamped) and his yes to a
   ticket for the wrapped-row follow mismatch. Records on the issues.
 - #88 (FZ-38): parked, uncommitted on at-a.
-- FZ-63 (#119), FZ-60 (#116): their unreviewed trees from `41ecd76` went
-  with worktrees found on neither machine (11-03); redispatch on his word.
+- FZ-63 (#119), FZ-60 (#116): unreviewed trees from `41ecd76` lost with
+  their worktrees (neither machine, 11-03); redispatch on his word.
 
 ## Open questions
 
