@@ -29,9 +29,8 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
-- FZ-68 (#124, the preview as a divided column, its text on pane 2's
-  top border): Ready, filed 11-04 on his ask; stops for his look.
-  The `{`/`}` from pane 2 ticket (FZ-66 follow-up): filed on his yes.
+- FZ-68 (#124, the preview as a divided column, text on pane 2's top
+  border): Ready, filed 11-04 on his ask; stops for his look.
   FZ-65 (#121): built, diff `9f4018d7160d` unreviewed, held for his wheel
   decision (selects as built, or scrolls with the highlight clamped) and
   his yes to a wrapped-row follow ticket. Records on the issues.
@@ -41,12 +40,9 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## Open questions
 
-- Markdown look and highlighting: 11-04 he asked to copy notez's
-  markdown formatting and colours ("steal/copy that md formatting/
-  preview", lint undecided). Lead's finding on the issue-free survey:
-  theme parity needs no dependency; fenced code and the CI YAML need
-  tree-sitter (notez's route, 11 crates, about 3.4 MB). His yes to the
-  dependencies pending, then tickets.
+- Markdown look: 11-04 he asked to copy notez's formatting and colours
+  (log). Theme parity needs no dependency; fenced code and the CI YAML
+  need tree-sitter as notez (11 crates). His dependency yes, then tickets.
 - #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
 - #81 and #79: his answer on the existing footer and header test edits.
 - Pane 1 wheel coalescing ticket, flaky `clipboard::tests` issue: his yes.
