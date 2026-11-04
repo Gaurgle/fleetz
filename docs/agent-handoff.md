@@ -8,10 +8,10 @@ finished work, the owner's dated words and the practical notes. Also read
 
 ## Current lead
 
-Baton released 2026-11-03 17:30 CET by session `11cc93e2`
-(`claude-fable-5-1`, `at-a`), on his "start wrapping up for today". No
-worker or reviewer running. Worktrees on at-a: `issue-121`, `issue-123`,
-`issue-88`; none on `jean-1` as far as known.
+Session `ea56f412` (`claude-fable-5-1`, `at-a`) took the baton
+2026-11-04 09:15 CET on his "continue"; `11cc93e2` released it 11-03
+17:30. No worker or reviewer running. Worktrees on at-a: `issue-121`,
+`issue-123`, `issue-88`; none on `jean-1` as far as known.
 
 ## Standing authority
 
