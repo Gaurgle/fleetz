@@ -43,6 +43,12 @@ pub enum HistoryView {
     Commits,
     Reflog,
     Graph,
+    /// The selected repo's worktrees, the main checkout first, the
+    /// highlighted one's facts and newest commits in the inspector (FZ-77).
+    /// Reads a worktree's log only while on screen
+    /// (`App::worktrees_wanted`). Beside `branches`, whose checkouts these
+    /// are, and before it: `branches`, `ci` and `notes` keep their order.
+    Worktrees,
     Branches,
     /// The selected repo's recent workflow runs (FZ-30d). The only view that
     /// polls: the CI data layer asks GitHub only while this one is on
@@ -56,11 +62,12 @@ pub enum HistoryView {
 
 impl HistoryView {
     /// Every view, in the order the tab strip draws them and `V` cycles them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Info,
         Self::Commits,
         Self::Reflog,
         Self::Graph,
+        Self::Worktrees,
         Self::Branches,
         Self::Ci,
         Self::Notes,
@@ -74,9 +81,10 @@ impl HistoryView {
             Self::Commits => 1,
             Self::Reflog => 2,
             Self::Graph => 3,
-            Self::Branches => 4,
-            Self::Ci => 5,
-            Self::Notes => 6,
+            Self::Worktrees => 4,
+            Self::Branches => 5,
+            Self::Ci => 6,
+            Self::Notes => 7,
         }
     }
 
@@ -89,6 +97,7 @@ impl HistoryView {
             Self::Branches => "branches",
             Self::Ci => "ci",
             Self::Notes => "notes",
+            Self::Worktrees => "worktrees",
         }
     }
 }
@@ -2447,6 +2456,16 @@ pub struct App {
     /// (`RefCell` for the reason `detail_row_tops` is one). A held log never
     /// changes, so its job id and the width are the whole key.
     pub ci_log_wrap: std::cell::RefCell<Option<CiLogWrap>>,
+    /// The `worktrees` view's newest commits per worktree, keyed by the
+    /// worktree's path as the row holds it, for the session (FZ-77). Read
+    /// only while the view is on screen (`worktrees_wanted`).
+    pub worktree_logs: std::collections::HashMap<String, WorktreeLog>,
+    /// Bumped when a sweep lands: a held worktree log from an older
+    /// generation is read again the next time it is shown.
+    pub worktree_logs_generation: u64,
+    /// The row path the cursor rests on in the `worktrees` view and since
+    /// when, for the dwell (`ci::DWELL`) before a log read starts.
+    pub worktrees_cursor: Option<(Option<String>, std::time::Instant)>,
     /// The `notes` view's walk per repo, keyed by the row's path, held for
     /// the session and never written to disk (FZ-53). Walked only while the
     /// view is on screen (`notes_wanted`).
@@ -2551,6 +2570,30 @@ pub struct NoteRender {
     pub generation: u64,
     pub width: u16,
     pub text: String,
+}
+
+/// One worktree's newest commits as the `worktrees` view's inspector draws
+/// them (FZ-77): `None` until a read lands.
+#[derive(Debug, Clone, Default)]
+pub struct WorktreeLog {
+    pub commits: Option<Vec<crate::model::Commit>>,
+    /// The generation `commits` was read in (`App::worktree_logs_generation`).
+    pub generation: u64,
+    /// A read is in flight; one per worktree at a time.
+    pub reading: bool,
+}
+
+/// How many commits the `worktrees` inspector lists for a worktree.
+pub const WORKTREE_LOG_COUNT: u32 = 6;
+
+/// A claimed log read of one worktree, for `git::branch_commits` on `HEAD`
+/// off the UI thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeLogRead {
+    /// The worktree's path as its row holds it, the `worktree_logs` key.
+    pub key: String,
+    pub dir: std::path::PathBuf,
+    pub generation: u64,
 }
 
 /// A claimed walk of one repo, for `notes::walk` off the UI thread.
@@ -2920,6 +2963,9 @@ impl App {
             brackets_cycling_views: false,
             ci_inspected: None,
             ci_log_wrap: std::cell::RefCell::new(None),
+            worktree_logs: std::collections::HashMap::new(),
+            worktree_logs_generation: 0,
+            worktrees_cursor: None,
             notes: std::collections::HashMap::new(),
             notes_generation: 0,
             notes_all_markdown: false,
@@ -3304,6 +3350,106 @@ impl App {
         self.ci_wanted() && !self.inspector_folded
     }
 
+    /// Whether the `worktrees` view is on screen (FZ-77): the one gate its
+    /// log read passes.
+    pub fn worktrees_wanted(&self) -> bool {
+        self.view == View::Detail && self.history_view == HistoryView::Worktrees
+    }
+
+    /// The worktrees the `worktrees` view lists for the selected repo, in
+    /// drawing order: the main checkout first, then the linked ones as
+    /// `git worktree list` gave them. Empty for a row with nothing on disk.
+    pub fn worktrees_listed(&self) -> Vec<crate::model::Worktree> {
+        let Some(repo) = self.selected_repo() else {
+            return Vec::new();
+        };
+        let Some(main) = repo.main_worktree() else {
+            return Vec::new();
+        };
+        std::iter::once(main)
+            .chain(repo.worktrees.iter().cloned())
+            .collect()
+    }
+
+    /// The worktree the `worktrees` view's cursor is on, clamped to the
+    /// rows there are.
+    pub fn worktree_highlighted(&self) -> Option<crate::model::Worktree> {
+        let mut listed = self.worktrees_listed();
+        let last = listed.len().checked_sub(1)?;
+        let at = self.detail_selections[HistoryView::Worktrees.index()].min(last);
+        Some(listed.swap_remove(at))
+    }
+
+    /// The directory `Enter`, `e` and `o` act in, `~` expanded: the
+    /// highlighted worktree's while pane 2 has focus on the `worktrees`
+    /// view (FZ-77), else the selected repo's. `None` for a row with
+    /// nothing on disk.
+    pub fn action_dir(&self) -> Option<String> {
+        let worktree = (self.worktrees_wanted() && self.focused_panel == FocusedPanel::Detail)
+            .then(|| self.worktree_highlighted())
+            .flatten();
+        let path = match worktree {
+            Some(wt) => wt.path,
+            None => self.selected_repo()?.path.clone()?,
+        };
+        Some(shellexpand::tilde(&path).to_string())
+    }
+
+    /// The held log of the highlighted worktree, `None` while none landed.
+    pub fn worktree_log(&self) -> Option<&[crate::model::Commit]> {
+        let wt = self.worktree_highlighted()?;
+        self.worktree_logs.get(&wt.path)?.commits.as_deref()
+    }
+
+    /// Claim the log read of the highlighted worktree at `instant`, or
+    /// `None`: only while the `worktrees` view is on screen with the
+    /// inspector open, once the cursor has rested on the repo for
+    /// `ci::DWELL` (as `claim_notes_walk` waits), and only when the log is
+    /// missing or from an older generation. One read per worktree at a time.
+    pub fn claim_worktree_log(&mut self, instant: std::time::Instant) -> Option<WorktreeLogRead> {
+        if !self.worktrees_wanted() || !self.inspector_is_expanded() {
+            return None;
+        }
+        let repo = self.selected_repo().and_then(|r| r.path.clone());
+        let settled_for = match &self.worktrees_cursor {
+            Some((held, since)) if *held == repo => instant.duration_since(*since),
+            _ => {
+                self.worktrees_cursor = Some((repo, instant));
+                std::time::Duration::ZERO
+            }
+        };
+        if settled_for < crate::ci::DWELL {
+            return None;
+        }
+        let key = self.worktree_highlighted()?.path;
+        let generation = self.worktree_logs_generation;
+        let state = self.worktree_logs.entry(key.clone()).or_default();
+        let fresh = state.commits.is_some() && state.generation == generation;
+        if state.reading || fresh {
+            return None;
+        }
+        state.reading = true;
+        let dir = std::path::PathBuf::from(shellexpand::tilde(&key).as_ref());
+        Some(WorktreeLogRead {
+            key,
+            dir,
+            generation,
+        })
+    }
+
+    /// Land a log read (`AppEvent::WorktreeLogRead`) and ask for a redraw.
+    pub fn apply_worktree_log(
+        &mut self,
+        read: WorktreeLogRead,
+        commits: Vec<crate::model::Commit>,
+    ) {
+        let state = self.worktree_logs.entry(read.key).or_default();
+        state.reading = false;
+        state.commits = Some(commits);
+        state.generation = read.generation;
+        self.needs_redraw = true;
+    }
+
     /// Whether the `notes` view may walk a repo or read a file: pane 2 is on
     /// screen showing it. The one gate the walk and the body read pass.
     pub fn notes_wanted(&self) -> bool {
@@ -3592,6 +3738,7 @@ impl App {
         self.sweep_started = None;
         self.last_refreshed = Some(at);
         self.invalidate_notes();
+        self.worktree_logs_generation += 1;
         self.needs_redraw = true;
     }
 
@@ -4323,6 +4470,8 @@ impl App {
                 .map_or(0, |s| s.runs.len()),
             // The files the tree lists, in its current mode.
             HistoryView::Notes => self.notes_listed().len(),
+            // The main checkout and the linked worktrees.
+            HistoryView::Worktrees => self.worktrees_listed().len(),
         }
     }
 
@@ -4422,6 +4571,26 @@ impl App {
             HistoryView::Ci => None,
             // A file is not a commit; the inspector reads the file itself.
             HistoryView::Notes => None,
+            // A worktree names its HEAD, as a branch names its tip; the main
+            // checkout first, as the view draws it. Borrowed from the rows
+            // the hash came from, not from a list built here.
+            HistoryView::Worktrees => match i {
+                0 => repo.main_worktree().and_then(|_| {
+                    repo.branches
+                        .iter()
+                        .find(|b| b.is_head)
+                        .map(|b| b.tip.as_str())
+                        .filter(|t| !t.is_empty())
+                        // Detached: the 7-digit form the row's
+                        // `detached @ <sha>` names (`main_worktree`).
+                        .or(repo
+                            .work_key
+                            .as_ref()
+                            .map(|k| k.head_sha.get(..7).unwrap_or(&k.head_sha)))
+                }),
+                _ => repo.worktrees.get(i - 1).map(|w| w.head.as_str()),
+            }
+            .filter(|h| !h.is_empty()),
         }
     }
 
@@ -9076,6 +9245,89 @@ mod tests {
         app.fetch_backoff.record("~/repos/repo-0", &timed_out(), t0);
         assert!(app.fetch_held("~/repos/repo-0", t0 + chrono::Duration::seconds(59)));
         assert!(!app.fetch_held("~/repos/repo-0", t0 + chrono::Duration::seconds(60)));
+    }
+
+    // --- The `worktrees` view (FZ-77) ---
+
+    /// An app on one repo with one linked worktree, pane 2 in the detail
+    /// view.
+    fn worktrees_app() -> App {
+        let mut app = make_app(1);
+        app.view = View::Detail;
+        app.repos[0].worktrees = vec![crate::model::Worktree {
+            path: "~/repos/repo-0-wt".to_string(),
+            branch: "side".to_string(),
+            head: "b2c3d4e".to_string(),
+            dirty: Some(0),
+            ..Default::default()
+        }];
+        app
+    }
+
+    /// `[` and `]` reach the view: forward from `graph`, back from
+    /// `branches`.
+    #[test]
+    fn brackets_reach_the_worktrees_view() {
+        let mut app = worktrees_app();
+        app.history_view = HistoryView::Graph;
+        app.press_bracket(false);
+        assert_eq!(app.history_view, HistoryView::Worktrees);
+        app.history_view = HistoryView::Branches;
+        app.press_bracket(true);
+        assert_eq!(app.history_view, HistoryView::Worktrees);
+        assert!(app.worktrees_wanted());
+    }
+
+    /// The log is read only while the view is on screen with the inspector
+    /// open, once the cursor has rested on the repo for the dwell, one read
+    /// per worktree at a time, held once landed, and read again after a
+    /// sweep.
+    #[test]
+    fn a_worktree_log_is_read_on_demand_and_again_after_a_sweep() {
+        let start = std::time::Instant::now();
+        let after = |ms: u64| start + std::time::Duration::from_millis(ms);
+        let rested = after(2000) + crate::ci::DWELL;
+        let mut app = worktrees_app();
+        app.inspector_folded = false;
+        for view in HistoryView::ALL {
+            if view == HistoryView::Worktrees {
+                continue;
+            }
+            app.history_view = view;
+            assert_eq!(app.claim_worktree_log(start), None, "{view:?}");
+            assert_eq!(app.claim_worktree_log(after(1000)), None, "{view:?}");
+        }
+        app.history_view = HistoryView::Worktrees;
+        app.view = View::Compact;
+        assert_eq!(app.claim_worktree_log(after(1500)), None, "compact");
+        app.view = View::Detail;
+
+        app.detail_selections[HistoryView::Worktrees.index()] = 1;
+        assert_eq!(
+            app.claim_worktree_log(after(2000)),
+            None,
+            "the dwell starts"
+        );
+        let early = rested - std::time::Duration::from_millis(1);
+        assert_eq!(app.claim_worktree_log(early), None, "still dwelling");
+        app.inspector_folded = true;
+        assert_eq!(app.claim_worktree_log(rested), None, "inspector folded");
+        app.inspector_folded = false;
+        let read = app
+            .claim_worktree_log(rested)
+            .expect("reads the highlighted one");
+        assert_eq!(read.key, "~/repos/repo-0-wt");
+        assert!(read.dir.ends_with("repos/repo-0-wt"), "{:?}", read.dir);
+        assert_eq!(app.claim_worktree_log(rested), None, "one at a time");
+        app.apply_worktree_log(read, Vec::new());
+        assert_eq!(app.worktree_log().map(<[_]>::len), Some(0));
+        assert_eq!(app.claim_worktree_log(rested), None, "held, not read again");
+
+        app.sweep_landed(chrono::Local::now());
+        assert!(
+            app.claim_worktree_log(rested).is_some(),
+            "read again after a sweep"
+        );
     }
 
     // --- The `notes` view (FZ-53) ---
