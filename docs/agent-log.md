@@ -373,7 +373,9 @@ FZ-68 round 2 on the accepted sketch (on #124); tickets on his yes:
 wizard (lead: a `fleetz doctor` under M5, never holding secrets) and
 the band on every list and the ssh README paragraph: unanswered.
 
-13:45 to 14:05 CET, three more ideas, recorded in `ideas.md` ("Info as
+Between 13:45 and 15:15 CET (the lead's stamps ran up to 80 minutes
+behind git in that stretch; commit dates are authoritative), three
+more ideas, recorded in `ideas.md` ("Info as
 a dashboard of boxes", "A day's work in info", "A Relay view") with
 his words: the `info` restructure (boxes for `BRANCHES` and `CI` side
 by side, `WORKTREES` short, `RECENT COMMITS` uncapped, each mouse-
@@ -383,8 +385,34 @@ in `info`; a Relay status view ("now we are talking!!"); and 13:50
 page of sorts" (into FZ-68 round 2). The lead sent an `info` sketch
 for his yes before a ticket; the other two wait for a design note.
 
+- **#128 (FZ-72), ssh refusals read `ssh` and the fetch marker wears
+  the Nerd warning glyph.** Merged `8f92063` at 15:10 CET on his
+  acceptance ("128 SSH i trust"); ticket commit `7ad7738` (base
+  `921935a`, branch `feat/128-ssh-label-warning-glyph`, worker
+  `fz-worker` and reviewer `fz-reviewer`, both `claude-fable-5-1`, lead
+  `ea56f412`). Filed on his pasted yes of 12:20 (a side session's
+  diagnosis: 32 ssh-origin repos marked `auth` because the passphrase
+  key was not in the agent under `BatchMode`). Built: `Ssh` kind judged
+  inside the auth-first branch, row `ssh`, phrase `ssh key refused (run
+  ssh-add)`, `badges::FETCH_WARNING_GLYPH` U+F071 under Nerd with `⚠`
+  under plain, README and CLAUDE.md (five Nerd uses). Worker stop 1:
+  three existing tests pinned the old kind and glyph, his ruling 12:50
+  ("i follow your recommendations on tests"): two `Auth` to `Ssh`, two
+  tests set plain icons. Review 1 (`39eb0219a640`) `needs evidence`:
+  the worker's M2 (auth judged before ssh) is an equivalent mutation,
+  no stderr matches both lists; ruled (a), the record corrected, the
+  diff stands; everything else accepted. Branch CI 41826784048,
+  combined checks on `9130491` (1579; the first run died with the
+  disk), gate holds, `main` CI 41845006953. Follow-ups: `Host key
+  verification failed` still reads `auth` (known_hosts); a
+  `(password)`-only ssh refusal reads as a key refusal. Remembered: a
+  mutation that no test can observe is equivalent, not a coverage
+  gap; the reviewer says so and the record carries it (nothing to keep
+  in a rule).
+  FZ-72: review evidence 1; fix cycles 0; owner decisions 2; worker 23; review 5; models claude-fable-5-1/claude-fable-5-1; usage worker 80529 tokens, reviewer 44043 tokens
+
 - **#127 (FZ-71), fenced code in the notes preview highlighted with
-  tree-sitter.** Merged `9130491` at 13:38 CET on his look ("yes looks
+  tree-sitter.** Merged `9130491` at 15:03 CET on his look ("yes looks
   good is accepted") and his lockfile yes ("i trust regarding lock
   files"); ticket commit `a04f9f4` (base `01b51cb`, branch
   `feat/127-tree-sitter-fenced-code`, worker `fz-worker` and reviewer

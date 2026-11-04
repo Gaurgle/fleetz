@@ -28,12 +28,14 @@ apply to every UI ticket.
 
 ## In flight
 
-- Ready to integrate, reviewed, CI green, records on the issues: FZ-68
-  (#124, `7694c29`) on his look and tab-strip answer (`[/] NOTES` alone,
-  or an elided strip later); FZ-71 (#127, `a04f9f4`, guarded Cargo
-  files) on his yes to the lockfile floor moves (`cc`, `serde_json`,
-  `shlex`), then `--guarded-approved`; FZ-72 (#128, `7ad7738`) on his
-  look. FZ-74 (#130, `yy`/`yp`): Ready after FZ-71, stops for his look.
+- Running, records on the issues: FZ-68 round 2 (#124, the flush
+  divider on his accepted sketch, `fz-worker`, branch at `7694c29` plus
+  an in-progress merge of `main`; stops for his look), FZ-74 (#130,
+  `yy`/`yp`, `fz-worker` from `8f92063`; his look), FZ-76 (#133, icons
+  repaint live, `fz-small`, in review, diff `c4b7c008e590`; no look).
+  Ready: FZ-77 (#134, worktrees view, lead's design), FZ-78 (#132, `M`
+  all files, after FZ-68). FZ-75 (#131) is another session's research
+  ticket (ssh key loading); not the lead's.
 - FZ-65 (#121): built, diff `9f4018d7160d` unreviewed, held for his wheel
   decision (select as built, or scroll clamped) and a wrapped-row ticket.
 - #88 (FZ-38): parked, uncommitted on at-a. FZ-63 (#119), FZ-60 (#116):
@@ -51,10 +53,10 @@ apply to every UI ticket.
 ## Next step
 
 Merged 11-04: FZ-67 `2e71935`, FZ-70 `f968c79`, FZ-69 `01b51cb`, FZ-73
-`14f44e3`. Next: merge FZ-71, FZ-72, FZ-68 as his answers come (fresh
-combined checks and gate each; merge-resolution cycles likely, they
-share `markdown.rs`, `detail.rs`, README); dispatch FZ-74 after FZ-71;
-then FZ-65 on his wheel answer, the `{`/`}` ticket on his yes, FZ-41
-(#97). FZ-63, FZ-60 on his word, FZ-58 after FZ-63. FZ-52: his word.
+`14f44e3`, FZ-71 `9130491`, FZ-72 `8f92063`. Next: review and merge
+FZ-76; FZ-68 round 2 and FZ-74 to his look; FZ-77 in the next worker
+slot, FZ-78 after FZ-68; the `info` boxes ticket on his sketch yes
+(ideas.md); then FZ-65 on his wheel answer, the `{`/`}` ticket on his
+yes, FZ-41 (#97). FZ-63, FZ-60 on his word, FZ-58 after FZ-63.
 
 Start a lead at the root: `claude --agent fz-coordinator`; Codex: `AGENTS.md`.
