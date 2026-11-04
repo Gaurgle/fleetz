@@ -289,6 +289,40 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### Merged on 2026-11-04
+
+Owner's words, 2026-11-04, about 10:05 CET, on the lead's capture of
+the FZ-67 branch build: "that's nice. but what would be even nicer is
+to NOT have the preview pane nested, but just divided. still using the
+border headers/text, but right of the divider. but 'save' this, it's
+still good!" Asked where the border text goes, he chose "Text on pane
+2's top border" (the divider runs pane 2's full height, the title and
+facts sit on pane 2's top border above the preview). Filed as FZ-68.
+
+- **#123 (FZ-67), the notes preview sits inside pane 2 with its own
+  border.** Merged `2e71935` at 11:15 CET on his look (above); ticket
+  commit `36de80f` (base `423ef9d`, branch
+  `feat/123-notes-preview-inside-pane2`, worker `fz-worker` and
+  reviewer `fz-reviewer`, both `claude-fable-5-1`, lead sessions
+  `11cc93e2` and `ea56f412`). Filed on his ask of 11-03 16:30 CET.
+  Pane 2 keeps one outer border, title, tabs and pinned header across
+  the full width; the body splits into the tree and a rounded box
+  titled `notes preview` with the file facts on its right border,
+  dropped whole when narrow; outer border lit for the tree, the box
+  lit for the reader; `panel_rects` nests `reader` in `detail` and
+  `at` checks the reader first; one shared (header, body) split,
+  `notes_pane_body`, feeds render and `panel_rects`. Worker stop 1:
+  four existing tests pinned the old shape, his yes 16:54 (log, 11-03);
+  each kept what it guarded. Review 1 (`782e7ef007d9`) accepted, one
+  optional note (short-pane fallback untested); worker added the test,
+  re-review (`15e338df8549`) accepted. Branch CI 41673678898, combined
+  checks on `050ab3a` (11-03) and `fbbf573` (11-04, 1546 green),
+  `relay-gate` holds twice, `main` CI 41812937478. The lead verified
+  the shape in the branch build under a private tmux socket (capture
+  and border colours) before his look. Remembered: nothing to keep,
+  the shared-split invariant was already in `.claude/rules/ui.md`.
+  FZ-67: review accepted first; fix cycles 0; owner decisions 2; worker 15; review 11; models claude-fable-5-1/claude-fable-5-1; usage worker 176790 tokens, reviewer 83799 tokens
+
 ### Merged on 2026-11-03
 
 Owner's words, 2026-11-03: on FZ-67's four existing tests, 16:54 CET,
