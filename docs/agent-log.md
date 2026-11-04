@@ -315,6 +315,68 @@ on". Filed FZ-69 (#125), FZ-70 (#126), FZ-71 (#127, the dependency
 approval recorded in its body); code files in the preview is a
 follow-up named in FZ-71, not filed.
 
+About 12:00 to 12:20 CET, three asks in a row: "also bring the yy / yp
+for yanking, essentially all around what would be nice to be able to
+'yank' from inside fleetz. yp on repo list could be yanking its path
+or url? yanking a commit hash, yy yanking a note, etc. let's review
+everything, and see what could be yankable, with either yy or yp";
+"how are we doing on the worktrees view in pane 2?" (none filed; `info`
+has the FZ-13w rows); "we also need to think about how other users
+stay 'logged in' since they have to use ssh for this fleetz to work
+smoothly across repos, right?"; "is the selection highlighting in
+lists on its way?" (FZ-66 did pane 1 only; no ticket for the rest).
+The side session's ssh diagnosis he pasted at 12:20 with "my yes is
+given here" became FZ-72 (#128). Lead's yank table, sent 12:23 for
+his answers: repo row `yy` the GitHub url, `yp` the local path; the
+commit lists `yy` the hash (today's `y`), `yp` the commit url;
+`branches` `yy` the name, `yp` its url; `ci` `yy` the run url, `yp`
+the run id; inspector on a commit `yy` the message, `yp` the hash; on
+a run `yy` the failing step's log tail, `yp` the run url; notes tree
+and the file card `yy` the content, `yp` the absolute path; strip,
+section header, not-cloned row nothing (`y` plus another key is a
+no-op, as notez). Open: keep plain `y`; `ci` url or id; `~` or
+absolute path. Lead's ssh answer: fleetz never prompts for or holds a
+passphrase; FZ-72's phrase names `ssh-add`; a README "fetching over
+ssh" paragraph proposed inside FZ-72, his yes pending.
+
+- **#125 (FZ-69), `<` and `>` step the repo list from the width on
+  screen.** Merged `01b51cb` at 12:17 CET under the safe-merge rule
+  (a fix to an existing key, no look); ticket commit `49f586c` (base
+  `fe014f5`, branch `fix/125-resize-step-from-screen`, worker
+  `fz-worker` and reviewer `fz-reviewer`, both `claude-fable-5-1`, lead
+  `ea56f412`). Filed on his report of 11:28 CET and yes of 11:31. Cause:
+  `split_main` capped the list at 52 columns only at the default
+  percentage and the keys stepped blind. Built: `App::main_area_width`
+  (a `Cell` the `<`/`>` arm sets from `panel_rects`), `repo_list_width`
+  beside `split_main`, the step from the drawn width when the cap
+  bites with a guard each way; three tests, one a width sweep 60 to
+  400. Review 1 (`8f6d1f161329`) accepted with two low findings (the
+  rounding direction untested, guard 1 without `area > 0`); lead took
+  both, re-review (`8dc38e480c27`) accepted, the floor mutation caught.
+  Branch CI 41819056674, combined checks on `f968c79` (1550), gate
+  holds, `main` CI 41819895717. Known: above about 260 columns `<`
+  from the default does nothing (the 20% floor is wider than the cap);
+  the `u16` multiply overflows above about 1092 columns, pre-existing.
+  Remembered: nothing to keep.
+  FZ-69: review accepted first; fix cycles 1; owner decisions 0; worker 18; review 7; models claude-fable-5-1/claude-fable-5-1; usage worker 54262 tokens, reviewer 50173 tokens
+
+- **#126 (FZ-70), the rendered markdown takes notez's colours.** Merged
+  `f968c79` at 12:08 CET under the small-look authority of 2026-10-02
+  (colours only); ticket commit `d3f18a6` (base `fe014f5`, branch
+  `feat/126-markdown-notez-colours`, worker `fz-small` on its
+  definition's model, reviewer `fz-reviewer` `claude-fable-5-1`, lead
+  `ea56f412`). Filed on his ask of 11:18 CET and yes of 11:31. Built:
+  `heading_style(level)` (H1 bold mauve, H2 bold sapphire, deeper bold
+  text), `code_style` peach, the ported heading-levels test, README.
+  Worker stop 1: a `detail.rs` test asserted the old colours; ruled
+  those two assertions move (the ticket's own change), scope widened
+  for them. Review 1 (`49342e5168f3`) accepted, no findings. Branch CI
+  41817591092; combined checks on `faebef6`: one failure of the known
+  load-flaky `a_two_hundred_row_fleet_filters_within_the_input_budget`
+  under three parallel builds, green on the immediate rerun (1547);
+  gate holds; `main` CI 41818941885. Remembered: nothing to keep.
+  FZ-70: review accepted first; fix cycles 0; owner decisions 0; worker 17; review 4; models fz-small default/claude-fable-5-1; usage worker 36410 tokens, reviewer 36049 tokens
+
 - **#123 (FZ-67), the notes preview sits inside pane 2 with its own
   border.** Merged `2e71935` at 11:15 CET on his look (above); ticket
   commit `36de80f` (base `423ef9d`, branch

@@ -22,39 +22,39 @@ Three workers running (In flight). Worktrees on at-a: `issue-121`,
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
 
 The 10-30 stop was lifted 2026-11-02 20:18 ("lets keep working then. you
-choose tickets as you see fit best", log). Astra is the preferred lead,
-Fable when Astra is unavailable. Never `cargo install`, tag or release.
-UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
+choose tickets as you see fit best", log). Astra is the preferred lead.
+Never `cargo install`, tag or release. His FZ-45 look rules (10-27, log)
+apply to every UI ticket.
 
 ## In flight
 
-- Running since 11-04 11:40, base `fe014f5`, not yet reported: FZ-68
-  (#124, divided preview, `fz-worker`, stops for his look), FZ-69 (#125,
-  `<`/`>` step from the drawn width, `fz-worker`), FZ-70 (#126, notez's
-  markdown colours, `fz-small`). FZ-71 (#127, tree-sitter fenced code,
-  deps approved in its body) after FZ-70. Records on the issues.
-- FZ-65 (#121): built, diff `9f4018d7160d` unreviewed, held for his
-  wheel decision (selects as built, or scrolls with the highlight
-  clamped) and his yes to a wrapped-row follow ticket.
+- FZ-68 (#124, divided preview): Ready to integrate at `7694c29` (merge
+  with `main` reviewed, CI green); waits for his look and his tab-strip
+  answer (`[/] NOTES` alone in `notes`, or an elided strip later).
+  FZ-71 (#127, tree-sitter, deps approved in its body): `fz-worker`
+  from `01b51cb`, 12:30. FZ-72 (#128, `ssh` label, Nerd warning glyph):
+  Ready on his pasted yes 12:20, stops for his look. Records on issues.
+- FZ-65 (#121): built, diff `9f4018d7160d` unreviewed, held for his wheel
+  decision (select as built, or scroll clamped) and a wrapped-row ticket.
 - #88 (FZ-38): parked, uncommitted on at-a. FZ-63 (#119), FZ-60 (#116):
   unreviewed trees lost with their worktrees 11-03; redispatch on his word.
 
 ## Open questions
 
-- Code files highlighted in the preview: his "later on" (11-04, log), a
-  ticket on his yes after FZ-71. The CI YAML needs a tenth grammar.
+- His yes wanted (asked 12:23, log): a pane 2 `worktrees` view (none
+  filed), the FZ-66 band on every list, an ssh README paragraph in
+  FZ-72, the `yy`/`yp` yank design (lead's table in the log). Code
+  files highlighted after FZ-71; the CI YAML needs a tenth grammar.
 - #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
   #81 and #79: his answer on the existing footer and header test edits.
 - Pane 1 wheel coalescing ticket, flaky `clipboard::tests` issue: his yes.
 
 ## Next step
 
-Merged 11-04: FZ-67 `2e71935`. Next: review and integrate FZ-69 and
-FZ-70 as they report (FZ-70 under the small-look authority, FZ-69
-without a look); FZ-68 to Ready to integrate for his look; FZ-71 once
-FZ-70 is on `main`; then FZ-65 on his wheel answer (merge-resolution
-cycle), the `{`/`}` ticket on his yes, FZ-41 (#97). FZ-63, FZ-60 on
-his word, FZ-58 (#114) after FZ-63. FZ-52 not before 0.8.0 and his word.
+Merged 11-04: FZ-67 `2e71935`, FZ-70 `f968c79`, FZ-69 `01b51cb`. Next:
+merge FZ-68 on his look (fresh gate); FZ-71 through review; FZ-72 in
+the second worker slot; then FZ-65 on his wheel answer (a merge-
+resolution cycle), the `{`/`}` ticket on his yes, FZ-41 (#97). FZ-63,
+FZ-60 on his word, FZ-58 (#114) after FZ-63. FZ-52 after 0.8.0, his word.
 
-Start a lead from the repo root: `claude --agent fz-coordinator`
-(subscription, no provider override); Codex from `AGENTS.md`.
+Start a lead at the root: `claude --agent fz-coordinator`; Codex: `AGENTS.md`.
