@@ -2187,3 +2187,67 @@ enough for the list and the view answers the rest on demand.
 `info` counts their dirt but this view lists the main checkout only in v1);
 the porcelain paths carried from the sweep to skip the dwell; the file list
 in `-d` print mode.
+
+## Info as a dashboard of boxes
+
+**Status: proposed by Andreas 2026-11-04, sketch pending his yes, not
+ticketed.**
+
+**Problem.** `info` is one scrolling column: branches with their paths and
+upstreams, a `ci` section under them, the worktrees with every detail, and
+six recent commits. The quick glance it is meant to be competes with detail
+that has its own pane 2 page now (`branches`, `ci`, `worktrees` once FZ-77
+lands). His words: "we can make WORKTREES less detailed, fit 'ci' to the
+right of 'branches', and make 'ci' spell 'CI'. branches dont need to show
+path nor 'upstream', save those for the WORKTREES page in pane 2.
+encapsulate each part in a small square/divider, that restructures
+ackording to window size. have each part be scrollable, to fit more info if
+one want to scroll to see more (only mouse for these). so dont cap 'recent
+commits' at 6 commits. essentially, i want to see more of the most relevant
+quick info one might need access too. the rest of the info has it's
+dedicated page in pane 2".
+
+**Shape.** Under the pinned header, `info`'s body becomes boxes: `BRANCHES`
+(name, ahead/behind, age; no path, no upstream) and `CI` side by side when
+the pane is wide enough, `WORKTREES` (one short row each: branch, dirty,
+age) and `RECENT COMMITS` (uncapped) below; each box has its own border and
+label in the section colour, its own scroll driven by the mouse wheel over
+it only (the keyboard keeps scrolling the body as a whole), and the boxes
+reflow to one column when the pane is narrow. The headings spell `CI`.
+
+**Open.** Which boxes pair at which width; whether a box can be folded;
+how the body's keyboard scroll and a box's wheel scroll coexist (the
+`panel_rects`-matches-`render` invariant applies to each box).
+
+## A day's work in info
+
+**Status: idea from Andreas 2026-11-04, not designed.**
+
+His words: "we could perhaps also in the general pane 2 INFO tab show a
+total of lines diff per 'session' what a session now might mean, perhaps
+an entire day? or can we build something that looks at factors such as
+commits, merges and worktrees and diffs, to determine what a 'session'
+is, and how much was done that day?"
+
+**Thoughts.** A day is the honest unit (commit dates, the contribution
+strip already counts by day); a "session" inferred from gaps between
+commits, merges and worktree activity is a heuristic worth a design note
+before any code. Lines added and removed come from `git log --numstat
+--since=midnight` per repo, off the UI thread as the sweep's other reads
+are; the fleet total belongs in the header or the status line, the per-repo
+figure in `info`'s box. Not a ticket until the unit is chosen.
+
+## A Relay view
+
+**Status: idea from Andreas 2026-11-04, not designed.**
+
+His words: "this might even open up to have a Claud (and later codex)
+view? Relay status! YES! to show status, handovers, etc!"
+
+**Thoughts.** A repo that runs Relay has `docs/agent-handoff.md`, the
+board and `scripts/relay-status`; a pane 2 view (or an `info` box for a
+Relay repo) could show the baton (lead, released or held), the tickets in
+flight with their status, the open worktrees and the last handoff time,
+read from the handoff file and `gh project` the way `ci` reads GitHub.
+What to read, how often, and whether the Codex side writes the same files
+are the design questions; the handoff format is the contract.

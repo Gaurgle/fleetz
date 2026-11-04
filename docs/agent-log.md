@@ -348,6 +348,69 @@ at, for notes syntax and yy yp". Rulings posted on #127 and #128;
 FZ-73 (#129, the band to `surface0`) filed and dispatched on the
 tweak; the yank ticket follows with the lead's defaults.
 
+13:24 to 13:30 CET, after his looks: "issue 127 version: took long
+time to open. looks good tho, i can only see/reach .md files in file
+explorer. perhaps an addition 'M' to see 'all' files? link code etc.
+what do you think? issue 128 version: cant test/see this without any
+actual failures? or how do i run ssh-add ? issue 124 version: i think
+the divider split should be done so that the yellow notes divider
+goes across the entire pane 2, making it all flush. this gives space
+for a constant full width (within pane 2 still) inspector / info bar?
+letting us keep the general info (containing 'synced, user/owner, *
+branch,- worktrees etc | (divider) inspector/file information? draw
+me a sketch to make sure we share vision. thoughts: should we have a
+setup wizard for letting users setup SSH and git passwords? chaning
+between nerdfont and plain texst should reflect directly, without
+need to save, in the interface". On the lead's sketch and answers:
+"i truyst regarding lock files, ( 1., 2., ) lets see a build of pane
+2 worktrees. i trust you on the first logical revision. 127: i see.
+yes looks good is accepted. good for M for all (code files). 128 SSH
+i trust. 124: looks correct to me. accepoted design. add some relevant
+colors to notes inspector". So: FZ-71 and FZ-72 accepted and merged;
+FZ-68 round 2 on the accepted sketch (on #124); tickets on his yes:
+`M` for all files with code highlighted, the pane 2 `worktrees` view
+(lead designs the first revision), icons switching live. The setup
+wizard (lead: a `fleetz doctor` under M5, never holding secrets) and
+the band on every list and the ssh README paragraph: unanswered.
+
+13:45 to 14:05 CET, three more ideas, recorded in `ideas.md` ("Info as
+a dashboard of boxes", "A day's work in info", "A Relay view") with
+his words: the `info` restructure (boxes for `BRANCHES` and `CI` side
+by side, `WORKTREES` short, `RECENT COMMITS` uncapped, each mouse-
+scrollable, reflowing by width); a per-day or per-session lines diff
+in `info`; a Relay status view ("now we are talking!!"); and 13:50
+"'notes previev' in pane 2 NOTES border could be colored, it's a sub
+page of sorts" (into FZ-68 round 2). The lead sent an `info` sketch
+for his yes before a ticket; the other two wait for a design note.
+
+- **#127 (FZ-71), fenced code in the notes preview highlighted with
+  tree-sitter.** Merged `9130491` at 13:38 CET on his look ("yes looks
+  good is accepted") and his lockfile yes ("i trust regarding lock
+  files"); ticket commit `a04f9f4` (base `01b51cb`, branch
+  `feat/127-tree-sitter-fenced-code`, worker `fz-worker` and reviewer
+  `fz-reviewer`, both `claude-fable-5-1`, lead `ea56f412`). Filed on
+  his ask of 11:18 and dependency yes of 11:31 ("go with tree-sitter
+  and the same nine grammars"). Built: `src/ui/highlight.rs` ported
+  from notez (nine grammars, `OnceLock` slots, a broken grammar
+  disables itself, the Kotlin query), twelve capture styles, fenced
+  code over spans with styles carried across wraps, README. Worker
+  stop 1: two existing tests pinned the unhighlighted look, his ruling
+  12:50 ("i follow your recommendations on tests"); lockfile floor
+  moves (`cc` 1.2.63, `serde_json` 1.0.150, `shlex` 2.0.1) explained
+  and approved; the binary 9.3 to 19.5 MB accepted ("the bigger size
+  is worth the fast build", no release profile). Review 1
+  (`3865ffcc819c`) accepted, no blockers, reviewer could not rerun
+  mutations (no write tool); `cargo tree` confirmed tree-sitter's
+  `serde_json` build feature does not reach the runtime. Branch CI
+  41826780144, combined checks on `1cfc62e` (1576), gate holds with
+  `--guarded-approved`, `main` CI 41843732311. First fence 16 ms cold
+  in release; `main`'s launch 0.34 s cold, under 10 ms warm, so his
+  "took long time to open" was the first `cargo run` compiling the
+  grammars. Follow-ups: FZ-78 (`M` all files, code by extension);
+  the `md` fence's cold cost unmeasured; a multi-byte fence test.
+  Remembered: nothing to keep.
+  FZ-71: review accepted first; fix cycles 0; owner decisions 3; worker 19; review 4; models claude-fable-5-1/claude-fable-5-1; usage worker 125305 tokens, reviewer 75132 tokens
+
 - **#129 (FZ-73), the list band is half as strong.** Merged `14f44e3`
   at 13:12 CET under the small-look authority of 2026-10-02 (a colour);
   ticket commit `46730df` (base `921935a`, branch
