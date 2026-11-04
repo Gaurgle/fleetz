@@ -2228,6 +2228,14 @@ reflow to one column when the pane is narrow. The headings spell `CI`.
 how the body's keyboard scroll and a box's wheel scroll coexist (the
 `panel_rects`-matches-`render` invariant applies to each box).
 
+**More sources he named.** `CONTRIBUTORS` (2026-11-04 15:35: "contributors
+as a list per repo would be nice to list somewhere, perhaps? less
+important but could be nice. i actually want that. perhaps in INFO
+inspector?"): `git shortlog -sn --no-merges` per repo, name, commit count,
+last commit date; a box in FZ-80's source list, and the candidate for the
+`info` inspector's empty state (today `no commit selected`). `AGENTS`
+and `RELAY` from "Agents in fleetz" below.
+
 ## A day's work in info
 
 **Status: idea from Andreas 2026-11-04, not designed.**
@@ -2246,17 +2254,70 @@ before any code. Lines added and removed come from `git log --numstat
 are; the fleet total belongs in the header or the status line, the per-repo
 figure in `info`'s box. Not a ticket until the unit is chosen.
 
-## A Relay view
+## Agents in fleetz
 
-**Status: idea from Andreas 2026-11-04, not designed.**
+**Status: design agreed with Andreas 2026-11-04 15:30, not ticketed.**
+His opening (14:05): "this might even open up to have a Claud (and later
+codex) view? Relay status! YES! to show status, handovers, etc!"; the
+frame (15:05): "other users might not need or want things like relay
+(ofcourse, it's too niche) but Claude implementations, and further down
+the line other AI, IS of interest. altough we should NOT try to compete
+with Herdr and others, but we could implement parts of it! built on my
+workflow".
 
-His words: "this might even open up to have a Claud (and later codex)
-view? Relay status! YES! to show status, handovers, etc!"
+**Principle.** Agent activity is a property of the repo, not an agent
+console inside fleetz (his "yes exactly!"). fleetz monitors and hands off
+(`Enter`, `e`, `o` into the worktree where the work is); it never
+launches, steers or chats with an agent, shows no transcripts, holds no
+credentials. The angle: every agent that works properly leaves git
+traces (a worktree, a ticket branch, commits, a merge, a diff), and
+fleetz already discovers and draws those for every repo at once, so the
+same picture covers Claude, Codex and a human the same way.
 
-**Thoughts.** A repo that runs Relay has `docs/agent-handoff.md`, the
-board and `scripts/relay-status`; a pane 2 view (or an `info` box for a
-Relay repo) could show the baton (lead, released or held), the tickets in
-flight with their status, the open worktrees and the last handoff time,
-read from the handoff file and `gh project` the way `ci` reads GitHub.
-What to read, how often, and whether the Codex side writes the same files
-are the design questions; the handoff format is the contract.
+**Three layers, each opt-in by what exists on disk.**
+
+1. *Plain git, every user.* The worktrees view (FZ-77) and "a day's
+   work" (the section above: lines in and out per repo since midnight, a
+   fleet total). An agent that works in worktrees shows up here with no
+   agent-specific code.
+2. *Agent conventions, when `.claude/` (later Codex's files) is there.*
+   What he wants to see, per repo (his answers): that this repo has an
+   active agent, which agent it is (claude or codex), what it produced
+   today, how many subagents it is running, the baton holder, perhaps the
+   PID; "not much deeper then that". Sources, all read-only and off the UI
+   thread: a worktree under `.claude/worktrees/` wears an agent glyph and
+   its ticket id from the branch name; `~/.claude/projects/<repo>/`
+   (names and mtimes only, never contents: a session directory per
+   session, subagent transcripts inside it) gives "last activity" and a
+   subagent count; a `claude` or `codex` process whose working directory
+   is the repo (`ps` plus `lsof`, on demand for the selected repo only)
+   gives the PID and "running now". This is the part other users want:
+   which repos have an agent busy in them and what the agents did today.
+3. *Relay, when the repo has it.* `scripts/relay-status` already prints
+   the block per repo (lead, baton held or released, `main` versus
+   origin, CI, worktrees, next step): fleetz runs it for the selected
+   repo and shows its lines in a box, as `ci` reads GitHub, and reads the
+   handoff's in-flight tickets for the rest. "Active" for a Relay repo is
+   the baton (his answer 2): held means active even between writes,
+   released means idle. The display is governed by a config key only
+   (`relay = "auto" | "off"`, auto shows the box when `scripts/relay-status`
+   exists), not a row in the `,` overlay: "people dont need to see that
+   Relay even exists, so stow that Relay display setting somewhere".
+
+**Where it lands.** An `AGENTS` box in the `info` dashboard (FZ-79's
+box model, a source in FZ-80's list) for layer 2, a `RELAY` box for layer
+3, and the agent glyph and ticket id in the worktrees view and pane 1's
+worktree badge. He also plans GitHub Projects and kanban in fleetz
+(FZ-08's read-only board view is the seed), which ties the baton and the
+tickets in flight to the board.
+
+**Rejected.** A session manager (start, stop, prompt): competes with
+Herdr-style tools and breaks the monitor-only rule. Reading transcript
+contents: privacy and cost for no monitoring value. A Relay row in the
+settings overlay: niche, stays in the config file. A "session" inferred
+from commit gaps for the day's work: a day first, the algorithm later
+("it will probably need some designing").
+
+**Order.** FZ-77 (worktrees view) first since the others render on it;
+"a day's work" as an `info` box after FZ-79; then the `AGENTS` box
+(layer 2); the `RELAY` box last. Tickets on his yes to this note.

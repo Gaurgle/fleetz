@@ -405,6 +405,43 @@ could implement parts of it! built on my workflow"); the lead answered
 with three layers (plain git, Claude conventions, Relay) and four
 questions, a design note in `ideas.md` on his answers.
 
+15:30 CET, his answers on the agents design (the note "Agents in
+fleetz" in `ideas.md` holds the design): "'agent activity as a property
+of the repo', not 'an agent console inside fleetz'. yes exactly!";
+layers "1. yes 2. yes sounds good. great start 3. yes, and the command
+'relay status' is already live to run per repo from inside a tracked
+repo, that we could just pipe in? but expand on the other parts? and
+add Relay in settings, but buried deeper? people dont need to see that
+Relay even exists, so stow that Relay display setting somewhere";
+"no steering, only monitor"; questions: "1. i think both, but per
+repo; this repo has an active agent and that agent produced x today.
+show which agent has the baton per repo, perhaps even show PID? i also
+have plans for implementing github projects and kanban into fleetz, so
+all of this connects. 2. hmm.. i think it would be good to see
+'active' or not status even if no agent is writing at the moment.
+meaning, if the baton is released or not, that would be the active
+signal? 3. nothing yet, but im intrigued by seeing some indication of
+status and repo per agent, and how many subaegnts its running, and
+what agent it is (claude or codex for instance) but not much deeper
+then that. 4. im fine with starting with the day. keep the other
+session algorithm in tickets for later. it will probably need some
+designing".
+
+- **#133 (FZ-76), switching icons in the settings row repaints at
+  once.** Merged `5ed9b4e` at 15:26 CET under the safe-merge rule (a
+  fix, no look); ticket commit `c21d453` (base `8f92063`, branch
+  `fix/133-icons-repaint-live`, worker `fz-small` on its definition's
+  model, reviewer `fz-reviewer` `claude-fable-5-1`, lead `ea56f412`).
+  Filed on his ask of 13:24. Built: each step of the row calls
+  `set_active_icons`, `SettingsOverlay.icons_in_force` restored on Esc,
+  `,` and `q` and committed on a saved Enter; the new test fails at the
+  base and passes after. Review 1 (`c4b7c008e590`) accepted, every
+  overlay exit path traced, two mutations caught; optional: no test
+  for `icons_in_force` moving on a save (needs a settings path).
+  Branch CI 41846485622, combined checks on `e830c2e` (1580), gate
+  holds, `main` CI 41847422807. Remembered: nothing to keep.
+  FZ-76: review accepted first; fix cycles 0; owner decisions 0; worker 11; review 3; models fz-small default/claude-fable-5-1; usage worker 43032 tokens, reviewer 30946 tokens
+
 - **#128 (FZ-72), ssh refusals read `ssh` and the fetch marker wears
   the Nerd warning glyph.** Merged `8f92063` at 15:10 CET on his
   acceptance ("128 SSH i trust"); ticket commit `7ad7738` (base
