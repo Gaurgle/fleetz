@@ -46,9 +46,14 @@ pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers, borders
 /// A whole-row wash rather than a bolded hash. Bold marks one token; the eye
 /// still has to find which token, and in a list two hundred rows long that is
 /// the work. A band says it at a glance, which is what lazygit does and why
-/// its lists read so quickly. Catppuccin `surface1`, a lift off the pane
-/// rather than a colour, so it cannot be mistaken for status.
-pub const SELECTED_BG: Color = Color::Rgb(69, 71, 90);
+/// its lists read so quickly. A lift off the pane rather than a colour, so it
+/// cannot be mistaken for status.
+///
+/// Catppuccin `surface0` (49, 50, 68), halfway from `surface1` (`SURFACE`) to
+/// the base (30, 30, 46): "the list highlight can be 50% more dimmed"
+/// (Andreas, 2026-11-04). Strictly between the two, so it stays a visible lift
+/// but is no longer `SURFACE`'s RGB.
+pub const SELECTED_BG: Color = Color::Rgb(49, 50, 68);
 
 /// Stashed work, in the repo list's badge and in the repo pane alike.
 ///
@@ -270,4 +275,27 @@ pub fn history_view_color(view: crate::app::HistoryView) -> Color {
 /// previous flat near-invisible grey where every lane looked the same.
 pub fn graph_lane_color(col: usize) -> Color {
     GRAPH_PALETTE[col % GRAPH_PALETTE.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rgb(c: Color) -> (u8, u8, u8) {
+        match c {
+            Color::Rgb(r, g, b) => (r, g, b),
+            other => panic!("not an RGB colour: {other:?}"),
+        }
+    }
+
+    /// The list band is dimmer than `SURFACE` yet still lifts off the pane
+    /// (FZ-73): every channel lies strictly between the base and `SURFACE`.
+    #[test]
+    fn selected_band_lies_between_base_and_surface() {
+        let b = (30u8, 30u8, 46u8); // Catppuccin Mocha `base`, the pane
+        let (s, band) = (rgb(SURFACE), rgb(SELECTED_BG));
+        assert!(b.0 < band.0 && band.0 < s.0, "red {band:?}");
+        assert!(b.1 < band.1 && band.1 < s.1, "green {band:?}");
+        assert!(b.2 < band.2 && band.2 < s.2, "blue {band:?}");
+    }
 }
