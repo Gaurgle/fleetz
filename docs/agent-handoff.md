@@ -28,12 +28,12 @@ apply to every UI ticket.
 
 ## In flight
 
-- FZ-68 (#124, divided preview): Ready to integrate at `7694c29` (merge
-  with `main` reviewed, CI green); waits for his look and his tab-strip
-  answer (`[/] NOTES` alone in `notes`, or an elided strip later).
-  FZ-71 (#127, tree-sitter, deps approved in its body): `fz-worker`
-  from `01b51cb`, 12:30. FZ-72 (#128, `ssh` label, Nerd warning glyph):
-  Ready on his pasted yes 12:20, stops for his look. Records on issues.
+- Ready to integrate, reviewed, CI green, records on the issues: FZ-68
+  (#124, `7694c29`) on his look and tab-strip answer (`[/] NOTES` alone,
+  or an elided strip later); FZ-71 (#127, `a04f9f4`, guarded Cargo
+  files) on his yes to the lockfile floor moves (`cc`, `serde_json`,
+  `shlex`), then `--guarded-approved`; FZ-72 (#128, `7ad7738`) on his
+  look. FZ-74 (#130, `yy`/`yp`): Ready after FZ-71, stops for his look.
 - FZ-65 (#121): built, diff `9f4018d7160d` unreviewed, held for his wheel
   decision (select as built, or scroll clamped) and a wrapped-row ticket.
 - #88 (FZ-38): parked, uncommitted on at-a. FZ-63 (#119), FZ-60 (#116):
@@ -42,8 +42,7 @@ apply to every UI ticket.
 ## Open questions
 
 - His yes wanted (asked 12:23, log): a pane 2 `worktrees` view (none
-  filed), the FZ-66 band on every list, an ssh README paragraph in
-  FZ-72, the `yy`/`yp` yank design (lead's table in the log). Code
+  filed), the FZ-66 band on every list, an ssh README paragraph. Code
   files highlighted after FZ-71; the CI YAML needs a tenth grammar.
 - #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
   #81 and #79: his answer on the existing footer and header test edits.
@@ -51,10 +50,11 @@ apply to every UI ticket.
 
 ## Next step
 
-Merged 11-04: FZ-67 `2e71935`, FZ-70 `f968c79`, FZ-69 `01b51cb`. Next:
-merge FZ-68 on his look (fresh gate); FZ-71 through review; FZ-72 in
-the second worker slot; then FZ-65 on his wheel answer (a merge-
-resolution cycle), the `{`/`}` ticket on his yes, FZ-41 (#97). FZ-63,
-FZ-60 on his word, FZ-58 (#114) after FZ-63. FZ-52 after 0.8.0, his word.
+Merged 11-04: FZ-67 `2e71935`, FZ-70 `f968c79`, FZ-69 `01b51cb`, FZ-73
+`14f44e3`. Next: merge FZ-71, FZ-72, FZ-68 as his answers come (fresh
+combined checks and gate each; merge-resolution cycles likely, they
+share `markdown.rs`, `detail.rs`, README); dispatch FZ-74 after FZ-71;
+then FZ-65 on his wheel answer, the `{`/`}` ticket on his yes, FZ-41
+(#97). FZ-63, FZ-60 on his word, FZ-58 after FZ-63. FZ-52: his word.
 
 Start a lead at the root: `claude --agent fz-coordinator`; Codex: `AGENTS.md`.

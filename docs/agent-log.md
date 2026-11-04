@@ -339,6 +339,30 @@ absolute path. Lead's ssh answer: fleetz never prompts for or holds a
 passphrase; FZ-72's phrase names `ssh-add`; a README "fetching over
 ssh" paragraph proposed inside FZ-72, his yes pending.
 
+12:50 CET, on the FZ-71 and FZ-72 stops: "1. i follow your
+recommendations on tests. 2. explain this better, i dont know what it
+means [the lockfile moves] 3. ok, that's fine? i think the bigger size
+is worth the fast build. other tweaks: the list highlight can be 505
+[50%] more dimmed. let me know when there's a new version i can look
+at, for notes syntax and yy yp". Rulings posted on #127 and #128;
+FZ-73 (#129, the band to `surface0`) filed and dispatched on the
+tweak; the yank ticket follows with the lead's defaults.
+
+- **#129 (FZ-73), the list band is half as strong.** Merged `14f44e3`
+  at 13:12 CET under the small-look authority of 2026-10-02 (a colour);
+  ticket commit `46730df` (base `921935a`, branch
+  `feat/129-list-band-dimmer`, worker `fz-small` on its definition's
+  model, reviewer `fz-reviewer` `claude-fable-5-1`, lead `ea56f412`).
+  Filed on his tweak of 12:50 CET. Built: `SELECTED_BG` from Catppuccin
+  `surface1` to `surface0` (49, 50, 68), the FZ-66 dots comment
+  reworded, a test keeping the band strictly between the base and
+  `SURFACE`. Review 1 (`fd39e6df446b`) accepted, no findings. Branch
+  CI 41826513896, combined checks on `921935a` (1551), gate holds,
+  `main` CI 41827102107. Remembered: the ticket pointed at a `BASE`
+  constant that does not exist (the base lives as `intro::BACKDROP`
+  and literals); nothing to keep.
+  FZ-73: review accepted first; fix cycles 0; owner decisions 0; worker 8; review 2; models fz-small default/claude-fable-5-1; usage worker 27404 tokens, reviewer 20753 tokens
+
 - **#125 (FZ-69), `<` and `>` step the repo list from the width on
   screen.** Merged `01b51cb` at 12:17 CET under the safe-merge rule
   (a fix to an existing key, no look); ticket commit `49f586c` (base
