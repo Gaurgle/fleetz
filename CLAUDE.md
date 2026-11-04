@@ -121,13 +121,14 @@ cargo fmt                     # must be clean before committing
 cargo install --path .        # to ~/.cargo/bin (the `fleetz` on PATH)
 ```
 
-Needs a Nerd Font for four uses of its codepoints: the repo kind glyph
+Needs a Nerd Font for five uses of its codepoints: the repo kind glyph
 (`ui/badges.rs::kind_glyph`), the stash mark (`badges::STASH_GLYPH`), the watch
-eye (`WATCH_ON_GLYPH` and `WATCH_OFF_GLYPH` in `ui/mod.rs`) and the contribution
+eye (`WATCH_ON_GLYPH` and `WATCH_OFF_GLYPH` in `ui/mod.rs`), the failed-fetch
+marker's warning icon (`badges::FETCH_WARNING_GLYPH`) and the contribution
 strip's day squares (`app::CellSize::glyph`). Without one they are tofu. The
 `icons = "plain"` config key, or the `,` settings row (`app::Icons::Plain`),
-swaps the first three for ASCII stand-ins; the day squares have no plain
-fallback. It also needs an authenticated `gh` on PATH, which the GitHub fetch
+swaps the first three for ASCII stand-ins and the warning icon for `⚠`; the
+day squares have no plain fallback. It also needs an authenticated `gh` on PATH, which the GitHub fetch
 uses.
 
 ## Domain invariants - do not violate
