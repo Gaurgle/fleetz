@@ -427,6 +427,27 @@ then that. 4. im fine with starting with the day. keep the other
 session algorithm in tickets for later. it will probably need some
 designing".
 
+16:10 CET: "we can also use the concept of subpanels/subpanes for
+worktrees? so standing on a worktree displays more detailed info in a
+subpage to the right, like in notes page?" Planned as FZ-77's round 2
+after his look (`ideas.md`, "The worktrees view as a divided pane");
+his answer pending on whether the subpage lists the worktree's
+uncommitted files too. Earlier, 15:35: "contributors as a list per repo
+would be nice ... i actually want that. perhaps in INFO inspector?" and
+"we are eating away at disk space with the lead's scratchpad cargo
+build output. clean up when you got time" (done, 24 GB free).
+
+Practical note, 15:45 CET: a `CARGO_TARGET_DIR` shared by two
+checkouts serves stale artifacts (cargo keys a workspace member by its
+relative path, so another worktree's build satisfies the fingerprint);
+the FZ-74 reviewer got 25 phantom failures and then a binary with
+another ticket's enum variant. Rule: one target dir per worktree,
+verify runs in their own, all under the session scratchpad, pruned at
+the merge (`relay-sweep`); trust only a run whose output shows
+`Compiling fleetz` or `Checking fleetz` with the expected path. The
+disk filled once today under three parallel tickets' dirs (about 10
+GB freed by removing finished ones); Andreas asked for cleanup at 15:35.
+
 - **#133 (FZ-76), switching icons in the settings row repaints at
   once.** Merged `5ed9b4e` at 15:26 CET under the safe-merge rule (a
   fix, no look); ticket commit `c21d453` (base `8f92063`, branch
