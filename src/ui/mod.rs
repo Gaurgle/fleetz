@@ -502,11 +502,13 @@ impl PanelRects {
         if self.repo_list.contains(p) {
             return Some(FocusedPanel::RepoList);
         }
-        if self.detail.is_some_and(|r| r.contains(p)) {
-            return Some(FocusedPanel::Detail);
-        }
+        // The reader before the detail pane: it sits inside pane 2 in the
+        // `notes` layout (FZ-67).
         if self.reader.is_some_and(|r| r.contains(p)) {
             return Some(FocusedPanel::Reader);
+        }
+        if self.detail.is_some_and(|r| r.contains(p)) {
+            return Some(FocusedPanel::Detail);
         }
         if self.inspector.is_some_and(|r| r.contains(p)) {
             return Some(FocusedPanel::Inspector);
@@ -632,7 +634,9 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
         // The `notes` layout (FZ-62) splits columns first: pane 1 over the
         // card in the left column, which the inspector's request, clamp and
         // fold size as they size the inspector, and pane 2 at full height on
-        // the right, split into the tree and the reader.
+        // the right, its body under the pinned header split into the tree
+        // and the preview (FZ-67). No preview while pane 2 shows a digest or
+        // no repo.
         View::Detail if app.notes_layout() => {
             let (body, contributions) = contributions::split_main_area(main, strip_folded);
             let (left, pane2) = detail::split_main(body, app.repo_list_pct);
@@ -642,15 +646,16 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
                 app.shows_inspector(),
                 app.inspector_folded,
             );
-            let (tree, reader) = detail::split_notes_pane(pane2);
+            let reader = detail::notes_pane_body(pane2, app)
+                .map(|(_, body)| detail::split_notes_pane(body).1);
             PanelRects {
                 main,
                 body,
                 repo_list,
-                detail: Some(tree),
+                detail: Some(pane2),
                 inspector: card,
                 inspector_folded: app.inspector_folded,
-                reader: Some(reader),
+                reader,
                 contributions,
             }
         }
