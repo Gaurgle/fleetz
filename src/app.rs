@@ -2436,6 +2436,10 @@ pub struct App {
     /// no other key came since: the streak keeps cycling views on arriving
     /// in `ci` rather than stepping the run bodies there.
     pub brackets_cycling_views: bool,
+    /// A `y` was pressed and the next key finishes the yank chord (FZ-74):
+    /// `y` copies the thing under the cursor, `p` its path, anything else
+    /// copies nothing. Cleared by the next key whatever it is.
+    pub pending_yank: bool,
     /// The run the scrolls and the mark belong to, and since when it is
     /// highlighted, for the dwell before the inspector fetches anything.
     pub ci_inspected: Option<(u64, std::time::Instant)>,
@@ -2826,6 +2830,55 @@ pub fn carrier_key(repo: &RepoStatus) -> Option<RemoteKey> {
     Some(GithubRepo::identity_key(Some(owner), &origin.name))
 }
 
+/// Which half of the yank chord (FZ-74): `yy` copies the thing under the
+/// cursor, `yp` its path or address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YankKind {
+    Thing,
+    Path,
+}
+
+/// How the status line names what a yank copied: a short value by itself
+/// (a hash, a branch, a run id), a url or a path by kind, a body by size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum YankWord {
+    Value,
+    Url,
+    Path,
+    Size,
+}
+
+/// The repo's page on GitHub, `https://github.com/<owner>/<repo>`: the
+/// carrier's owner and name as GitHub spells them, else an `origin` on
+/// github.com. `None` for a row with neither.
+fn github_web_url(repo: &RepoStatus) -> Option<String> {
+    let origin = repo
+        .remote_url
+        .as_deref()
+        .and_then(crate::model::RemoteRef::parse);
+    let (owner, name) = match (&repo.owner, &repo.location) {
+        (Some(owner), RepoLocation::LocalOnly) => (owner.clone(), origin?.name),
+        (Some(owner), _) => (owner.clone(), repo.name.clone()),
+        (None, _) => {
+            let origin = origin.filter(|o| o.host.eq_ignore_ascii_case("github.com"))?;
+            (origin.owner, origin.name)
+        }
+    };
+    Some(format!("https://github.com/{owner}/{name}"))
+}
+
+/// A note's text as the reader reads it, up to `notes::BODY_CAP`, without
+/// the reader's cut marker, which is not the file's. `None` for a file that
+/// cannot be read as text.
+fn note_text(path: &std::path::Path) -> Option<String> {
+    let body = crate::notes::read_body(path).ok()?;
+    let marker = format!("\n… cut at {} KiB", crate::notes::BODY_CAP / 1024);
+    Some(match body.strip_suffix(&marker) {
+        Some(text) => text.to_string(),
+        None => body,
+    })
+}
+
 impl App {
     pub fn new(repos: Vec<RepoStatus>, header: String, term_width: u16, term_height: u16) -> Self {
         Self {
@@ -2914,6 +2967,7 @@ impl App {
             ci_job_mark: None,
             ci_job_follow: std::cell::Cell::new(JobFollow::Free),
             brackets_cycling_views: false,
+            pending_yank: false,
             ci_inspected: None,
             ci_log_wrap: std::cell::RefCell::new(None),
             notes: std::collections::HashMap::new(),
@@ -4444,6 +4498,191 @@ impl App {
             return;
         };
         self.copy_hash(&hash, copy);
+    }
+
+    /// Feed one key press to the yank chord (FZ-74) and say whether the
+    /// chord took it. `key` is the character pressed, `None` for any key
+    /// that is not a plain character. A `y` arms the chord; the next key
+    /// finishes it: `y` copies the thing under the cursor, `p` its path,
+    /// anything else ends it, copies nothing and is not taken, so it does
+    /// what it does on its own. On a commit list in pane 2 the first `y`
+    /// already copies the hash, as `y` always did there, and still arms
+    /// the chord.
+    pub fn press_yank_key(
+        &mut self,
+        key: Option<char>,
+        copy: impl FnOnce(&str) -> Result<(), String>,
+    ) -> bool {
+        if std::mem::take(&mut self.pending_yank) {
+            let kind = match key {
+                Some('y') => YankKind::Thing,
+                Some('p') => YankKind::Path,
+                _ => return false,
+            };
+            self.yank(kind, copy);
+            return true;
+        }
+        if key != Some('y') {
+            return false;
+        }
+        self.pending_yank = true;
+        if self.on_commit_list() {
+            self.yank_with(copy);
+        }
+        true
+    }
+
+    /// Whether pane 2 has focus on a list of commits, where a plain `y`
+    /// copies the hash at once.
+    fn on_commit_list(&self) -> bool {
+        self.view == View::Detail
+            && self.focused_panel == FocusedPanel::Detail
+            && self.on_header().is_none()
+            && matches!(
+                self.history_view,
+                HistoryView::Info | HistoryView::Commits | HistoryView::Reflog | HistoryView::Graph
+            )
+    }
+
+    /// `yy` or `yp`: copy what `kind` names under the focused cursor through
+    /// `copy` and say so on the status line, `nothing to copy` where there
+    /// is nothing (`yank_target`).
+    pub fn yank(&mut self, kind: YankKind, copy: impl FnOnce(&str) -> Result<(), String>) {
+        let Some((text, word)) = self.yank_target(kind) else {
+            self.set_status("nothing to copy".to_string(), false);
+            return;
+        };
+        let said = match word {
+            YankWord::Value => format!("copied {text}"),
+            YankWord::Url => "copied url".to_string(),
+            YankWord::Path => "copied path".to_string(),
+            // Bytes under a KB, where `0.0 KB` would read as empty.
+            YankWord::Size => match text.len() {
+                n if n < 1024 => format!("copied {n} B"),
+                n => format!("copied {:.1} KB", n as f64 / 1024.0),
+            },
+        };
+        match copy(&text) {
+            Ok(()) => self.set_status(said, false),
+            Err(reason) => self.set_status(format!("copy failed: {reason}"), true),
+        }
+    }
+
+    /// What `yy` (`Thing`) or `yp` (`Path`) copies from the focused pane,
+    /// and the word the status line says it in. Nothing on the compact
+    /// grid, the strip, a section header or a row with nothing to name.
+    fn yank_target(&self, kind: YankKind) -> Option<(String, YankWord)> {
+        use YankKind::{Path, Thing};
+        if self.view != View::Detail || self.on_header().is_some() {
+            return None;
+        }
+        let repo = self.selected_repo()?;
+        match (self.focused_panel, self.history_view) {
+            (FocusedPanel::Contributions, _) => None,
+            (FocusedPanel::RepoList, _) => match kind {
+                Thing => Some((github_web_url(repo)?, YankWord::Url)),
+                Path => Some((
+                    shellexpand::tilde(repo.path.as_deref()?).into_owned(),
+                    YankWord::Path,
+                )),
+            },
+            (_, HistoryView::Notes) => {
+                let path = self.notes_highlighted()?;
+                match kind {
+                    Thing => Some((note_text(&path)?, YankWord::Size)),
+                    Path => Some((path.to_string_lossy().into_owned(), YankWord::Path)),
+                }
+            }
+            (FocusedPanel::Reader, _) => None,
+            (FocusedPanel::Detail, HistoryView::Branches) => {
+                let (name, on_remote) = self.highlighted_branch(repo)?;
+                match kind {
+                    Thing => Some((name.to_string(), YankWord::Value)),
+                    Path => {
+                        let branch = match on_remote {
+                            true => name.split_once('/').map_or(name, |(_, b)| b),
+                            false => name,
+                        };
+                        let url = github_web_url(repo)?;
+                        Some((format!("{url}/tree/{branch}"), YankWord::Url))
+                    }
+                }
+            }
+            (FocusedPanel::Detail, HistoryView::Ci) => {
+                let run = self.ci_highlighted_run()?;
+                match kind {
+                    Thing => Some((run.url.clone(), YankWord::Url)),
+                    Path => Some((run.id.to_string(), YankWord::Value)),
+                }
+            }
+            (FocusedPanel::Detail, _) => {
+                let hash = self.inspected_hash()?;
+                match kind {
+                    Thing => Some((hash.to_string(), YankWord::Value)),
+                    Path => {
+                        let url = github_web_url(repo)?;
+                        Some((format!("{url}/commit/{hash}"), YankWord::Url))
+                    }
+                }
+            }
+            (FocusedPanel::Inspector, HistoryView::Ci) => {
+                if !self.inspects_ci_run() {
+                    return None;
+                }
+                match kind {
+                    Thing => Some((self.ci_shown_text()?, YankWord::Size)),
+                    Path => Some((self.ci_highlighted_run()?.url.clone(), YankWord::Url)),
+                }
+            }
+            (FocusedPanel::Inspector, _) => match kind {
+                Thing => {
+                    let commit = self.inspected_commit()?;
+                    let message = match commit.body.trim().is_empty() {
+                        true => commit.message.clone(),
+                        false => format!("{}\n\n{}", commit.message, commit.body.trim_end()),
+                    };
+                    Some((message, YankWord::Size))
+                }
+                Path => Some((self.inspected_hash()?.to_string(), YankWord::Value)),
+            },
+        }
+    }
+
+    /// The `branches` view's highlighted entry: its name as the view lists
+    /// it, and whether it is a remote-tracking branch. Locals come first.
+    fn highlighted_branch<'a>(&self, repo: &'a RepoStatus) -> Option<(&'a str, bool)> {
+        let locals = repo.branches.len();
+        let last = (locals + repo.remote_branches.len()).checked_sub(1)?;
+        let i = self.detail_selected().min(last);
+        match i < locals {
+            true => repo.branches.get(i).map(|b| (b.name.as_str(), false)),
+            false => repo
+                .remote_branches
+                .get(i - locals)
+                .map(|r| (r.name.as_str(), true)),
+        }
+    }
+
+    /// The text of the run body the inspector shows: the marked job's log
+    /// tail in `jobs`, its whole held log in `log`, the workflow file in
+    /// `script`. `None` while the body holds no text.
+    fn ci_shown_text(&self) -> Option<String> {
+        let run = self.ci_highlighted_run()?;
+        let state = self.selected_ci()?.1?;
+        match self.ci_body {
+            CiBody::Jobs => match state.logs.get(&self.ci_marked_job()?.id)? {
+                crate::ci::LogTail::Lines(tail) => Some(tail.join("\n")),
+                crate::ci::LogTail::Unavailable(_) => None,
+            },
+            CiBody::Log => Some(crate::ui::ci::shown_log(self)?.1.join("\n")),
+            CiBody::Script => {
+                let key = (run.head_sha.clone()?, run.path.clone()?);
+                match state.scripts.get(&key)? {
+                    crate::ci::Detail::Ready(text) => Some(text.clone()),
+                    _ => None,
+                }
+            }
+        }
     }
 
     /// Copy `hash` through `copy` and say so on the status line, in the
