@@ -2,16 +2,15 @@
 
 The baton between leads: at most 60 lines, read on every start. GitHub
 (the issues and https://github.com/users/Gaurgle/projects/1) holds status,
-each ticket's issue holds its record and rulings, `docs/agent-log.md` holds
-finished work, the owner's dated words and the practical notes. Also read
-`release-plan.md`.
+each issue its record and rulings, `docs/agent-log.md` finished work, the
+owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
 Session `ea56f412` (`claude-fable-5-1`, `at-a`) took the baton
-2026-11-04 09:15 CET on his "continue"; `11cc93e2` released it 11-03
-17:30. No worker or reviewer running. Worktrees on at-a: `issue-121`,
-`issue-123`, `issue-88`; none on `jean-1` as far as known.
+2026-11-04 09:15 CET on his "continue"; `11cc93e2` released it 11-03.
+Three workers running (In flight). Worktrees on at-a: `issue-121`,
+`issue-124`, `issue-125`, `issue-126`, `issue-88`; none on `jean-1`.
 
 ## Standing authority
 
@@ -29,32 +28,33 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
-- FZ-68 (#124, the preview as a divided column, text on pane 2's top
-  border): Ready, filed 11-04 on his ask; stops for his look.
-  FZ-65 (#121): built, diff `9f4018d7160d` unreviewed, held for his wheel
-  decision (selects as built, or scrolls with the highlight clamped) and
-  his yes to a wrapped-row follow ticket. Records on the issues.
-- #88 (FZ-38): parked, uncommitted on at-a.
-- FZ-63 (#119), FZ-60 (#116): unreviewed trees from `41ecd76` lost with
-  their worktrees (neither machine, 11-03); redispatch on his word.
+- Running since 11-04 11:40, base `fe014f5`, not yet reported: FZ-68
+  (#124, divided preview, `fz-worker`, stops for his look), FZ-69 (#125,
+  `<`/`>` step from the drawn width, `fz-worker`), FZ-70 (#126, notez's
+  markdown colours, `fz-small`). FZ-71 (#127, tree-sitter fenced code,
+  deps approved in its body) after FZ-70. Records on the issues.
+- FZ-65 (#121): built, diff `9f4018d7160d` unreviewed, held for his
+  wheel decision (selects as built, or scrolls with the highlight
+  clamped) and his yes to a wrapped-row follow ticket.
+- #88 (FZ-38): parked, uncommitted on at-a. FZ-63 (#119), FZ-60 (#116):
+  unreviewed trees lost with their worktrees 11-03; redispatch on his word.
 
 ## Open questions
 
-- Markdown look: 11-04 he asked to copy notez's formatting and colours
-  (log). Theme parity needs no dependency; fenced code and the CI YAML
-  need tree-sitter as notez (11 crates). His dependency yes, then tickets.
+- Code files highlighted in the preview: his "later on" (11-04, log), a
+  ticket on his yes after FZ-71. The CI YAML needs a tenth grammar.
 - #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
-- #81 and #79: his answer on the existing footer and header test edits.
+  #81 and #79: his answer on the existing footer and header test edits.
 - Pane 1 wheel coalescing ticket, flaky `clipboard::tests` issue: his yes.
 
 ## Next step
 
-Merged 11-04: FZ-67 `2e71935`. Next: dispatch FZ-68 (#124) under the
-standing authority, then FZ-65 on his wheel answer (merge-resolution
-cycle, same files), the `{`/`}` ticket on his yes, FZ-41 (#97) after
-them. Markdown theme and highlighting tickets on his dependency yes.
-FZ-63, FZ-60 on his word, FZ-58 (#114) after FZ-63. FZ-52 not before
-0.8.0 and his word.
+Merged 11-04: FZ-67 `2e71935`. Next: review and integrate FZ-69 and
+FZ-70 as they report (FZ-70 under the small-look authority, FZ-69
+without a look); FZ-68 to Ready to integrate for his look; FZ-71 once
+FZ-70 is on `main`; then FZ-65 on his wheel answer (merge-resolution
+cycle), the `{`/`}` ticket on his yes, FZ-41 (#97). FZ-63, FZ-60 on
+his word, FZ-58 (#114) after FZ-63. FZ-52 not before 0.8.0 and his word.
 
-Start a lead from the repo root: `claude --agent fz-coordinator` (normal
-permissions, subscription, no provider override); Codex from `AGENTS.md`.
+Start a lead from the repo root: `claude --agent fz-coordinator`
+(subscription, no provider override); Codex from `AGENTS.md`.
