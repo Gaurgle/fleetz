@@ -172,7 +172,7 @@ pub enum AppEvent {
         walk: app::NotesWalk,
         result: Result<notes::Notes, String>,
     },
-    /// The highlighted note's body and its metadata for the card, applied by
+    /// The highlighted note's body and its metadata for the facts, applied by
     /// `App::apply_note_read` and `App::apply_note_facts`, and a markdown
     /// body rendered at the read's `render_width` (FZ-59), applied by
     /// `App::apply_note_rendered` in the same turn so the reader never
@@ -2028,7 +2028,7 @@ async fn handle_normal_input(
 }
 
 /// The file `Enter` opens in $EDITOR: the `notes` view's highlighted file,
-/// while pane 2, the reader or the card has focus. `None` leaves `Enter` to
+/// while pane 2 or the reader has focus. `None` leaves `Enter` to
 /// open lazygit on the repo.
 fn note_to_open(app: &App) -> Option<std::path::PathBuf> {
     let focused = matches!(
@@ -3026,7 +3026,7 @@ fn spawn_notes_walk(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, walk: app
 }
 
 /// Read the highlighted note off the UI thread and send its body back with
-/// its metadata for the card (FZ-62), then its last commit from a bounded
+/// its metadata for the facts (FZ-62), then its last commit from a bounded
 /// `git log`, "untracked" when git prints nothing. Two answers, body first:
 /// for a file git never saw it walks the whole history, and the reader
 /// shows the body without waiting for that. A markdown body is rendered in
@@ -11942,7 +11942,7 @@ mod tests {
         }
     }
 
-    /// The card's facts are read off the UI thread (FZ-62): `spawn_note_read`
+    /// The file's facts are read off the UI thread (FZ-62): `spawn_note_read`
     /// returns before anything is sent. The body and its metadata come
     /// first and git's last commit after, so the reader never waits on git
     /// (review F4): a date for a committed file, "untracked" for one git
@@ -12660,9 +12660,9 @@ mod tests {
     }
 
     /// FZ-30f fix cycle 3: `]` from the focused inspector in `branches`
-    /// enters `ci` with its runs held and the next `]` goes on to `info`;
+    /// enters `ci` with its runs held and the next `[` goes back to `branches`;
     /// back in `ci`, any other key ends the streak and `]` steps the bodies.
-    /// Fails while the second `]` sticks on the bodies.
+    /// Fails while the second `[` sticks on the bodies.
     #[tokio::test]
     async fn a_bracket_streak_cycles_views_through_ci_until_another_key() {
         let args = Args::parse_from(["fleetz"]);
@@ -12680,7 +12680,7 @@ mod tests {
         app.focused_panel = FocusedPanel::Inspector;
         let repo_dir = Path::new("/nonexistent");
         let mut views = Vec::new();
-        for key in [']', ']', '[', 'j', ']'] {
+        for key in [']', '[', ']', 'j', ']'] {
             handle_normal_input(
                 &mut app,
                 &mut terminal,
@@ -12699,7 +12699,7 @@ mod tests {
             views,
             vec![
                 (HistoryView::Ci, CiBody::Jobs),
-                (HistoryView::Notes, CiBody::Jobs),
+                (HistoryView::Branches, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Log),

@@ -2456,11 +2456,11 @@ pub struct App {
     /// The row path the cursor rests on in the `notes` view and since when,
     /// for the dwell (`ci::DWELL`) before a walk starts.
     pub notes_cursor: Option<(Option<String>, std::time::Instant)>,
-    /// The highlighted file's body and facts, for the reader and the card:
-    /// one file at a time.
+    /// The highlighted file's body and facts, for the reader and the facts
+    /// beside pane 2's header: one file at a time.
     pub note_body: Option<NoteBody>,
     /// The reader's scroll offset (FZ-62), its own rather than the
-    /// inspector's, which the card scrolls. Reset when the file changes.
+    /// inspector's. Reset when the file changes.
     pub reader_scroll: u16,
     /// Largest useful reader offset, measured by the renderer for the
     /// reason `inspector_max_scroll` is.
@@ -2513,7 +2513,7 @@ pub struct NotesState {
 }
 
 /// The body and facts of one file in the `notes` view: the reader draws the
-/// text, the card the facts.
+/// text, the facts beside pane 2's header the facts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoteBody {
     pub path: std::path::PathBuf,
@@ -2558,7 +2558,7 @@ pub struct NotesWalk {
 }
 
 /// A claimed read of the highlighted file, for `notes::read_body` and the
-/// card's facts.
+/// file's facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteRead {
     pub path: std::path::PathBuf,
@@ -3336,8 +3336,8 @@ impl App {
         Some(std::path::PathBuf::from(shellexpand::tilde(root).as_ref()).join(&file.rel))
     }
 
-    /// The walk's entry for the file the cursor is on: what the card and the
-    /// reader's border describe (FZ-62).
+    /// The walk's entry for the file the cursor is on: what the facts and
+    /// the reader describe (FZ-62, FZ-68).
     pub fn notes_highlighted_file(&self) -> Option<&crate::notes::NoteFile> {
         let listed = self.notes_listed();
         let last = listed.len().checked_sub(1)?;
@@ -3395,7 +3395,7 @@ impl App {
     /// Claim the read of the highlighted file, or `None`: only while the
     /// `notes` view shows, and only when the body held is another file's or
     /// from an older generation. One file at a time, whatever the cursor
-    /// passed over since the last tick. A folded card still reads: the
+    /// passed over since the last tick. A folded inspector still reads: the
     /// reader beside the tree shows the body (FZ-62). A new file starts the
     /// reader at its top; a re-read of the same one keeps its place.
     pub fn claim_note_read(&mut self) -> Option<NoteRead> {
@@ -3530,7 +3530,8 @@ impl App {
     }
 
     /// Whether the main area takes the `notes` layout (FZ-62): pane 2 at
-    /// full height split into tree and reader, the card under pane 1. Not on
+    /// full height split into tree and reader, the facts beside its header,
+    /// and no inspector under pane 1 (FZ-68). Not on
     /// a section header, where pane 2 is the digest and the usual layout
     /// returns. Read by `ui::panel_rects`, so render and hit-testing agree.
     pub fn notes_layout(&self) -> bool {
@@ -3985,8 +3986,11 @@ impl App {
     /// the block needs. Read by both `ui::panel_rects` and `ui::render`
     /// through `detail::split_inspector`, so the two cannot disagree about
     /// whether the pane exists.
+    ///
+    /// The `notes` layout docks none either: the file's facts sit in pane 2
+    /// beside the header (FZ-68), and `ui::panel_rects` gives pane 1 the rows.
     pub fn shows_inspector(&self) -> bool {
-        self.history_view != HistoryView::Graph
+        self.history_view != HistoryView::Graph && !self.notes_layout()
     }
 
     /// Whether the inspector is drawn with its content, not folded to an
@@ -4506,7 +4510,7 @@ impl App {
         Some(match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             // In the `notes` layout the pane after the tree is the reader,
-            // as Tab goes, ahead of the card.
+            // as Tab goes.
             FocusedPanel::Detail if self.notes_layout() => FocusedPanel::Reader,
             FocusedPanel::Detail if self.inspector_is_expanded() => FocusedPanel::Inspector,
             // The graph docks no inspector, so there is no next pane to reach
@@ -4594,7 +4598,8 @@ impl App {
             };
             return;
         }
-        // The `notes` layout puts its reader between pane 2 and the card.
+        // The `notes` layout puts its reader after pane 2, and docks no
+        // inspector after it (FZ-68).
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             FocusedPanel::Detail if self.notes_layout() => FocusedPanel::Reader,
@@ -5304,6 +5309,11 @@ impl App {
                 if self.selected != pos {
                     self.selected = pos;
                     self.reset_detail_view();
+                }
+                // Off a header onto a repo in `notes` the layout returns and
+                // docks no inspector; focus cannot stay on it (FZ-68).
+                if self.focused_panel == FocusedPanel::Inspector && !self.shows_inspector() {
+                    self.focused_panel = FocusedPanel::Detail;
                 }
             }
             ListRow::Results | ListRow::Gap => return,
@@ -9191,7 +9201,7 @@ mod tests {
 
     /// The body read is the highlighted file's alone, however far the cursor
     /// moved since the last tick, and nothing outside the view. Read again
-    /// after a suspend returns, and with the card folded: the reader beside
+    /// after a suspend returns, and with the inspector folded: the reader beside
     /// the tree still shows the body (FZ-62).
     #[test]
     fn only_the_highlighted_file_is_read() {
@@ -9254,18 +9264,18 @@ mod tests {
         assert!(app.notes_all_markdown, "not the view");
     }
 
-    /// In the `notes` layout Tab walks repo list, tree, reader, card, strip
-    /// and Shift-Tab walks it back; the reader takes focus nowhere else, and
-    /// leaving the view moves focus off it (FZ-62).
+    /// In the `notes` layout Tab walks repo list, tree, reader, strip and
+    /// Shift-Tab walks it back, with no card to stop on since FZ-68 round 2:
+    /// `3` does not reach an inspector there either. The reader takes focus
+    /// nowhere else, and leaving the view moves focus off it (FZ-62).
     #[test]
-    fn focus_walks_tree_reader_and_card_in_the_notes_layout() {
+    fn focus_walks_tree_and_reader_in_the_notes_layout() {
         let mut app = notes_app();
         app.history_view = HistoryView::Notes;
         let order = [
             FocusedPanel::RepoList,
             FocusedPanel::Detail,
             FocusedPanel::Reader,
-            FocusedPanel::Inspector,
             FocusedPanel::Contributions,
         ];
         app.focused_panel = FocusedPanel::RepoList;
@@ -9278,6 +9288,12 @@ mod tests {
             app.toggle_panel_focus_back();
             assert_eq!(app.focused_panel, *want, "Shift-Tab");
         }
+        app.focus_panel(FocusedPanel::Inspector);
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::RepoList,
+            "no card to focus"
+        );
 
         app.focus_panel(FocusedPanel::Reader);
         assert_eq!(app.focused_panel, FocusedPanel::Reader);
@@ -9290,21 +9306,23 @@ mod tests {
     }
 
     /// `J`/`K` in the `notes` layout scroll the reader a line from the tree,
-    /// with the card open (the default) as well as folded (FZ-62 review F1),
-    /// and from the reader itself, focus unmoved (finding 6).
+    /// with the inspector's fold open (the default) as well as folded
+    /// (FZ-62 review F1; no card is docked since FZ-68 round 2, so the fold
+    /// must not matter), and from the reader itself, focus unmoved
+    /// (finding 6).
     #[test]
-    fn shift_scroll_walks_tree_reader_card_in_the_notes_layout() {
+    fn shift_scroll_walks_tree_and_reader_in_the_notes_layout() {
         let mut app = notes_app();
         app.history_view = HistoryView::Notes;
         walked(&mut app, &["notez/a.md"]);
-        assert!(!app.inspector_folded, "the card is open");
+        assert!(!app.inspector_folded, "the fold is open");
 
         app.focused_panel = FocusedPanel::Detail;
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
         app.reader_max_scroll.set(20);
         app.scroll_next_panel(3);
         assert_eq!(app.reader_scroll, 3, "J from the tree scrolls the reader");
-        assert_eq!(app.inspector_scroll, 0, "not the card");
+        assert_eq!(app.inspector_scroll, 0, "not the inspector");
 
         assert_eq!(app.focused_panel, FocusedPanel::Detail, "focus unmoved");
 
@@ -9316,6 +9334,26 @@ mod tests {
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
         app.focused_panel = FocusedPanel::Detail;
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
+    }
+
+    /// FZ-68 round 2: on a section header in `notes` pane 2 is the digest and
+    /// the inspector is docked, so it can hold focus; stepping onto the repo
+    /// brings the `notes` layout back, which docks none, and focus lands on
+    /// pane 2 rather than staying on a pane that is not drawn.
+    #[test]
+    fn leaving_a_header_in_notes_moves_focus_off_the_inspector() {
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        app.repos[0].location = crate::model::RepoLocation::LocalOnly;
+        let section = crate::digest::Section::of(&app.repos[0]);
+        app.land_on(ListRow::Header(section));
+        assert!(!app.notes_layout(), "on the digest");
+        app.focus_panel(FocusedPanel::Inspector);
+        assert_eq!(app.focused_panel, FocusedPanel::Inspector, "docked here");
+
+        app.land_on(ListRow::Repo(0));
+        assert!(app.notes_layout(), "the notes layout is back");
+        assert_eq!(app.focused_panel, FocusedPanel::Detail);
     }
 
     /// `H`/`L` page the reader by the height its last frame drew, from the

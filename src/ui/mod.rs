@@ -532,9 +532,8 @@ impl PanelRects {
         if col.abs_diff(split_x) <= GRAB_SLOP {
             return Some(Divider::Vertical);
         }
-        // A folded inspector has no height to drag. Bounded on the right
-        // too: the `notes` card spans pane 1 only, and pane 2 beside it has
-        // no divider on that row.
+        // A folded inspector has no height to drag. Bounded to the
+        // inspector's own columns.
         if let Some(inspector) = self.inspector
             && !self.inspector_folded
             && col >= inspector.x
@@ -632,29 +631,23 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
                 contributions,
             }
         }
-        // The `notes` layout (FZ-62) splits columns first: pane 1 over the
-        // card in the left column, which the inspector's request, clamp and
-        // fold size as they size the inspector, and pane 2 at full height on
-        // the right, split by a divider into the tree's column and the
-        // preview's (FZ-68). No preview while pane 2 shows a digest or no
-        // repo.
+        // The `notes` layout (FZ-62) splits columns first: pane 1 the full
+        // height on the left, docking no inspector, as `graph` docks none
+        // (the file's facts sit in pane 2 beside the header, FZ-68), and
+        // pane 2 at full height on the right, split by a divider into the
+        // tree's column and the preview's. No preview while pane 2 shows a
+        // digest or no repo.
         View::Detail if app.notes_layout() => {
             let (body, contributions) = contributions::split_main_area(main, strip_folded);
-            let (left, pane2) = detail::split_main(body, app.repo_list_pct);
-            let (repo_list, card) = detail::split_inspector(
-                left,
-                app.inspector_pct,
-                app.shows_inspector(),
-                app.inspector_folded,
-            );
+            let (repo_list, pane2) = detail::split_main(body, app.repo_list_pct);
             let reader = detail::notes_pane_body(pane2, app).map(|notes| notes.reader);
             PanelRects {
                 main,
                 body,
                 repo_list,
                 detail: Some(pane2),
-                inspector: card,
-                inspector_folded: app.inspector_folded,
+                inspector: None,
+                inspector_folded: false,
                 reader,
                 contributions,
             }
