@@ -385,6 +385,26 @@ in `info`; a Relay status view ("now we are talking!!"); and 13:50
 page of sorts" (into FZ-68 round 2). The lead sent an `info` sketch
 for his yes before a ticket; the other two wait for a design note.
 
+15:20 CET, on the lead's `info` sketch: "yes! very good. but have the
+boxes stay the same size and fill them with say 6 rows of info + some
+addition headers if needed. then scrollable. we should also make use
+of a 'full size' pane 2, that steals space from pane 3 laterally, to
+show either more sorces, or more of the selected sources.. wait. this
+can be modular. default is the 4 most and best used sources:
+branches, CI, worktrees, recent commits. that makes sense? but let a
+user choose what sources in what order to display, in settings, with
+additional 2-4 other sources for full size mode. which also is
+selectable in settings." Filed FZ-79 (#135, the four fixed boxes,
+Ready, after FZ-68) and FZ-80 (#136, chosen sources and the
+full-size pane 2, Backlog, a design checkpoint with him first). At
+15:05 he opened the agents discussion ("discuss this with me! ...
+other users might not need or want things like relay ... but Claude
+implementations, and further down the line other AI, IS of interest.
+altough we should NOT try to compete with Herdr and others, but we
+could implement parts of it! built on my workflow"); the lead answered
+with three layers (plain git, Claude conventions, Relay) and four
+questions, a design note in `ideas.md` on his answers.
+
 - **#128 (FZ-72), ssh refusals read `ssh` and the fetch marker wears
   the Nerd warning glyph.** Merged `8f92063` at 15:10 CET on his
   acceptance ("128 SSH i trust"); ticket commit `7ad7738` (base

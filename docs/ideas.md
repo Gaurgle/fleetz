@@ -2190,8 +2190,17 @@ in `-d` print mode.
 
 ## Info as a dashboard of boxes
 
-**Status: proposed by Andreas 2026-11-04, sketch pending his yes, not
-ticketed.**
+**Status: ticketed as FZ-79 (the boxes) and FZ-80 (the sources and the
+full-size pane 2), not built.** Sketch accepted 2026-11-04 15:20: "yes!
+very good. but have the boxes stay the same size and fill them with say 6
+rows of info + some addition headers if needed. then scrollable. we should
+also make use of a 'full size' pane 2, that steals space from pane 3
+laterally, to show either more sorces, or more of the selected sources..
+wait. this can be modular. default is the 4 most and best used sources:
+branches, CI, worktrees, recent commits. that makes sense? but let a user
+choose what sources in what order to display, in settings, with additional
+2-4 other sources for full size mode. which also is selectable in
+settings."
 
 **Problem.** `info` is one scrolling column: branches with their paths and
 upstreams, a `ci` section under them, the worktrees with every detail, and
