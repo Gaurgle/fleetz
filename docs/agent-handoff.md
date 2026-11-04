@@ -29,8 +29,11 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## In flight
 
-- FZ-68 (#124, the preview as a divided column, text on pane 2's top
-  border): Ready, filed 11-04 on his ask; stops for his look.
+- Running since 11-04 11:40, base `fe014f5`, workers not yet reported:
+  FZ-68 (#124, divided preview, `fz-worker`, stops for his look), FZ-69
+  (#125, `<`/`>` step from the drawn width, `fz-worker`), FZ-70 (#126,
+  notez's markdown colours, `fz-small`). Records on the issues. FZ-71
+  (#127, tree-sitter fenced code, deps approved in its body) after FZ-70.
   FZ-65 (#121): built, diff `9f4018d7160d` unreviewed, held for his wheel
   decision (selects as built, or scrolls with the highlight clamped) and
   his yes to a wrapped-row follow ticket. Records on the issues.
@@ -40,21 +43,22 @@ UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
 
 ## Open questions
 
-- Markdown look: 11-04 he asked to copy notez's formatting and colours
-  (log). Theme parity needs no dependency; fenced code and the CI YAML
-  need tree-sitter as notez (11 crates). His dependency yes, then tickets.
+- Code files highlighted in the notes preview: his "later on" (11-04,
+  log); a ticket on his yes after FZ-71. The CI YAML needs a tenth
+  grammar, a new dependency question.
 - #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
 - #81 and #79: his answer on the existing footer and header test edits.
 - Pane 1 wheel coalescing ticket, flaky `clipboard::tests` issue: his yes.
 
 ## Next step
 
-Merged 11-04: FZ-67 `2e71935`. Next: dispatch FZ-68 (#124) under the
-standing authority, then FZ-65 on his wheel answer (merge-resolution
-cycle, same files), the `{`/`}` ticket on his yes, FZ-41 (#97) after
-them. Markdown theme and highlighting tickets on his dependency yes.
-FZ-63, FZ-60 on his word, FZ-58 (#114) after FZ-63. FZ-52 not before
-0.8.0 and his word.
+Merged 11-04: FZ-67 `2e71935`. Next: scope-check, review and integrate
+FZ-69 and FZ-70 as they report (FZ-70 merges under the small-look
+authority, FZ-69 without a look); FZ-68 to Ready to integrate for his
+look; FZ-71 (#127) dispatched once FZ-70 is on `main`; then FZ-65 on
+his wheel answer (merge-resolution cycle), the `{`/`}` ticket on his
+yes, FZ-41 (#97). FZ-63, FZ-60 on his word, FZ-58 (#114) after FZ-63.
+FZ-52 not before 0.8.0 and his word.
 
 Start a lead from the repo root: `claude --agent fz-coordinator` (normal
 permissions, subscription, no provider override); Codex from `AGENTS.md`.

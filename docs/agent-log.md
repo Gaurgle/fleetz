@@ -298,15 +298,22 @@ border headers/text, but right of the divider. but 'save' this, it's
 still good!" Asked where the border text goes, he chose "Text on pane
 2's top border" (the divider runs pane 2's full height, the title and
 facts sit on pane 2's top border above the preview). Filed as FZ-68.
-About 11:20 CET: "look at notez's mardkown highlighting and formatting
+About 11:18 CET: "look at notez's mardkown highlighting and formatting
 (and lint..?) it looks way better, with the colors etc. have a look at
-that code, and steal/copy that md formatting/preview". About 11:40
+that code, and steal/copy that md formatting/preview". About 11:28
 CET: "'</>' for resizing panes works wierd, panes 'jump' through
 different widths. it's not simply 'bigger, bigger, bigger' its:
 'bigger, way smaller, way bigger, bigger' so something is off". Lead's
 diagnosis: `split_main` caps the list at `REPO_LIST_MAX_COLS` (52)
 only at `DEFAULT_REPO_LIST_PCT`; on a wide terminal the first `<`
 (30%) and `>` (40%) leave the cap and land on both sides of it.
+About 11:31 CET, asked three things (file the resize fix, a theme
+parity ticket, tree-sitter with notez's crates or an own highlighter):
+"yes to all three, go with tree-sitter and the same nine grammars.
+it'd would be nice to be able to preview code in the previews later
+on". Filed FZ-69 (#125), FZ-70 (#126), FZ-71 (#127, the dependency
+approval recorded in its body); code files in the preview is a
+follow-up named in FZ-71, not filed.
 
 - **#123 (FZ-67), the notes preview sits inside pane 2 with its own
   border.** Merged `2e71935` at 11:15 CET on his look (above); ticket
