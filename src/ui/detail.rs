@@ -93,10 +93,11 @@ pub fn split_main(area: Rect, repo_list_pct: u16) -> (Rect, Rect) {
     (h[0], h[1])
 }
 
-/// Split pane 2's body of the `notes` layout, under its pinned header
-/// (`notes_pane_body`), into the file tree and the preview beside it (FZ-62,
-/// FZ-67). Shared by `render` and `ui::panel_rects`, as the other splits
-/// are, so a click lands in the pane drawn under it.
+/// Split pane 2's inner area of the `notes` layout, its full height, into
+/// the tree's column and the column right of it (FZ-62, FZ-68), whose
+/// first column is the divider (`notes_pane_body`). Shared by `render` and
+/// `ui::panel_rects`, as the other splits are, so a click lands in the pane
+/// drawn under it.
 ///
 /// The tree takes the repo list's rule within pane 2 (35%, capped at
 /// `REPO_LIST_MAX_COLS`): it is a list of names, and the reader is what
@@ -187,7 +188,7 @@ pub fn render(
 ) {
     render_repo_list(frame, list_area, app);
     render_detail_pane(frame, detail_area, app);
-    // The `notes` layout's preview, inside pane 2 beside the tree (FZ-67).
+    // The `notes` layout's preview, right of pane 2's divider (FZ-68).
     if let Some(reader_area) = reader_area {
         render_reader(frame, reader_area, app);
     }
@@ -664,40 +665,51 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         ),
         Span::styled(format!(" {status} "), Style::default().fg(colors::OVERLAY)),
     ]);
+    // FZ-68: in the `notes` layout a divider splits pane 2 from border to
+    // border, the tree's column left of it and the preview right of it.
+    let notes_split = match app.notes_layout() {
+        true => notes_pane_body(pane, app),
+        false => None,
+    };
     // Two corners and a column of border either side of the two titles, so
-    // they cannot meet in the middle and overprint.
-    let budget = (area.width as usize)
-        .saturating_sub(2)
-        .saturating_sub(span_width(&left_title.spans) + 2);
+    // they cannot meet in the middle and overprint. In `notes` the titles
+    // share the top border's segment left of the divider.
+    let title_room = match notes_split {
+        Some(notes) => notes.divider.saturating_sub(pane.x).saturating_sub(1),
+        None => area.width.saturating_sub(2),
+    };
+    let budget = (title_room as usize).saturating_sub(span_width(&left_title.spans) + 2);
+    let switcher = view_switcher(app.history_view, focused, budget);
 
-    let panel = panel
-        .title_top(left_title.left_aligned())
-        .title_top(view_switcher(app.history_view, focused, budget));
     let inner = panel.inner(area);
-    frame.render_widget(panel, area);
+    match notes_split {
+        Some(notes) => {
+            frame.render_widget(panel, area);
+            render_notes_frame(frame, pane, &notes, left_title, switcher, app);
+        }
+        None => frame.render_widget(
+            panel
+                .title_top(left_title.left_aligned())
+                .title_top(switcher),
+            area,
+        ),
+    }
+    let inner = notes_split.map_or(inner, |notes| notes.column);
 
     let rows = pane_rows(inner);
     render_selected_commit_readout(frame, rows[0], app);
     let area = rows[1];
     let width = area.width as usize;
 
-    // FZ-67: in the `notes` layout the header pins across the whole pane and
-    // the body under it is the tree's, beside the preview.
-    let notes_split = match app.notes_layout() {
-        true => notes_pane_body(pane, app),
-        false => None,
-    };
     let mut lines: Vec<Line> = header_lines(app, repo, width);
     let (area, width) = match notes_split {
-        Some((header, body)) => {
-            let (tree, _) = split_notes_pane(body);
-            match header {
-                Some(header) => frame.render_widget(Paragraph::new(lines.split_off(0)), header),
-                // Unpinned on a short pane: the header scrolls with the tree,
-                // laid out at the tree's width.
-                None => lines = header_lines(app, repo, tree.width as usize),
+        Some(notes) => {
+            // Pinned, or on a short pane scrolling with the tree; laid out
+            // at the column's width either way.
+            if let Some(header) = notes.header {
+                frame.render_widget(Paragraph::new(lines.split_off(0)), header);
             }
-            (tree, tree.width as usize)
+            (notes.body, notes.body.width as usize)
         }
         None => (area, width),
     };
@@ -1230,23 +1242,134 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-/// Pane 2 of the `notes` layout under its frame and readout row (FZ-67):
-/// the rows its header pins across the whole pane, `None` when the pane is
-/// too short to spare them, and the body under it that `split_notes_pane`
-/// splits into the tree and the preview. `None` when pane 2 shows no tree
+/// Pane 2 of the `notes` layout, split by its divider (FZ-68).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotesPane {
+    /// The tree's column, inside the frame, its full inner height: the
+    /// readout row, the header and the tree.
+    pub column: Rect,
+    /// The rows the header pins in that column, `None` when the pane is too
+    /// short to spare them.
+    pub header: Option<Rect>,
+    /// The tree, under the header.
+    pub body: Rect,
+    /// The divider's screen column, from the top border to the bottom one.
+    pub divider: u16,
+    /// The preview's text: one column in from the divider, the column's
+    /// full inner height.
+    pub reader: Rect,
+}
+
+/// Pane 2 of the `notes` layout inside its frame (FZ-67, FZ-68): the tree's
+/// column left of the divider, holding the readout, the pinned header and
+/// the tree, and the preview right of it. `None` when pane 2 shows no tree
 /// (a section's digest, or no repo). Shared by `render_detail_pane` and
 /// `ui::panel_rects`, so the preview is hit-tested where it is drawn.
-pub fn notes_pane_body(pane: Rect, app: &App) -> Option<(Option<Rect>, Rect)> {
+pub fn notes_pane_body(pane: Rect, app: &App) -> Option<NotesPane> {
     let repo = app.selected_repo()?;
-    let below = pane_rows(pane2_block(colors::SURFACE).inner(pane))[1];
+    let (column, right) = split_notes_pane(pane2_block(colors::SURFACE).inner(pane));
+    // A column of padding either side of the divider, as the frame keeps
+    // one inside its border.
+    let reader = Rect {
+        x: right.x.saturating_add(2).min(right.right()),
+        width: right.width.saturating_sub(2),
+        ..right
+    };
+    let below = pane_rows(column)[1];
     let header_rows =
         u16::try_from(header_lines(app, repo, below.width as usize).len()).unwrap_or(u16::MAX);
-    if below.height < header_rows.saturating_add(MIN_BODY_ROWS) {
-        return Some((None, below));
+    let (header, body) = if below.height < header_rows.saturating_add(MIN_BODY_ROWS) {
+        (None, below)
+    } else {
+        let split =
+            Layout::vertical([Constraint::Length(header_rows), Constraint::Min(1)]).split(below);
+        (Some(split[0]), split[1])
+    };
+    Some(NotesPane {
+        column,
+        header,
+        body,
+        divider: right.x,
+        reader,
+    })
+}
+
+/// Pane 2's border in the `notes` layout (FZ-68), drawn over the frame
+/// `render_detail_pane` has rendered: the divider from `┬` to `┴`, the
+/// preview's outline in its own focus, and the top border's two segments,
+/// the pane's title and view tabs left of the divider, `notes preview` and
+/// the file's facts right of it.
+fn render_notes_frame(
+    frame: &mut Frame,
+    pane: Rect,
+    notes: &NotesPane,
+    left_title: Line<'static>,
+    switcher: Line<'static>,
+    app: &App,
+) {
+    let lit = |on: bool| match on {
+        true => colors::LAVENDER,
+        false => colors::SURFACE,
+    };
+    let reader_focused = app.focused_panel == FocusedPanel::Reader;
+    let divider_color = lit(reader_focused || app.focused_panel == FocusedPanel::Detail);
+    let (top, bottom) = (pane.y, pane.bottom().saturating_sub(1));
+    let x = notes.divider;
+    let right_x = x.saturating_add(1);
+    let segment = pane.right().saturating_sub(1).saturating_sub(right_x);
+    let buf = frame.buffer_mut();
+    // The preview's part of the outline wears the reader's focus.
+    let right_style = Style::default().fg(lit(reader_focused));
+    for rect in [
+        Rect::new(right_x, top, segment + 1, 1),
+        Rect::new(right_x, bottom, segment + 1, 1),
+        Rect::new(pane.right().saturating_sub(1), top, 1, pane.height),
+    ] {
+        buf.set_style(rect.intersection(pane), right_style);
     }
-    let split =
-        Layout::vertical([Constraint::Length(header_rows), Constraint::Min(1)]).split(below);
-    Some((Some(split[0]), split[1]))
+    for y in top..=bottom {
+        let symbol = match y {
+            y if y == top => "┬",
+            y if y == bottom => "┴",
+            _ => "│",
+        };
+        // Off the buffer on a pane squeezed to a column or two.
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_symbol(symbol)
+                .set_style(Style::default().fg(divider_color));
+        }
+    }
+
+    let left = Rect::new(
+        pane.x + 1,
+        top,
+        x.saturating_sub(pane.x).saturating_sub(1),
+        1,
+    );
+    frame.render_widget(
+        Block::new()
+            .title_top(left_title.left_aligned())
+            .title_top(switcher),
+        left,
+    );
+
+    let title_style = match reader_focused {
+        true => Style::default()
+            .fg(colors::LAVENDER)
+            .add_modifier(Modifier::BOLD),
+        false => Style::default().fg(colors::OVERLAY),
+    };
+    let label = Line::from(Span::styled(READER_LABEL, title_style));
+    let label_width = label.width();
+    let mut titles = Block::new().title_top(label.left_aligned());
+    // The file's facts on the right of the segment, dropped whole when it
+    // cannot hold both with a column between them (FZ-67).
+    if let Some(facts) = reader_title(app).map(|t| Line::from(Span::styled(t, title_style)))
+        && label_width + 1 + facts.width() <= segment as usize
+    {
+        titles = titles.title_top(facts.right_aligned());
+    }
+    frame.render_widget(titles, Rect::new(right_x, top, segment, 1));
 }
 
 /// Pane 2's frame, every view's: rounded, a column of padding either side
@@ -1934,7 +2057,8 @@ fn render_notes_card(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// The preview's left border title, inside pane 2 (FZ-67).
+/// The preview's title, on pane 2's top border right of the divider
+/// (FZ-68).
 const READER_LABEL: &str = " notes preview ";
 
 /// The reader's right border title: the file's name, kind and size, then for a
@@ -1983,37 +2107,9 @@ fn reader_render(app: &App) -> Option<&crate::app::RenderedNote> {
 /// width this pass records; `p` shows its source, which every other kind
 /// always shows, raw as `notes::read_body` delivers it. A cut body says so
 /// on its last line, as the read leaves it.
-fn render_reader(frame: &mut Frame, area: Rect, app: &App) {
-    let focused = app.focused_panel == FocusedPanel::Reader;
-    let border_color = if focused {
-        colors::LAVENDER
-    } else {
-        colors::SURFACE
-    };
-    let title_style = match focused {
-        true => Style::default()
-            .fg(colors::LAVENDER)
-            .add_modifier(Modifier::BOLD),
-        false => Style::default().fg(colors::OVERLAY),
-    };
-    let label = Line::from(Span::styled(READER_LABEL, title_style));
-    let label_width = label.width();
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
-        .padding(Padding::new(1, 1, 0, 0))
-        .title_top(label.left_aligned());
-    // The file's facts on the right of the same border, dropped whole when
-    // the border cannot hold both with a column between them (FZ-67).
-    let room = (area.width as usize).saturating_sub(2);
-    if let Some(facts) = reader_title(app).map(|t| Line::from(Span::styled(t, title_style)))
-        && label_width + 1 + facts.width() <= room
-    {
-        block = block.title_top(facts.right_aligned());
-    }
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+fn render_reader(frame: &mut Frame, inner: Rect, app: &App) {
+    // No frame of its own: pane 2's border and divider hold the column and
+    // carry its titles (`render_notes_frame`, FZ-68).
     // One `H`/`L` page and the render width, which only this pass can
     // measure.
     app.reader_view_height.set(inner.height);
@@ -4260,7 +4356,7 @@ mod tests {
     /// tells the two apart.
     fn has_headliner(text: &str, name: &str) -> bool {
         text.lines()
-            .any(|l| l.trim().trim_matches('│').trim() == name)
+            .any(|l| l.split('│').any(|column| column.trim() == name))
     }
 
     /// The colours of the headliner's divider: its first cell and its last.
@@ -4282,7 +4378,7 @@ mod tests {
         let title_y = (1..24u16)
             .find(|y| {
                 let row: String = (0..width).map(|x| buf[(x, *y)].symbol()).collect();
-                row.trim().trim_matches('│').trim() == name
+                row.split('│').any(|column| column.trim() == name)
             })
             .expect("no headliner drawn");
         let y = title_y + 1;
@@ -5072,6 +5168,17 @@ mod tests {
         // `the_graph_is_drawn_with_box_characters_not_ascii`.
     }
 
+    /// The tabs pane 2's top border holds in `view`: every one, except in
+    /// `notes`, whose tabs share the border with the preview (FZ-68) and fit
+    /// the tree's segment as the active tab alone. The whole strip is 61
+    /// columns and the segment at most 54.
+    fn tabs_on_the_border(view: HistoryView) -> Vec<HistoryView> {
+        match view {
+            HistoryView::Notes => vec![view],
+            _ => HistoryView::ALL.to_vec(),
+        }
+    }
+
     /// The header and the switcher are what tell you where you are, so they
     /// must survive every view and every scroll.
     #[test]
@@ -5080,7 +5187,7 @@ mod tests {
             let text = pane_text(view, 92);
             assert!(text.contains("~/repos/fleetz"), "{}", view.label());
             assert!(text.contains("synced"), "{}", view.label());
-            for tab in HistoryView::ALL {
+            for tab in tabs_on_the_border(view) {
                 assert!(
                     text.contains(&view_name(tab)),
                     "{} is missing the {} tab",
@@ -5103,7 +5210,7 @@ mod tests {
                 .next()
                 .unwrap_or_default()
                 .to_string();
-            for tab in HistoryView::ALL {
+            for tab in tabs_on_the_border(view) {
                 assert!(
                     border.contains(&view_name(tab)),
                     "{} view: the border is missing the {} tab: {border:?}",
@@ -5446,7 +5553,7 @@ mod tests {
                 // The row has to *be* the name: the strip draws the same
                 // string, so a substring match would find the border row as
                 // readily as the headliner.
-                if row.trim().trim_matches('│').trim() != title {
+                if !row.split('│').any(|column| column.trim() == title) {
                     continue;
                 }
                 let x = (0..92u16)
@@ -8081,17 +8188,7 @@ mod tests {
     /// its name in the border, then its body, or the read's error in place.
     #[test]
     fn the_notes_inspector_shows_the_body_or_the_error() {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let draw = |app: &crate::app::App| {
-            let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
-            term.draw(|f| render_reader(f, f.area(), app)).unwrap();
-            let buf = term.backend().buffer().clone();
-            (0..12u16)
-                .map(|y| (0..60u16).map(|x| buf[(x, y)].symbol()).collect::<String>())
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
+        let draw = |app: &crate::app::App| notes_pane_rows(120, 12, app).join("\n");
         let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
         let read = app.claim_note_read().expect("a read");
         assert!(draw(&app).contains("reading…"));
@@ -8108,6 +8205,29 @@ mod tests {
     }
 
     // --- The `notes` reader and card (FZ-62), the mode line (FZ-57) ---
+
+    /// Pane 2 of the `notes` layout, `w` by `h`, as `ui::render` draws it:
+    /// the frame, the tree's column and the reader at `notes_pane_body`'s
+    /// rect (FZ-68).
+    fn notes_pane_buffer(w: u16, h: u16, app: &crate::app::App) -> ratatui::buffer::Buffer {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| {
+            render_detail_pane(f, f.area(), app);
+            let notes = notes_pane_body(f.area(), app).expect("a tree");
+            render_reader(f, notes.reader, app);
+        })
+        .unwrap();
+        term.backend().buffer().clone()
+    }
+
+    fn notes_pane_rows(w: u16, h: u16, app: &crate::app::App) -> Vec<String> {
+        let buf = notes_pane_buffer(w, h, app);
+        (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect()
+    }
 
     /// Draw `paint` into a `w` by `h` buffer and return its rows.
     fn drawn_rows(w: u16, h: u16, paint: impl FnOnce(&mut Frame)) -> Vec<String> {
@@ -8181,20 +8301,22 @@ mod tests {
         app.apply_note_facts(&read, facts);
         app.apply_note_read(read, Ok(body.join("\n")));
 
-        // Wide enough for `notes preview` and the facts on one border (FZ-67).
-        let draw = |app: &crate::app::App| drawn_rows(70, 12, |f| render_reader(f, f.area(), app));
+        // Wide enough for `notes preview` and the facts on one border (FZ-67);
+        // the text from pane 2's first inner row, under its top padding, to
+        // the row above its bottom border (FZ-68).
+        let draw = |app: &crate::app::App| notes_pane_rows(120, 12, app);
         let rows = draw(&app);
         assert!(
             rows[0].contains("README.md · markdown · 4.2 KiB"),
             "{}",
             rows[0]
         );
-        assert!(rows[1].contains("line 1 "), "{}", rows[1]);
+        assert!(rows[2].contains("line 1 "), "{}", rows[2]);
 
-        assert_eq!(app.reader_view_height.get(), 10, "one H/L page measured");
+        assert_eq!(app.reader_view_height.get(), 9, "one H/L page measured");
         app.scroll_reader(10);
         let rows = draw(&app);
-        assert!(rows[1].contains("line 11"), "{}", rows.join("\n"));
+        assert!(rows[2].contains("line 11"), "{}", rows.join("\n"));
         assert!(!rows.join("\n").contains("line 1 "), "{}", rows.join("\n"));
         assert_eq!(app.detail_selected(), 0, "the tree's cursor did not move");
 
@@ -8209,13 +8331,10 @@ mod tests {
     const MARKDOWN_FIXTURE: &str = "# Plan\n\n- ship *it* now\n- run `cargo test`\n\n\
                                     See [the docs](https://x.io).";
 
-    /// Draw the reader into a 60 by 12 buffer.
+    /// Draw the reader into a 120 by 12 pane 2, its titles on the pane's
+    /// border (FZ-68).
     fn reader_buffer(app: &crate::app::App) -> ratatui::buffer::Buffer {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
-        term.draw(|f| render_reader(f, f.area(), app)).unwrap();
-        term.backend().buffer().clone()
+        notes_pane_buffer(120, 12, app)
     }
 
     fn buffer_rows(buf: &ratatui::buffer::Buffer) -> Vec<String> {
@@ -8414,9 +8533,11 @@ mod tests {
             reader.x > pane2.x + 1 && reader.right() < pane2.right(),
             "the reader is inside pane 2's width: {reader:?} in {pane2:?}"
         );
+        // FZ-68: beside the header, the column's full inner height, under
+        // the frame's top padding and down to its bottom border.
         assert!(
-            reader.y > pane2.y + 2 && reader.bottom() < pane2.bottom(),
-            "the reader is under pane 2's header: {reader:?} in {pane2:?}"
+            reader.y == pane2.y + 2 && reader.bottom() == pane2.bottom() - 1,
+            "the reader runs pane 2's inner height: {reader:?} in {pane2:?}"
         );
         assert!(
             reader.x > pane2.x + pane2.width / 4,
@@ -8424,10 +8545,27 @@ mod tests {
         );
 
         let cell = |x: u16, y: u16| rows[y as usize].chars().nth(x as usize).unwrap();
+        // The preview's divider is drawn where its rect says, two columns
+        // left of its text, and its titles on pane 2's top border right of
+        // it (FZ-68).
+        let divider = reader.x - 2;
+        assert_eq!(cell(divider, pane2.y), '┬', "Reader divider top");
+        assert_eq!(cell(divider, pane2.bottom() - 1), '┴', "Reader divider");
+        let over_reader: String = rows[pane2.y as usize]
+            .chars()
+            .skip(divider as usize)
+            .take((pane2.right() - divider) as usize)
+            .collect();
+        for title in ["notes preview", "a.md · markdown"] {
+            assert!(over_reader.contains(title), "Reader title: {over_reader}");
+        }
+        assert_eq!(
+            rects.at(reader.x, reader.y),
+            Some(FocusedPanel::Reader),
+            "click corner Reader"
+        );
         for (rect, panel, title) in [
             (pane2, FocusedPanel::Detail, "[2]"),
-            (reader, FocusedPanel::Reader, "notes preview"),
-            (reader, FocusedPanel::Reader, "a.md · markdown"),
             (card, FocusedPanel::Inspector, "[3] file"),
         ] {
             assert_eq!(cell(rect.x, rect.y), '╭', "{panel:?} corner");
@@ -8483,19 +8621,25 @@ mod tests {
         assert_eq!(rects.divider_at(reader.x + 2, card.y), None);
     }
 
-    /// FZ-67: pane 2 keeps one outer border in the `notes` layout, its
-    /// title and view tabs across the whole pane, and the preview is a box
-    /// of its own inside it, titled `notes preview`, right of the tree.
-    /// Fails while the reader is a sibling pane with its top on pane 2's.
+    /// FZ-68 (was FZ-67's box): pane 2 keeps one outer border in the
+    /// `notes` layout, and the preview is its right column, divided from
+    /// the tree by a line from `┬` on the top border to `┴` on the bottom,
+    /// titled `notes preview` on the top border right of the `┬`; the
+    /// header is drawn left of the divider only. Fails while the preview is
+    /// a box of its own inside pane 2.
     #[test]
-    fn the_notes_preview_is_a_box_inside_pane_2() {
+    fn the_notes_preview_is_a_divided_column_of_pane_2() {
         let (w, h) = (140u16, 44u16);
         let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
         app.contributions_folded = true;
+        let read = app.claim_note_read().expect("a read");
+        app.apply_note_read(read, Ok("hello".to_string()));
         let rows = drawn_rows(w, h, |f| crate::ui::render(f, &app));
         let rects = crate::ui::panel_rects(Rect::new(0, 0, w, h), &app);
         let pane2 = rects.detail.expect("pane 2");
         let reader = rects.reader.expect("preview");
+        let notes = notes_pane_body(pane2, &app).expect("a tree");
+        let divider = notes.divider;
         let span = |y: u16, from: u16, to: u16| -> String {
             rows[y as usize]
                 .chars()
@@ -8503,6 +8647,7 @@ mod tests {
                 .take((to - from) as usize)
                 .collect()
         };
+        let cell = |x: u16, y: u16| rows[y as usize].chars().nth(x as usize).unwrap();
 
         // One border on pane 2's top row: its two corners and nothing
         // between them that opens a second box.
@@ -8513,29 +8658,61 @@ mod tests {
         assert!(top.contains("NOTES"), "the view tabs: {top}");
         let bottom = span(pane2.bottom() - 1, pane2.x, pane2.right());
         assert!(bottom.starts_with('╰') && bottom.ends_with('╯'), "{bottom}");
+        assert_eq!(bottom.matches('╰').count(), 1, "no second box: {bottom}");
 
-        // The preview's own box, inside pane 2 and titled.
-        let preview_top = span(reader.y, reader.x, reader.right());
-        assert!(preview_top.starts_with('╭'), "{preview_top}");
-        assert!(preview_top.contains("notes preview"), "{preview_top}");
+        // The divider: joined to both borders, a line on every inner row.
+        assert_eq!(cell(divider, pane2.y), '┬', "{top}");
+        assert_eq!(cell(divider, pane2.bottom() - 1), '┴', "{bottom}");
+        for y in pane2.y + 1..pane2.bottom() - 1 {
+            assert_eq!(cell(divider, y), '│', "row {y}:\n{}", rows.join("\n"));
+        }
         assert!(
-            pane2.contains(ratatui::layout::Position {
-                x: reader.x,
-                y: reader.y
-            }) && reader.right() < pane2.right()
-                && reader.bottom() < pane2.bottom(),
-            "{reader:?} in {pane2:?}"
+            top.find("[2]") < top.find('┬') && top.find("NOTES") < top.find('┬'),
+            "title and tabs left of the divider: {top}"
         );
 
+        // The preview's title on the top border right of the `┬`, and its
+        // text right of the divider, inside pane 2.
+        let preview_top = span(pane2.y, divider, pane2.right());
+        assert!(preview_top.starts_with("┬ notes preview "), "{preview_top}");
+        assert_eq!(reader.x, divider + 2, "one column in from the divider");
+        assert!(
+            reader.right() < pane2.right() && reader.bottom() < pane2.bottom(),
+            "{reader:?} in {pane2:?}"
+        );
+        assert!(span(reader.y, reader.x, reader.right()).contains("hello"));
+
+        // The header left of the divider only: its rows hold the repo's
+        // state and path in the tree's column, and nothing of them crosses.
+        let header = notes.header.expect("pinned at 44 rows");
+        let repo = app.selected_repo().expect("a repo");
+        let state = repo.long_status();
+        let path = repo.path.clone().expect("cloned");
+        let left = |y: u16| span(y, pane2.x, divider);
+        assert!(left(header.y).contains(&state), "{}", left(header.y));
+        assert!(
+            (header.y..header.bottom()).any(|y| left(y).contains(&path)),
+            "{}",
+            rows.join("\n")
+        );
+        for y in header.y..header.bottom() {
+            let right = span(y, divider + 1, pane2.right() - 1);
+            assert!(
+                right.trim().is_empty() || right.trim() == "hello",
+                "header row {y} crosses the divider: {right}"
+            );
+        }
+
         // The tree on the left of the same body: its mode line on the
-        // preview's top row, before the preview's corner.
-        let left = span(reader.y, pane2.x, reader.x);
-        assert!(left.contains("notes: [notez]"), "the tree: {left}");
+        // tree's first row, before the divider.
+        let mode = left(notes.body.y);
+        assert!(mode.contains("notes: [notez]"), "the tree: {mode}");
     }
 
-    /// FZ-67: the preview's border carries the file's facts on its right
-    /// where it can hold them beside `notes preview`, and only `notes
-    /// preview` where it cannot. Fails while the facts are the left title.
+    /// FZ-67, moved to pane 2's border by FZ-68: the top border's segment
+    /// over the preview carries the file's facts on its right where it can
+    /// hold them beside `notes preview`, and only `notes preview` where it
+    /// cannot. Fails while the facts are the left title.
     #[test]
     fn the_preview_border_drops_the_facts_whole_when_narrow() {
         let mut app = notes_view_app(&[("notez/README.md", Some("notez"))]);
@@ -8547,19 +8724,100 @@ mod tests {
         app.apply_note_facts(&read, facts);
         app.apply_note_read(read, Ok("body".to_string()));
         let facts = "README.md · markdown · 4.2 KiB · rendered";
+        // The top border from the divider's `┬` to the corner.
+        let segment = |w: u16| -> String {
+            let divider = notes_pane_body(Rect::new(0, 0, w, 12), &app)
+                .expect("a tree")
+                .divider;
+            notes_pane_rows(w, 12, &app)[0]
+                .chars()
+                .skip(divider as usize)
+                .collect()
+        };
 
-        let wide = drawn_rows(70, 6, |f| render_reader(f, f.area(), &app));
-        assert!(wide[0].starts_with("╭ notes preview "), "{}", wide[0]);
-        assert!(wide[0].contains(&format!(" {facts} ╮")), "{}", wide[0]);
+        let wide = segment(140);
+        assert!(wide.starts_with("┬ notes preview "), "{wide}");
+        assert!(wide.contains(&format!(" {facts} ╮")), "{wide}");
 
-        let narrow = drawn_rows(50, 6, |f| render_reader(f, f.area(), &app));
-        assert!(narrow[0].starts_with("╭ notes preview "), "{}", narrow[0]);
-        assert!(
-            !narrow[0].contains("README"),
-            "dropped whole: {}",
-            narrow[0]
+        let narrow = segment(80);
+        assert!(narrow.starts_with("┬ notes preview "), "{narrow}");
+        assert!(!narrow.contains("README"), "dropped whole: {narrow}");
+        assert!(!narrow.contains("·"), "no fragment: {narrow}");
+    }
+
+    /// FZ-68: the divider and the outline take focus by side. The tree
+    /// focused lights the left of the top border and the divider, the
+    /// preview's segment dim; the reader focused lights its segment and the
+    /// divider, the left dim.
+    #[test]
+    fn the_divider_lights_with_either_side_and_each_segment_with_its_own() {
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        let (w, h) = (140u16, 12u16);
+        let notes = notes_pane_body(Rect::new(0, 0, w, h), &app).expect("a tree");
+        let divider = notes.divider;
+        let colours = |app: &crate::app::App| {
+            let buf = notes_pane_buffer(w, h, app);
+            // The first plain border cell either side of the divider.
+            let rule = |mut xs: std::ops::Range<u16>| {
+                xs.find(|x| buf[(*x, 0)].symbol() == "─")
+                    .expect("a border cell")
+            };
+            let (left, right) = (rule(1..divider), rule(divider + 1..w - 1));
+            [left, divider, right].map(|x| buf[(x, 0)].fg)
+        };
+        let (on, off) = (colors::LAVENDER, colors::SURFACE);
+
+        app.focused_panel = FocusedPanel::Detail;
+        assert_eq!(colours(&app), [on, on, off], "the tree focused");
+        app.focused_panel = FocusedPanel::Reader;
+        assert_eq!(colours(&app), [off, on, on], "the reader focused");
+        app.focused_panel = FocusedPanel::RepoList;
+        assert_eq!(colours(&app), [off, off, off], "neither");
+    }
+
+    /// FZ-68 review: a pane 2 squeezed to a few columns (a tiny terminal, a
+    /// tmux pane mid-resize) puts the divider off the buffer; drawing the
+    /// `notes` frame there must skip it, not panic.
+    #[test]
+    fn a_tiny_notes_frame_draws_without_panicking() {
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        app.contributions_folded = true;
+        for w in [5u16, 1] {
+            drawn_rows(w, 40, |f| crate::ui::render(f, &app));
+        }
+        for w in 1..=6u16 {
+            drawn_rows(w, 12, |f| render_detail_pane(f, f.area(), &app));
+        }
+    }
+
+    /// FZ-68: `panel_rects` puts the reader right of the divider, one
+    /// column in, for the column's full inner height (under the frame's top
+    /// padding, down to the bottom border, up to the right padding). `at`
+    /// answers `Reader` there and `Detail` on the divider and on a tree row.
+    #[test]
+    fn panel_rects_put_the_reader_right_of_the_divider_full_height() {
+        let area = Rect::new(0, 0, 140, 44);
+        let app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        let rects = crate::ui::panel_rects(area, &app);
+        let pane2 = rects.detail.expect("pane 2");
+        let reader = rects.reader.expect("preview");
+        let notes = notes_pane_body(pane2, &app).expect("a tree");
+        assert_eq!(reader, notes.reader, "one geometry");
+        assert_eq!(reader.x, notes.divider + 2);
+        assert_eq!(reader.y, pane2.y + 2);
+        assert_eq!(reader.bottom(), pane2.bottom() - 1);
+        assert_eq!(reader.right(), pane2.right() - 2);
+        for y in [reader.y, reader.y + reader.height / 2, reader.bottom() - 1] {
+            assert_eq!(rects.at(reader.x, y), Some(FocusedPanel::Reader));
+            assert_eq!(rects.at(notes.divider, y), Some(FocusedPanel::Detail));
+        }
+        let tree_row = notes.body.y;
+        assert_eq!(
+            rects.at(notes.body.x + 1, tree_row),
+            Some(FocusedPanel::Detail),
+            "a tree row"
         );
-        assert!(!narrow[0].contains("·"), "no fragment: {}", narrow[0]);
+        assert!(notes.body.right() < notes.divider, "the tree is left of it");
     }
 
     /// FZ-67: in the `notes` layout `detail` is all of pane 2 and `reader`
@@ -8647,8 +8905,9 @@ mod tests {
     /// FZ-67: on a pane too short to pin the header over the tree and the
     /// preview, the header scrolls with the tree in the tree's column, laid
     /// out at the tree's width: its rows do not wrap, so the mode line sits
-    /// right under them, and the preview keeps its box beside it. Fails
-    /// while the fallback keeps the header laid out for the whole pane.
+    /// right under them, and the preview keeps its column beside it, right
+    /// of the divider (FZ-68). Fails while the fallback keeps the header
+    /// laid out for the whole pane.
     #[test]
     fn a_short_notes_pane_scrolls_the_header_with_the_tree() {
         let (w, h) = (140u16, 18u16);
@@ -8657,21 +8916,22 @@ mod tests {
         let pane2 = crate::ui::panel_rects(Rect::new(0, 0, w, h), &app)
             .detail
             .expect("pane 2");
-        let (header, body) = notes_pane_body(pane2, &app).expect("a tree");
-        assert_eq!(header, None, "too short to pin the header");
-        let (tree, _) = split_notes_pane(body);
+        let notes = notes_pane_body(pane2, &app).expect("a tree");
+        assert_eq!(notes.header, None, "too short to pin the header");
+        let tree = notes.body;
 
         let rows = drawn_rows(w, h, |f| crate::ui::render(f, &app));
         let reader = crate::ui::panel_rects(Rect::new(0, 0, w, h), &app)
             .reader
             .expect("preview");
         let cell = |x: u16, y: u16| rows[y as usize].chars().nth(x as usize).unwrap();
-        assert_eq!(cell(reader.x, reader.y), '╭', "the preview's corner");
+        assert_eq!(cell(notes.divider, pane2.y), '┬', "the preview's divider");
+        assert_eq!(cell(notes.divider, reader.y), '│', "{}", rows.join("\n"));
         let left = |y: u16| -> String {
             rows[y as usize]
                 .chars()
                 .skip(tree.x as usize)
-                .take((reader.x - tree.x) as usize)
+                .take((notes.divider - tree.x) as usize)
                 .collect()
         };
 

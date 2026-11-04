@@ -469,8 +469,8 @@ pub struct PanelRects {
     pub inspector: Option<Rect>,
     /// Whether that inspector is folded, which leaves it nothing to resize.
     pub inspector_folded: bool,
-    /// The `notes` layout's reader, right of the tree that `detail` holds
-    /// there (FZ-62); None in every other layout.
+    /// The `notes` layout's reader text, right of pane 2's divider inside
+    /// the `detail` rect (FZ-62, FZ-68); None in every other layout.
     pub reader: Option<Rect>,
     /// The contribution strip, when it is open and the area had room for it.
     pub contributions: Option<Rect>,
@@ -634,9 +634,9 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
         // The `notes` layout (FZ-62) splits columns first: pane 1 over the
         // card in the left column, which the inspector's request, clamp and
         // fold size as they size the inspector, and pane 2 at full height on
-        // the right, its body under the pinned header split into the tree
-        // and the preview (FZ-67). No preview while pane 2 shows a digest or
-        // no repo.
+        // the right, split by a divider into the tree's column and the
+        // preview's (FZ-68). No preview while pane 2 shows a digest or no
+        // repo.
         View::Detail if app.notes_layout() => {
             let (body, contributions) = contributions::split_main_area(main, strip_folded);
             let (left, pane2) = detail::split_main(body, app.repo_list_pct);
@@ -646,8 +646,7 @@ pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
                 app.shows_inspector(),
                 app.inspector_folded,
             );
-            let reader = detail::notes_pane_body(pane2, app)
-                .map(|(_, body)| detail::split_notes_pane(body).1);
+            let reader = detail::notes_pane_body(pane2, app).map(|notes| notes.reader);
             PanelRects {
                 main,
                 body,
