@@ -9,6 +9,7 @@ pub mod digest;
 pub mod footer;
 pub mod grips;
 pub mod help;
+pub mod highlight;
 pub mod intro;
 pub mod markdown;
 pub mod scroll;
