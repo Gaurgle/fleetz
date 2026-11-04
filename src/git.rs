@@ -356,6 +356,10 @@ pub enum FetchFailureKind {
     /// Credentials wanted or refused. Prompts are disabled, so a remote that
     /// asks for a password fails here instead of hanging.
     Auth,
+    /// ssh refused the key (`Permission denied (publickey)`): the fix is the
+    /// key or the agent, not a password. fleetz fetches with `BatchMode=yes`,
+    /// so a passphrase key that is not in the agent lands here.
+    Ssh,
     /// The network, DNS or the host itself.
     Unreachable,
     /// The remote is missing or is not a repository.
@@ -1009,12 +1013,19 @@ fn classify_fetch_error(stderr: &str) -> FetchFailureKind {
         "could not read username",
         "could not read password",
         "terminal prompts disabled",
-        "permission denied (",
         "host key verification failed",
         "invalid username or password",
         "access denied",
         "returned error: 401",
         "returned error: 403",
+    ];
+    // OpenSSH's refusal, `Permission denied (publickey)` or with more
+    // methods in the parentheses, and the agent and identity lines it can
+    // print before it.
+    const SSH: &[&str] = &[
+        "permission denied (",
+        "agent refused operation",
+        "no such identity",
     ];
     const UNREACHABLE: &[&str] = &[
         "could not resolve host",
@@ -1053,8 +1064,11 @@ fn classify_fetch_error(stderr: &str) -> FetchFailureKind {
     });
     // Auth first even then: a credential that was asked for or refused means
     // a server answered at some point (another address, a jump host), and the
-    // credential is what the user has to fix.
-    if has(AUTH) {
+    // credential is what the user has to fix. Within that, ssh refusing the
+    // key comes first: its fix is the key or the agent, not a password.
+    if has(SSH) {
+        FetchFailureKind::Ssh
+    } else if has(AUTH) {
         FetchFailureKind::Auth
     } else if ssh_unreachable || has(UNREACHABLE) {
         FetchFailureKind::Unreachable
@@ -4854,7 +4868,7 @@ mod fetch_outcome_tests {
             ),
             (
                 "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
-                Auth,
+                Ssh,
             ),
             (
                 "Host key verification failed.\nfatal: Could not read from remote repository.",
@@ -4902,10 +4916,10 @@ mod fetch_outcome_tests {
                 "fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n",
                 Other,
             ),
-            // A refused key stays Auth even if a connect line came first.
+            // A refused key is Ssh even if a connect line came first.
             (
                 "ssh: connect to host h port 22: Undefined error: 0\ngit@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
-                Auth,
+                Ssh,
             ),
             // git 2.39.3 on an HTTP 404 (a removed or renamed remote).
             (
@@ -4917,6 +4931,56 @@ mod fetch_outcome_tests {
                 Other,
             ),
             ("", Other),
+        ] {
+            assert_eq!(kind_of(stderr), want, "{stderr:?}");
+        }
+    }
+
+    /// FZ-72 (#128): ssh refusing the key is `Ssh`, whatever methods it
+    /// lists and whatever it printed first; an https credential refusal stays
+    /// `Auth`. Wording as OpenSSH, git and curl print it under `LC_ALL=C`.
+    #[test]
+    fn an_ssh_key_refusal_is_ssh_and_an_https_refusal_is_auth() {
+        use FetchFailureKind::*;
+        for (stderr, want) in [
+            (
+                "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+                Ssh,
+            ),
+            (
+                "git@host: Permission denied (publickey,password).\nfatal: Could not read from remote repository.",
+                Ssh,
+            ),
+            (
+                "sign_and_send_pubkey: signing failed for ED25519 \"/k\" from agent: agent refused operation\ngit@github.com: Permission denied (publickey).",
+                Ssh,
+            ),
+            ("no such identity: /k: No such file or directory", Ssh),
+            (
+                "ssh: connect to host h port 22: Undefined error: 0\ngit@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+                Ssh,
+            ),
+            (
+                "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+                Auth,
+            ),
+            (
+                "fatal: Authentication failed for 'https://github.com/o/r.git/'",
+                Auth,
+            ),
+            (
+                "fatal: unable to access 'https://h/o/r.git/': The requested URL returned error: 401",
+                Auth,
+            ),
+            (
+                "fatal: unable to access 'https://h/o/r.git/': The requested URL returned error: 403",
+                Auth,
+            ),
+            // A local file git cannot open is no ssh refusal.
+            (
+                "error: cannot open .git/FETCH_HEAD: Permission denied",
+                Other,
+            ),
         ] {
             assert_eq!(kind_of(stderr), want, "{stderr:?}");
         }

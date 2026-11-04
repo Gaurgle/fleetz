@@ -125,7 +125,10 @@ A `git fetch` that fails (from `f`, `F`, `r`, `R`, launch or a watch sweep) is
 marked on the repo rather than passed off as a fetch:
 
 - the row, in the list and the compact grid, gets an orange marker beside the
-  status, `⚠ unreachable 3↓`. The word says how: `timeout`, `auth`,
+  status, `⚠ unreachable 3↓` (the triangle is the Nerd Font warning icon, or
+  `⚠` under `icons = "plain"`). The word says how: `timeout`, `auth` (an
+  https credential refused or wanted), `ssh` (ssh refused the key: add it to
+  the agent with `ssh-add`, since fetches never prompt for a passphrase),
   `unreachable` (network, DNS or host), `no remote` (missing, or not a
   repository), or `fetch` for anything else;
 - the repo pane spells it out under the counts, `⚠ fetch failed: remote
@@ -175,8 +178,9 @@ You also need:
 - `lazygit` (optional, for the `Enter` keybind)
 - a [Nerd Font](https://www.nerdfonts.com/) in your terminal, unless you set
   `icons = "plain"` in the config or the `,` settings, which draws the repo
-  kind, stash and watch marks as plain ASCII instead (the contribution strip's
-  day squares still need one)
+  kind, stash and watch marks as plain ASCII instead, and the failed-fetch
+  marker's warning icon as `⚠` (the contribution strip's day squares still
+  need one)
 
 ## Usage
 
