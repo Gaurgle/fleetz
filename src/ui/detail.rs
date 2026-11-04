@@ -8271,14 +8271,14 @@ mod tests {
         }
         assert!(!text.contains("# Plan"), "the heading's # is gone:\n{text}");
         let heading = style_at(&buf, "Plan");
-        assert_eq!(heading.fg, Some(colors::LAVENDER), "the title colour");
+        assert_eq!(heading.fg, Some(colors::MAUVE), "the title colour");
         assert!(heading.add_modifier.contains(Modifier::BOLD));
         assert!(
             style_at(&buf, "it now")
                 .add_modifier
                 .contains(Modifier::ITALIC)
         );
-        assert_eq!(style_at(&buf, "cargo test").fg, Some(colors::SUBTEXT));
+        assert_eq!(style_at(&buf, "cargo test").fg, Some(colors::PEACH));
         assert_eq!(style_at(&buf, "the docs").fg, Some(colors::SAPPHIRE));
         assert_eq!(style_at(&buf, "(https").fg, Some(colors::OVERLAY));
 

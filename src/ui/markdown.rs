@@ -43,17 +43,21 @@ fn text_style() -> Style {
     Style::default().fg(colors::TEXT)
 }
 
-/// Every heading level: the title colour panel titles use, bold.
-pub fn heading_style() -> Style {
-    Style::default()
-        .fg(colors::LAVENDER)
-        .add_modifier(Modifier::BOLD)
+/// A heading, as notez draws it: level 1 bold mauve, level 2 bold sapphire,
+/// deeper levels bold in the text colour.
+pub fn heading_style(level: u8) -> Style {
+    let style = Style::default().add_modifier(Modifier::BOLD);
+    match level {
+        1 => style.fg(colors::MAUVE),
+        2 => style.fg(colors::SAPPHIRE),
+        _ => style.fg(colors::TEXT),
+    }
 }
 
-/// Inline code and fenced code: the receding text colour, monospace being
-/// the terminal's own.
+/// Inline code and fenced code: peach, as notez's `theme::code`, monospace
+/// being the terminal's own.
 pub fn code_style() -> Style {
-    Style::default().fg(colors::SUBTEXT)
+    Style::default().fg(colors::PEACH)
 }
 
 /// A link's text, in the colour repo names are drawn in.
@@ -281,9 +285,9 @@ impl<'s> Renderer<'s> {
     fn start(&mut self, tag: Tag<'s>) {
         match tag {
             Tag::Paragraph => self.begin_block(),
-            Tag::Heading { .. } => {
+            Tag::Heading { level, .. } => {
                 self.begin_block();
-                self.push_style(heading_style());
+                self.push_style(heading_style(level as u8));
             }
             Tag::BlockQuote(_) => {
                 self.begin_block();
@@ -1129,20 +1133,33 @@ mod tests {
         style.add_modifier.contains(modifier)
     }
 
-    /// FZ-59: no new ladder. A heading is the title colour panel titles are
-    /// drawn in, every level, and code, links and rules are existing tokens.
+    /// FZ-59: no new ladder, code, links and rules are existing tokens.
+    /// FZ-70: code is peach.
     #[test]
-    fn styles_are_colors_tokens_and_a_heading_wears_the_title_color() {
-        let lines = render_markdown("# One\n\n## Two\n\n###### Six", 40);
-        assert_eq!(texts(&lines), ["One", "", "Two", "", "Six"]);
-        for level in ["One", "Two", "Six"] {
-            let style = span(&lines, level).style;
-            assert_eq!(style.fg, Some(colors::LAVENDER), "{level}");
-            assert!(has(style, Modifier::BOLD), "{level} not bold");
-        }
-        assert_eq!(code_style().fg, Some(colors::SUBTEXT));
+    fn styles_are_colors_tokens() {
+        assert_eq!(code_style().fg, Some(colors::PEACH));
         assert_eq!(link_style().fg, Some(colors::SAPPHIRE));
         assert_eq!(rule_style().fg, Some(colors::SURFACE));
+    }
+
+    /// FZ-70, ported from notez: levels 1 and 2 have their own colour and
+    /// deeper levels are bold in the text colour.
+    #[test]
+    fn headings_one_and_two_have_their_own_style_and_deeper_levels_are_bold() {
+        let lines = render_markdown("# One\n\n## Two\n\n### Three\n\n###### Six", 40);
+        assert_eq!(texts(&lines), ["One", "", "Two", "", "Three", "", "Six"]);
+        assert_eq!(span(&lines, "One").style, heading_style(1));
+        assert_eq!(span(&lines, "Two").style, heading_style(2));
+        assert_ne!(heading_style(1), heading_style(2));
+        assert_eq!(heading_style(1).fg, Some(colors::MAUVE));
+        assert_eq!(heading_style(2).fg, Some(colors::SAPPHIRE));
+        for deep in ["Three", "Six"] {
+            let style = span(&lines, deep).style;
+            assert!(has(style, Modifier::BOLD), "{deep} not bold");
+            assert_eq!(style.fg, Some(colors::TEXT), "{deep} not text colour");
+        }
+        assert!(has(heading_style(1), Modifier::BOLD));
+        assert!(has(heading_style(2), Modifier::BOLD));
     }
 
     #[test]
