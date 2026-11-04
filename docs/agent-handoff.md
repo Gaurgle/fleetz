@@ -33,9 +33,8 @@ apply to every UI ticket.
   an in-progress merge of `main`; stops for his look), FZ-74 (#130,
   `yy`/`yp`, `fz-worker` from `8f92063`; his look), FZ-76 (#133, icons
   repaint live, `fz-small`, in review, diff `c4b7c008e590`; no look).
-  Ready: FZ-77 (#134, worktrees view, lead's design), FZ-78 (#132, `M`
-  all files, after FZ-68). FZ-75 (#131) is another session's research
-  ticket (ssh key loading); not the lead's.
+  Ready: FZ-77 (#134, worktrees view), FZ-78 (#132, `M` all files,
+  after FZ-68). FZ-75 (#131) is another session's research ticket.
 - FZ-65 (#121): built, diff `9f4018d7160d` unreviewed, held for his wheel
   decision (select as built, or scroll clamped) and a wrapped-row ticket.
 - #88 (FZ-38): parked, uncommitted on at-a. FZ-63 (#119), FZ-60 (#116):
@@ -46,9 +45,8 @@ apply to every UI ticket.
 - His yes wanted (asked 12:23, log): a pane 2 `worktrees` view (none
   filed), the FZ-66 band on every list, an ssh README paragraph. Code
   files highlighted after FZ-71; the CI YAML needs a tenth grammar.
-- #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
-  #81 and #79: his answer on the existing footer and header test edits.
-- Pane 1 wheel coalescing ticket, flaky `clipboard::tests` issue: his yes.
+- #88 worktree: stays or goes; FZ-38 with font-checked glyphs? #81 and
+  #79 test edits; pane 1 wheel coalescing, flaky `clipboard::tests`: his yes.
 
 ## Next step
 
