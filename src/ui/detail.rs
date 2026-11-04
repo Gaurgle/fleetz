@@ -82,15 +82,21 @@ pub fn split_main(area: Rect, repo_list_pct: u16) -> (Rect, Rect) {
     // Only the default yields. Once the divider has been dragged the number
     // is the user's answer to this question and is honoured exactly, however
     // wide the terminal.
-    let width = if repo_list_pct == crate::app::DEFAULT_REPO_LIST_PCT {
-        (area.width * repo_list_pct / 100).min(REPO_LIST_MAX_COLS)
-    } else {
-        area.width * repo_list_pct / 100
-    };
+    let width = repo_list_width(area.width, repo_list_pct);
     let h = Layout::horizontal([Constraint::Length(width), Constraint::Min(0)])
         .spacing(1)
         .split(area);
     (h[0], h[1])
+}
+
+/// The repo list width `split_main` draws in a main area `area_width`
+/// columns wide, cap included. The resize keys step from it (FZ-69).
+pub fn repo_list_width(area_width: u16, repo_list_pct: u16) -> u16 {
+    if repo_list_pct == crate::app::DEFAULT_REPO_LIST_PCT {
+        (area_width * repo_list_pct / 100).min(REPO_LIST_MAX_COLS)
+    } else {
+        area_width * repo_list_pct / 100
+    }
 }
 
 /// Split pane 2's body of the `notes` layout, under its pinned header
