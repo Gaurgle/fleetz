@@ -441,9 +441,10 @@ pub fn repo_row_spans(
     if !mark.is_empty() {
         spans.push(Span::styled(mark, Style::default().fg(colors::OVERLAY)));
     }
-    // The cursor's row wears the history lists' band (FZ-66). The band is
-    // `SURFACE` itself, so its dots step up to `OVERLAY` and bold to stay
-    // seen; `·` is one cell either way, so no column moves.
+    // The cursor's row wears the history lists' band (FZ-66). The dots'
+    // resting colour, `SURFACE`, is lighter than the band, so they step up to
+    // `OVERLAY` and bold to stay seen; `·` is one cell either way, so no
+    // column moves.
     let dot_style = if is_selected {
         Style::default()
             .fg(colors::OVERLAY)
