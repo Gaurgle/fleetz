@@ -1942,8 +1942,21 @@ async fn handle_normal_input(
         // narrower/wider); +/- move the horizontal one (inspector taller or
         // shorter). `=` resets both, which is also what every launch does
         // unless persist_pane_sizes is on.
-        KeyCode::Char('<') => app.resize_repo_list(-1),
-        KeyCode::Char('>') => app.resize_repo_list(1),
+        KeyCode::Char('<' | '>') => {
+            // The step starts from the list width on screen (FZ-69), which
+            // depends on the main area's width.
+            if let Ok(size) = terminal.size() {
+                let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+                app.main_area_width
+                    .set(ui::panel_rects(area, app).body.width);
+            }
+            let delta = if key.code == KeyCode::Char('<') {
+                -1
+            } else {
+                1
+            };
+            app.resize_repo_list(delta);
+        }
         KeyCode::Char('+') => app.resize_inspector(1),
         KeyCode::Char('-') => app.resize_inspector(-1),
         KeyCode::Char('=') => app.reset_pane_sizes(),

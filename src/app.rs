@@ -2470,6 +2470,11 @@ pub struct App {
     /// Columns the reader's body drew on the last frame: the width a
     /// markdown body is rendered at (FZ-59), off the UI thread.
     pub reader_width: std::cell::Cell<u16>,
+    /// Columns of the main area the repo list and the right column split,
+    /// as the key handler last measured it; 0 before it has. `<` and `>`
+    /// step from the list width this draws (FZ-69), which differs from
+    /// `repo_list_pct` where the default yields to the cap.
+    pub main_area_width: std::cell::Cell<u16>,
     /// `p` in the `notes` layout: the reader shows markdown as its source.
     /// One flag for the session, not per file; other kinds are always raw.
     pub reader_raw: bool,
@@ -2920,6 +2925,7 @@ impl App {
             reader_max_scroll: std::cell::Cell::new(0),
             reader_view_height: std::cell::Cell::new(0),
             reader_width: std::cell::Cell::new(0),
+            main_area_width: std::cell::Cell::new(0),
             reader_raw: false,
             list_stop: None,
             digest_window: crate::digest::DigestWindow::default(),
@@ -4119,13 +4125,37 @@ impl App {
 
     /// Move the vertical divider between the repo list and the right column.
     /// Positive widens the repo list.
+    ///
+    /// The step starts from the width on screen (FZ-69). Where the default
+    /// yields to the cap in `split_main`, the percentage is not what is
+    /// drawn, and stepping it blind made `<` widen the list.
     pub fn resize_repo_list(&mut self, delta: i16) {
-        self.repo_list_pct = step_pct(
-            self.repo_list_pct,
-            delta,
-            REPO_LIST_PCT_MIN,
-            REPO_LIST_PCT_MAX,
-        );
+        use crate::ui::detail::repo_list_width;
+        let area = self.main_area_width.get();
+        let pct = self.repo_list_pct;
+        let drawn = repo_list_width(area, pct);
+        // The percentage that draws `drawn`, rounded up as a drag converts
+        // a column, so the start is the list on screen.
+        let uncapped = u32::from(area) * u32::from(pct) / 100;
+        let from = if area > 0 && u32::from(drawn) < uncapped {
+            (u32::from(drawn) * 100).div_ceil(u32::from(area)) as u16
+        } else {
+            pct
+        };
+        let mut next = step_pct(from, delta, REPO_LIST_PCT_MIN, REPO_LIST_PCT_MAX);
+        // Landing back on the default would draw the capped width again.
+        if delta > 0
+            && area > 0
+            && next == DEFAULT_REPO_LIST_PCT
+            && repo_list_width(area, next) <= drawn
+        {
+            next = (next + 1).min(REPO_LIST_PCT_MAX);
+        }
+        // Already narrower than the floor draws: `<` has nowhere to go.
+        if delta < 0 && area > 0 && repo_list_width(area, next) > drawn {
+            return;
+        }
+        self.repo_list_pct = next;
         self.needs_redraw = true;
     }
 
@@ -6716,6 +6746,90 @@ mod tests {
         app.reset_pane_sizes();
         assert_eq!(app.repo_list_pct, DEFAULT_REPO_LIST_PCT);
         assert_eq!(app.inspector_pct, DEFAULT_INSPECTOR_PCT);
+    }
+
+    /// The list width `split_main` draws for `app` in a main area `w` wide.
+    fn drawn_list_width(app: &App, w: u16) -> u16 {
+        let area = ratatui::layout::Rect::new(0, 0, w, 40);
+        crate::ui::detail::split_main(area, app.repo_list_pct)
+            .0
+            .width
+    }
+
+    /// FZ-69: at 180 columns the default draws 52 (the cap), and stepping
+    /// the percentage blind gave `>` 72 but `<` 54, wider than the 52 on
+    /// screen. Every step now starts from the drawn width.
+    #[test]
+    fn resize_keys_step_from_the_capped_width_on_screen() {
+        let w = 180;
+        let at_default = || {
+            let app = make_app(1);
+            app.main_area_width.set(w);
+            app
+        };
+
+        let mut app = at_default();
+        let default = drawn_list_width(&app, w);
+        assert!(default < w * DEFAULT_REPO_LIST_PCT / 100, "the cap bites");
+        app.resize_repo_list(-1);
+        let after_lt = drawn_list_width(&app, w);
+        assert!(after_lt < default, "< widened: {default} -> {after_lt}");
+        assert_eq!(after_lt, 43, "< steps 5% of 180 from 52");
+
+        let mut app = at_default();
+        let mut widths = vec![default];
+        for _ in 0..3 {
+            app.resize_repo_list(1);
+            widths.push(drawn_list_width(&app, w));
+        }
+        assert_eq!(widths[1], 61, "> steps 5% of 180 from 52");
+        assert!(
+            widths.windows(2).all(|p| p[0] < p[1]),
+            "> did not widen every press: {widths:?}"
+        );
+    }
+
+    /// At every width a key press moves the list the way it says or, at a
+    /// bound, not at all: never back onto the capped default (which would
+    /// stall `>`), never wider under `<` where the floor exceeds the cap.
+    #[test]
+    fn resize_keys_never_move_the_list_the_wrong_way_at_any_width() {
+        for w in 60..=400 {
+            for delta in [-1i16, 1] {
+                let mut app = make_app(1);
+                app.main_area_width.set(w);
+                for press in 0..10 {
+                    let before = drawn_list_width(&app, w);
+                    let pct = app.repo_list_pct;
+                    app.resize_repo_list(delta);
+                    let after = drawn_list_width(&app, w);
+                    if delta < 0 {
+                        assert!(
+                            after <= before,
+                            "w {w} press {press}: < {before} -> {after}"
+                        );
+                    } else if pct < REPO_LIST_PCT_MAX {
+                        assert!(after > before, "w {w} press {press}: > {before} -> {after}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Where the cap does not bite the step is the plain 5% it always was.
+    #[test]
+    fn resize_keys_step_five_percent_where_the_cap_does_not_bite() {
+        let w = 100;
+        let mut app = make_app(1);
+        app.main_area_width.set(w);
+        assert_eq!(drawn_list_width(&app, w), 35);
+        app.resize_repo_list(-1);
+        assert_eq!(app.repo_list_pct, DEFAULT_REPO_LIST_PCT - 5);
+        assert_eq!(drawn_list_width(&app, w), 30);
+        app.reset_pane_sizes();
+        app.resize_repo_list(1);
+        assert_eq!(app.repo_list_pct, DEFAULT_REPO_LIST_PCT + 5);
+        assert_eq!(drawn_list_width(&app, w), 40);
     }
 
     #[test]
