@@ -1527,7 +1527,10 @@ fn handle_time_window_input(app: &mut App, key: KeyEvent) -> bool {
 
 /// Key handling for the settings overlay: j/k walk the rows, h/l adjust the
 /// focused one, digits type into numeric rows, Enter applies the live fields
-/// and writes every field back to `config.toml`, Esc discards.
+/// and writes every field back to `config.toml`, Esc discards. The icons row
+/// is the one exception to "nothing applies before Enter": stepping it sets
+/// the thread-local glyph set at once, so the next frame draws it, and Esc
+/// puts the set in force back.
 ///
 /// Applying and saving are one action deliberately. A separate "apply without
 /// saving" would leave the running session disagreeing with the file it was
@@ -1538,12 +1541,21 @@ fn handle_settings_input(app: &mut App, key: KeyEvent) {
     };
     match key.code {
         KeyCode::Esc | KeyCode::Char(',') | KeyCode::Char('q') => {
+            // The icons row previews as it is stepped; discarding puts the
+            // set in force back.
+            ui::badges::set_active_icons(so.icons_in_force);
             app.overlay = Overlay::None;
         }
         KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => so.move_cursor(1),
         KeyCode::Char('k') | KeyCode::Up => so.move_cursor(-1),
-        KeyCode::Char('l') | KeyCode::Right => so.step(1),
-        KeyCode::Char('h') | KeyCode::Left => so.step(-1),
+        KeyCode::Char('l') | KeyCode::Right => {
+            so.step(1);
+            ui::badges::set_active_icons(so.icons);
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            so.step(-1);
+            ui::badges::set_active_icons(so.icons);
+        }
         KeyCode::Char(c) if c.is_ascii_digit() => so.push_digit(c as u8 - b'0'),
         KeyCode::Enter => {
             so.normalize();
@@ -1552,6 +1564,7 @@ fn handle_settings_input(app: &mut App, key: KeyEvent) {
             match config::save_settings(&path, &updates) {
                 Ok(()) => {
                     so.status = Some(format!("saved to {}", tilde_display(&path)));
+                    so.icons_in_force = so.icons;
                     // Live fields take effect immediately; the overlay stays
                     // open so the confirmation is actually readable.
                     let saved = so.clone();
@@ -9782,8 +9795,56 @@ mod tests {
         assert_eq!(drawn_icon_marks(&app), nerd);
     }
 
+    /// The text of the settings row for icons, as the frame draws it.
+    fn drawn_icons_row(app: &App) -> String {
+        use ratatui::backend::TestBackend;
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| ui::render(f, app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .find(|line| {
+                line.contains("icons") && (line.contains("nerd") || line.contains("plain"))
+            })
+            .expect("the settings overlay draws an icons row")
+    }
+
+    /// Stepping the icons row repaints the next frame at once, pane 1 and
+    /// the row both, with no Enter, no save and no config read in between,
+    /// and again the other way. Fails if the row only changes the overlay's
+    /// own copy until it is saved.
+    #[test]
+    fn stepping_the_icons_row_repaints_the_next_frame_without_a_save() {
+        let _restore = RestoreIcons::capture();
+        ui::badges::set_active_icons(app::Icons::Nerd);
+        let mut app = app_for_icons();
+        let nerd = drawn_icon_marks(&app);
+
+        open_settings_on_the_icons_row(&mut app);
+        assert!(drawn_icons_row(&app).contains("nerd"));
+        handle_settings_input(&mut app, press('l'));
+        assert_eq!(
+            drawn_icon_marks(&app),
+            ("+".to_string(), "o".to_string()),
+            "pane 1 still draws the Nerd set after the step"
+        );
+        assert!(drawn_icons_row(&app).contains("plain"));
+
+        handle_settings_input(&mut app, press('h'));
+        assert_eq!(
+            drawn_icon_marks(&app),
+            nerd,
+            "the step back did not repaint"
+        );
+        assert!(drawn_icons_row(&app).contains("nerd"));
+    }
+
     /// Esc after toggling the row discards it, as it discards every row:
-    /// the overlay does not preview, so the set in force is untouched.
+    /// the row previews at once and Esc restores the set in force.
     #[test]
     fn cancelling_the_overlay_leaves_the_icon_set_as_it_was() {
         let _restore = RestoreIcons::capture();

@@ -348,6 +348,154 @@ at, for notes syntax and yy yp". Rulings posted on #127 and #128;
 FZ-73 (#129, the band to `surface0`) filed and dispatched on the
 tweak; the yank ticket follows with the lead's defaults.
 
+13:24 to 13:30 CET, after his looks: "issue 127 version: took long
+time to open. looks good tho, i can only see/reach .md files in file
+explorer. perhaps an addition 'M' to see 'all' files? link code etc.
+what do you think? issue 128 version: cant test/see this without any
+actual failures? or how do i run ssh-add ? issue 124 version: i think
+the divider split should be done so that the yellow notes divider
+goes across the entire pane 2, making it all flush. this gives space
+for a constant full width (within pane 2 still) inspector / info bar?
+letting us keep the general info (containing 'synced, user/owner, *
+branch,- worktrees etc | (divider) inspector/file information? draw
+me a sketch to make sure we share vision. thoughts: should we have a
+setup wizard for letting users setup SSH and git passwords? chaning
+between nerdfont and plain texst should reflect directly, without
+need to save, in the interface". On the lead's sketch and answers:
+"i truyst regarding lock files, ( 1., 2., ) lets see a build of pane
+2 worktrees. i trust you on the first logical revision. 127: i see.
+yes looks good is accepted. good for M for all (code files). 128 SSH
+i trust. 124: looks correct to me. accepoted design. add some relevant
+colors to notes inspector". So: FZ-71 and FZ-72 accepted and merged;
+FZ-68 round 2 on the accepted sketch (on #124); tickets on his yes:
+`M` for all files with code highlighted, the pane 2 `worktrees` view
+(lead designs the first revision), icons switching live. The setup
+wizard (lead: a `fleetz doctor` under M5, never holding secrets) and
+the band on every list and the ssh README paragraph: unanswered.
+
+Between 13:45 and 15:15 CET (the lead's stamps ran up to 80 minutes
+behind git in that stretch; commit dates are authoritative), three
+more ideas, recorded in `ideas.md` ("Info as
+a dashboard of boxes", "A day's work in info", "A Relay view") with
+his words: the `info` restructure (boxes for `BRANCHES` and `CI` side
+by side, `WORKTREES` short, `RECENT COMMITS` uncapped, each mouse-
+scrollable, reflowing by width); a per-day or per-session lines diff
+in `info`; a Relay status view ("now we are talking!!"); and 13:50
+"'notes previev' in pane 2 NOTES border could be colored, it's a sub
+page of sorts" (into FZ-68 round 2). The lead sent an `info` sketch
+for his yes before a ticket; the other two wait for a design note.
+
+15:20 CET, on the lead's `info` sketch: "yes! very good. but have the
+boxes stay the same size and fill them with say 6 rows of info + some
+addition headers if needed. then scrollable. we should also make use
+of a 'full size' pane 2, that steals space from pane 3 laterally, to
+show either more sorces, or more of the selected sources.. wait. this
+can be modular. default is the 4 most and best used sources:
+branches, CI, worktrees, recent commits. that makes sense? but let a
+user choose what sources in what order to display, in settings, with
+additional 2-4 other sources for full size mode. which also is
+selectable in settings." Filed FZ-79 (#135, the four fixed boxes,
+Ready, after FZ-68) and FZ-80 (#136, chosen sources and the
+full-size pane 2, Backlog, a design checkpoint with him first). At
+15:05 he opened the agents discussion ("discuss this with me! ...
+other users might not need or want things like relay ... but Claude
+implementations, and further down the line other AI, IS of interest.
+altough we should NOT try to compete with Herdr and others, but we
+could implement parts of it! built on my workflow"); the lead answered
+with three layers (plain git, Claude conventions, Relay) and four
+questions, a design note in `ideas.md` on his answers.
+
+15:30 CET, his answers on the agents design (the note "Agents in
+fleetz" in `ideas.md` holds the design): "'agent activity as a property
+of the repo', not 'an agent console inside fleetz'. yes exactly!";
+layers "1. yes 2. yes sounds good. great start 3. yes, and the command
+'relay status' is already live to run per repo from inside a tracked
+repo, that we could just pipe in? but expand on the other parts? and
+add Relay in settings, but buried deeper? people dont need to see that
+Relay even exists, so stow that Relay display setting somewhere";
+"no steering, only monitor"; questions: "1. i think both, but per
+repo; this repo has an active agent and that agent produced x today.
+show which agent has the baton per repo, perhaps even show PID? i also
+have plans for implementing github projects and kanban into fleetz, so
+all of this connects. 2. hmm.. i think it would be good to see
+'active' or not status even if no agent is writing at the moment.
+meaning, if the baton is released or not, that would be the active
+signal? 3. nothing yet, but im intrigued by seeing some indication of
+status and repo per agent, and how many subaegnts its running, and
+what agent it is (claude or codex for instance) but not much deeper
+then that. 4. im fine with starting with the day. keep the other
+session algorithm in tickets for later. it will probably need some
+designing".
+
+- **#133 (FZ-76), switching icons in the settings row repaints at
+  once.** Merged `5ed9b4e` at 15:26 CET under the safe-merge rule (a
+  fix, no look); ticket commit `c21d453` (base `8f92063`, branch
+  `fix/133-icons-repaint-live`, worker `fz-small` on its definition's
+  model, reviewer `fz-reviewer` `claude-fable-5-1`, lead `ea56f412`).
+  Filed on his ask of 13:24. Built: each step of the row calls
+  `set_active_icons`, `SettingsOverlay.icons_in_force` restored on Esc,
+  `,` and `q` and committed on a saved Enter; the new test fails at the
+  base and passes after. Review 1 (`c4b7c008e590`) accepted, every
+  overlay exit path traced, two mutations caught; optional: no test
+  for `icons_in_force` moving on a save (needs a settings path).
+  Branch CI 41846485622, combined checks on `e830c2e` (1580), gate
+  holds, `main` CI 41847422807. Remembered: nothing to keep.
+  FZ-76: review accepted first; fix cycles 0; owner decisions 0; worker 11; review 3; models fz-small default/claude-fable-5-1; usage worker 43032 tokens, reviewer 30946 tokens
+
+- **#128 (FZ-72), ssh refusals read `ssh` and the fetch marker wears
+  the Nerd warning glyph.** Merged `8f92063` at 15:10 CET on his
+  acceptance ("128 SSH i trust"); ticket commit `7ad7738` (base
+  `921935a`, branch `feat/128-ssh-label-warning-glyph`, worker
+  `fz-worker` and reviewer `fz-reviewer`, both `claude-fable-5-1`, lead
+  `ea56f412`). Filed on his pasted yes of 12:20 (a side session's
+  diagnosis: 32 ssh-origin repos marked `auth` because the passphrase
+  key was not in the agent under `BatchMode`). Built: `Ssh` kind judged
+  inside the auth-first branch, row `ssh`, phrase `ssh key refused (run
+  ssh-add)`, `badges::FETCH_WARNING_GLYPH` U+F071 under Nerd with `⚠`
+  under plain, README and CLAUDE.md (five Nerd uses). Worker stop 1:
+  three existing tests pinned the old kind and glyph, his ruling 12:50
+  ("i follow your recommendations on tests"): two `Auth` to `Ssh`, two
+  tests set plain icons. Review 1 (`39eb0219a640`) `needs evidence`:
+  the worker's M2 (auth judged before ssh) is an equivalent mutation,
+  no stderr matches both lists; ruled (a), the record corrected, the
+  diff stands; everything else accepted. Branch CI 41826784048,
+  combined checks on `9130491` (1579; the first run died with the
+  disk), gate holds, `main` CI 41845006953. Follow-ups: `Host key
+  verification failed` still reads `auth` (known_hosts); a
+  `(password)`-only ssh refusal reads as a key refusal. Remembered: a
+  mutation that no test can observe is equivalent, not a coverage
+  gap; the reviewer says so and the record carries it (nothing to keep
+  in a rule).
+  FZ-72: review evidence 1; fix cycles 0; owner decisions 2; worker 23; review 5; models claude-fable-5-1/claude-fable-5-1; usage worker 80529 tokens, reviewer 44043 tokens
+
+- **#127 (FZ-71), fenced code in the notes preview highlighted with
+  tree-sitter.** Merged `9130491` at 15:03 CET on his look ("yes looks
+  good is accepted") and his lockfile yes ("i trust regarding lock
+  files"); ticket commit `a04f9f4` (base `01b51cb`, branch
+  `feat/127-tree-sitter-fenced-code`, worker `fz-worker` and reviewer
+  `fz-reviewer`, both `claude-fable-5-1`, lead `ea56f412`). Filed on
+  his ask of 11:18 and dependency yes of 11:31 ("go with tree-sitter
+  and the same nine grammars"). Built: `src/ui/highlight.rs` ported
+  from notez (nine grammars, `OnceLock` slots, a broken grammar
+  disables itself, the Kotlin query), twelve capture styles, fenced
+  code over spans with styles carried across wraps, README. Worker
+  stop 1: two existing tests pinned the unhighlighted look, his ruling
+  12:50 ("i follow your recommendations on tests"); lockfile floor
+  moves (`cc` 1.2.63, `serde_json` 1.0.150, `shlex` 2.0.1) explained
+  and approved; the binary 9.3 to 19.5 MB accepted ("the bigger size
+  is worth the fast build", no release profile). Review 1
+  (`3865ffcc819c`) accepted, no blockers, reviewer could not rerun
+  mutations (no write tool); `cargo tree` confirmed tree-sitter's
+  `serde_json` build feature does not reach the runtime. Branch CI
+  41826780144, combined checks on `1cfc62e` (1576), gate holds with
+  `--guarded-approved`, `main` CI 41843732311. First fence 16 ms cold
+  in release; `main`'s launch 0.34 s cold, under 10 ms warm, so his
+  "took long time to open" was the first `cargo run` compiling the
+  grammars. Follow-ups: FZ-78 (`M` all files, code by extension);
+  the `md` fence's cold cost unmeasured; a multi-byte fence test.
+  Remembered: nothing to keep.
+  FZ-71: review accepted first; fix cycles 0; owner decisions 3; worker 19; review 4; models claude-fable-5-1/claude-fable-5-1; usage worker 125305 tokens, reviewer 75132 tokens
+
 - **#129 (FZ-73), the list band is half as strong.** Merged `14f44e3`
   at 13:12 CET under the small-look authority of 2026-10-02 (a colour);
   ticket commit `46730df` (base `921935a`, branch

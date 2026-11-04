@@ -7,10 +7,10 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Session `ea56f412` (`claude-fable-5-1`, `at-a`) took the baton
-2026-11-04 09:15 CET on his "continue"; `11cc93e2` released it 11-03.
-Three workers running (In flight). Worktrees on at-a: `issue-121`,
-`issue-124`, `issue-125`, `issue-126`, `issue-88`; none on `jean-1`.
+Session `ea56f412` (`claude-fable-5-1`, `at-a`) holds the baton since
+2026-11-04 09:15 CET, on his "continue". Two workers running (In
+flight). Worktrees on at-a: `issue-121`, `issue-124`, `issue-130`,
+`issue-88`; none on `jean-1`.
 
 ## Standing authority
 
@@ -28,12 +28,13 @@ apply to every UI ticket.
 
 ## In flight
 
-- Ready to integrate, reviewed, CI green, records on the issues: FZ-68
-  (#124, `7694c29`) on his look and tab-strip answer (`[/] NOTES` alone,
-  or an elided strip later); FZ-71 (#127, `a04f9f4`, guarded Cargo
-  files) on his yes to the lockfile floor moves (`cc`, `serde_json`,
-  `shlex`), then `--guarded-approved`; FZ-72 (#128, `7ad7738`) on his
-  look. FZ-74 (#130, `yy`/`yp`): Ready after FZ-71, stops for his look.
+- Running, records on the issues: FZ-68 round 2 (#124, the flush
+  divider on his accepted sketch, `fz-worker`, branch at `7694c29` plus
+  an in-progress merge of `main`; stops for his look), FZ-74 (#130,
+  `yy`/`yp`, `fz-worker` from `8f92063`; his look). Ready: FZ-77 (#134,
+  worktrees view, next worker slot), FZ-78 (#132, `M` all files) and
+  FZ-79 (#135, info boxes) after FZ-68; FZ-80 (#136) Backlog, design
+  checkpoint first. FZ-75 (#131) is another session's research ticket.
 - FZ-65 (#121): built, diff `9f4018d7160d` unreviewed, held for his wheel
   decision (select as built, or scroll clamped) and a wrapped-row ticket.
 - #88 (FZ-38): parked, uncommitted on at-a. FZ-63 (#119), FZ-60 (#116):
@@ -44,17 +45,16 @@ apply to every UI ticket.
 - His yes wanted (asked 12:23, log): a pane 2 `worktrees` view (none
   filed), the FZ-66 band on every list, an ssh README paragraph. Code
   files highlighted after FZ-71; the CI YAML needs a tenth grammar.
-- #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
-  #81 and #79: his answer on the existing footer and header test edits.
-- Pane 1 wheel coalescing ticket, flaky `clipboard::tests` issue: his yes.
+- #88 worktree: stays or goes; FZ-38 with font-checked glyphs? #81 and
+  #79 test edits; pane 1 wheel coalescing, flaky `clipboard::tests`: his yes.
 
 ## Next step
 
 Merged 11-04: FZ-67 `2e71935`, FZ-70 `f968c79`, FZ-69 `01b51cb`, FZ-73
-`14f44e3`. Next: merge FZ-71, FZ-72, FZ-68 as his answers come (fresh
-combined checks and gate each; merge-resolution cycles likely, they
-share `markdown.rs`, `detail.rs`, README); dispatch FZ-74 after FZ-71;
-then FZ-65 on his wheel answer, the `{`/`}` ticket on his yes, FZ-41
-(#97). FZ-63, FZ-60 on his word, FZ-58 after FZ-63. FZ-52: his word.
+`14f44e3`, FZ-71 `9130491`, FZ-72 `8f92063`, FZ-76 `5ed9b4e`. Next:
+FZ-68 round 2 and FZ-74 to his look; FZ-77 in the next worker
+slot, FZ-78 after FZ-68; the `info` boxes ticket on his sketch yes
+(ideas.md); then FZ-65 on his wheel answer, the `{`/`}` ticket on his
+yes, FZ-41 (#97). FZ-63, FZ-60 on his word, FZ-58 after FZ-63.
 
 Start a lead at the root: `claude --agent fz-coordinator`; Codex: `AGENTS.md`.

@@ -636,6 +636,9 @@ pub struct SettingsOverlay {
     /// Seeded from the set the app is drawing with, so a save that only
     /// meant to change another row writes back the set already in force.
     pub icons: Icons,
+    /// The set in force when the overlay opened, or when it last saved: what
+    /// Esc puts back, because stepping the icons row previews at once.
+    pub icons_in_force: Icons,
     pub intro: bool,
     /// Result of the last save attempt, shown as a footer line.
     pub status: Option<String>,
@@ -670,6 +673,7 @@ impl SettingsOverlay {
             contributions,
             contrib_cell,
             icons,
+            icons_in_force: icons,
             intro,
             status: None,
             digits: String::new(),

@@ -111,6 +111,7 @@ pub fn fetch_failure_short(kind: crate::git::FetchFailureKind) -> &'static str {
     match kind {
         FetchFailureKind::TimedOut => "timeout",
         FetchFailureKind::Auth => "auth",
+        FetchFailureKind::Ssh => "ssh",
         FetchFailureKind::Unreachable => "unreachable",
         FetchFailureKind::NoRemote => "no remote",
         FetchFailureKind::Other => "fetch",
@@ -124,6 +125,7 @@ pub fn fetch_failure_phrase(kind: crate::git::FetchFailureKind) -> &'static str 
     match kind {
         FetchFailureKind::TimedOut => "timed out",
         FetchFailureKind::Auth => "authentication failed",
+        FetchFailureKind::Ssh => "ssh key refused (run ssh-add)",
         FetchFailureKind::Unreachable => "remote unreachable",
         FetchFailureKind::NoRemote => "remote not found",
         FetchFailureKind::Other => "git error",
@@ -131,10 +133,15 @@ pub fn fetch_failure_phrase(kind: crate::git::FetchFailureKind) -> &'static str 
     }
 }
 
-/// The row marker for a repo whose last fetch failed, or None.
+/// The row marker for a repo whose last fetch failed, or None. The warning
+/// glyph follows the active icon set (`badges::fetch_warning_icon`).
 pub fn fetch_marker(facts: &crate::model::FetchFacts) -> Option<String> {
     let failure = facts.failure()?;
-    Some(format!("⚠ {}", fetch_failure_short(failure.kind)))
+    Some(format!(
+        "{} {}",
+        badges::fetch_warning_icon(),
+        fetch_failure_short(failure.kind)
+    ))
 }
 
 /// A byte count the way the row names it: git's binary units, named as
@@ -1907,6 +1914,27 @@ mod tests {
         assert_eq!(
             fetch_failure_line(&facts, now).as_deref(),
             Some("⚠ fetch failed: authentication failed, age unknown")
+        );
+    }
+
+    /// FZ-72 (#128): an ssh refusal names what to fix; an https refusal
+    /// keeps its own phrase.
+    #[test]
+    fn an_ssh_refusal_names_the_key_and_an_auth_refusal_the_credential() {
+        let now = at(2026, 10, 1, 14, 30);
+        let ssh = failed_fetch(crate::git::FetchFailureKind::Ssh, None);
+        assert_eq!(
+            fetch_failure_line(&ssh, now).as_deref(),
+            Some("⚠ fetch failed: ssh key refused (run ssh-add), age unknown")
+        );
+        let auth = failed_fetch(crate::git::FetchFailureKind::Auth, None);
+        assert_eq!(
+            fetch_failure_line(&auth, now).as_deref(),
+            Some("⚠ fetch failed: authentication failed, age unknown")
+        );
+        assert_ne!(
+            fetch_failure_short(crate::git::FetchFailureKind::Ssh),
+            fetch_failure_short(crate::git::FetchFailureKind::Auth)
         );
     }
 

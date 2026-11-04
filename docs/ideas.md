@@ -2187,3 +2187,137 @@ enough for the list and the view answers the rest on demand.
 `info` counts their dirt but this view lists the main checkout only in v1);
 the porcelain paths carried from the sweep to skip the dwell; the file list
 in `-d` print mode.
+
+## Info as a dashboard of boxes
+
+**Status: ticketed as FZ-79 (the boxes) and FZ-80 (the sources and the
+full-size pane 2), not built.** Sketch accepted 2026-11-04 15:20: "yes!
+very good. but have the boxes stay the same size and fill them with say 6
+rows of info + some addition headers if needed. then scrollable. we should
+also make use of a 'full size' pane 2, that steals space from pane 3
+laterally, to show either more sorces, or more of the selected sources..
+wait. this can be modular. default is the 4 most and best used sources:
+branches, CI, worktrees, recent commits. that makes sense? but let a user
+choose what sources in what order to display, in settings, with additional
+2-4 other sources for full size mode. which also is selectable in
+settings."
+
+**Problem.** `info` is one scrolling column: branches with their paths and
+upstreams, a `ci` section under them, the worktrees with every detail, and
+six recent commits. The quick glance it is meant to be competes with detail
+that has its own pane 2 page now (`branches`, `ci`, `worktrees` once FZ-77
+lands). His words: "we can make WORKTREES less detailed, fit 'ci' to the
+right of 'branches', and make 'ci' spell 'CI'. branches dont need to show
+path nor 'upstream', save those for the WORKTREES page in pane 2.
+encapsulate each part in a small square/divider, that restructures
+ackording to window size. have each part be scrollable, to fit more info if
+one want to scroll to see more (only mouse for these). so dont cap 'recent
+commits' at 6 commits. essentially, i want to see more of the most relevant
+quick info one might need access too. the rest of the info has it's
+dedicated page in pane 2".
+
+**Shape.** Under the pinned header, `info`'s body becomes boxes: `BRANCHES`
+(name, ahead/behind, age; no path, no upstream) and `CI` side by side when
+the pane is wide enough, `WORKTREES` (one short row each: branch, dirty,
+age) and `RECENT COMMITS` (uncapped) below; each box has its own border and
+label in the section colour, its own scroll driven by the mouse wheel over
+it only (the keyboard keeps scrolling the body as a whole), and the boxes
+reflow to one column when the pane is narrow. The headings spell `CI`.
+
+**Open.** Which boxes pair at which width; whether a box can be folded;
+how the body's keyboard scroll and a box's wheel scroll coexist (the
+`panel_rects`-matches-`render` invariant applies to each box).
+
+**More sources he named.** `CONTRIBUTORS` (2026-11-04 15:35: "contributors
+as a list per repo would be nice to list somewhere, perhaps? less
+important but could be nice. i actually want that. perhaps in INFO
+inspector?"): `git shortlog -sn --no-merges` per repo, name, commit count,
+last commit date; a box in FZ-80's source list, and the candidate for the
+`info` inspector's empty state (today `no commit selected`). `AGENTS`
+and `RELAY` from "Agents in fleetz" below.
+
+## A day's work in info
+
+**Status: idea from Andreas 2026-11-04, not designed.**
+
+His words: "we could perhaps also in the general pane 2 INFO tab show a
+total of lines diff per 'session' what a session now might mean, perhaps
+an entire day? or can we build something that looks at factors such as
+commits, merges and worktrees and diffs, to determine what a 'session'
+is, and how much was done that day?"
+
+**Thoughts.** A day is the honest unit (commit dates, the contribution
+strip already counts by day); a "session" inferred from gaps between
+commits, merges and worktree activity is a heuristic worth a design note
+before any code. Lines added and removed come from `git log --numstat
+--since=midnight` per repo, off the UI thread as the sweep's other reads
+are; the fleet total belongs in the header or the status line, the per-repo
+figure in `info`'s box. Not a ticket until the unit is chosen.
+
+## Agents in fleetz
+
+**Status: design agreed with Andreas 2026-11-04 15:30, not ticketed.**
+His opening (14:05): "this might even open up to have a Claud (and later
+codex) view? Relay status! YES! to show status, handovers, etc!"; the
+frame (15:05): "other users might not need or want things like relay
+(ofcourse, it's too niche) but Claude implementations, and further down
+the line other AI, IS of interest. altough we should NOT try to compete
+with Herdr and others, but we could implement parts of it! built on my
+workflow".
+
+**Principle.** Agent activity is a property of the repo, not an agent
+console inside fleetz (his "yes exactly!"). fleetz monitors and hands off
+(`Enter`, `e`, `o` into the worktree where the work is); it never
+launches, steers or chats with an agent, shows no transcripts, holds no
+credentials. The angle: every agent that works properly leaves git
+traces (a worktree, a ticket branch, commits, a merge, a diff), and
+fleetz already discovers and draws those for every repo at once, so the
+same picture covers Claude, Codex and a human the same way.
+
+**Three layers, each opt-in by what exists on disk.**
+
+1. *Plain git, every user.* The worktrees view (FZ-77) and "a day's
+   work" (the section above: lines in and out per repo since midnight, a
+   fleet total). An agent that works in worktrees shows up here with no
+   agent-specific code.
+2. *Agent conventions, when `.claude/` (later Codex's files) is there.*
+   What he wants to see, per repo (his answers): that this repo has an
+   active agent, which agent it is (claude or codex), what it produced
+   today, how many subagents it is running, the baton holder, perhaps the
+   PID; "not much deeper then that". Sources, all read-only and off the UI
+   thread: a worktree under `.claude/worktrees/` wears an agent glyph and
+   its ticket id from the branch name; `~/.claude/projects/<repo>/`
+   (names and mtimes only, never contents: a session directory per
+   session, subagent transcripts inside it) gives "last activity" and a
+   subagent count; a `claude` or `codex` process whose working directory
+   is the repo (`ps` plus `lsof`, on demand for the selected repo only)
+   gives the PID and "running now". This is the part other users want:
+   which repos have an agent busy in them and what the agents did today.
+3. *Relay, when the repo has it.* `scripts/relay-status` already prints
+   the block per repo (lead, baton held or released, `main` versus
+   origin, CI, worktrees, next step): fleetz runs it for the selected
+   repo and shows its lines in a box, as `ci` reads GitHub, and reads the
+   handoff's in-flight tickets for the rest. "Active" for a Relay repo is
+   the baton (his answer 2): held means active even between writes,
+   released means idle. The display is governed by a config key only
+   (`relay = "auto" | "off"`, auto shows the box when `scripts/relay-status`
+   exists), not a row in the `,` overlay: "people dont need to see that
+   Relay even exists, so stow that Relay display setting somewhere".
+
+**Where it lands.** An `AGENTS` box in the `info` dashboard (FZ-79's
+box model, a source in FZ-80's list) for layer 2, a `RELAY` box for layer
+3, and the agent glyph and ticket id in the worktrees view and pane 1's
+worktree badge. He also plans GitHub Projects and kanban in fleetz
+(FZ-08's read-only board view is the seed), which ties the baton and the
+tickets in flight to the board.
+
+**Rejected.** A session manager (start, stop, prompt): competes with
+Herdr-style tools and breaks the monitor-only rule. Reading transcript
+contents: privacy and cost for no monitoring value. A Relay row in the
+settings overlay: niche, stays in the config file. A "session" inferred
+from commit gaps for the day's work: a day first, the algorithm later
+("it will probably need some designing").
+
+**Order.** FZ-77 (worktrees view) first since the others render on it;
+"a day's work" as an `info` box after FZ-79; then the `AGENTS` box
+(layer 2); the `RELAY` box last. Tickets on his yes to this note.
