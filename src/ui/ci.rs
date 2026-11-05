@@ -2235,6 +2235,8 @@ mod tests {
     #[test]
     fn j_k_and_the_wheel_scroll_the_log_and_script_bodies() {
         let mut app = on_failed_run();
+        // Draws at the pre-FZ-88 inspector size (40%) it was written for.
+        app.inspector_pct = 40;
         let sha = runs()[FAILED_RUN].head_sha.clone().unwrap();
         app.ci.get_mut(&key()).unwrap().scripts.insert(
             (sha, WORKFLOW.to_string()),
