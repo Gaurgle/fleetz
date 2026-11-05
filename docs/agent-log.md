@@ -327,6 +327,35 @@ pins removed, the spinner line cut from a third; the heatmap line, the
 CI inspector pin and his `pick up` pin kept). Filed on his asks: FZ-82
 to FZ-88 (#139 to #145).
 
+- **#150 (FZ-93), the fleet's status in pane 2's header and a keys-only
+  footer.** Merged `b8c6115` at about 18:50 CET on his look and his
+  word ("ship this and merge", "you may commit and push"); ticket
+  commits `c4a8bfa` feature, `04845c2` bump to 0.6.2, `4cede48` round 1
+  fixes, `2755a60` round 2 tests (base `f4887d4`, built in his own
+  session, not dispatched; reviewer `fz-reviewer`). Four designs in one
+  evening, each on his look in the running app: a status line under the
+  header, then a status box under pane 1 (beside the inspector or at
+  the foot of pane 1, on a temporary `Z`), then the status in pane 2's
+  header, then GitHub moved to the top row. His words, in #150. Kept:
+  top row name and version with loading, GitHub, watch and the sweep
+  time flush right; pane 2's header in three sections (local, remote
+  leaning left, the fleet's window, summary and activity in fixed rows);
+  keys-only footer, which carries the fleet's state where pane 2 draws
+  none; the `notes` file facts on a divider at the tree's foot; the
+  commit counter on the view's title row. Version 0.6.2 on his ruling
+  ("no need to up them a lot all the time, its gonna get inflated") over
+  the minor `CLAUDE.md` would give a feature. Review 1 (`8ada872bca4f`)
+  changes requested: messages drawn nowhere without a fleet column
+  (high), two criteria untested, two identity tests vacuous. Review 2
+  (`96ba250fbddd`) changes requested: no frame-level test that pane 2
+  marks the frame. Review 3 (`32e4c2ba273d`) accepted, eight mutations
+  across the rounds. Gate: `relay-gate --guarded-approved` held on
+  `fa390f7`. Existing tests rewritten to the new contract are listed in
+  #150. Open: the digest draws no fleet column (the footer carries it);
+  review 3's optional note, a summary-only frame test. Remembered: keep
+  version bumps small.
+  FZ-93: review accepted third; fix cycles 2; owner decisions 9; worker main session; review 3; models claude-opus-5-5/fz-reviewer default; usage reviewer 108785, 81705, 24123 tokens
+
 - **#130 (FZ-74), `yy` and `yp` yank the thing under the cursor and
   its path.** Merged `fb26449` at 12:45 CET on his look ("FZ-74 yes");
   ticket commit `3d9078b` (base `8f92063`, branch `feat/130-yank-yy-yp`,
