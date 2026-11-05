@@ -569,7 +569,7 @@ impl SettingField {
 /// Repo list width as a percentage of the main area, and the inspector's share
 /// of the right column. These are the sizes every launch starts from.
 pub const DEFAULT_REPO_LIST_PCT: u16 = 35;
-pub const DEFAULT_INSPECTOR_PCT: u16 = 40;
+pub const DEFAULT_INSPECTOR_PCT: u16 = 30;
 
 /// Bounds the resize keys clamp to. Both panes stay wide/tall enough to be
 /// worth drawing, so a held key can never collapse one to nothing.
