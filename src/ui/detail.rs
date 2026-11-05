@@ -3385,7 +3385,7 @@ fn worktree_rows(repo: &RepoStatus, width: usize) -> Vec<Line<'static>> {
 /// wrapping body that must stay one rendered row: the commit list's row tops
 /// are counted in source lines, so a row that wrapped would put every commit
 /// below it lower than recorded.
-fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+pub(crate) fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     let mut left = width;
     let mut out = Vec::new();
     for span in spans {

@@ -97,7 +97,11 @@ pub fn run_rows(
         .iter()
         .enumerate()
         .map(|(i, run)| {
-            run_line(run, &widths, width, now, dim_pending).marked(i == selected, focused)
+            let line =
+                run_line(run, &widths, width, now, dim_pending).marked(i == selected, focused);
+            // Below the row's floor (lamp, duration and age) the row is cut,
+            // so the wrapping body never breaks it onto a second row.
+            Line::from(crate::ui::detail::clip_spans(line.spans, width))
         })
         .collect()
 }
@@ -113,9 +117,10 @@ pub fn headline(app: &App, width: usize, now: DateTime<Local>) -> Option<Line<'s
     let columns = Widths::of(&state.runs, now).headed().fit(width);
     let mut text = " ".repeat(MARKER_W + 2);
     text.extend(cells(&columns, HEADINGS).into_iter().map(|(_, cell)| cell));
-    Some(Line::from(Span::styled(
-        text,
-        Style::default().fg(colors::OVERLAY),
+    let words = Span::styled(text, Style::default().fg(colors::OVERLAY));
+    Some(Line::from(crate::ui::detail::clip_spans(
+        vec![words],
+        width,
     )))
 }
 
@@ -1405,6 +1410,119 @@ mod tests {
         release.event = "workflow_dispatch".to_string();
         runs.push(release);
         runs
+    }
+
+    /// His screenshot's rows (FZ-82): `Frontend CI` on `feat/font-previews`
+    /// from a `pull_request`, `9m 14s`, `17h ago`, with a long title.
+    fn screenshot_runs() -> Vec<WorkflowRun> {
+        let created = Utc::now() - chrono::Duration::hours(17);
+        (0..3)
+            .map(|i| {
+                let mut run = runs()[1].clone();
+                run.id += i;
+                run.workflow = Some("Frontend CI".to_string());
+                run.branch = Some("feat/font-previews".to_string());
+                run.event = "pull_request".to_string();
+                run.title = "feat(fonts): preview every font in the picker".to_string();
+                run.created = created;
+                run.started = Some(created);
+                run.updated = created + chrono::Duration::seconds(554);
+                run
+            })
+            .collect()
+    }
+
+    /// His report of 2026-11-05: on a narrow pane 2 every run row kept the
+    /// trigger and broke `37s   6m ago` onto a second row. Pane 2 drawn
+    /// alone at each width from 40 to 80 columns: one rendered row per run,
+    /// each ending in its age, the headline too. Fails while a row is laid
+    /// out wider than the body it is drawn in.
+    #[test]
+    fn a_run_row_never_wraps_on_a_narrow_pane() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Detail;
+        landed(&mut app, screenshot_runs(), Local::now());
+        for pane in 40..=80u16 {
+            let mut terminal = Terminal::new(TestBackend::new(pane, 30)).unwrap();
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    crate::ui::detail::render(f, Rect::default(), area, None, None, &app);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let rows: Vec<String> = (0..30).map(|y| row_text(&buffer, y)).collect();
+            let first = rows
+                .iter()
+                .position(|r| r.contains("as of "))
+                .unwrap_or_else(|| panic!("the first line at {pane}: {rows:#?}"));
+            let body = |row: &str| row.trim_matches('│').trim_end().to_string();
+            let headline = body(&rows[first + 1]);
+            assert!(headline.ends_with("age"), "headline at {pane}: {rows:#?}");
+            for i in 0..3 {
+                let row = body(&rows[first + 2 + i]);
+                assert!(row.ends_with("17h ago"), "run {i} at {pane}: {rows:#?}");
+                assert!(row.contains("9m 14s"), "run {i} at {pane}: {rows:#?}");
+            }
+            let marked: usize = rows[first + 2..first + 5]
+                .iter()
+                .map(|r| r.matches('▸').count())
+                .sum();
+            assert_eq!(marked, 1, "the cursor on one row at {pane}");
+            assert!(
+                body(&rows[first + 5]).is_empty(),
+                "nothing under the runs at {pane}: {rows:#?}"
+            );
+        }
+    }
+
+    /// FZ-82: below the row's floor (lamp, duration and age, 23 columns)
+    /// the run rows and the headline are cut at the inner width, never
+    /// wrapped. Panes 20 to 26 hold 16 to 22 columns inside. Fails while a
+    /// row past the floor wraps its age onto a second row.
+    #[test]
+    fn below_its_floor_a_run_row_is_clipped_not_wrapped() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Detail;
+        landed(&mut app, screenshot_runs(), Local::now());
+        for pane in 20..=26u16 {
+            let mut terminal = Terminal::new(TestBackend::new(pane, 30)).unwrap();
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    crate::ui::detail::render(f, Rect::default(), area, None, None, &app);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let rows: Vec<String> = (0..30).map(|y| row_text(&buffer, y)).collect();
+            let first = rows
+                .iter()
+                .position(|r| r.contains("as of "))
+                .unwrap_or_else(|| panic!("the first line at {pane}: {rows:#?}"));
+            let body = |row: &str| row.trim_matches('│').trim().to_string();
+            assert!(
+                !body(&rows[first + 1]).contains('◉'),
+                "the headline on one row at {pane}: {rows:#?}"
+            );
+            for i in 0..3 {
+                let row = body(&rows[first + 2 + i]);
+                assert!(row.contains('◉'), "run {i} on one row at {pane}: {rows:#?}");
+            }
+            assert!(
+                body(&rows[first + 5]).is_empty(),
+                "nothing wrapped under the runs at {pane}: {rows:#?}"
+            );
+            // The pinned header draws unwrapped, so also hold the lines
+            // themselves to the inner width: a short pane scrolls the
+            // headline with the body, which wraps.
+            let inner = usize::from(pane) - 4;
+            let now = Local::now();
+            let head = headline(&app, inner, now).expect("runs are listed");
+            assert!(head.width() <= inner, "headline at {pane}: {head:?}");
+            for row in run_rows(&app, inner, now, 0, true) {
+                assert!(row.width() <= inner, "run at {pane}: {row:?}");
+            }
+        }
     }
 
     /// His look on #95: at 170 columns the workflow was cut at 18
