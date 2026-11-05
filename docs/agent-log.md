@@ -368,6 +368,28 @@ sync rewrote them from memory); pins are his to clear in the app.
 14:00: "i think we should start wrapping up soon, finish the current
 tickets but stop after".
 
+- **#134 (FZ-77), a worktrees view in pane 2.** Merged `8af724f` at
+  14:36 CET on his look ("accpet"); ticket commit `4db738c` plus the
+  merge `58428d6` (base `5ed9b4e`, worker `fz-worker`, reviewer
+  `fz-reviewer`, both `claude-fable-5-1`). The lead's first revision
+  on his "i trust you on the first logical revision": rows from
+  `worktree_rows` (main first, marked), the inspector with the facts
+  and six commits read on demand after a dwell, `Enter`/`e`/`o` in the
+  worktree, the tab between `graph` and `branches` in pink (existing
+  tests pinned the order and the colours). Review 1 (`844babafe3bb`)
+  accepted with low findings, three taken (short hash, the dwell and
+  fold gate, an alignment doc), re-review (`e6344b76473c`) accepted;
+  the merge with `main` added a `yank_target` arm (branch and path),
+  reviewed (`d73c5efeffff`). `main` CI 42036326448. Round 2 planned
+  (the notes-style subpage). Remembered: nothing to keep.
+  FZ-77: review accepted first; fix cycles 2; owner decisions 2; worker 39; review 12; models claude-fable-5-1/claude-fable-5-1; usage worker 221872 + 74677 tokens, reviewer 84480 + 38612 tokens
+
+14:25 CET: "137 is accepted", "wrap up the other workers, then stop for
+today". 14:30: "did you answer why the CI flags portfolio-site CI as
+red, CI failed, whilst all CI in pane CI page are green?" (answered
+at 13:40: a failing Vercel commit status in the rollup; fixed in
+FZ-83, built, not yet reviewed).
+
 - **#124 (FZ-68), the notes preview as a column of pane 2.** Merged
   `1affbc7` at 14:09 CET on his look ("accpet"); two rounds: round 1 a
   divider with the preview's text on pane 2's top border (11-04), round

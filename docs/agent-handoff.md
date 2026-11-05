@@ -7,10 +7,11 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Session `ea56f412` (`claude-fable-5-1`, `at-a`) holds the baton again
-since 2026-11-05 12:26 CET, on his batch of feedback (it released it
-11-04 16:15). No worker or reviewer running. Worktrees on at-a:
-`issue-121`, `issue-124`, `issue-130`, `issue-134`, `issue-88`.
+Baton released 2026-11-05 14:36 CET by session `ea56f412` (held since
+12:26; `claude-fable-5-1`, then `claude-opus-5-5` from 13:55 on his
+`/model`), on his "wrap up the other workers, then stop for today". No
+worker or reviewer running. Worktrees on at-a: `issue-121`, `issue-137`,
+`issue-140`, `issue-88`.
 
 ## Standing authority
 
@@ -27,11 +28,12 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 
 ## In flight
 
-- FZ-81 (#137, yank flash, `35f17cc`, diff `7900ef870c0e`, CI green):
-  Ready to integrate for his look. FZ-77 (#134, look accepted 11-05):
-  merge-resolution worker running against `main` `1affbc7`. FZ-83 (#140,
-  CI lamp, option C ruled): `fz-worker` running. Ready: FZ-84 to FZ-87,
-  FZ-89 to FZ-92, FZ-78, FZ-79. FZ-80 Backlog. Stop after these.
+- FZ-81 (#137, yank flash, `35f17cc`, diff `7900ef870c0e`): his look
+  accepted 14:25; merging with `main` conflicts in README's `yy`/`yp`
+  row: a resolution cycle, review, gate, merge. FZ-83 (#140, CI lamp,
+  uncommitted, diff `6e27d7d9ae3c` vs `334e9a6`): built, not reviewed;
+  next review, commit, a merge with `main`, his look. Ready: FZ-84 to
+  FZ-87, FZ-89 to FZ-92, FZ-78, FZ-79. FZ-80 Backlog.
 - FZ-65 (#121): built, `9f4018d7160d` unreviewed, his wheel decision.
   #88 (FZ-38) parked, uncommitted. FZ-63 (#119), FZ-60 (#116): trees
   lost 11-03; redispatch on his word.
@@ -49,9 +51,10 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 ## Next step
 
 Merged 11-05: FZ-74 `fb26449`, FZ-88 `334e9a6`, FZ-82 `fa3c5ec`, FZ-68
-`1affbc7`. Next: finish FZ-77's merge (review, gate, merge) and FZ-83
-(review, his look); FZ-81 on his look. Then, on his word: FZ-85, FZ-86,
-FZ-84, FZ-87, FZ-89, FZ-90 to FZ-92, FZ-77 round 2, FZ-78, FZ-79. One
-target dir per worktree, pruned at merge (log).
+`1affbc7`, FZ-77 `8af724f`. Next: FZ-81's README resolution and merge;
+FZ-83's review and his look; then FZ-85, FZ-86, FZ-84, FZ-87, FZ-89,
+FZ-90 to FZ-92, FZ-77 round 2, FZ-78, FZ-79. One target dir per
+worktree, pruned at merge (log). His `fleetz` is from Oct 29: suggest
+`cargo install --path .` before he judges a screenshot (memory).
 
 Start a lead at the root: `claude --agent fz-coordinator`; Codex: `AGENTS.md`.
