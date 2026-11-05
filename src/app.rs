@@ -2186,6 +2186,13 @@ pub struct App {
     /// are written on the first frame, which is always drawn before any input
     /// is processed.
     pub detail_max_scroll: std::cell::Cell<u16>,
+    /// Whether this frame drew the fleet's state in pane 2 (FZ-93): its
+    /// header's fleet column, or the `notes` layout's slot beside it. Reset
+    /// at the start of every frame and read by the footer, drawn after pane
+    /// 2, which carries the summary and the message itself when nothing
+    /// else did (a section's digest, no repo, a pane too narrow for the
+    /// column), so an action never ends in silence.
+    pub fleet_drawn: std::cell::Cell<bool>,
     /// Set when the cursor moves, cleared once the renderer has scrolled to
     /// show it.
     ///
@@ -2949,6 +2956,7 @@ impl App {
             detail_selections: [0; HistoryView::COUNT],
             inspector_scroll: 0,
             detail_max_scroll: std::cell::Cell::new(0),
+            fleet_drawn: std::cell::Cell::new(false),
             follow_selection: std::cell::Cell::new(false),
             detail_row_tops: std::cell::RefCell::new(Vec::new()),
             detail_hits: std::cell::RefCell::new(Default::default()),

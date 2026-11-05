@@ -1002,7 +1002,7 @@ fn trim_end_spans(spans: &mut Vec<Span<'static>>) {
 
 /// Cut a line to `avail - 1` columns and end it with `…` in the style of
 /// the span it cuts.
-fn clip_spans(spans: Vec<Span<'static>>, avail: usize) -> Vec<Span<'static>> {
+pub(crate) fn clip_spans(spans: Vec<Span<'static>>, avail: usize) -> Vec<Span<'static>> {
     let limit = avail.saturating_sub(1);
     let mut clipped = Vec::new();
     let mut width = 0;
