@@ -58,4 +58,3 @@ FZ-90 to FZ-92, FZ-77 round 2, FZ-78, FZ-79. One target dir per
 worktree, pruned at merge (log). His `fleetz` is from Oct 29: suggest
 `cargo install --path .` before he judges a screenshot (memory).
 
-Start a lead at the root: `claude --agent fz-coordinator`; Codex: `AGENTS.md`.
