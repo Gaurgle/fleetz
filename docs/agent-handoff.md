@@ -7,11 +7,10 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Baton released 2026-11-05 14:36 CET by session `ea56f412` (held since
-12:26; `claude-fable-5-1`, then `claude-opus-5-5` from 13:55 on his
-`/model`), on his "wrap up the other workers, then stop for today". No
-worker or reviewer running. Worktrees on at-a: `issue-121`, `issue-137`,
-`issue-140`, `issue-88`.
+Session `ea56f412` (`claude-opus-5-5` since 13:55 on his `/model`)
+holds the baton again from 14:45 CET for one last ticket on his "lets
+do this as the last ticket for today": FZ-83 with its source column.
+Worktrees on at-a: `issue-121`, `issue-137`, `issue-140`, `issue-88`.
 
 ## Standing authority
 
