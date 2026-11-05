@@ -36,7 +36,8 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
   review, commit, a merge with `main` (behind FZ-82/68/77), his look. Ready: FZ-84 to
   FZ-87, FZ-89 to FZ-92, FZ-78, FZ-79. FZ-80 Backlog.
 - FZ-93 (#150) merged `b8c6115` 11-05 (log), 0.6.2 on `main`, untagged.
-  FZ-94 (#151, todoz mode and ticking boxes) Backlog, after FZ-63.
+  Filed on his look 18:48: FZ-95 (#152, fixed header sections, owner/name)
+  and FZ-96 (#153, digest fleet column) Ready; FZ-94 (#151) Backlog.
 - FZ-65 (#121): built, `9f4018d7160d` unreviewed, his wheel decision.
   #88 (FZ-38) parked, uncommitted. FZ-63 (#119), FZ-60 (#116): trees
   lost 11-03; redispatch on his word.
@@ -53,8 +54,8 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 
 ## Next step
 
-Merged 11-05: FZ-74, 88, 82, 68, 77, 93 (log). Next: FZ-81's README and
-`ui::render` fixes against FZ-93, then merge; FZ-83's review and his look; then
-FZ-85, 86, 84, 87, 89, 90 to 92, FZ-77 round 2, 78, 79. Pruned per
-worktree at merge (log). Suggest `cargo install` before a screenshot.
+He stopped 11-05 18:55. Merged 11-05: FZ-74, 88, 82, 68, 77, 93 (log).
+Next: FZ-81 against FZ-93, merge; FZ-95, 96; FZ-83's review, his look;
+FZ-85, 86, 84, 87, 89, 90 to 92, 77 round 2, 78, 79. Worktrees pruned
+at merge (log). Suggest `cargo install` before a screenshot.
 
