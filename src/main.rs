@@ -178,7 +178,7 @@ pub enum AppEvent {
         walk: app::NotesWalk,
         result: Result<notes::Notes, String>,
     },
-    /// The highlighted note's body and its metadata for the card, applied by
+    /// The highlighted note's body and its metadata for the facts, applied by
     /// `App::apply_note_read` and `App::apply_note_facts`, and a markdown
     /// body rendered at the read's `render_width` (FZ-59), applied by
     /// `App::apply_note_rendered` in the same turn so the reader never
@@ -1248,6 +1248,11 @@ fn handle_mouse_input(
     terminal: &Terminal<CrosstermBackend<io::Stdout>>,
     m: MouseEvent,
 ) {
+    // A press ends a pending yank chord (FZ-74), as a key does: a click can
+    // move the cursor, and a `p` after it must not copy from the new row.
+    if matches!(m.kind, MouseEventKind::Down(_)) {
+        app.pending_yank = false;
+    }
     if !matches!(app.overlay, Overlay::None) || app.search_active {
         return;
     }
@@ -1732,6 +1737,21 @@ async fn handle_normal_input(
     if !matches!(key.code, KeyCode::Char('[' | ']')) {
         app.brackets_cycling_views = false;
     }
+    // `yy` and `yp` (FZ-74): a `y`, and the key after one, go to the chord
+    // first; a key that does not finish it falls through to its own action.
+    let plain = match key.code {
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(c)
+        }
+        _ => None,
+    };
+    if app.press_yank_key(plain, clipboard::copy) {
+        return Ok(());
+    }
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         // A leftover search query (set, then Enter'd out of edit mode) is
@@ -1861,7 +1881,6 @@ async fn handle_normal_input(
             _ => app.scroll_detail(-10),
         },
         KeyCode::Char('v') => app.toggle_view(),
-        KeyCode::Char('y') => app.yank_with(clipboard::copy),
         KeyCode::Char('?') => app.toggle_help(),
         KeyCode::Char('/') => app.start_search(),
         // Fetch (not pull): update remote-tracking refs so ahead/behind is
@@ -2042,7 +2061,7 @@ async fn handle_normal_input(
 }
 
 /// The file `Enter` opens in $EDITOR: the `notes` view's highlighted file,
-/// while pane 2, the reader or the card has focus. `None` leaves `Enter` to
+/// while pane 2 or the reader has focus. `None` leaves `Enter` to
 /// open lazygit on the repo.
 fn note_to_open(app: &App) -> Option<std::path::PathBuf> {
     let focused = matches!(
@@ -3053,7 +3072,7 @@ fn spawn_notes_walk(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, walk: app
 }
 
 /// Read the highlighted note off the UI thread and send its body back with
-/// its metadata for the card (FZ-62), then its last commit from a bounded
+/// its metadata for the facts (FZ-62), then its last commit from a bounded
 /// `git log`, "untracked" when git prints nothing. Two answers, body first:
 /// for a file git never saw it walks the whole history, and the reader
 /// shows the body without waiting for that. A markdown body is rendered in
@@ -11738,6 +11757,465 @@ mod tests {
         );
     }
 
+    // FZ-74: `yy` and `yp` copy the thing under the focused cursor and its
+    // path or address.
+
+    /// Press `keys` one by one through the yank chord with a stand-in
+    /// clipboard, and return what was copied.
+    fn chord(app: &mut App, keys: &str) -> Vec<String> {
+        let mut copied = Vec::new();
+        for c in keys.chars() {
+            app.press_yank_key(Some(c), |text| {
+                copied.push(text.to_string());
+                Ok(())
+            });
+        }
+        copied
+    }
+
+    /// `yank_app`'s repo as GitHub's `Gaurgle/r`, focused on `panel`.
+    fn yank_on(view: app::HistoryView, panel: FocusedPanel) -> App {
+        let mut app = yank_app(view, 0);
+        app.repos[0].owner = Some("Gaurgle".to_string());
+        app.focused_panel = panel;
+        app
+    }
+
+    #[test]
+    fn yy_on_a_cloned_repo_row_copies_its_github_url() {
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        assert_eq!(chord(&mut app, "yy"), ["https://github.com/Gaurgle/r"]);
+        assert_eq!(yank_status(&app), Some(("copied url".to_string(), false)));
+    }
+
+    #[test]
+    fn yy_on_a_local_row_reads_the_url_off_a_github_origin() {
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        app.repos[0].owner = None;
+        app.repos[0].remote_url = Some("git@github.com:acme/tool.git".to_string());
+        assert_eq!(chord(&mut app, "yy"), ["https://github.com/acme/tool"]);
+        app.repos[0].remote_url = Some("git@gitlab.com:acme/tool.git".to_string());
+        assert!(chord(&mut app, "yy").is_empty(), "not a GitHub remote");
+        assert_eq!(
+            yank_status(&app),
+            Some(("nothing to copy".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn yp_on_a_cloned_repo_row_copies_its_expanded_path() {
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        app.repos[0].path = Some("~/repos/yank".to_string());
+        let home = shellexpand::tilde("~/repos/yank").into_owned();
+        assert!(!home.starts_with('~'), "HOME is set in the test run");
+        assert_eq!(chord(&mut app, "yp"), [home]);
+        assert_eq!(yank_status(&app), Some(("copied path".to_string(), false)));
+    }
+
+    #[test]
+    fn a_not_cloned_row_copies_its_url_and_has_no_path() {
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        app.repos[0].location = model::RepoLocation::NotCloned;
+        app.repos[0].path = None;
+        assert_eq!(chord(&mut app, "yy"), ["https://github.com/Gaurgle/r"]);
+        assert!(chord(&mut app, "yp").is_empty(), "no path to copy");
+        assert_eq!(
+            yank_status(&app),
+            Some(("nothing to copy".to_string(), false))
+        );
+    }
+
+    /// Plain `y` on a commit list copies the hash at once, as it always
+    /// did, and arms the chord: a second `y` copies it again.
+    #[test]
+    fn plain_y_on_commits_still_copies_the_hash() {
+        let mut app = yank_on(app::HistoryView::Commits, FocusedPanel::Detail);
+        app.set_detail_selected(1);
+        assert_eq!(chord(&mut app, "y"), ["bbb2222"]);
+        assert_eq!(
+            yank_status(&app),
+            Some(("copied bbb2222".to_string(), false))
+        );
+        assert_eq!(chord(&mut app, "y"), ["bbb2222"], "yy copies it again");
+        assert!(!app.pending_yank, "yy finished the chord");
+    }
+
+    #[test]
+    fn yy_and_yp_on_every_commit_list_copy_the_hash_and_its_url() {
+        for view in [
+            app::HistoryView::Info,
+            app::HistoryView::Commits,
+            app::HistoryView::Reflog,
+            app::HistoryView::Graph,
+        ] {
+            let mut app = yank_on(view, FocusedPanel::Detail);
+            app.set_detail_selected(2);
+            assert_eq!(chord(&mut app, "yy"), ["ccc3333", "ccc3333"], "{view:?}");
+            assert_eq!(
+                yank_status(&app),
+                Some(("copied ccc3333".to_string(), false))
+            );
+            assert_eq!(
+                chord(&mut app, "yp"),
+                ["ccc3333", "https://github.com/Gaurgle/r/commit/ccc3333"],
+                "{view:?}"
+            );
+            assert_eq!(yank_status(&app), Some(("copied url".to_string(), false)));
+        }
+    }
+
+    #[test]
+    fn the_branches_view_copies_the_name_and_its_tree_url() {
+        let mut app = yank_on(app::HistoryView::Branches, FocusedPanel::Detail);
+        app.repos[0].branches = vec![model::BranchStatus {
+            name: "main".to_string(),
+            upstream: None,
+            behind: 0,
+            ahead: 0,
+            is_head: true,
+            tip: "aaa1111".to_string(),
+        }];
+        app.repos[0].remote_branches = vec![model::RemoteBranch {
+            name: "origin/feat/x".to_string(),
+            tip: "ddd4444".to_string(),
+        }];
+        assert_eq!(chord(&mut app, "yy"), ["main"]);
+        assert_eq!(yank_status(&app), Some(("copied main".to_string(), false)));
+        assert_eq!(
+            chord(&mut app, "yp"),
+            ["https://github.com/Gaurgle/r/tree/main"]
+        );
+        app.set_detail_selected(1);
+        assert_eq!(chord(&mut app, "yy"), ["origin/feat/x"]);
+        assert_eq!(
+            chord(&mut app, "yp"),
+            ["https://github.com/Gaurgle/r/tree/feat/x"],
+            "without the remote prefix"
+        );
+        assert_eq!(yank_status(&app), Some(("copied url".to_string(), false)));
+    }
+
+    /// FZ-77 on FZ-74: in `worktrees`, `yy` is the highlighted worktree's
+    /// branch and `yp` its absolute path, the main checkout first; a
+    /// detached one has no branch to copy.
+    #[test]
+    fn the_worktrees_view_copies_the_branch_and_its_absolute_path() {
+        let mut app = yank_on(app::HistoryView::Worktrees, FocusedPanel::Detail);
+        app.repos[0].branches = vec![model::BranchStatus {
+            name: "main".to_string(),
+            upstream: None,
+            behind: 0,
+            ahead: 0,
+            is_head: true,
+            tip: "aaa1111".to_string(),
+        }];
+        app.repos[0].worktrees = vec![
+            model::Worktree {
+                path: "~/wt/side".to_string(),
+                branch: "side".to_string(),
+                head: "bbb2222".to_string(),
+                ..Default::default()
+            },
+            model::Worktree {
+                path: "/tmp/wt-detached".to_string(),
+                detached: true,
+                head: "ccc3333".to_string(),
+                ..Default::default()
+            },
+        ];
+        assert_eq!(chord(&mut app, "yy"), ["main"]);
+        assert_eq!(yank_status(&app), Some(("copied main".to_string(), false)));
+        assert_eq!(chord(&mut app, "yp"), ["/tmp/yank"]);
+        app.set_detail_selected(1);
+        assert_eq!(chord(&mut app, "yy"), ["side"]);
+        assert_eq!(
+            chord(&mut app, "yp"),
+            [shellexpand::tilde("~/wt/side").into_owned()],
+            "the `~` expanded"
+        );
+        assert_eq!(yank_status(&app), Some(("copied path".to_string(), false)));
+        app.set_detail_selected(2);
+        assert!(chord(&mut app, "yy").is_empty(), "detached: no branch");
+        assert_eq!(
+            yank_status(&app),
+            Some(("nothing to copy".to_string(), false))
+        );
+        assert_eq!(chord(&mut app, "yp"), ["/tmp/wt-detached"]);
+    }
+
+    /// `ci_app` on the `ci` view holding the fixture runs, the first
+    /// highlighted, focused on `panel`.
+    fn ci_yank_app(panel: FocusedPanel) -> App {
+        let mut app = ci_app();
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Ci;
+        app.inspector_folded = false;
+        app.focused_panel = panel;
+        app.ci.insert(
+            ci_key(),
+            app::CiState {
+                runs: ci_runs(),
+                ..Default::default()
+            },
+        );
+        app
+    }
+
+    #[test]
+    fn the_ci_view_copies_the_run_url_and_its_id() {
+        let mut app = ci_yank_app(FocusedPanel::Detail);
+        let run = ci_runs()[0].clone();
+        assert_eq!(chord(&mut app, "yy"), [run.url.as_str()]);
+        assert_eq!(yank_status(&app), Some(("copied url".to_string(), false)));
+        assert_eq!(chord(&mut app, "yp"), ["39590684061"]);
+        assert_eq!(
+            yank_status(&app),
+            Some(("copied 39590684061".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn the_inspector_on_a_run_copies_the_shown_body_and_the_run_url() {
+        let mut app = ci_yank_app(FocusedPanel::Inspector);
+        let run = ci_runs()[0].clone();
+        let sha = run.head_sha.clone().expect("fixture sha");
+        app.ci.get_mut(&ci_key()).unwrap().runs[0].path =
+            Some(".github/workflows/ci.yml".to_string());
+        app.ci.get_mut(&ci_key()).unwrap().scripts.insert(
+            (sha, ".github/workflows/ci.yml".to_string()),
+            ci::Detail::Ready("on: push\njobs: {}\n".to_string()),
+        );
+        app.ci_body = app::CiBody::Script;
+        assert_eq!(chord(&mut app, "yy"), ["on: push\njobs: {}\n"]);
+        assert_eq!(yank_status(&app), Some(("copied 18 B".to_string(), false)));
+
+        let jobs = ci::parse_jobs(include_str!("ci/fixtures/jobs-failed.json")).unwrap();
+        let job = jobs[0].id;
+        let state = app.ci.get_mut(&ci_key()).unwrap();
+        state.jobs.insert(run.id, app::CiJobs { etag: None, jobs });
+        state.full_logs.insert(
+            job,
+            ci::Detail::Ready(vec!["first".to_string(), "##[error]boom".to_string()]),
+        );
+        state
+            .logs
+            .insert(job, ci::LogTail::Lines(vec!["tail".to_string()]));
+        app.ci_body = app::CiBody::Log;
+        assert_eq!(chord(&mut app, "yy"), ["first\n##[error]boom"]);
+        app.ci_body = app::CiBody::Jobs;
+        assert_eq!(chord(&mut app, "yy"), ["tail"], "the marked job's tail");
+
+        assert_eq!(chord(&mut app, "yp"), [run.url]);
+        assert_eq!(yank_status(&app), Some(("copied url".to_string(), false)));
+    }
+
+    #[test]
+    fn the_inspector_on_a_commit_copies_its_message_and_its_hash() {
+        let mut app = yank_on(app::HistoryView::Commits, FocusedPanel::Inspector);
+        app.set_detail_selected(1);
+        app.repos[0].commits = vec![model::Commit {
+            hash: "bbb2222".to_string(),
+            message: "fix: the subject".to_string(),
+            body: "Why it changed.\n".to_string(),
+            author: "Gaurgle".to_string(),
+            date: None,
+            insertions: 0,
+            deletions: 0,
+            files: vec![],
+        }];
+        assert_eq!(
+            chord(&mut app, "yy"),
+            ["fix: the subject\n\nWhy it changed."]
+        );
+        assert_eq!(yank_status(&app), Some(("copied 33 B".to_string(), false)));
+        assert_eq!(chord(&mut app, "yp"), ["bbb2222"]);
+        assert_eq!(
+            yank_status(&app),
+            Some(("copied bbb2222".to_string(), false))
+        );
+    }
+
+    /// The tree, the reader and the `[3] file` card all copy the highlighted
+    /// file's content, capped as the reader caps it, and its path.
+    #[test]
+    fn the_notes_view_copies_the_file_and_its_path() {
+        let scratch =
+            std::env::temp_dir().join(format!("fleetz_yank_notes_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("notez")).unwrap();
+        let file = scratch.join("notez/a.md");
+        std::fs::write(&file, "x".repeat(4300)).unwrap();
+        let root = scratch.to_string_lossy().into_owned();
+        let mut app = yank_on(app::HistoryView::Notes, FocusedPanel::Detail);
+        app.repos[0].path = Some(root.clone());
+        app.inspector_folded = false;
+        let walk = app::NotesWalk {
+            key: root.clone(),
+            root: scratch.clone(),
+            generation: app.notes_generation,
+        };
+        let files = vec![notes::NoteFile {
+            rel: "notez/a.md".into(),
+            notez: Some("notez".into()),
+        }];
+        app.apply_notes_walk(walk, Ok(notes::Notes { files }));
+        for panel in [
+            FocusedPanel::Detail,
+            FocusedPanel::Reader,
+            FocusedPanel::Inspector,
+        ] {
+            app.focused_panel = panel;
+            assert_eq!(chord(&mut app, "yy"), ["x".repeat(4300)], "{panel:?}");
+            assert_eq!(
+                yank_status(&app),
+                Some(("copied 4.2 KB".to_string(), false)),
+                "{panel:?}"
+            );
+            assert_eq!(
+                chord(&mut app, "yp"),
+                [file.to_string_lossy().into_owned()],
+                "{panel:?}"
+            );
+            assert_eq!(yank_status(&app), Some(("copied path".to_string(), false)));
+        }
+
+        std::fs::write(&file, "y".repeat(notes::BODY_CAP + 10)).unwrap();
+        app.focused_panel = FocusedPanel::Detail;
+        let copied = chord(&mut app, "yy");
+        assert_eq!(
+            copied,
+            ["y".repeat(notes::BODY_CAP)],
+            "cut at the cap, no marker"
+        );
+        assert_eq!(
+            yank_status(&app),
+            Some(("copied 256.0 KB".to_string(), false))
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `y` and then a key that is not `y` or `p` copies nothing, leaves the
+    /// status line as it was and hands the key back to its own action.
+    #[test]
+    fn y_then_another_key_copies_nothing() {
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        let mut called = false;
+        assert!(app.press_yank_key(Some('y'), |_| {
+            called = true;
+            Ok(())
+        }));
+        assert!(!app.press_yank_key(Some('j'), |_| {
+            called = true;
+            Ok(())
+        }));
+        assert!(!called, "the clipboard was asked to copy");
+        assert_eq!(yank_status(&app), None, "the status line moved");
+        assert!(!app.pending_yank, "the chord outlived the key after it");
+        assert!(!app.press_yank_key(Some('p'), |_| {
+            called = true;
+            Ok(())
+        }));
+        assert!(!called, "a lone `p` is not a yank");
+        assert!(!app.press_yank_key(None, |_| Ok(())));
+    }
+
+    #[test]
+    fn the_strip_and_the_compact_grid_copy_nothing() {
+        let mut app = yank_on(app::HistoryView::Commits, FocusedPanel::Contributions);
+        assert!(chord(&mut app, "yy").is_empty());
+        assert_eq!(
+            yank_status(&app),
+            Some(("nothing to copy".to_string(), false))
+        );
+        let mut app = yank_on(app::HistoryView::Commits, FocusedPanel::RepoList);
+        app.view = app::View::Compact;
+        assert!(chord(&mut app, "yy").is_empty());
+        assert!(chord(&mut app, "yp").is_empty());
+    }
+
+    /// A LocalOnly carrier's url names the repo its origin names, not the
+    /// folder it was cloned into.
+    #[test]
+    fn a_local_carrier_is_named_by_its_origin_not_its_folder() {
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        app.repos[0].location = model::RepoLocation::LocalOnly;
+        app.repos[0].name = "my-folder".to_string();
+        app.repos[0].remote_url = Some("git@github.com:Gaurgle/real-name.git".to_string());
+        assert_eq!(
+            chord(&mut app, "yy"),
+            ["https://github.com/Gaurgle/real-name"]
+        );
+    }
+
+    /// A terminal for driving the input handlers, as the `4` key test has.
+    fn yank_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
+        let backend = CrosstermBackend::new(io::stdout());
+        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 40));
+        Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap()
+    }
+
+    /// The key handler hands keys to the chord: `y` on the compact grid
+    /// copies nothing and arms it, and the `j` after it ends it and still
+    /// moves the cursor. Fails if the handler stops calling the chord.
+    #[tokio::test]
+    async fn the_key_handler_feeds_the_yank_chord() {
+        let args = Args::parse_from(["fleetz"]);
+        let config = config::Config::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut terminal = yank_terminal();
+        let mut app = App::new(vec![yank_repo(0), yank_repo(0)], String::new(), 120, 40);
+        app.view = app::View::Compact;
+        app.focused_panel = FocusedPanel::RepoList;
+        let repo_dir = Path::new("/nonexistent");
+        handle_normal_input(
+            &mut app,
+            &mut terminal,
+            press('y'),
+            &tx,
+            &args,
+            &config,
+            repo_dir,
+        )
+        .await
+        .unwrap();
+        assert!(app.pending_yank, "`y` did not reach the chord");
+        assert_eq!(yank_status(&app), None, "`y` alone copied something");
+        handle_normal_input(
+            &mut app,
+            &mut terminal,
+            press('j'),
+            &tx,
+            &args,
+            &config,
+            repo_dir,
+        )
+        .await
+        .unwrap();
+        assert!(!app.pending_yank, "`j` left the chord armed");
+        assert_eq!(app.selected, 1, "`j` after `y` did not move the cursor");
+    }
+
+    /// A mouse press ends the chord: `y`, a click, then `p` copies nothing.
+    #[test]
+    fn a_click_ends_the_yank_chord() {
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        let terminal = yank_terminal();
+        assert!(chord(&mut app, "y").is_empty());
+        assert!(app.pending_yank);
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_input(&mut app, &terminal, click);
+        assert!(!app.pending_yank, "the click left the chord armed");
+        assert!(
+            chord(&mut app, "p").is_empty(),
+            "`p` after the click copied"
+        );
+    }
+
     /// Click on `needle` in pane 2, offset `dx` columns from its first cell,
     /// and return what was copied.
     fn click_at(app: &mut App, needle: &str, dx: u16) -> Vec<String> {
@@ -12047,7 +12525,7 @@ mod tests {
         }
     }
 
-    /// The card's facts are read off the UI thread (FZ-62): `spawn_note_read`
+    /// The file's facts are read off the UI thread (FZ-62): `spawn_note_read`
     /// returns before anything is sent. The body and its metadata come
     /// first and git's last commit after, so the reader never waits on git
     /// (review F4): a date for a committed file, "untracked" for one git
@@ -12765,9 +13243,9 @@ mod tests {
     }
 
     /// FZ-30f fix cycle 3: `]` from the focused inspector in `branches`
-    /// enters `ci` with its runs held and the next `]` goes on to `info`;
+    /// enters `ci` with its runs held and the next `[` goes back to `branches`;
     /// back in `ci`, any other key ends the streak and `]` steps the bodies.
-    /// Fails while the second `]` sticks on the bodies.
+    /// Fails while the second `[` sticks on the bodies.
     #[tokio::test]
     async fn a_bracket_streak_cycles_views_through_ci_until_another_key() {
         let args = Args::parse_from(["fleetz"]);
@@ -12785,7 +13263,7 @@ mod tests {
         app.focused_panel = FocusedPanel::Inspector;
         let repo_dir = Path::new("/nonexistent");
         let mut views = Vec::new();
-        for key in [']', ']', '[', 'j', ']'] {
+        for key in [']', '[', ']', 'j', ']'] {
             handle_normal_input(
                 &mut app,
                 &mut terminal,
@@ -12804,7 +13282,7 @@ mod tests {
             views,
             vec![
                 (HistoryView::Ci, CiBody::Jobs),
-                (HistoryView::Notes, CiBody::Jobs),
+                (HistoryView::Branches, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Log),

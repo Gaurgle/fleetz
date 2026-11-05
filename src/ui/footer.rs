@@ -232,6 +232,22 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
         hints.push(Span::styled(" switch", desc_style));
     }
     hints.push(gap.clone());
+    // The yank chords (FZ-74), where the focused pane has a cursor on
+    // something to copy: not the compact grid, the strip or a header. Not
+    // on the repo list either, whose row has no column to spare for it.
+    if app.view == View::Detail
+        && !matches!(
+            app.focused_panel,
+            FocusedPanel::Contributions | FocusedPanel::RepoList
+        )
+        && app.on_header().is_none()
+    {
+        hints.push(Span::styled("[yy/yp]", key_style));
+        if with_desc {
+            hints.push(Span::styled(" yank", desc_style));
+        }
+        hints.push(gap.clone());
+    }
     hints.push(Span::styled("[v]", lit(app.view == View::Compact)));
     if with_desc {
         hints.push(Span::styled(format!(" {view_hint}"), desc_style));
@@ -986,6 +1002,33 @@ mod tests {
             .find(|s| s.content == "[c]")
             .expect("[c] in the strip segment");
         assert_eq!(c.style.fg, Some(colors::TEXT));
+    }
+
+    /// FZ-74: the yank chords are hinted where pane 2, the inspector or the
+    /// reader has a cursor to copy from, and not on the repo list, the
+    /// strip or the compact grid.
+    #[test]
+    fn the_yank_chords_are_hinted_beside_the_panes_that_copy() {
+        let mut app = app_in(View::Detail);
+        for panel in [
+            FocusedPanel::Detail,
+            FocusedPanel::Inspector,
+            FocusedPanel::Reader,
+        ] {
+            app.focused_panel = panel;
+            let row = global_row(&app);
+            assert!(
+                row.contains("[s] switch  [yy/yp] yank  [v]"),
+                "{panel:?}: {row}"
+            );
+        }
+        for panel in [FocusedPanel::RepoList, FocusedPanel::Contributions] {
+            app.focused_panel = panel;
+            assert!(!global_row(&app).contains("[yy/yp]"), "{panel:?}");
+        }
+        let mut app = app_in(View::Compact);
+        app.focused_panel = FocusedPanel::Detail;
+        assert!(!global_row(&app).contains("[yy/yp]"), "compact");
     }
 
     #[test]

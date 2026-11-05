@@ -578,7 +578,7 @@ impl SettingField {
 /// Repo list width as a percentage of the main area, and the inspector's share
 /// of the right column. These are the sizes every launch starts from.
 pub const DEFAULT_REPO_LIST_PCT: u16 = 35;
-pub const DEFAULT_INSPECTOR_PCT: u16 = 40;
+pub const DEFAULT_INSPECTOR_PCT: u16 = 30;
 
 /// Bounds the resize keys clamp to. Both panes stay wide/tall enough to be
 /// worth drawing, so a held key can never collapse one to nothing.
@@ -2449,6 +2449,10 @@ pub struct App {
     /// no other key came since: the streak keeps cycling views on arriving
     /// in `ci` rather than stepping the run bodies there.
     pub brackets_cycling_views: bool,
+    /// A `y` was pressed and the next key finishes the yank chord (FZ-74):
+    /// `y` copies the thing under the cursor, `p` its path, anything else
+    /// copies nothing. Cleared by the next key whatever it is.
+    pub pending_yank: bool,
     /// The run the scrolls and the mark belong to, and since when it is
     /// highlighted, for the dwell before the inspector fetches anything.
     pub ci_inspected: Option<(u64, std::time::Instant)>,
@@ -2479,11 +2483,11 @@ pub struct App {
     /// The row path the cursor rests on in the `notes` view and since when,
     /// for the dwell (`ci::DWELL`) before a walk starts.
     pub notes_cursor: Option<(Option<String>, std::time::Instant)>,
-    /// The highlighted file's body and facts, for the reader and the card:
-    /// one file at a time.
+    /// The highlighted file's body and facts, for the reader and the facts
+    /// beside pane 2's header: one file at a time.
     pub note_body: Option<NoteBody>,
     /// The reader's scroll offset (FZ-62), its own rather than the
-    /// inspector's, which the card scrolls. Reset when the file changes.
+    /// inspector's. Reset when the file changes.
     pub reader_scroll: u16,
     /// Largest useful reader offset, measured by the renderer for the
     /// reason `inspector_max_scroll` is.
@@ -2536,7 +2540,7 @@ pub struct NotesState {
 }
 
 /// The body and facts of one file in the `notes` view: the reader draws the
-/// text, the card the facts.
+/// text, the facts beside pane 2's header the facts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoteBody {
     pub path: std::path::PathBuf,
@@ -2605,7 +2609,7 @@ pub struct NotesWalk {
 }
 
 /// A claimed read of the highlighted file, for `notes::read_body` and the
-/// card's facts.
+/// file's facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteRead {
     pub path: std::path::PathBuf,
@@ -2873,6 +2877,55 @@ pub fn carrier_key(repo: &RepoStatus) -> Option<RemoteKey> {
     Some(GithubRepo::identity_key(Some(owner), &origin.name))
 }
 
+/// Which half of the yank chord (FZ-74): `yy` copies the thing under the
+/// cursor, `yp` its path or address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YankKind {
+    Thing,
+    Path,
+}
+
+/// How the status line names what a yank copied: a short value by itself
+/// (a hash, a branch, a run id), a url or a path by kind, a body by size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum YankWord {
+    Value,
+    Url,
+    Path,
+    Size,
+}
+
+/// The repo's page on GitHub, `https://github.com/<owner>/<repo>`: the
+/// carrier's owner and name as GitHub spells them, else an `origin` on
+/// github.com. `None` for a row with neither.
+fn github_web_url(repo: &RepoStatus) -> Option<String> {
+    let origin = repo
+        .remote_url
+        .as_deref()
+        .and_then(crate::model::RemoteRef::parse);
+    let (owner, name) = match (&repo.owner, &repo.location) {
+        (Some(owner), RepoLocation::LocalOnly) => (owner.clone(), origin?.name),
+        (Some(owner), _) => (owner.clone(), repo.name.clone()),
+        (None, _) => {
+            let origin = origin.filter(|o| o.host.eq_ignore_ascii_case("github.com"))?;
+            (origin.owner, origin.name)
+        }
+    };
+    Some(format!("https://github.com/{owner}/{name}"))
+}
+
+/// A note's text as the reader reads it, up to `notes::BODY_CAP`, without
+/// the reader's cut marker, which is not the file's. `None` for a file that
+/// cannot be read as text.
+fn note_text(path: &std::path::Path) -> Option<String> {
+    let body = crate::notes::read_body(path).ok()?;
+    let marker = format!("\n… cut at {} KiB", crate::notes::BODY_CAP / 1024);
+    Some(match body.strip_suffix(&marker) {
+        Some(text) => text.to_string(),
+        None => body,
+    })
+}
+
 impl App {
     pub fn new(repos: Vec<RepoStatus>, header: String, term_width: u16, term_height: u16) -> Self {
         Self {
@@ -2961,6 +3014,7 @@ impl App {
             ci_job_mark: None,
             ci_job_follow: std::cell::Cell::new(JobFollow::Free),
             brackets_cycling_views: false,
+            pending_yank: false,
             ci_inspected: None,
             ci_log_wrap: std::cell::RefCell::new(None),
             worktree_logs: std::collections::HashMap::new(),
@@ -3486,8 +3540,8 @@ impl App {
         Some(std::path::PathBuf::from(shellexpand::tilde(root).as_ref()).join(&file.rel))
     }
 
-    /// The walk's entry for the file the cursor is on: what the card and the
-    /// reader's border describe (FZ-62).
+    /// The walk's entry for the file the cursor is on: what the facts and
+    /// the reader describe (FZ-62, FZ-68).
     pub fn notes_highlighted_file(&self) -> Option<&crate::notes::NoteFile> {
         let listed = self.notes_listed();
         let last = listed.len().checked_sub(1)?;
@@ -3545,7 +3599,7 @@ impl App {
     /// Claim the read of the highlighted file, or `None`: only while the
     /// `notes` view shows, and only when the body held is another file's or
     /// from an older generation. One file at a time, whatever the cursor
-    /// passed over since the last tick. A folded card still reads: the
+    /// passed over since the last tick. A folded inspector still reads: the
     /// reader beside the tree shows the body (FZ-62). A new file starts the
     /// reader at its top; a re-read of the same one keeps its place.
     pub fn claim_note_read(&mut self) -> Option<NoteRead> {
@@ -3680,7 +3734,8 @@ impl App {
     }
 
     /// Whether the main area takes the `notes` layout (FZ-62): pane 2 at
-    /// full height split into tree and reader, the card under pane 1. Not on
+    /// full height split into tree and reader, the facts beside its header,
+    /// and no inspector under pane 1 (FZ-68). Not on
     /// a section header, where pane 2 is the digest and the usual layout
     /// returns. Read by `ui::panel_rects`, so render and hit-testing agree.
     pub fn notes_layout(&self) -> bool {
@@ -4136,8 +4191,11 @@ impl App {
     /// the block needs. Read by both `ui::panel_rects` and `ui::render`
     /// through `detail::split_inspector`, so the two cannot disagree about
     /// whether the pane exists.
+    ///
+    /// The `notes` layout docks none either: the file's facts sit in pane 2
+    /// beside the header (FZ-68), and `ui::panel_rects` gives pane 1 the rows.
     pub fn shows_inspector(&self) -> bool {
-        self.history_view != HistoryView::Graph
+        self.history_view != HistoryView::Graph && !self.notes_layout()
     }
 
     /// Whether the inspector is drawn with its content, not folded to an
@@ -4619,6 +4677,200 @@ impl App {
         self.copy_hash(&hash, copy);
     }
 
+    /// Feed one key press to the yank chord (FZ-74) and say whether the
+    /// chord took it. `key` is the character pressed, `None` for any key
+    /// that is not a plain character. A `y` arms the chord; the next key
+    /// finishes it: `y` copies the thing under the cursor, `p` its path,
+    /// anything else ends it, copies nothing and is not taken, so it does
+    /// what it does on its own. On a commit list in pane 2 the first `y`
+    /// already copies the hash, as `y` always did there, and still arms
+    /// the chord.
+    pub fn press_yank_key(
+        &mut self,
+        key: Option<char>,
+        copy: impl FnOnce(&str) -> Result<(), String>,
+    ) -> bool {
+        if std::mem::take(&mut self.pending_yank) {
+            let kind = match key {
+                Some('y') => YankKind::Thing,
+                Some('p') => YankKind::Path,
+                _ => return false,
+            };
+            self.yank(kind, copy);
+            return true;
+        }
+        if key != Some('y') {
+            return false;
+        }
+        self.pending_yank = true;
+        if self.on_commit_list() {
+            self.yank_with(copy);
+        }
+        true
+    }
+
+    /// Whether pane 2 has focus on a list of commits, where a plain `y`
+    /// copies the hash at once.
+    fn on_commit_list(&self) -> bool {
+        self.view == View::Detail
+            && self.focused_panel == FocusedPanel::Detail
+            && self.on_header().is_none()
+            && matches!(
+                self.history_view,
+                HistoryView::Info | HistoryView::Commits | HistoryView::Reflog | HistoryView::Graph
+            )
+    }
+
+    /// `yy` or `yp`: copy what `kind` names under the focused cursor through
+    /// `copy` and say so on the status line, `nothing to copy` where there
+    /// is nothing (`yank_target`).
+    pub fn yank(&mut self, kind: YankKind, copy: impl FnOnce(&str) -> Result<(), String>) {
+        let Some((text, word)) = self.yank_target(kind) else {
+            self.set_status("nothing to copy".to_string(), false);
+            return;
+        };
+        let said = match word {
+            YankWord::Value => format!("copied {text}"),
+            YankWord::Url => "copied url".to_string(),
+            YankWord::Path => "copied path".to_string(),
+            // Bytes under a KB, where `0.0 KB` would read as empty.
+            YankWord::Size => match text.len() {
+                n if n < 1024 => format!("copied {n} B"),
+                n => format!("copied {:.1} KB", n as f64 / 1024.0),
+            },
+        };
+        match copy(&text) {
+            Ok(()) => self.set_status(said, false),
+            Err(reason) => self.set_status(format!("copy failed: {reason}"), true),
+        }
+    }
+
+    /// What `yy` (`Thing`) or `yp` (`Path`) copies from the focused pane,
+    /// and the word the status line says it in. Nothing on the compact
+    /// grid, the strip, a section header or a row with nothing to name.
+    fn yank_target(&self, kind: YankKind) -> Option<(String, YankWord)> {
+        use YankKind::{Path, Thing};
+        if self.view != View::Detail || self.on_header().is_some() {
+            return None;
+        }
+        let repo = self.selected_repo()?;
+        match (self.focused_panel, self.history_view) {
+            (FocusedPanel::Contributions, _) => None,
+            (FocusedPanel::RepoList, _) => match kind {
+                Thing => Some((github_web_url(repo)?, YankWord::Url)),
+                Path => Some((
+                    shellexpand::tilde(repo.path.as_deref()?).into_owned(),
+                    YankWord::Path,
+                )),
+            },
+            (_, HistoryView::Notes) => {
+                let path = self.notes_highlighted()?;
+                match kind {
+                    Thing => Some((note_text(&path)?, YankWord::Size)),
+                    Path => Some((path.to_string_lossy().into_owned(), YankWord::Path)),
+                }
+            }
+            (FocusedPanel::Reader, _) => None,
+            (FocusedPanel::Detail, HistoryView::Branches) => {
+                let (name, on_remote) = self.highlighted_branch(repo)?;
+                match kind {
+                    Thing => Some((name.to_string(), YankWord::Value)),
+                    Path => {
+                        let branch = match on_remote {
+                            true => name.split_once('/').map_or(name, |(_, b)| b),
+                            false => name,
+                        };
+                        let url = github_web_url(repo)?;
+                        Some((format!("{url}/tree/{branch}"), YankWord::Url))
+                    }
+                }
+            }
+            // A worktree's branch and its directory; a detached one has no
+            // branch to name (FZ-77 on FZ-74).
+            (FocusedPanel::Detail, HistoryView::Worktrees) => {
+                let wt = self.worktree_highlighted()?;
+                match kind {
+                    Thing => (!wt.branch.is_empty()).then_some((wt.branch, YankWord::Value)),
+                    Path => Some((shellexpand::tilde(&wt.path).into_owned(), YankWord::Path)),
+                }
+            }
+            (FocusedPanel::Detail, HistoryView::Ci) => {
+                let run = self.ci_highlighted_run()?;
+                match kind {
+                    Thing => Some((run.url.clone(), YankWord::Url)),
+                    Path => Some((run.id.to_string(), YankWord::Value)),
+                }
+            }
+            (FocusedPanel::Detail, _) => {
+                let hash = self.inspected_hash()?;
+                match kind {
+                    Thing => Some((hash.to_string(), YankWord::Value)),
+                    Path => {
+                        let url = github_web_url(repo)?;
+                        Some((format!("{url}/commit/{hash}"), YankWord::Url))
+                    }
+                }
+            }
+            (FocusedPanel::Inspector, HistoryView::Ci) => {
+                if !self.inspects_ci_run() {
+                    return None;
+                }
+                match kind {
+                    Thing => Some((self.ci_shown_text()?, YankWord::Size)),
+                    Path => Some((self.ci_highlighted_run()?.url.clone(), YankWord::Url)),
+                }
+            }
+            (FocusedPanel::Inspector, _) => match kind {
+                Thing => {
+                    let commit = self.inspected_commit()?;
+                    let message = match commit.body.trim().is_empty() {
+                        true => commit.message.clone(),
+                        false => format!("{}\n\n{}", commit.message, commit.body.trim_end()),
+                    };
+                    Some((message, YankWord::Size))
+                }
+                Path => Some((self.inspected_hash()?.to_string(), YankWord::Value)),
+            },
+        }
+    }
+
+    /// The `branches` view's highlighted entry: its name as the view lists
+    /// it, and whether it is a remote-tracking branch. Locals come first.
+    fn highlighted_branch<'a>(&self, repo: &'a RepoStatus) -> Option<(&'a str, bool)> {
+        let locals = repo.branches.len();
+        let last = (locals + repo.remote_branches.len()).checked_sub(1)?;
+        let i = self.detail_selected().min(last);
+        match i < locals {
+            true => repo.branches.get(i).map(|b| (b.name.as_str(), false)),
+            false => repo
+                .remote_branches
+                .get(i - locals)
+                .map(|r| (r.name.as_str(), true)),
+        }
+    }
+
+    /// The text of the run body the inspector shows: the marked job's log
+    /// tail in `jobs`, its whole held log in `log`, the workflow file in
+    /// `script`. `None` while the body holds no text.
+    fn ci_shown_text(&self) -> Option<String> {
+        let run = self.ci_highlighted_run()?;
+        let state = self.selected_ci()?.1?;
+        match self.ci_body {
+            CiBody::Jobs => match state.logs.get(&self.ci_marked_job()?.id)? {
+                crate::ci::LogTail::Lines(tail) => Some(tail.join("\n")),
+                crate::ci::LogTail::Unavailable(_) => None,
+            },
+            CiBody::Log => Some(crate::ui::ci::shown_log(self)?.1.join("\n")),
+            CiBody::Script => {
+                let key = (run.head_sha.clone()?, run.path.clone()?);
+                match state.scripts.get(&key)? {
+                    crate::ci::Detail::Ready(text) => Some(text.clone()),
+                    _ => None,
+                }
+            }
+        }
+    }
+
     /// Copy `hash` through `copy` and say so on the status line, in the
     /// words `y` uses. A click passes the hash it saw drawn.
     pub fn copy_hash(&mut self, hash: &str, copy: impl FnOnce(&str) -> Result<(), String>) {
@@ -4679,7 +4931,7 @@ impl App {
         Some(match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             // In the `notes` layout the pane after the tree is the reader,
-            // as Tab goes, ahead of the card.
+            // as Tab goes.
             FocusedPanel::Detail if self.notes_layout() => FocusedPanel::Reader,
             FocusedPanel::Detail if self.inspector_is_expanded() => FocusedPanel::Inspector,
             // The graph docks no inspector, so there is no next pane to reach
@@ -4767,7 +5019,8 @@ impl App {
             };
             return;
         }
-        // The `notes` layout puts its reader between pane 2 and the card.
+        // The `notes` layout puts its reader after pane 2, and docks no
+        // inspector after it (FZ-68).
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             FocusedPanel::Detail if self.notes_layout() => FocusedPanel::Reader,
@@ -5477,6 +5730,11 @@ impl App {
                 if self.selected != pos {
                     self.selected = pos;
                     self.reset_detail_view();
+                }
+                // Off a header onto a repo in `notes` the layout returns and
+                // docks no inspector; focus cannot stay on it (FZ-68).
+                if self.focused_panel == FocusedPanel::Inspector && !self.shows_inspector() {
+                    self.focused_panel = FocusedPanel::Detail;
                 }
             }
             ListRow::Results | ListRow::Gap => return,
@@ -9447,7 +9705,7 @@ mod tests {
 
     /// The body read is the highlighted file's alone, however far the cursor
     /// moved since the last tick, and nothing outside the view. Read again
-    /// after a suspend returns, and with the card folded: the reader beside
+    /// after a suspend returns, and with the inspector folded: the reader beside
     /// the tree still shows the body (FZ-62).
     #[test]
     fn only_the_highlighted_file_is_read() {
@@ -9510,18 +9768,18 @@ mod tests {
         assert!(app.notes_all_markdown, "not the view");
     }
 
-    /// In the `notes` layout Tab walks repo list, tree, reader, card, strip
-    /// and Shift-Tab walks it back; the reader takes focus nowhere else, and
-    /// leaving the view moves focus off it (FZ-62).
+    /// In the `notes` layout Tab walks repo list, tree, reader, strip and
+    /// Shift-Tab walks it back, with no card to stop on since FZ-68 round 2:
+    /// `3` does not reach an inspector there either. The reader takes focus
+    /// nowhere else, and leaving the view moves focus off it (FZ-62).
     #[test]
-    fn focus_walks_tree_reader_and_card_in_the_notes_layout() {
+    fn focus_walks_tree_and_reader_in_the_notes_layout() {
         let mut app = notes_app();
         app.history_view = HistoryView::Notes;
         let order = [
             FocusedPanel::RepoList,
             FocusedPanel::Detail,
             FocusedPanel::Reader,
-            FocusedPanel::Inspector,
             FocusedPanel::Contributions,
         ];
         app.focused_panel = FocusedPanel::RepoList;
@@ -9534,6 +9792,12 @@ mod tests {
             app.toggle_panel_focus_back();
             assert_eq!(app.focused_panel, *want, "Shift-Tab");
         }
+        app.focus_panel(FocusedPanel::Inspector);
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::RepoList,
+            "no card to focus"
+        );
 
         app.focus_panel(FocusedPanel::Reader);
         assert_eq!(app.focused_panel, FocusedPanel::Reader);
@@ -9546,21 +9810,23 @@ mod tests {
     }
 
     /// `J`/`K` in the `notes` layout scroll the reader a line from the tree,
-    /// with the card open (the default) as well as folded (FZ-62 review F1),
-    /// and from the reader itself, focus unmoved (finding 6).
+    /// with the inspector's fold open (the default) as well as folded
+    /// (FZ-62 review F1; no card is docked since FZ-68 round 2, so the fold
+    /// must not matter), and from the reader itself, focus unmoved
+    /// (finding 6).
     #[test]
-    fn shift_scroll_walks_tree_reader_card_in_the_notes_layout() {
+    fn shift_scroll_walks_tree_and_reader_in_the_notes_layout() {
         let mut app = notes_app();
         app.history_view = HistoryView::Notes;
         walked(&mut app, &["notez/a.md"]);
-        assert!(!app.inspector_folded, "the card is open");
+        assert!(!app.inspector_folded, "the fold is open");
 
         app.focused_panel = FocusedPanel::Detail;
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
         app.reader_max_scroll.set(20);
         app.scroll_next_panel(3);
         assert_eq!(app.reader_scroll, 3, "J from the tree scrolls the reader");
-        assert_eq!(app.inspector_scroll, 0, "not the card");
+        assert_eq!(app.inspector_scroll, 0, "not the inspector");
 
         assert_eq!(app.focused_panel, FocusedPanel::Detail, "focus unmoved");
 
@@ -9572,6 +9838,26 @@ mod tests {
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
         app.focused_panel = FocusedPanel::Detail;
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
+    }
+
+    /// FZ-68 round 2: on a section header in `notes` pane 2 is the digest and
+    /// the inspector is docked, so it can hold focus; stepping onto the repo
+    /// brings the `notes` layout back, which docks none, and focus lands on
+    /// pane 2 rather than staying on a pane that is not drawn.
+    #[test]
+    fn leaving_a_header_in_notes_moves_focus_off_the_inspector() {
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        app.repos[0].location = crate::model::RepoLocation::LocalOnly;
+        let section = crate::digest::Section::of(&app.repos[0]);
+        app.land_on(ListRow::Header(section));
+        assert!(!app.notes_layout(), "on the digest");
+        app.focus_panel(FocusedPanel::Inspector);
+        assert_eq!(app.focused_panel, FocusedPanel::Inspector, "docked here");
+
+        app.land_on(ListRow::Repo(0));
+        assert!(app.notes_layout(), "the notes layout is back");
+        assert_eq!(app.focused_panel, FocusedPanel::Detail);
     }
 
     /// `H`/`L` page the reader by the height its last frame drew, from the
