@@ -1055,6 +1055,18 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.extend(rows);
     }
 
+    // The `worktrees` view (FZ-77): one cursor stop per worktree, the main
+    // checkout first.
+    if view == HistoryView::Worktrees {
+        let base = lines.len();
+        let (rows, selected) = worktrees_view_rows(app, repo, width);
+        if let Some(row) = selected {
+            selected_block = Some((base + row, base + row));
+            block_tops.extend(base..base + app.worktrees_listed().len());
+        }
+        lines.extend(rows);
+    }
+
     // PRs
     // Gated on `-p`: the header row already names the open PRs by number, so
     // this section is the opt-in detail rather than the news itself.
@@ -2227,6 +2239,10 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
         render_ci_inspector(frame, area, app);
         return;
     }
+    if app.worktrees_wanted() {
+        render_worktree_inspector(frame, area, app);
+        return;
+    }
     let focused = app.focused_panel == FocusedPanel::Inspector;
     let border_color = if focused {
         colors::LAVENDER
@@ -2372,6 +2388,137 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     for (rect, lines) in wrapped {
         frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), rect);
     }
+}
+
+/// The inspector while pane 2 shows `worktrees` (FZ-77): the highlighted
+/// worktree's facts, then its newest commits as the read landed them.
+fn render_worktree_inspector(frame: &mut Frame, area: Rect, app: &App) {
+    let focused = app.focused_panel == FocusedPanel::Inspector;
+    let border_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .padding(Padding::new(2, 2, 1, 0))
+        .title_top(crate::ui::panel_title(
+            crate::ui::INSPECTOR_NUM,
+            "inspector",
+            focused,
+        ));
+    let inner = block.inner(area);
+    let lines: Vec<Line> = worktree_inspector_lines(app)
+        .iter()
+        .flat_map(|l| wrap_line(l, inner.width as usize))
+        .collect();
+    let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
+    app.inspector_max_scroll.set(max_scroll);
+    let scroll = app.inspector_scroll.min(max_scroll);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), inner);
+}
+
+/// What the `worktrees` inspector draws for the highlighted worktree: its
+/// path, branch, HEAD, dirty count, ahead and behind against its upstream,
+/// the age of its last commit, then its newest commits in the branches
+/// preview's row form. Ahead and behind come from the main checkout's
+/// `branches`, as `worktree_table`'s column does.
+fn worktree_inspector_lines(app: &App) -> Vec<Line<'static>> {
+    let (Some(repo), Some(wt)) = (app.selected_repo(), app.worktree_highlighted()) else {
+        return vec![Line::from(Span::styled(
+            "no worktree selected",
+            Style::default().fg(colors::OVERLAY),
+        ))];
+    };
+    let label =
+        |text: &str| Span::styled(format!("{text:<8}"), Style::default().fg(colors::OVERLAY));
+    let plain = |text: String, color| Span::styled(text, Style::default().fg(color));
+    let log = app.worktree_log();
+    let mut lines = vec![Line::from(Span::styled(
+        wt.path.clone(),
+        Style::default()
+            .fg(colors::SAPPHIRE)
+            .add_modifier(Modifier::BOLD),
+    ))];
+
+    let branch = match wt.detached {
+        true => plain(format!("detached @ {}", wt.head), colors::PEACH),
+        false => plain(wt.branch.clone(), colors::TEXT),
+    };
+    lines.push(Line::from(vec![label("branch"), branch]));
+
+    let subject = log
+        .and_then(|commits| commits.first())
+        .filter(|c| {
+            !wt.head.is_empty() && (c.hash.starts_with(&wt.head) || wt.head.starts_with(&c.hash))
+        })
+        .map(|c| c.message.clone());
+    let mut head = vec![label("HEAD"), plain(wt.head.clone(), colors::HASH_CLR)];
+    if let Some(subject) = subject {
+        head.push(plain(format!(" {subject}"), colors::TEXT));
+    }
+    lines.push(Line::from(head));
+
+    let dirty = match wt.dirty {
+        None => plain("unknown".to_string(), colors::OVERLAY),
+        Some(0) => plain("clean".to_string(), colors::OVERLAY),
+        Some(n) => Span::styled(
+            format!("{} ({n} changed)", crate::model::counters_text(0, 0, n)),
+            Style::default().fg(badges::counter_color(0, 0, n)),
+        ),
+    };
+    lines.push(Line::from(vec![label("dirty"), dirty]));
+
+    let tracked = (!wt.detached)
+        .then(|| repo.branches.iter().find(|b| b.name == wt.branch))
+        .flatten();
+    let sync = match tracked {
+        None => plain("·".to_string(), colors::OVERLAY),
+        Some(b) => match &b.upstream {
+            None => plain("no upstream".to_string(), colors::OVERLAY),
+            Some(up) if b.behind == 0 && b.ahead == 0 => {
+                plain(format!("level with {up}"), colors::OVERLAY)
+            }
+            Some(up) => Span::styled(
+                format!(
+                    "{} against {up}",
+                    crate::model::counters_text(b.behind, b.ahead, 0)
+                ),
+                Style::default().fg(badges::counter_color(b.behind, b.ahead, 0)),
+            ),
+        },
+    };
+    lines.push(Line::from(vec![label("sync"), sync]));
+
+    let age = wt.head_at.map_or_else(|| "·".to_string(), format_age);
+    lines.push(Line::from(vec![label("last"), plain(age, colors::OVERLAY)]));
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(section_label("recent commits")));
+    match log {
+        None => lines.push(Line::from(plain("  reading…".to_string(), colors::OVERLAY))),
+        Some([]) => lines.push(Line::from(plain(
+            "  (no commits)".to_string(),
+            colors::OVERLAY,
+        ))),
+        Some(commits) => {
+            for c in commits {
+                lines.push(Line::from(vec![
+                    plain(format!("  {}", c.hash), colors::HASH_CLR),
+                    Span::styled(
+                        format!(" {} ", crate::ui::author_code(&c.author)),
+                        Style::default().fg(colors::author_color(&c.author)),
+                    ),
+                    plain(c.message.clone(), colors::TEXT),
+                    plain(format!("  {}", commit_age(c)), colors::OVERLAY),
+                ]));
+            }
+        }
+    }
+    lines
 }
 
 /// The inspector's body tabs on a run (FZ-64), `[/] JOBS · LOG · SCRIPT`,
@@ -3376,6 +3523,72 @@ fn worktree_rows(repo: &RepoStatus, width: usize) -> Vec<Line<'static>> {
     if repo.worktrees.is_empty() {
         return Vec::new();
     }
+    let mut lines = vec![Line::from(section_label("worktrees"))];
+    lines.extend(worktree_table(repo, &repo.worktrees, width));
+    lines
+}
+
+/// The `worktrees` view's list (FZ-77): one row per worktree, the main
+/// checkout first and marked `*` as the checked-out branch is, each row
+/// `worktree_table`'s behind the cursor's caret column. Returns the lines
+/// and the selected row; a row with nothing on disk says `not cloned`, and
+/// a repo with no linked worktree says so under its main checkout.
+fn worktrees_view_rows(
+    app: &App,
+    repo: &RepoStatus,
+    width: usize,
+) -> (Vec<Line<'static>>, Option<usize>) {
+    let dim = |text: &str| {
+        Line::from(Span::styled(
+            format!("  {text}"),
+            Style::default().fg(colors::OVERLAY),
+        ))
+    };
+    let listed = app.worktrees_listed();
+    if listed.is_empty() {
+        let text = match repo.is_not_cloned() {
+            true => "not cloned",
+            false => "no worktrees",
+        };
+        return (vec![dim(text)], None);
+    }
+    let selected = app.detail_selected().min(listed.len() - 1);
+    let head_color = colors::ref_color(crate::model::RefKind::Head);
+    let mut lines = Vec::with_capacity(listed.len() + 1);
+    for (i, row) in worktree_table(repo, &listed, width.saturating_sub(2))
+        .into_iter()
+        .enumerate()
+    {
+        let is_sel = i == selected;
+        let mut spans = vec![Span::styled(
+            if is_sel { "▸ " } else { "  " },
+            Style::default().fg(colors::SAPPHIRE),
+        )];
+        let mut cells = row.spans;
+        if i == 0 && !cells.is_empty() {
+            cells[0] = Span::styled("* ", Style::default().fg(head_color));
+        }
+        spans.extend(cells);
+        if is_sel {
+            spans = wash(pad_to(spans, width));
+        }
+        lines.push(Line::from(spans));
+    }
+    if listed.len() == 1 {
+        lines.push(dim("no worktrees besides the main one"));
+    }
+    (lines, Some(selected))
+}
+
+/// One row per entry of `worktrees`, the columns `worktree_rows` draws:
+/// that section and the `worktrees` view (FZ-77) both lay their rows out
+/// here, so the two cannot drift. Each row starts with two blank columns,
+/// the indent the view's main checkout marks.
+fn worktree_table(
+    repo: &RepoStatus,
+    worktrees: &[crate::model::Worktree],
+    width: usize,
+) -> Vec<Line<'static>> {
     let token = |behind: u32, ahead: u32, dirty: u32| -> Span<'static> {
         Span::styled(
             crate::model::counters_text(behind, ahead, dirty),
@@ -3392,8 +3605,7 @@ fn worktree_rows(repo: &RepoStatus, width: usize) -> Vec<Line<'static>> {
         age: String,
         path: String,
     }
-    let rows: Vec<Row> = repo
-        .worktrees
+    let rows: Vec<Row> = worktrees
         .iter()
         .map(|wt| {
             let branch = (!wt.detached)
@@ -3444,7 +3656,7 @@ fn worktree_rows(repo: &RepoStatus, width: usize) -> Vec<Line<'static>> {
         .max()
         .unwrap_or(0);
 
-    let mut lines = vec![Line::from(section_label("worktrees"))];
+    let mut lines = Vec::with_capacity(rows.len());
     for row in rows {
         let mut spans = vec![Span::raw("  ")];
         spans.extend(pad_to(
@@ -4871,6 +5083,194 @@ mod tests {
         let expected = format!("{}…", "b".repeat(WORKTREE_NAME_MAX - 1));
         assert!(row.contains(&expected), "{row}");
         assert!(!row.contains(&"b".repeat(WORKTREE_NAME_MAX)), "{row}");
+    }
+
+    /// The text of `line`, every span joined.
+    fn line_text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// The `worktrees` view lists one row per worktree, the main checkout
+    /// first and marked `*` before the linked one (FZ-77).
+    #[test]
+    fn the_worktrees_view_lists_the_main_checkout_first_and_marked() {
+        let (_, rows) = drawn(repo_with_a_worktree(), HistoryView::Worktrees);
+        let text = rows.join("\n");
+        let main = rows
+            .iter()
+            .position(|r| r.contains("▸ * main"))
+            .unwrap_or_else(|| panic!("no marked main row under the cursor:\n{text}"));
+        let linked = rows
+            .iter()
+            .position(|r| r.contains("feature") && r.contains(".claude/worktrees/feat"))
+            .unwrap_or_else(|| panic!("no linked row:\n{text}"));
+        assert_eq!(
+            linked,
+            main + 1,
+            "the linked row follows the main one:\n{text}"
+        );
+        assert!(!rows[linked].contains('*'), "only main is marked:\n{text}");
+        assert!(!text.contains("no worktrees"), "{text}");
+
+        let mut app = crate::app::App::new(vec![repo_with_a_worktree()], "t".to_string(), 100, 40);
+        app.history_view = HistoryView::Worktrees;
+        assert_eq!(app.selected_commit_count(), 2, "one stop per worktree");
+    }
+
+    /// The view's rows are `info`'s worktree rows: the linked row is the
+    /// same text as `worktree_rows` draws for the same repo, behind the
+    /// cursor's column, so the two cannot drift.
+    ///
+    /// The view's table is aligned over every row it lists, the main
+    /// checkout included, so a main branch wider than the linked ones pads
+    /// the linked rows differently from `info`, which aligns over the linked
+    /// rows alone. That is by design; this fixture's main row is no wider
+    /// in any column, which is what lets the texts compare equal.
+    #[test]
+    fn the_worktrees_view_rows_are_the_info_section_rows() {
+        let repo = repo_with_a_worktree();
+        let mut app = crate::app::App::new(vec![repo.clone()], "t".to_string(), 100, 40);
+        app.history_view = HistoryView::Worktrees;
+        let width = 90;
+        let (rows, selected) = worktrees_view_rows(&app, &repo, width);
+        assert_eq!(selected, Some(0));
+        assert_eq!(rows.len(), 2);
+        let info: Vec<String> = worktree_rows(&repo, width - 2)[1..]
+            .iter()
+            .map(line_text)
+            .collect();
+        let view: Vec<String> = rows[1..]
+            .iter()
+            .map(|l| line_text(l).chars().skip(2).collect())
+            .collect();
+        assert_eq!(view, info);
+        let main = line_text(&rows[0]);
+        assert!(main.starts_with("▸ * main"), "{main}");
+    }
+
+    /// A repo with no linked worktree lists its main checkout and says it
+    /// has no worktrees besides; a row with nothing on disk says `not
+    /// cloned`.
+    #[test]
+    fn the_worktrees_view_says_no_worktrees_and_not_cloned() {
+        let (_, rows) = drawn(busy_repo(), HistoryView::Worktrees);
+        let text = rows.join("\n");
+        assert!(text.contains("no worktrees"), "{text}");
+        assert!(text.contains("▸ * main"), "{text}");
+
+        let mut gone = busy_repo();
+        gone.location = RepoLocation::NotCloned;
+        let (_, rows) = drawn(gone, HistoryView::Worktrees);
+        let text = rows.join("\n");
+        assert!(text.contains("not cloned"), "{text}");
+        assert!(!text.contains("▸ "), "nothing to select:\n{text}");
+    }
+
+    /// The tab strip names the view and lights it in its own colour.
+    #[test]
+    fn the_tab_strip_names_the_worktrees_view() {
+        let line = view_switcher(HistoryView::Worktrees, true, 200);
+        let tab = line
+            .spans
+            .iter()
+            .find(|s| s.content == "WORKTREES")
+            .expect("a WORKTREES tab");
+        assert_eq!(tab.style.fg, Some(colors::PINK));
+    }
+
+    /// The inspector shows the highlighted worktree's path and branch, and
+    /// once the log landed its HEAD subject and commits.
+    #[test]
+    fn the_worktrees_inspector_shows_the_highlighted_worktree() {
+        let mut app = crate::app::App::new(vec![repo_with_a_worktree()], "t".to_string(), 100, 40);
+        app.view = crate::app::View::Detail;
+        app.history_view = HistoryView::Worktrees;
+        app.detail_selections[HistoryView::Worktrees.index()] = 1;
+        let text: Vec<String> = worktree_inspector_lines(&app)
+            .iter()
+            .map(line_text)
+            .collect();
+        assert_eq!(text[0], "~/repos/fleetz/.claude/worktrees/feat");
+        assert_eq!(text[1], "branch  feature");
+        assert!(text[4].contains("2↑ against origin/feature"), "{text:?}");
+        assert!(text.iter().any(|l| l.contains("reading")), "{text:?}");
+
+        app.inspector_folded = false;
+        let start = std::time::Instant::now();
+        assert_eq!(app.claim_worktree_log(start), None, "the dwell starts");
+        let read = app
+            .claim_worktree_log(start + crate::ci::DWELL)
+            .expect("a read");
+        assert_eq!(read.key, "~/repos/fleetz/.claude/worktrees/feat");
+        let commit = crate::model::Commit {
+            hash: "b2c3d4e".to_string(),
+            message: "feat: the side work".to_string(),
+            author: "Gaurgle".to_string(),
+            date: Some(chrono::Utc::now()),
+            body: String::new(),
+            insertions: 0,
+            deletions: 0,
+            files: vec![],
+        };
+        app.apply_worktree_log(read, vec![commit]);
+        let text: Vec<String> = worktree_inspector_lines(&app)
+            .iter()
+            .map(line_text)
+            .collect();
+        assert_eq!(text[2], "HEAD    b2c3d4e feat: the side work");
+        assert!(
+            text.iter()
+                .any(|l| l.starts_with("  b2c3d4e") && l.contains("feat: the side work")),
+            "{text:?}"
+        );
+
+        app.detail_selections[HistoryView::Worktrees.index()] = 0;
+        let text: Vec<String> = worktree_inspector_lines(&app)
+            .iter()
+            .map(line_text)
+            .collect();
+        assert_eq!(text[1], "branch  main");
+    }
+
+    /// A detached main checkout names its HEAD in the readout by the same
+    /// 7 digits its row draws, not the full 40 of `rev-parse HEAD`.
+    #[test]
+    fn a_detached_main_checkout_reads_out_its_short_head() {
+        let mut r = repo_with_a_worktree();
+        r.branches[0].is_head = false;
+        let full = "0123456789abcdef0123456789abcdef01234567";
+        r.work_key = Some(crate::digest::tests::work_key(full));
+        let (_, rows) = drawn(r, HistoryView::Worktrees);
+        let text = rows.join("\n");
+        assert!(text.contains("[1/2 · 0123456]"), "{text}");
+        assert!(!text.contains(full), "{text}");
+        assert!(text.contains("detached @ 0123456"), "{text}");
+    }
+
+    /// A click on a worktree row moves the cursor there.
+    #[test]
+    fn a_click_on_a_worktree_row_moves_the_cursor() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = crate::app::App::new(vec![repo_with_a_worktree()], "t".to_string(), 100, 40);
+        app.history_view = HistoryView::Worktrees;
+        let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        term.draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let y = (0..40u16)
+            .find(|&y| {
+                let row: String = (0..100u16).map(|x| buf[(x, y)].symbol()).collect();
+                row.contains(".claude/worktrees/feat")
+            })
+            .expect("the linked row");
+        let click = app.detail_hits.borrow().at(10, y).expect("a hit");
+        app.click_detail(&click);
+        assert_eq!(app.detail_selected(), 1);
+        assert_eq!(
+            app.worktree_highlighted().map(|w| w.branch),
+            Some("feature".to_string())
+        );
     }
 
     #[test]

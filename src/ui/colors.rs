@@ -8,6 +8,7 @@ pub const SAPPHIRE: Color = Color::Rgb(116, 199, 236); // repo names
 pub const LAVENDER: Color = Color::Rgb(180, 190, 254); // headers
 pub const MAUVE: Color = Color::Rgb(203, 166, 247); // section labels
 pub const MAROON: Color = Color::Rgb(235, 160, 172); // the `ci` view's tab
+pub const PINK: Color = Color::Rgb(245, 194, 231); // the `worktrees` view's tab
 
 /// Open pull requests, everywhere one is counted or listed.
 ///
@@ -265,6 +266,9 @@ pub fn history_view_color(view: crate::app::HistoryView) -> Color {
         // Yellow, the paper of a notes pad (FZ-53): the one tab hue left
         // that is neither the HEAD marker's teal nor a lamp's colour.
         HistoryView::Notes => YELLOW,
+        // Pink, not the `WT` badge's lavender: lavender is the `branches`
+        // tab already, and the tabs must stay distinct (FZ-77).
+        HistoryView::Worktrees => PINK,
     }
 }
 
