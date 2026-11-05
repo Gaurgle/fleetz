@@ -27,13 +27,11 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 
 ## In flight
 
-- Ready to integrate for his look, reviewed, committed, pushed: FZ-68
-  (#124, `f22d8aa` incl. the merge of `main` `8ce524a`, accepted diff
-  `c3221a9861ed`; his look accepted 11-05, second merge of `main` in
-  review), FZ-77 (#134, `4db738c`, look accepted 11-05; merges after
-  FZ-68). Running: FZ-81 (#137, flash, fix cycle 1 in re-review), FZ-83
-  (#140, CI lamp, `fz-worker`, option C ruled). Ready: FZ-84 to FZ-87,
-  FZ-89 (YAML reader), FZ-90 to FZ-92, FZ-78, FZ-79. FZ-80 Backlog.
+- FZ-81 (#137, yank flash, `35f17cc`, diff `7900ef870c0e`, CI green):
+  Ready to integrate for his look. FZ-77 (#134, look accepted 11-05):
+  merge-resolution worker running against `main` `1affbc7`. FZ-83 (#140,
+  CI lamp, option C ruled): `fz-worker` running. Ready: FZ-84 to FZ-87,
+  FZ-89 to FZ-92, FZ-78, FZ-79. FZ-80 Backlog. Stop after these.
 - FZ-65 (#121): built, `9f4018d7160d` unreviewed, his wheel decision.
   #88 (FZ-38) parked, uncommitted. FZ-63 (#119), FZ-60 (#116): trees
   lost 11-03; redispatch on his word.
@@ -50,10 +48,10 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 
 ## Next step
 
-Merged 11-04: seven tickets (log); 11-05: FZ-74 `fb26449`. Next: review
-and merge FZ-82 and FZ-88; FZ-81 to his look; on his look merge FZ-68
-then FZ-77 (merge-resolution cycles, shared `app.rs`, `main.rs`,
-`detail.rs`); then FZ-85, FZ-83, FZ-86, FZ-84, FZ-87; FZ-77 round 2,
-FZ-78, FZ-79. One target dir per worktree, pruned at merge (log).
+Merged 11-05: FZ-74 `fb26449`, FZ-88 `334e9a6`, FZ-82 `fa3c5ec`, FZ-68
+`1affbc7`. Next: finish FZ-77's merge (review, gate, merge) and FZ-83
+(review, his look); FZ-81 on his look. Then, on his word: FZ-85, FZ-86,
+FZ-84, FZ-87, FZ-89, FZ-90 to FZ-92, FZ-77 round 2, FZ-78, FZ-79. One
+target dir per worktree, pruned at merge (log).
 
 Start a lead at the root: `claude --agent fz-coordinator`; Codex: `AGENTS.md`.

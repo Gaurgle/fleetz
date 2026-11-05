@@ -368,6 +368,21 @@ sync rewrote them from memory); pins are his to clear in the app.
 14:00: "i think we should start wrapping up soon, finish the current
 tickets but stop after".
 
+- **#124 (FZ-68), the notes preview as a column of pane 2.** Merged
+  `1affbc7` at 14:09 CET on his look ("accpet"); two rounds: round 1 a
+  divider with the preview's text on pane 2's top border (11-04), round
+  2 his accepted sketch (one divider under a whole top border, the
+  `NOTES` rule across it at `┼`, the facts beside the header, no `[3]
+  file` card, the inspector unfocusable in `notes`). Workers and
+  reviewers `claude-fable-5-1`; three merge-resolution cycles with
+  `main`, each reviewed; a worker breached "Writing files" once with
+  inline python (recorded; regions re-read). His test rulings: 11-03
+  16:54 and 11-05 15:45 (the bracket-streak route). Combined checks on
+  `9e15a5c` (1607), gate holds, `main` CI 42032676132. Follow-up: focus
+  can sit on the undrawn inspector after a search regroups the list
+  (fix-up lives in `land_on` only). Remembered: nothing to keep.
+  FZ-68: review changes 1; fix cycles 3; owner decisions 4; worker 75; review 30; models claude-fable-5-1/claude-fable-5-1; usage worker 265528 + 38147 tokens, reviewer 124193 + 34326 + 31322 tokens
+
 - **#139 (FZ-82), a ci run row is clipped, not wrapped, below its
   floor.** Merged `fa3c5ec` at 14:00 CET under the safe-merge rule;
   ticket commit `5325234` (base `fb26449`, worker `fz-worker`,
