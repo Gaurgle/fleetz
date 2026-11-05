@@ -7,9 +7,9 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Baton released 2026-11-04 16:15 CET by session `ea56f412`
-(`claude-fable-5-1`, `at-a`, held since 09:15) on his "lets stop here
-for today?". No worker or reviewer running. Worktrees on at-a:
+Session `ea56f412` (`claude-fable-5-1`, `at-a`) holds the baton again
+since 2026-11-05 12:26 CET, on his batch of feedback (it released it
+11-04 16:15). No worker or reviewer running. Worktrees on at-a:
 `issue-121`, `issue-124`, `issue-130`, `issue-134`, `issue-88`.
 
 ## Standing authority

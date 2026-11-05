@@ -289,6 +289,32 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### 2026-11-05
+
+Owner's words, 2026-11-05 about 12:20 CET (the lead took the baton
+again at 12:26), a batch after using the 11-04 builds: "yy/yp should
+have the same 'flash' effect as 'notez' has" (his own FZ-81, #137,
+filed 11-04 15:39 with "CLAUDE! fill in all missing criteria"; body
+filled by the lead; #138 is an untitled duplicate of it); "why is not
+the 'general' CI lamp blinking in pane 1 list, while the job blinks in
+CI page/pane2?" and "see also that it says 'CI passed' while orange CI
+lamp is blinking" (lead: the row lamp and the header are the default
+branch's `statusCheckRollup` from the fleet poll, the `ci` view polls
+every branch's runs; the running run was on a PR branch); "in pane 3
+in CI mode, the border text should differentiate 'inspector' and the
+pane3 page (script, log, jobs) by color and something more '::'
+perhaps? rust style, or something else like '[]'"; pinz notes: "r for
+refresh spinner is 'finished' before the actual refresh. spinner
+stops, then the repos are updated", "[4] contributions heatmap should
+be dynamically colorful, derived median values rather than threshold
+based (if they are..?)", "discovery ordering should update with
+refresh and in watch mode", "2 additional sorting: sort by visibility,
+sort by owner", "Inspector should start smaller", "Commit message in
+Inspector should start on new row"; "CI Pane inspector: should have
+syntax highlighting, a good reader, and show language, like notez
+reader. functionally the same look and functions but in pane 3.
+indicate it's togglable modes".
+
 ### Merged on 2026-11-04
 
 Owner's words, 2026-11-04, about 10:05 CET, on the lead's capture of
