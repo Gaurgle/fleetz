@@ -968,8 +968,8 @@ pub fn panel_title(num: u8, label: &str, focused: bool) -> Line<'static> {
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    // Pane 2 sets it when it draws the fleet's state; the footer, drawn
-    // after it, reads it.
+    // Pane 1's summary box sets it when drawn; the footer, drawn after it,
+    // reads it.
     app.fleet_drawn.set(false);
     let chunks = frame_chunks(area, app);
     render_header(frame, chunks.header, app);
@@ -1082,10 +1082,10 @@ fn render_load_error(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Render the header: the name and the version on the left; outside the
-/// compact view, loading, GitHub, watch and the sweep time on the right. Everything else
-/// that reports state sits in the fleet column of pane 2's header
-/// (`fleet_lines`), or in the compact view on the status line under this
-/// row.
+/// compact view, loading, GitHub, watch and the sweep time on the right.
+/// The summary and the activity sit in pane 1's summary box, the window in
+/// its box at the right of pane 2's header (FZ-95), and in the compact view
+/// all of it on the status line under this row.
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let name = Span::styled(
         " fleetz",
@@ -1252,8 +1252,10 @@ fn window_chip(label: &str) -> Span<'static> {
     )
 }
 
-/// The fleet's state as spans, built once and laid out two ways: on one
-/// row by `render_status_line`, one piece per row by `fleet_lines`.
+/// The fleet's state as spans, built once and laid out where each view
+/// shows it: on one row by `render_status_line` (compact), in pane 1's
+/// summary box (`detail::summary_box_lines`), and on the footer where
+/// neither was drawn (`footer::fallback_spans`).
 pub struct FleetPieces {
     pub window: Option<Span<'static>>,
     /// The one key hint off the footer, and only because it sits on the
@@ -1362,62 +1364,6 @@ pub fn fleet_pieces(app: &App, now: chrono::DateTime<chrono::Local>) -> FleetPie
         github_short,
         watch,
     }
-}
-
-/// The narrowest and widest the fleet column of pane 2's header is drawn.
-/// Between them it takes the width of its window and summary rows, so a
-/// fleet with every counter reads whole (his look, 2026-11-05: `2 not
-/// clone…`). Never the activity row's: a message must not move the
-/// dividers.
-pub const FLEET_COLUMN_MIN: usize = 24;
-pub const FLEET_COLUMN_MAX: usize = 56;
-
-/// Trim each span's outer spaces: the status line pads its pieces, a
-/// column lays them out itself.
-fn trimmed(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
-    spans
-        .into_iter()
-        .map(|s| Span::styled(s.content.trim().to_string(), s.style))
-        .collect()
-}
-
-/// The fleet's state in three fixed rows, every piece always in its own
-/// place whether or not it has anything to say, so nothing moves to make
-/// room (his look, 2026-11-05):
-///
-/// 0. the window and its `[t]`, the group after it
-/// 1. the summary
-/// 2. activity: a manual refresh, the last action's message; blank when
-///    there is none
-///
-/// Loading, GitHub, watch and the sweep time sit on the header's divider.
-pub fn fleet_lines(app: &App, now: chrono::DateTime<chrono::Local>) -> Vec<Line<'static>> {
-    let p = fleet_pieces(app, now);
-
-    let mut window: Vec<Span> = Vec::new();
-    if let Some(w) = p.window {
-        window.push(w);
-        window.push(p.window_key);
-    }
-    if let Some(g) = p.group {
-        window.push(Span::raw("  "));
-        window.push(g);
-    }
-
-    let mut activity: Vec<Span> = Vec::new();
-    if let Some(spinner) = p.refreshing {
-        activity.extend(trimmed(spinner));
-        activity.push(Span::raw("  "));
-    }
-    if let Some(message) = p.message {
-        activity.push(message);
-    }
-
-    vec![
-        Line::from(window),
-        Line::from(p.summary),
-        Line::from(activity),
-    ]
 }
 
 /// Render the compact view's status line: the time window, the group and

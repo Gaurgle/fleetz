@@ -39,8 +39,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // further left, hard against the terminal edge.
     let width = area.width.saturating_sub(2 * crate::ui::PANE_CONTENT_INSET) as usize;
 
-    // The fleet's state lives in pane 2's header (FZ-93) and on the compact
-    // view's status line. Where this frame drew neither, the footer carries
+    // The fleet's summary and activity live in pane 1's summary box (FZ-95)
+    // and on the compact view's status line. Where this frame drew neither
+    // (a pane 1 too short for the box), the footer carries
     // it, as it always did: a manual refresh's spinner, then the last
     // action's message or the summary. Otherwise the keys have the row.
     let left = if crate::ui::uses_status_line(app) || app.fleet_drawn.get() {
@@ -100,7 +101,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-/// The footer's left side where no fleet column was drawn: a manual
+/// The footer's left side where no summary box was drawn: a manual
 /// refresh's spinner, then the last action's message, or the summary when
 /// there is none.
 fn fallback_spans(app: &App) -> Vec<Span<'static>> {

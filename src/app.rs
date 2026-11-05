@@ -2186,8 +2186,8 @@ pub struct App {
     /// are written on the first frame, which is always drawn before any input
     /// is processed.
     pub detail_max_scroll: std::cell::Cell<u16>,
-    /// Whether this frame drew the fleet's state in pane 2 (FZ-93): its
-    /// header's fleet column, or the `notes` layout's slot beside it. Reset
+    /// Whether this frame drew the fleet's summary and activity in pane 1's
+    /// summary box (FZ-95; pane 2's fleet column in FZ-93). Reset
     /// at the start of every frame and read by the footer, drawn after pane
     /// 2, which carries the summary and the message itself when nothing
     /// else did (a section's digest, no repo, a pane too narrow for the

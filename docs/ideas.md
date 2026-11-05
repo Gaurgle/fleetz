@@ -669,11 +669,18 @@ clears on its own, red for an error, grey before any answer), watch and
 the sweep time flush right. The window, the summary that used to share the
 footer and an activity row for what is passing form a column at the right
 of the repo pane's header, after the repo's local and remote sections, so
-every piece keeps its row and nothing moves to make room. Where pane 2
-draws no such column (a section's digest, no repo, a pane too narrow) the
-footer carries the summary and the message, so an action never ends in
-silence. The commit counter moved onto the view's title row, giving pane 2
-a row back. The footer is
+every piece keeps its row and nothing moves to make room. The commit
+counter moved onto the view's title row, giving pane 2 a row back.
+
+**Amended again the same evening (FZ-95, #152), on his look.** The fleet
+column moved out: the summary and the activity row to a box at the foot
+of pane 1, the window to a teal box of its own at the right of pane 2's
+header, framed with `[t]` on its border. Pane 2's header is three fixed
+sections sized by the pane's width alone, local and remote split evenly
+by the first divider, the remote right-aligned and named `owner/name`, so
+no divider moves between repos. A failed fetch sits whole under the
+sections rather than across them. Where pane 1 is too short for its box,
+the footer carries the summary and the message. The footer is
 keys only. `notes` carries the file's facts on a divider at the tree's
 foot. Tried and dropped the same day: a one-row status line under the
 header, and a status box under pane 1 (beside the inspector, or at the

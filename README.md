@@ -52,31 +52,39 @@ land.
 
 The top row is the name and the version, with GitHub's connection, the
 watch eye and the `swept` time flush right, and `loading` beside them while
-the fleet lands. The fleet's state is the right of three sections in the
-repo pane's header, after the repo's local facts (state, path, branch) and
-its remote ones (owner, remote URL, PRs and CI), a divider between each:
+the fleet lands.
+
+The repo pane's header has three sections, each a fixed size that depends
+on the pane's width only, so the dividers stand in the same columns for
+every repo: the repo's local facts (state, path, branch) on the left, its
+remote ones (owner, `owner/name`, PRs and CI) right-aligned against the
+second divider, the first divider in the middle between them, and the time
+window in a teal box at the right with its `[t]` key on the box's border:
 
 ```
-○ 2 uncommitted        │ ● Gaurgle                    │ since 2 weeks [t]
-  ~/repos/fleetz       │ github.com/Gaurgle/fleetz    │ 3↓ · 1! · 17 synced · 2 not cloned
-  * main · 5 worktrees │ 2 open PRs · CI ◉ passed     │ ⠿ checking remote…
+○ 2707 behind on 2 branches   │          bonsai-education │ ╭───────────────╮
+  ~/repos/bonsai/bonsai-edu…  │ bonsai-education/bonsai-… │ │ ◷ since 1 week│
+  * feature/modules           │ 5 open PRs #87 #76+ · ◉ ok│ ╰───── [t] ─────╯
 ```
 
-Each piece of the fleet column has a row of its own that it keeps whether or
-not it has anything to say: the time window in teal with its `[t]` and the
-active group, the summary (`3↓ · 2↑ · 4! · 17 synced · 2 PRs`), and the
-activity row for what is passing (a manual refresh, the last action's
-message), blank when nothing is. The column takes the width of its window
-and summary, so a message never moves the dividers. On a narrow pane the
-remote section goes first; a pane too narrow for the local facts beside the
-column draws the header without it. Where pane 2 has no fleet column (a
-section's digest, no repo selected, or a pane too narrow for it) the footer
-carries the summary and the last action's message beside the keys. In the
-`notes` view the fleet column
-sits right of the divider, above `notes preview`. The compact view has no
-repo pane and draws the same pieces, GitHub included, on one status line
-under the top row. The view's title row under the header carries the
-cursor's place in the list flush right (`[1/6 · 61ab6be]`).
+The remote is named `owner/name` for GitHub in any of the forms git writes,
+with the host before it for any other, never with credentials. A failed
+fetch and git's reason, and the earlier-refresh note, sit whole under the
+three sections. On a narrow pane the remote section goes first; a pane too
+narrow for the local facts beside the box draws the header without the
+sections. In the `notes` view the window box sits right of the divider,
+above `notes preview`.
+
+The fleet's summary sits in a box at the foot of the repo list, under a
+divider: its counters (`3↓ · 1! · 17 synced · 2 not cloned · 8 PRs`),
+wrapped between counters where the pane is narrow, then an activity row
+for what is passing (a manual refresh, the last action's message), blank
+when nothing is, so a message never moves anything. Where the list is too
+short to spare the rows, the footer carries the summary and the message
+beside the keys. The compact view has no repo list pane and draws the same
+pieces, GitHub included, on one status line under the top row. The view's
+title row under the header carries the cursor's place in the list flush
+right (`[1/6 · 61ab6be]`).
 
 GitHub's piece is always drawn, its colour saying how the connection is and
 its words when the data (CI, PRs, the contribution strip) is not current:
