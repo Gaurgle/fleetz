@@ -9,9 +9,9 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 Baton released 2026-11-05 15:35 CET by session `ea56f412`
 (`claude-opus-5-5` since 13:55) at his 95% usage warning. No worker or
-reviewer running (FZ-83's review stopped unfinished). His 0.6.1 bump
-sits uncommitted in the main checkout (`Cargo.toml`, `Cargo.lock`), his.
-Worktrees on at-a: `issue-121`, `issue-137`, `issue-140`, `issue-88`.
+reviewer running (FZ-83's review stopped unfinished). 0.6.1 is pushed
+(`d5cf417`); tag `v0.6.1` local only, his. Worktrees on at-a: `issue-121`,
+`issue-137`, `issue-140`, `issue-88`, `status-bar` (FZ-93).
 
 ## Standing authority
 
@@ -35,6 +35,8 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
   `334e9a6`, 1631 green): his design yes 15:32; next a fresh full
   review, commit, a merge with `main` (behind FZ-82/68/77), his look. Ready: FZ-84 to
   FZ-87, FZ-89 to FZ-92, FZ-78, FZ-79. FZ-80 Backlog.
+- FZ-93 (#150): his session's `feat/status-bar`, look given, he commits
+  (0.6.2 bump own commit, `--guarded-approved`). Next: review, gate, merge.
 - FZ-65 (#121): built, `9f4018d7160d` unreviewed, his wheel decision.
   #88 (FZ-38) parked, uncommitted. FZ-63 (#119), FZ-60 (#116): trees
   lost 11-03; redispatch on his word.
@@ -51,10 +53,8 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 
 ## Next step
 
-Merged 11-05: FZ-74 `fb26449`, FZ-88 `334e9a6`, FZ-82 `fa3c5ec`, FZ-68
-`1affbc7`, FZ-77 `8af724f`. Next: FZ-81's README resolution and merge;
-FZ-83's review and his look; then FZ-85, FZ-86, FZ-84, FZ-87, FZ-89,
-FZ-90 to FZ-92, FZ-77 round 2, FZ-78, FZ-79. One target dir per
-worktree, pruned at merge (log). His `fleetz` is from Oct 29: suggest
-`cargo install --path .` before he judges a screenshot (memory).
+Merged 11-05: FZ-74, 88, 82, 68, 77 (log). Next: FZ-93's review and
+merge, FZ-81's README fix and merge; FZ-83's review and his look; then
+FZ-85, 86, 84, 87, 89, 90 to 92, FZ-77 round 2, 78, 79. Pruned per
+worktree at merge (log). Suggest `cargo install` before a screenshot.
 
