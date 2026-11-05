@@ -69,7 +69,10 @@ activity row for what is passing (a manual refresh, the last action's
 message), blank when nothing is. The column takes the width of its window
 and summary, so a message never moves the dividers. On a narrow pane the
 remote section goes first; a pane too narrow for the local facts beside the
-column draws the header without it. In the `notes` view the fleet column
+column draws the header without it. Where pane 2 has no fleet column (a
+section's digest, no repo selected, or a pane too narrow for it) the footer
+carries the summary and the last action's message beside the keys. In the
+`notes` view the fleet column
 sits right of the divider, above `notes preview`. The compact view has no
 repo pane and draws the same pieces, GitHub included, on one status line
 under the top row. The view's title row under the header carries the
@@ -107,8 +110,8 @@ later; after that the wait doubles with each failure in a row, up to about ten
 minutes (8 to 12, randomised so several fleetz windows do not retry
 together). Offline and signed out keep retrying every interval, so the
 dashboard recovers as soon as the network or the sign-in is back. With watch
-off, none follows on its own, and `r` retries at once. The segment clears on
-the first success. Where the row is too narrow it shortens to `⚠ github`,
+off, none follows on its own, and `r` retries at once. It turns back to
+`● github connected` on the first success. Where the row is too narrow it shortens to `⚠ github`,
 `github cached`, `github slowed` or `github paused` rather than dropping it.
 
 fleetz also reads GitHub's hourly allowance off every answer and spaces its

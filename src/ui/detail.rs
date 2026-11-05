@@ -341,6 +341,10 @@ fn render_selected_commit_readout(frame: &mut Frame, area: Rect, app: &App) {
     // to the pane's inner edge, so a space here would park this one cell short
     // of the column they all share.
     let text = format!("[{}/{} · {}]", index + 1, total, hash);
+    // Whole or not at all: a cut readout names a hash that is not the one.
+    if text.chars().count() > area.width as usize {
+        return;
+    }
     // Bright while the commit cursor is what the keys are actually driving:
     // this is a readout you go looking for, so it has to win against the
     // grey furniture around it. Steps down to OVERLAY (not all the way to
@@ -711,6 +715,7 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     let width = area.width as usize;
 
     let mut lines: Vec<Line> = header_lines(app, repo, width);
+    let header_width = width;
     let (area, width) = match notes_split {
         Some(notes) => {
             // Pinned, or on a short pane scrolling with the tree; laid out
@@ -1178,17 +1183,28 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             let body = lines.split_off(pinned);
             let header_area = header_area.expect("split");
             frame.render_widget(Paragraph::new(lines), header_area);
+            // The footer carries the fleet's state when this did not.
+            if draws_fleet_column(app, header_width) {
+                app.fleet_drawn.set(true);
+            }
             // The counter flush right on the view's title row, the first of
             // the headliner's two (his look, 2026-11-05). Only while that row
             // is pinned: a counter scrolled away with the body would vanish
             // exactly when the list has been scrolled past.
+            // Right of the title only, so a narrow pane never covers it.
             if let Some(title_y) = (header_rows >= 2)
                 .then(|| header_area.y + header_rows as u16 - 2)
                 .filter(|y| *y < header_area.bottom())
             {
+                let title_w = view_name(app.history_view).chars().count() as u16 + 1;
                 render_selected_commit_readout(
                     frame,
-                    Rect::new(header_area.x, title_y, header_area.width, 1),
+                    Rect::new(
+                        header_area.x + title_w.min(header_area.width),
+                        title_y,
+                        header_area.width.saturating_sub(title_w),
+                        1,
+                    ),
                     app,
                 );
             }
@@ -1458,6 +1474,7 @@ fn render_notes_heads(frame: &mut Frame, pane: Rect, notes: &NotesPane, app: &Ap
     }
     let label_row = facts.bottom() - 1;
     let mut lines = crate::ui::fleet_lines(app, chrono::Local::now());
+    app.fleet_drawn.set(true);
     lines.truncate(usize::from(facts.height - 1));
     frame.render_widget(
         Paragraph::new(lines),
@@ -1528,6 +1545,14 @@ fn pad_spans(mut spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> 
         spans.push(Span::raw(" ".repeat(width - w)));
     }
     spans
+}
+
+/// Whether pane 2's header at `width` carries the fleet column: the same
+/// decision `header_lines` makes, asked again so the footer knows whether
+/// to carry the fleet's state itself.
+fn draws_fleet_column(app: &App, width: usize) -> bool {
+    !app.notes_layout()
+        && fleet_column_width(&crate::ui::fleet_lines(app, chrono::Local::now()), width).is_some()
 }
 
 /// The fleet column's width in a header of `width`, or `None` when there
@@ -7035,6 +7060,13 @@ mod tests {
         assert!(row(title_y).contains("[2/4 · "), "{:?}", row(title_y));
     }
 
+    /// The regression: `info` draws the graph but the readout and the
+    /// inspector used to index `commits`, and the two are different `git log`
+    /// runs -- `commits` walks HEAD, the graph walks the union of the local
+    /// branches. One commit living only on a side branch therefore sat in the
+    /// drawn list and not in the indexed one, and every row below it reported
+    /// its neighbour's hash: the caret was on `36fc171d` while the readout and
+    /// the inspector below both said `0a7d35e6`.
     #[test]
     fn readout_names_the_row_the_cursor_is_on() {
         use ratatui::Terminal;
@@ -7111,33 +7143,127 @@ mod tests {
     }
 
     #[test]
-    /// Local on the left of every header row, remote flush right. The path
-    /// used to share row one with the sync status, which read as "how it is
-    /// doing" and "where it lives" run together.
-    fn owner_and_name_stack_flush_to_the_right_edge() {
-        // 120, not 80: the fleet column (FZ-93) takes 37 columns, and at 80
-        // the remote section is too narrow for the URL, which then drops as
+    /// Local on the left of every header row, remote in its own section from
+    /// the first divider (FZ-93, leaning left on his look of 2026-11-05;
+    /// flush right before). The path used to share row one with the sync
+    /// status, which read as "how it is doing" and "where it lives" run
+    /// together.
+    fn owner_and_url_lean_left_in_the_remote_section() {
+        // 120, not 80: at 80 the fleet column leaves the remote section too
+        // narrow for the URL, which then drops as
         // `identity_is_dropped_whole_on_a_narrow_pane` requires.
         let (state, location, _) = header_rows(cloned_repo(), 120);
-        // Flush right of the remote section, left of the fleet column.
-        let (state, location) = (before_fleet(&state), before_fleet(&location));
 
-        // Row one is state only, with the owner flush right.
-        assert!(!state.contains("~/repos"), "path left row one: {state:?}");
+        // Row one is state only, the owner starting the remote section.
+        let (local, remote) = sections(&state);
+        assert!(!local.contains("~/repos"), "path left row one: {state:?}");
         assert!(
-            state.ends_with("Gaurgle"),
-            "owner not flush right: {state:?}"
+            remote.starts_with(' ') && remote.trim_start().ends_with("Gaurgle"),
+            "owner not at the start of the remote section: {state:?}"
+        );
+        assert_eq!(
+            remote.chars().nth(1).map(|c| c != ' '),
+            Some(true),
+            "{state:?}"
         );
 
-        // Row two is location: local path left, remote URL right.
+        // Row two is location: local path left, remote URL from the divider.
+        let (local, remote) = sections(&location);
         assert!(
-            location.trim_start().starts_with("~/repos/fleetz"),
+            local.trim_start().starts_with("~/repos/fleetz"),
             "local path not on the left: {location:?}"
         );
         assert!(
-            location.ends_with("git@github.com:Gaurgle/fleetz.git"),
-            "remote URL not flush right: {location:?}"
+            remote.starts_with(" git@github.com:Gaurgle/fleetz.git"),
+            "remote URL not against the divider: {location:?}"
         );
+    }
+
+    /// Pane 2's three header rows as drawn at `width`, borders kept, for an
+    /// app `setup` prepares.
+    fn header_block(width: u16, setup: impl FnOnce(&mut crate::app::App)) -> Vec<String> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app =
+            crate::app::App::new(vec![cloned_repo()], "since 2 weeks".to_string(), width, 40);
+        setup(&mut app);
+        let mut terminal = Terminal::new(TestBackend::new(width, 16)).unwrap();
+        terminal
+            .draw(|f| render_detail_pane(f, f.area(), &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (2..5u16)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    /// The columns of a row's section dividers: every `│` but the frame's.
+    fn divider_columns(row: &str) -> Vec<usize> {
+        let last = row.chars().count().saturating_sub(1);
+        row.chars()
+            .enumerate()
+            .filter(|(x, c)| *c == '│' && *x != 0 && *x != last)
+            .map(|(x, _)| x)
+            .collect()
+    }
+
+    /// FZ-93: the header is three sections in order, local, remote and the
+    /// fleet, with two dividers in the same columns on every row.
+    #[test]
+    fn the_header_draws_local_remote_and_fleet_with_two_dividers() {
+        let rows = header_block(140, |_| {});
+        let dividers = divider_columns(&rows[0]);
+        assert_eq!(dividers.len(), 2, "two dividers: {:?}", rows[0]);
+        for row in &rows {
+            assert_eq!(divider_columns(row), dividers, "row {row:?}");
+        }
+        let at = |needle: &str| {
+            rows[0]
+                .chars()
+                .collect::<String>()
+                .find(needle)
+                .map(|byte| rows[0][..byte].chars().count())
+                .unwrap_or_else(|| panic!("{needle} not on {:?}", rows[0]))
+        };
+        assert!(at("synced") < dividers[0], "{:?}", rows[0]);
+        assert!(dividers[0] < at("Gaurgle") && at("Gaurgle") < dividers[1]);
+        assert!(dividers[1] < at("since 2 weeks [t]"), "{:?}", rows[0]);
+        assert!(rows[1].contains("~/repos/fleetz"), "{:?}", rows[1]);
+        assert!(rows[1].contains("git@github.com"), "{:?}", rows[1]);
+    }
+
+    /// FZ-93: the fleet's pieces keep their rows. A message or a manual
+    /// refresh lands on the activity row and moves neither the window, the
+    /// summary nor a divider (his look, 2026-11-05: "keep their places
+    /// static").
+    #[test]
+    fn a_message_or_a_refresh_moves_no_fleet_row() {
+        let idle = header_block(140, |_| {});
+        let message = header_block(140, |app| {
+            app.set_status("copied 1abc123".to_string(), false)
+        });
+        let refreshing = header_block(140, |app| {
+            app.sweep_started = Some(std::time::Instant::now());
+            app.sweep_manual = true;
+            app.refresh_awaits_poll = true;
+        });
+        assert!(message[2].contains("copied 1abc123"), "{:?}", message[2]);
+        assert!(refreshing[2].contains("checking"), "{:?}", refreshing[2]);
+        assert!(!idle[2].contains("copied") && !idle[2].contains("checking"));
+        for busy in [&message, &refreshing] {
+            assert_eq!(busy[0], idle[0], "the window row moved");
+            assert_eq!(busy[1], idle[1], "the summary row moved");
+            assert_eq!(divider_columns(&busy[2]), divider_columns(&idle[2]));
+        }
+    }
+
+    /// A header row's local and remote sections: the text before its first
+    /// divider, and between the first and the fleet column's (FZ-93).
+    fn sections(row: &str) -> (String, String) {
+        let mut parts = row.split('│');
+        let local = parts.next().unwrap_or_default().to_string();
+        let remote = parts.next().unwrap_or_default().trim_end().to_string();
+        (local, remote)
     }
 
     /// A header row up to the fleet column's divider (FZ-93), its trailing
@@ -7150,17 +7276,27 @@ mod tests {
     }
 
     #[test]
-    fn stacked_identity_is_right_aligned_on_both_rows() {
-        // Both rows must end at the same column, which is the whole point of
-        // stacking them; the left content differs in length, so this only
-        // holds if each row is padded independently.
-        let (status, url) = pane_rows(cloned_repo(), 60);
-        let owner_end = status.chars().count();
-        let name_end = url.chars().count();
+    fn stacked_identity_shares_its_divider_on_both_rows() {
+        // Both rows put the first divider in the same column and start the
+        // remote half right after it, which is the whole point of stacking
+        // them (FZ-93; both rows ended in one column when they were flush
+        // right). The local halves differ in length, so this only holds if
+        // each row is padded to the section independently.
+        let (status, url) = pane_rows(cloned_repo(), 120);
+        let divider = |row: &str| row.chars().position(|c| c == '│');
+        assert!(divider(&status).is_some(), "no divider: {status:?}");
         assert_eq!(
-            owner_end, name_end,
-            "rows end at different columns: {status:?} vs {url:?}"
+            divider(&status),
+            divider(&url),
+            "rows divide at different columns: {status:?} vs {url:?}"
         );
+        for row in [&status, &url] {
+            let remote = sections(row).1;
+            assert!(
+                remote.starts_with(' ') && remote.chars().nth(1).is_some_and(|c| c != ' '),
+                "the remote half does not start at the divider: {row:?}"
+            );
+        }
     }
 
     #[test]

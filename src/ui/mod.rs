@@ -616,7 +616,7 @@ fn pct_for(cells: u16, total: u16) -> u16 {
 pub struct FrameChunks {
     pub header: Rect,
     /// Only in the compact view (`uses_status_line`); the detail view puts
-    /// the same pieces in the status box under pane 1.
+    /// the same pieces in pane 2's header (`fleet_lines`).
     pub status: Option<Rect>,
     pub main: Rect,
     pub footer: Rect,
@@ -968,6 +968,9 @@ pub fn panel_title(num: u8, label: &str, focused: bool) -> Line<'static> {
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
+    // Pane 2 sets it when it draws the fleet's state; the footer, drawn
+    // after it, reads it.
+    app.fleet_drawn.set(false);
     let chunks = frame_chunks(area, app);
     render_header(frame, chunks.header, app);
     if let Some(status) = chunks.status {
@@ -1084,17 +1087,16 @@ fn render_load_error(frame: &mut Frame, area: Rect, app: &App) {
 /// (`fleet_lines`), or in the compact view on the status line under this
 /// row.
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let line = Line::from(vec![
-        Span::styled(
-            " fleetz",
-            Style::default()
-                .fg(colors::LAVENDER)
-                .add_modifier(Modifier::BOLD),
-        ),
-        // Dimmest colour: "which build am I looking at" is answerable without
-        // quitting, and it is the least urgent thing on screen.
-        Span::styled(format!(" {VERSION}"), Style::default().fg(colors::SUBTEXT)),
-    ]);
+    let name = Span::styled(
+        " fleetz",
+        Style::default()
+            .fg(colors::LAVENDER)
+            .add_modifier(Modifier::BOLD),
+    );
+    // Dimmest colour: "which build am I looking at" is answerable without
+    // quitting, and it is the least urgent thing on screen.
+    let version = Span::styled(format!(" {VERSION}"), Style::default().fg(colors::SUBTEXT));
+    let line = Line::from(vec![name.clone(), version]);
     // Under it the compact view's status line is the divider, and carries
     // watch and the sweep. Elsewhere the header draws its own divider, as it
     // always did, with watch and the sweep time flush right on it (his look,
@@ -1109,7 +1111,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         // "belongs there"). Loading is here, not in pane 2, because pane 2
         // has no header to draw until the first repo lands.
         let p = fleet_pieces(app, chrono::Local::now());
-        let build = |github: &str| {
+        let build = |github: &str, with_swept: bool| {
             let mut right: Vec<Span<'static>> = Vec::new();
             if let Some(loading) = p.loading.clone() {
                 right.extend(loading);
@@ -1119,31 +1121,39 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(p.github_health.color()),
             ));
             right.extend(p.watch.iter().cloned());
-            if let Some(swept) = p.swept.clone() {
+            if with_swept && let Some(swept) = p.swept.clone() {
                 right.extend(swept);
             }
             right.push(Span::raw(" "));
             right
         };
-        let name_w = line.width();
-        let long = build(&p.github_long);
-        let fits = |spans: &[Span]| {
-            name_w
-                + spans
-                    .iter()
-                    .map(|s| s.content.chars().count())
-                    .sum::<usize>()
-                < area.width as usize
+        // The two sides are placed independently, so on a narrow terminal
+        // they would overprint: GitHub shortens first, then the sweep time
+        // goes, then the version. Loading, GitHub and watch always stay.
+        let columns = |spans: &[Span]| {
+            spans
+                .iter()
+                .map(|s| s.content.chars().count())
+                .sum::<usize>()
         };
-        let right = if fits(&long) {
-            long
-        } else {
-            build(&p.github_short)
-        };
+        let width = area.width as usize;
+        let candidates = [
+            (line.clone(), build(&p.github_long, true)),
+            (line.clone(), build(&p.github_short, true)),
+            (line.clone(), build(&p.github_short, false)),
+            (Line::from(name), build(&p.github_short, false)),
+        ];
+        let last = candidates.len() - 1;
+        let (left, right) = candidates
+            .into_iter()
+            .enumerate()
+            .find(|(i, (left, right))| *i == last || left.width() + columns(right) < width)
+            .map(|(_, pair)| pair)
+            .expect("the last candidate always matches");
         Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(colors::SURFACE))
-            .title_bottom(line.left_aligned())
+            .title_bottom(left.left_aligned())
             .title_bottom(Line::from(right).right_aligned())
     };
     frame.render_widget(block, area);
@@ -2717,6 +2727,47 @@ mod tests {
         let loading = row.find("loading").expect("no loading on the header");
         let github = row.find("github").expect("no github on the header");
         assert!(loading < github, "{row:?}");
+    }
+
+    /// The header's two sides never overprint: as the terminal narrows,
+    /// GitHub shortens, then the sweep time and then the version go, and
+    /// the name and the watch eye stay whole (FZ-93 review).
+    #[test]
+    fn a_narrow_header_sheds_pieces_rather_than_overprinting() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        for width in 30u16..=90 {
+            let mut app = crate::app::App::new(Vec::new(), String::new(), width, 40);
+            full_header_app(&mut app);
+            app.view = View::Detail;
+            let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+            terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let row: String = (0..width).map(|x| buffer[(x, 0)].symbol()).collect();
+            assert!(row.starts_with(" fleetz"), "w{width}: {row:?}");
+            assert!(row.contains(" watch"), "w{width}: {row:?}");
+            assert!(row.contains("github"), "w{width}: {row:?}");
+        }
+    }
+
+    /// Where pane 2 draws no fleet column (here no repo at all), the whole
+    /// frame still reports an action: the footer carries the message
+    /// (FZ-93 review, B1). Fails while the per-frame flag is left set from
+    /// an earlier frame or the footer stops reading it.
+    #[test]
+    fn with_no_fleet_column_the_frame_shows_the_message_in_the_footer() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let (w, h) = (160u16, 30u16);
+        let mut app = crate::app::App::new(Vec::new(), String::new(), w, h);
+        app.view = View::Detail;
+        app.fleet_drawn.set(true);
+        app.set_status("Already refreshing".to_string(), true);
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let last: String = (0..w).map(|x| buffer[(x, h - 1)].symbol()).collect();
+        assert!(last.contains("Already refreshing"), "{last:?}");
     }
 
     /// The window is drawn in its own colour, not one more grey phrase, and
