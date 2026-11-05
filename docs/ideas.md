@@ -2321,3 +2321,23 @@ from commit gaps for the day's work: a day first, the algorithm later
 **Order.** FZ-77 (worktrees view) first since the others render on it;
 "a day's work" as an `info` box after FZ-79; then the `AGENTS` box
 (layer 2); the `RELAY` box last. Tickets on his yes to this note.
+
+## The worktrees view as a divided pane
+
+**Status: planned as FZ-77's round 2, after his look at the first
+revision (list plus docked inspector).** Andreas 2026-11-04 16:10: "we can
+also use the concept of subpanels/subpanes for worktrees? so standing on
+a worktree displays more detailed info in a subpage to the right, like in
+notes page?"
+
+**Shape.** The notes layout (FZ-68) reused: one divider through pane 2;
+left, the worktree rows; right of the divider beside the header, the
+highlighted worktree's facts (path, branch, HEAD, dirty, sync, age); below
+the rule, its commits, uncapped and scrollable; no inspector under pane 1,
+which takes the rows. The data and the on-demand read exist in revision 1;
+only the drawing moves. Open: whether the right column also lists the
+worktree's uncommitted files (one `git status` per worktree on demand),
+the one thing the row's `3!` never tells. A third view taking this shape
+makes the notes layout the general "list with a subpage" pattern; a
+shared helper for the header split, the divider and the rule then stops
+the two drifting (the `panel_rects` matches `render` invariant applies).

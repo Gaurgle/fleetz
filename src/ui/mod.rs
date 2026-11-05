@@ -1744,6 +1744,35 @@ mod tests {
         crate::app::App::new(Vec::new(), "test".to_string(), 120, 44)
     }
 
+    /// FZ-88: the inspector launches at 30% of the right column, and `=`
+    /// (`reset_pane_sizes`) returns to it after a resize. Measured through
+    /// `panel_rects`, the geometry clicks are tested against.
+    #[test]
+    fn the_inspector_starts_at_thirty_percent_and_equals_returns_to_it() {
+        let area = Rect::new(0, 0, 200, 60);
+        let mut app = layout_app();
+        app.view = crate::app::View::Detail;
+        app.contributions_folded = true;
+
+        let drawn_pct = |app: &crate::app::App| {
+            let r = panel_rects(area, app);
+            let inspector = r.inspector.expect("inspector laid out");
+            let detail = r.detail.expect("detail laid out");
+            inspector.height * 100 / (inspector.height + detail.height)
+        };
+
+        let launch = drawn_pct(&app);
+        assert_eq!(app.inspector_pct, 30);
+        assert!((29..=30).contains(&launch), "launch share was {launch}%");
+
+        app.resize_inspector(1);
+        app.resize_inspector(1);
+        assert!(drawn_pct(&app) > launch, "the resize did not grow it");
+
+        app.reset_pane_sizes();
+        assert_eq!(drawn_pct(&app), launch, "= returns to the default share");
+    }
+
     /// `panel_rects` and `render` must agree about the strip, or clicks land
     /// on a pane that is not where the eye sees it.
     #[test]

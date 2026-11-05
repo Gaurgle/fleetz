@@ -7008,6 +7008,10 @@ mod tests {
     }
 
     fn inspector_screen(w: u16, h: u16) -> Vec<String> {
+        inspector_screen_at(w, h, crate::app::DEFAULT_INSPECTOR_PCT)
+    }
+
+    fn inspector_screen_at(w: u16, h: u16, inspector_pct: u16) -> Vec<String> {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -7022,6 +7026,7 @@ mod tests {
         app.view = crate::app::View::Detail;
         app.history_view = crate::app::HistoryView::Commits;
         app.contributions_folded = true;
+        app.inspector_pct = inspector_pct;
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         term.draw(|f| crate::ui::render(f, &app)).unwrap();
         let buf = term.backend().buffer().clone();
@@ -7061,7 +7066,8 @@ mod tests {
     /// Below the width threshold the lanes stack as one column, as before.
     #[test]
     fn a_narrow_inspector_stacks_the_files_under_the_message() {
-        let screen = inspector_screen(90, 40);
+        // Draws at the pre-FZ-88 inspector size (40%) it was written for.
+        let screen = inspector_screen_at(90, 40, 40);
         assert!(
             row_of(&screen, "changed files") > row_of(&screen, "why it changed"),
             "files should follow the body"

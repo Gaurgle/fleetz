@@ -289,6 +289,61 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### 2026-11-05
+
+Owner's words, 2026-11-05 about 12:20 CET (the lead took the baton
+again at 12:26), a batch after using the 11-04 builds: "yy/yp should
+have the same 'flash' effect as 'notez' has" (his own FZ-81, #137,
+filed 11-04 15:39 with "CLAUDE! fill in all missing criteria"; body
+filled by the lead; #138 is an untitled duplicate of it); "why is not
+the 'general' CI lamp blinking in pane 1 list, while the job blinks in
+CI page/pane2?" and "see also that it says 'CI passed' while orange CI
+lamp is blinking" (lead: the row lamp and the header are the default
+branch's `statusCheckRollup` from the fleet poll, the `ci` view polls
+every branch's runs; the running run was on a PR branch); "in pane 3
+in CI mode, the border text should differentiate 'inspector' and the
+pane3 page (script, log, jobs) by color and something more '::'
+perhaps? rust style, or something else like '[]'"; pinz notes: "r for
+refresh spinner is 'finished' before the actual refresh. spinner
+stops, then the repos are updated", "[4] contributions heatmap should
+be dynamically colorful, derived median values rather than threshold
+based (if they are..?)", "discovery ordering should update with
+refresh and in watch mode", "2 additional sorting: sort by visibility,
+sort by owner", "Inspector should start smaller", "Commit message in
+Inspector should start on new row"; "CI Pane inspector: should have
+syntax highlighting, a good reader, and show language, like notez
+reader. functionally the same look and functions but in pane 3.
+indicate it's togglable modes".
+
+At 12:30 to 12:40 CET: a narrow `ci` pane wraps its rows (screenshot;
+FZ-82, #139); "CI is still blinkning in repos list on portfolio repo
+... but CI tab is all green" (the fleet poll's stale `pending` against
+the `ci` view's fresher runs; with the 11-04 case, FZ-83, #140); "FZ-74
+yes the flash is just an additional effect/indicator i want to add"
+(merged); "close 138 if it is a duplicate" (closed, off the board);
+"what is the tree-sitter-yaml ?" (explained; his yes pending for the
+CI reader); "clear the pinz/fleetz pins also that are cleared" (two
+pins removed, the spinner line cut from a third; the heatmap line, the
+CI inspector pin and his `pick up` pin kept). Filed on his asks: FZ-82
+to FZ-88 (#139 to #145).
+
+- **#130 (FZ-74), `yy` and `yp` yank the thing under the cursor and
+  its path.** Merged `fb26449` at 12:45 CET on his look ("FZ-74 yes");
+  ticket commit `3d9078b` (base `8f92063`, branch `feat/130-yank-yy-yp`,
+  worker `fz-worker` and reviewer `fz-reviewer`, both
+  `claude-fable-5-1`, lead `ea56f412`). Filed 11-04 on his asks with
+  the lead's table as the spec. Built: `YankKind`, `App::yank`,
+  `press_yank_key` ahead of the key match, `pending_yank`,
+  `github_web_url`, the footer hint; plain `y` kept on the commit
+  lists. Review 1 (`ce027992e872`) accepted with low findings; lead
+  took three (a hookup test, a mouse press ends the chord, a LocalOnly
+  url test), re-review (`b72913604e3c`) accepted. Branch CI
+  41851154017, combined checks on `f137629` (1597), gate holds, `main`
+  CI 42021964231. Follow-ups: FZ-81 the flash; branch names unescaped
+  in tree urls. Remembered: a shared `CARGO_TARGET_DIR` across
+  checkouts serves stale artifacts (practical note, 11-04).
+  FZ-74: review accepted first; fix cycles 1; owner decisions 1; worker 21; review 12; models claude-fable-5-1/claude-fable-5-1; usage worker 183659 tokens, reviewer 79824 tokens
+
 ### Merged on 2026-11-04
 
 Owner's words, 2026-11-04, about 10:05 CET, on the lead's capture of
@@ -426,6 +481,27 @@ what agent it is (claude or codex for instance) but not much deeper
 then that. 4. im fine with starting with the day. keep the other
 session algorithm in tickets for later. it will probably need some
 designing".
+
+16:10 CET: "we can also use the concept of subpanels/subpanes for
+worktrees? so standing on a worktree displays more detailed info in a
+subpage to the right, like in notes page?" Planned as FZ-77's round 2
+after his look (`ideas.md`, "The worktrees view as a divided pane");
+his answer pending on whether the subpage lists the worktree's
+uncommitted files too. Earlier, 15:35: "contributors as a list per repo
+would be nice ... i actually want that. perhaps in INFO inspector?" and
+"we are eating away at disk space with the lead's scratchpad cargo
+build output. clean up when you got time" (done, 24 GB free).
+
+Practical note, 15:45 CET: a `CARGO_TARGET_DIR` shared by two
+checkouts serves stale artifacts (cargo keys a workspace member by its
+relative path, so another worktree's build satisfies the fingerprint);
+the FZ-74 reviewer got 25 phantom failures and then a binary with
+another ticket's enum variant. Rule: one target dir per worktree,
+verify runs in their own, all under the session scratchpad, pruned at
+the merge (`relay-sweep`); trust only a run whose output shows
+`Compiling fleetz` or `Checking fleetz` with the expected path. The
+disk filled once today under three parallel tickets' dirs (about 10
+GB freed by removing finished ones); Andreas asked for cleanup at 15:35.
 
 - **#133 (FZ-76), switching icons in the settings row repaints at
   once.** Merged `5ed9b4e` at 15:26 CET under the safe-merge rule (a
