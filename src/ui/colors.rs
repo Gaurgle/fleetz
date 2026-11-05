@@ -55,6 +55,25 @@ pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers, borders
 /// but is no longer `SURFACE`'s RGB.
 pub const SELECTED_BG: Color = Color::Rgb(49, 50, 68);
 
+/// The cursor row's background for the one flash after `yy` or `yp`
+/// (FZ-81), swept over the band and then faded back to `SELECTED_BG`.
+///
+/// Catppuccin `surface2`, the colour notez's copy flash uses: a clear step
+/// up from the band and from `SURFACE`, still well below `OVERLAY` so the
+/// row's own text stays readable for the 300 ms it lasts.
+pub const YANKED_BG: Color = Color::Rgb(88, 91, 112);
+
+/// `from` moved `fraction` (clamped to 0..=1) of the way to `to`, channel by
+/// channel. A colour that is not RGB does not mix: `to` is returned.
+pub fn mix(from: Color, to: Color, fraction: f64) -> Color {
+    let (Color::Rgb(r0, g0, b0), Color::Rgb(r1, g1, b1)) = (from, to) else {
+        return to;
+    };
+    let t = fraction.clamp(0.0, 1.0);
+    let channel = |a: u8, b: u8| (f64::from(a) + (f64::from(b) - f64::from(a)) * t).round() as u8;
+    Color::Rgb(channel(r0, r1), channel(g0, g1), channel(b0, b1))
+}
+
 /// Stashed work, in the repo list's badge and in the repo pane alike.
 ///
 /// Catppuccin `flamingo`. Grey was the wrong answer twice over: `OVERLAY` is
@@ -297,5 +316,25 @@ mod tests {
         assert!(b.0 < band.0 && band.0 < s.0, "red {band:?}");
         assert!(b.1 < band.1 && band.1 < s.1, "green {band:?}");
         assert!(b.2 < band.2 && band.2 < s.2, "blue {band:?}");
+    }
+
+    /// The copy flash (FZ-81) is a brighter wash than the band: every
+    /// channel lies strictly between `SURFACE` and `OVERLAY`.
+    #[test]
+    fn yanked_wash_lies_between_surface_and_overlay() {
+        let (s, o, y) = (rgb(SURFACE), rgb(OVERLAY), rgb(YANKED_BG));
+        assert!(s.0 < y.0 && y.0 < o.0, "red {y:?}");
+        assert!(s.1 < y.1 && y.1 < o.1, "green {y:?}");
+        assert!(s.2 < y.2 && y.2 < o.2, "blue {y:?}");
+    }
+
+    #[test]
+    fn mix_runs_from_one_colour_to_the_other() {
+        let (a, b) = (Color::Rgb(0, 100, 200), Color::Rgb(100, 0, 100));
+        assert_eq!(mix(a, b, 0.0), a);
+        assert_eq!(mix(a, b, 0.5), Color::Rgb(50, 50, 150));
+        assert_eq!(mix(a, b, 1.0), b);
+        assert_eq!(mix(a, b, 7.0), b, "clamped");
+        assert_eq!(mix(Color::Reset, b, 0.2), b, "not RGB");
     }
 }
