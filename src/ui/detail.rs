@@ -7257,6 +7257,73 @@ mod tests {
         }
     }
 
+    /// The whole frame at `w` by `h`: every row as drawn, and the footer's
+    /// last row, the keys row.
+    fn frame_rows(app: &crate::app::App, w: u16, h: u16) -> (Vec<String>, String) {
+        let rows = drawn_rows(w, h, |f| crate::ui::render(f, app));
+        let last = rows.last().cloned().unwrap_or_default();
+        (rows, last)
+    }
+
+    /// The fleet summary's text as the footer would draw it.
+    fn summary_text(app: &crate::app::App) -> String {
+        crate::ui::footer::summary_spans(&app.summary())
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect()
+    }
+
+    /// Where pane 2's header carries the fleet column, the footer is keys
+    /// only: the message and the summary are drawn once, in pane 2 (FZ-93
+    /// review, round 2). Fails while `render_detail_pane` stops marking the
+    /// frame as having drawn the fleet's state.
+    #[test]
+    fn beside_the_fleet_column_the_frame_draws_the_message_once() {
+        let mut app =
+            crate::app::App::new(vec![cloned_repo()], "since 2 weeks".to_string(), 160, 30);
+        app.view = crate::app::View::Detail;
+        app.contributions_folded = true;
+        app.set_status("copied 1abc123".to_string(), false);
+        let (rows, last) = frame_rows(&app, 160, 30);
+        let summary = summary_text(&app);
+        assert!(!summary.is_empty());
+        assert!(
+            rows.iter().any(|r| r.contains("copied 1abc123")),
+            "pane 2 drew no message:\n{}",
+            rows.join("\n")
+        );
+        assert!(!last.contains("copied"), "the footer repeats it: {last:?}");
+        assert!(!last.contains(&summary), "the footer repeats it: {last:?}");
+    }
+
+    /// The same in the `notes` layout, whose fleet status sits right of the
+    /// divider once the header is pinned. Fails while `render_notes_heads`
+    /// stops marking the frame.
+    #[test]
+    fn beside_the_notes_fleet_slot_the_frame_draws_the_message_once() {
+        let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
+        app.contributions_folded = true;
+        app.set_status("copied 1abc123".to_string(), false);
+        let (w, h) = (140u16, 44u16);
+        let pane2 = crate::ui::panel_rects(Rect::new(0, 0, w, h), &app)
+            .detail
+            .expect("pane 2");
+        let notes = notes_pane_body(pane2, &app).expect("a tree");
+        assert!(notes.facts.is_some(), "the header pins at {h} rows");
+        let (rows, last) = frame_rows(&app, w, h);
+        assert!(
+            rows.iter().any(|r| r.contains("copied 1abc123")),
+            "the notes slot drew no message:\n{}",
+            rows.join("\n")
+        );
+        assert!(!last.contains("copied"), "the footer repeats it: {last:?}");
+        let summary = summary_text(&app);
+        assert!(
+            summary.is_empty() || !last.contains(&summary),
+            "the footer repeats it: {last:?}"
+        );
+    }
+
     /// A header row's local and remote sections: the text before its first
     /// divider, and between the first and the fleet column's (FZ-93).
     fn sections(row: &str) -> (String, String) {
