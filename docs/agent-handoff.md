@@ -9,7 +9,8 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 Baton released 2026-11-05 15:35 CET by session `ea56f412`
 (`claude-opus-5-5` since 13:55) at his 95% usage warning. No worker or
-reviewer running (FZ-83's review was stopped unfinished, 15:35).
+reviewer running (FZ-83's review stopped unfinished). His 0.6.1 bump
+sits uncommitted in the main checkout (`Cargo.toml`, `Cargo.lock`), his.
 Worktrees on at-a: `issue-121`, `issue-137`, `issue-140`, `issue-88`.
 
 ## Standing authority
