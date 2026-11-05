@@ -344,6 +344,52 @@ to FZ-88 (#139 to #145).
   checkouts serves stale artifacts (practical note, 11-04).
   FZ-74: review accepted first; fix cycles 1; owner decisions 1; worker 21; review 12; models claude-fable-5-1/claude-fable-5-1; usage worker 183659 tokens, reviewer 79824 tokens
 
+13:36 CET: "why does it show CI failed, but all CI jobs in pane 2 are
+green? that doesnt help anyone" (portfolio-site's `main` rollup was
+`FAILURE` from a Vercel commit status, "Aliasing has failed", while
+the Actions `build` passed; FZ-83 amended). 13:50 CET, his answers:
+"1. ... if it wont concern users, then just ask me, the developer. i
+just want it to work smoothly. 2. i mean the pushed commit messages.
+they started on the same line as some other info, then wrapped in
+under and continued. i want the messages to start on its own row when
+displayed. 3. use the same concept? median based, i guess? 4. accpet
+5. perhaps its own page/ what do you think makes most sense? 6. not
+sure. what you think makes sense? 7. yes 8. sure, that could be
+nice!" (4: FZ-68 and FZ-77 looks accepted; 7: the band on every list,
+the ssh README paragraph, `fleetz doctor`; 8: pane 1 pulses for a run
+on another branch, into FZ-83). Filed FZ-89 (#146, YAML reader, his
+"yes lets add treesitter yaml"), FZ-90 (#147, commit rows), FZ-91
+(#148, median heatmap, which rewrites the `contributionLevel` rule on
+his answer), FZ-92 (#149, band everywhere). About 13:55 he switched
+the lead's model with `/model` to `claude-opus-5-5`; workers and
+reviewers keep their definitions' models. Pins: deleting files under
+`~/pinz-board` does not stick while the pinz app is open (its 13:37
+sync rewrote them from memory); pins are his to clear in the app.
+14:00: "i think we should start wrapping up soon, finish the current
+tickets but stop after".
+
+- **#139 (FZ-82), a ci run row is clipped, not wrapped, below its
+  floor.** Merged `fa3c5ec` at 14:00 CET under the safe-merge rule;
+  ticket commit `5325234` (base `fb26449`, worker `fz-worker`,
+  reviewer `fz-reviewer`, both `claude-fable-5-1`). His screenshot came
+  from the Oct 29 installed binary (before FZ-40's shedding); the worker
+  proved it by reproducing the old layout, then the ticket narrowed to
+  clipping below 23 columns with `detail::clip_spans` made `pub(crate)`.
+  Review 1 (`87f5b52be518`) accepted. Combined checks on `334e9a6`
+  (1600), gate holds, `main` CI 42030803270. Remembered: before
+  diagnosing a screenshot, check the installed binary's build date
+  against `main` (`ls -l ~/.cargo/bin/fleetz`); this one was a week old.
+  FZ-82: review accepted first; fix cycles 1; owner decisions 0; worker 24; review 4; models claude-fable-5-1/claude-fable-5-1; usage worker 121913 tokens, reviewer 29924 tokens
+
+- **#145 (FZ-88), the inspector starts at 30%.** Merged `334e9a6` at
+  13:38 CET under the small-look authority; ticket commit `3c9afb0`
+  (base `fb26449`, worker `fz-small`, reviewer `fz-reviewer`). The
+  subject-row half was already true in the inspector (he meant the list
+  rows: FZ-90). Two fixtures pinned to 40% by the lead's ruling, no
+  assertion changed. Review 1 (`f1037b6ed034`) accepted, three
+  mutations. Remembered: nothing to keep.
+  FZ-88: review accepted first; fix cycles 1; owner decisions 0; worker 6; review 6; models fz-small default/claude-fable-5-1; usage worker 53549 tokens, reviewer 33211 tokens
+
 ### Merged on 2026-11-04
 
 Owner's words, 2026-11-04, about 10:05 CET, on the lead's capture of

@@ -29,23 +29,22 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 
 - Ready to integrate for his look, reviewed, committed, pushed: FZ-68
   (#124, `f22d8aa` incl. the merge of `main` `8ce524a`, accepted diff
-  `c3221a9861ed`), FZ-77 (#134, `4db738c`, `e6344b76473c`, CI green;
-  round 2 planned, `ideas.md`). Running since 11-05 12:55 from `fb26449`:
-  FZ-81 (#137, yank flash, `fz-worker`, his look), FZ-82 (#139, ci row
-  wrap, `fz-worker`), FZ-88 (#145, inspector 30%, `fz-small`). Ready:
-  FZ-83 (#140), FZ-84 (#141), FZ-85 (#142), FZ-86 (#143), FZ-87 (#144),
-  FZ-78, FZ-79 after FZ-68. FZ-80 Backlog. FZ-75 is not the lead's.
+  `c3221a9861ed`; his look accepted 11-05, second merge of `main` in
+  review), FZ-77 (#134, `4db738c`, look accepted 11-05; merges after
+  FZ-68). Running: FZ-81 (#137, flash, fix cycle 1 in re-review), FZ-83
+  (#140, CI lamp, `fz-worker`, option C ruled). Ready: FZ-84 to FZ-87,
+  FZ-89 (YAML reader), FZ-90 to FZ-92, FZ-78, FZ-79. FZ-80 Backlog.
 - FZ-65 (#121): built, `9f4018d7160d` unreviewed, his wheel decision.
   #88 (FZ-38) parked, uncommitted. FZ-63 (#119), FZ-60 (#116): trees
   lost 11-03; redispatch on his word.
 
 ## Open questions
 
-- His yes wanted: four design tickets from "Agents in fleetz" and the
-  `info` boxes (`ideas.md`): contributors in the `info` inspector, a
-  day's work box, `AGENTS` box, `RELAY` box; the FZ-66 band on every
-  list; an ssh README paragraph; `fleetz doctor` (M5); whether FZ-77's
-  subpage lists uncommitted files. The CI YAML needs a tenth grammar.
+- To file on his 11-05 13:50 answers (log): an ssh README paragraph,
+  `fleetz doctor` (M5), contributors in the `info` inspector; the day's
+  work, `AGENTS` and `RELAY` boxes after FZ-79 (his "what you think
+  makes sense": lead's order in `ideas.md`). FZ-77 round 2: facts and
+  commits; uncommitted files belong to `changes` (FZ-60).
 - #88 worktree: stays or goes; FZ-38 with font-checked glyphs? #81 and
   #79 test edits; pane 1 wheel coalescing, flaky `clipboard::tests`: his yes.
 
