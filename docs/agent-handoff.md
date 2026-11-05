@@ -7,9 +7,9 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Session `ea56f412` (`claude-opus-5-5` since 13:55 on his `/model`)
-holds the baton again from 14:45 CET for one last ticket on his "lets
-do this as the last ticket for today": FZ-83 with its source column.
+Baton released 2026-11-05 15:35 CET by session `ea56f412`
+(`claude-opus-5-5` since 13:55) at his 95% usage warning. No worker or
+reviewer running (FZ-83's review was stopped unfinished, 15:35).
 Worktrees on at-a: `issue-121`, `issue-137`, `issue-140`, `issue-88`.
 
 ## Standing authority
@@ -30,8 +30,9 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 - FZ-81 (#137, yank flash, `35f17cc`, diff `7900ef870c0e`): his look
   accepted 14:25; merging with `main` conflicts in README's `yy`/`yp`
   row: a resolution cycle, review, gate, merge. FZ-83 (#140, CI lamp,
-  uncommitted, diff `6e27d7d9ae3c` vs `334e9a6`): built, not reviewed;
-  next review, commit, a merge with `main`, his look. Ready: FZ-84 to
+  Vercel rows, source column; uncommitted, diff `5f4c44d114ce` vs
+  `334e9a6`, 1631 green): his design yes 15:32; next a fresh full
+  review, commit, a merge with `main` (behind FZ-82/68/77), his look. Ready: FZ-84 to
   FZ-87, FZ-89 to FZ-92, FZ-78, FZ-79. FZ-80 Backlog.
 - FZ-65 (#121): built, `9f4018d7160d` unreviewed, his wheel decision.
   #88 (FZ-38) parked, uncommitted. FZ-63 (#119), FZ-60 (#116): trees
