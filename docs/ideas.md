@@ -663,6 +663,22 @@ global row's words give way first because they are the same every day and
 the segment is the new information; the cost he accepted is that between
 about 125 and 190 columns the global row shows bare keys where it had words.
 
+**Amended 2026-11-05 (FZ-93, #150), on Andreas's ask, awaiting his
+look.** The top row is the name and the version, with loading, a GitHub
+lamp that is always drawn (green connected, orange for an issue that
+clears on its own, red for an error, grey before any answer), watch and
+the sweep time flush right. The window, the summary that used to share the
+footer and an activity row for what is passing form a column at the right
+of the repo pane's header, after the repo's local and remote sections, so
+every piece keeps its row and nothing moves to make room. The commit
+counter moved onto the view's title row, giving pane 2 a row back. The footer is
+keys only. `notes` carries the file's facts on a divider at the tree's
+foot. Tried and dropped the same day: a one-row status line under the
+header, and a status box under pane 1 (beside the inspector, or at the
+foot of pane 1's column), which narrowed the inspector and repeated what
+the repo header already says. The chrome stays three rows: a row less
+dropped the inspector at its minimum height.
+
 Fixing the pulse exposed a latent bug worth recording: `SLOW_REPAINT_TICKS` was
 10 against a `BLINK_TICKS` of 5, so between any two repaints the blink flipped
 exactly twice and was always drawn in the same phase. The pending-CI blink had

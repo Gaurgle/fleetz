@@ -210,9 +210,9 @@ pub fn fetch_report_label(report: &crate::app::FetchReport) -> String {
 /// narrow header falls back to, and its colour. `None` when the data is
 /// fresh, which is the ordinary case and says nothing.
 ///
-/// Stale is `PEACH`, not `RED`: red already means CI failed, and this is the
-/// same thing the overdue `swept` timestamp means, that a refresh is not
-/// keeping up. Cached is the dim `OVERLAY` of the `swept` label: an attempt
+/// The colour here is the segment's own; the status line draws it in
+/// `GithubHealth`'s instead, which makes a failure red on Andreas's ask
+/// (2026-11-05) where this keeps the older `PEACH`. Cached is the dim `OVERLAY` of the `swept` label: an attempt
 /// is on its way and it is reassurance, not a warning. Ages are written the
 /// way `swept_label` writes them.
 pub fn github_freshness_segment(
@@ -610,16 +610,55 @@ fn pct_for(cells: u16, total: u16) -> u16 {
     (cells * 100).div_ceil(total).min(100) as u16
 }
 
+/// The frame's rows: header, the compact view's status line, main area,
+/// footer. One function for `render` and `panel_rects`, so the main area
+/// they hit-test is the one drawn.
+pub struct FrameChunks {
+    pub header: Rect,
+    /// Only in the compact view (`uses_status_line`); the detail view puts
+    /// the same pieces in the status box under pane 1.
+    pub status: Option<Rect>,
+    pub main: Rect,
+    pub footer: Rect,
+}
+
+/// Split the frame. The chrome is three rows either way: a pane that
+/// shrank by a row would lose its inspector at the minimum height.
+pub fn frame_chunks(area: Rect, app: &App) -> FrameChunks {
+    if uses_status_line(app) {
+        let c = Layout::vertical([
+            Constraint::Length(1), // header: name and version
+            Constraint::Length(1), // status line on its divider
+            Constraint::Min(1),    // main content
+            Constraint::Length(1), // footer: keys, under the grid
+        ])
+        .split(area);
+        FrameChunks {
+            header: c[0],
+            status: Some(c[1]),
+            main: c[2],
+            footer: c[3],
+        }
+    } else {
+        let c = Layout::vertical([
+            Constraint::Length(1), // header: name and version on a divider
+            Constraint::Min(1),    // main content
+            Constraint::Length(2), // footer: divider and keys
+        ])
+        .split(area);
+        FrameChunks {
+            header: c[0],
+            status: None,
+            main: c[1],
+            footer: c[2],
+        }
+    }
+}
+
 /// Recompute the panel layout for `area` -- must mirror `render` +
 /// `detail::render` exactly so hit-testing lines up with what's drawn.
 pub fn panel_rects(area: Rect, app: &App) -> PanelRects {
-    let chunks = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(2),
-    ])
-    .split(area);
-    let main = chunks[1];
+    let main = frame_chunks(area, app).main;
     let strip_folded = app.contributions_folded;
 
     match app.view {
@@ -929,15 +968,11 @@ pub fn panel_title(num: u8, label: &str, focused: bool) -> Line<'static> {
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    let chunks = Layout::vertical([
-        Constraint::Length(1), // header (a single divider line, tags embedded)
-        Constraint::Min(1),    // main content
-        Constraint::Length(2), // footer
-    ])
-    .split(area);
-
-    // Header
-    render_header(frame, chunks[0], app);
+    let chunks = frame_chunks(area, app);
+    render_header(frame, chunks.header, app);
+    if let Some(status) = chunks.status {
+        render_status_line(frame, status, app);
+    }
 
     // Main content area. Drawn from `panel_rects` itself rather than from a
     // parallel copy of the same arithmetic: hit-testing is then guaranteed to
@@ -985,7 +1020,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
 
     // Footer
-    footer::render(frame, chunks[2], app);
+    footer::render(frame, chunks.footer, app);
 
     // Overlay (rendered last, on top)
     match &app.overlay {
@@ -1043,112 +1078,250 @@ fn render_load_error(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// Render the header. The left (name/header/group) and right (refresh time/
-/// view hint/help) titles are positioned independently by ratatui with no
-/// mutual awareness, so on a narrow pane they can literally overlap
-/// character-for-character. To avoid that, progressively drop the least
-/// important piece from each side -- refresh timestamp first, then the view
-/// hint, then the group tag, then the header description -- until both sides
-/// fit side by side.
+/// Render the header: the name and the version on the left; outside the
+/// compact view, loading, GitHub, watch and the sweep time on the right. Everything else
+/// that reports state sits in the fleet column of pane 2's header
+/// (`fleet_lines`), or in the compact view on the status line under this
+/// row.
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let width = area.width as usize;
+    let line = Line::from(vec![
+        Span::styled(
+            " fleetz",
+            Style::default()
+                .fg(colors::LAVENDER)
+                .add_modifier(Modifier::BOLD),
+        ),
+        // Dimmest colour: "which build am I looking at" is answerable without
+        // quitting, and it is the least urgent thing on screen.
+        Span::styled(format!(" {VERSION}"), Style::default().fg(colors::SUBTEXT)),
+    ]);
+    // Under it the compact view's status line is the divider, and carries
+    // watch and the sweep. Elsewhere the header draws its own divider, as it
+    // always did, with watch and the sweep time flush right on it (his look,
+    // 2026-11-05): both say how current everything below is, so they sit
+    // over all of it rather than in the status box.
+    let block = if uses_status_line(app) {
+        Block::default().title_top(line.left_aligned())
+    } else {
+        // Flush right, so a piece appearing on the left of the group moves
+        // nothing to its right: loading while the fleet lands, then GitHub's
+        // connection, watch and the sweep time (his look, 2026-11-05: GitHub
+        // "belongs there"). Loading is here, not in pane 2, because pane 2
+        // has no header to draw until the first repo lands.
+        let p = fleet_pieces(app, chrono::Local::now());
+        let build = |github: &str| {
+            let mut right: Vec<Span<'static>> = Vec::new();
+            if let Some(loading) = p.loading.clone() {
+                right.extend(loading);
+            }
+            right.push(Span::styled(
+                github.to_string(),
+                Style::default().fg(p.github_health.color()),
+            ));
+            right.extend(p.watch.iter().cloned());
+            if let Some(swept) = p.swept.clone() {
+                right.extend(swept);
+            }
+            right.push(Span::raw(" "));
+            right
+        };
+        let name_w = line.width();
+        let long = build(&p.github_long);
+        let fits = |spans: &[Span]| {
+            name_w
+                + spans
+                    .iter()
+                    .map(|s| s.content.chars().count())
+                    .sum::<usize>()
+                < area.width as usize
+        };
+        let right = if fits(&long) {
+            long
+        } else {
+            build(&p.github_short)
+        };
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(colors::SURFACE))
+            .title_bottom(line.left_aligned())
+            .title_bottom(Line::from(right).right_aligned())
+    };
+    frame.render_widget(block, area);
+}
 
-    let name = Span::styled(
-        " fleetz",
+/// Whether the fleet's state is drawn on a status line under the header
+/// rather than in pane 2's header: only the compact view, which has no
+/// pane 2.
+pub fn uses_status_line(app: &App) -> bool {
+    app.view == View::Compact
+}
+
+/// How GitHub is doing, as the status line's lamp says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GithubHealth {
+    /// The last poll succeeded and nothing holds polling back.
+    Connected,
+    /// Data on screen, but aging: rate limited, paused or slowed.
+    Issue,
+    /// The last poll failed for a reason that will not clear on its own.
+    Error,
+    /// No poll has answered yet: first load, or running on the cache.
+    Unknown,
+}
+
+impl GithubHealth {
+    pub fn color(self) -> Color {
+        match self {
+            GithubHealth::Connected => colors::GREEN,
+            GithubHealth::Issue => colors::PEACH,
+            GithubHealth::Error => colors::RED,
+            GithubHealth::Unknown => colors::OVERLAY,
+        }
+    }
+}
+
+/// The status line's GitHub piece: its health, the full text and the short
+/// form a narrow line falls back to. Always drawn, unlike the old header
+/// segment, so a healthy poll says `connected` instead of nothing. The
+/// words are `github_segment`'s whenever it has any; the failure form keeps
+/// its `⚠`, which stands in for the lamp.
+pub fn github_status(
+    app: &App,
+    now: chrono::DateTime<chrono::Local>,
+) -> (GithubHealth, String, String) {
+    use crate::app::Outcome;
+    // `-d` polls nothing by design: say so, not "waiting".
+    if app.dirty_mode {
+        return (
+            GithubHealth::Unknown,
+            " ○ github off ".to_string(),
+            " ○ github off ".to_string(),
+        );
+    }
+    let Some((long, short, _)) = github_segment(app, now) else {
+        return match app.github_freshness.outcome {
+            Outcome::Success => (
+                GithubHealth::Connected,
+                " ● github connected ".to_string(),
+                " ● github ".to_string(),
+            ),
+            _ => (
+                GithubHealth::Unknown,
+                " ○ github ".to_string(),
+                " ○ github ".to_string(),
+            ),
+        };
+    };
+    let health = match &app.github_freshness.outcome {
+        Outcome::Failed(failure) if failure.rate_limited => GithubHealth::Issue,
+        Outcome::Failed(_) => GithubHealth::Error,
+        Outcome::Success => GithubHealth::Issue,
+        Outcome::NotAttempted => GithubHealth::Unknown,
+    };
+    if matches!(app.github_freshness.outcome, Outcome::Failed(_)) {
+        return (health, long, short);
+    }
+    let lamp = if health == GithubHealth::Unknown {
+        "○"
+    } else {
+        "●"
+    };
+    (health, format!(" {lamp}{long}"), format!(" {lamp}{short}"))
+}
+
+/// The time window in bold teal, so the scope every list on screen is cut
+/// to reads at a glance rather than as one more grey phrase. No ground
+/// behind it: on his look a tinted chip read as a highlight, as if it were
+/// selected (2026-11-05).
+fn window_chip(label: &str) -> Span<'static> {
+    Span::styled(
+        format!("{label} "),
         Style::default()
-            .fg(colors::LAVENDER)
+            .fg(colors::TEAL)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+/// The fleet's state as spans, built once and laid out two ways: on one
+/// row by `render_status_line`, one piece per row by `fleet_lines`.
+pub struct FleetPieces {
+    pub window: Option<Span<'static>>,
+    /// The one key hint off the footer, and only because it sits on the
+    /// thing it edits: `t` opens the picker for exactly the window beside
+    /// it. Dropped with the window, since a bare `[t]` explains nothing.
+    pub window_key: Span<'static>,
+    pub group: Option<Span<'static>>,
+    /// The fleet's counters.
+    pub summary: Vec<Span<'static>>,
+    /// The transient status message after an action, while it lasts.
+    pub message: Option<Span<'static>>,
+    /// While the initial load or an R reload is in flight.
+    pub loading: Option<Vec<Span<'static>>>,
+    /// A manual refresh's spinner, naming the half it is on.
+    pub refreshing: Option<Vec<Span<'static>>>,
+    /// `swept 11:42`.
+    pub swept: Option<Vec<Span<'static>>>,
+    pub github_health: GithubHealth,
+    pub github_long: String,
+    pub github_short: String,
+    pub watch: Vec<Span<'static>>,
+}
+
+pub fn fleet_pieces(app: &App, now: chrono::DateTime<chrono::Local>) -> FleetPieces {
+    let window = (!app.header.is_empty()).then(|| window_chip(&app.header));
+    let window_key = Span::styled(
+        "[t]",
+        Style::default()
+            .fg(colors::TEXT)
             .add_modifier(Modifier::BOLD),
     );
-    // Version rides next to the name in the dimmest color, so "which build am
-    // I looking at" is answerable without quitting. First thing the fit loop
-    // drops: it is the least urgent piece on the line by a wide margin.
-    let version_span = Span::styled(format!(" {VERSION}"), Style::default().fg(colors::SUBTEXT));
-    let header_span = (!app.header.is_empty()).then(|| {
-        Span::styled(
-            format!(" - {}", app.header),
-            Style::default().fg(colors::OVERLAY),
-        )
-    });
-    // The one key hint in the header, and only because it sits on the thing it
-    // edits: `t` opens the picker for exactly the window named to its left.
-    // Every other key is a global action and lives in the footer with the rest.
-    // Dropped with the header text it annotates, since a bare `[t]` next to
-    // nothing explains nothing.
-    let window_key_span = (!app.header.is_empty()).then(|| {
-        Span::styled(
-            " [t]",
-            Style::default()
-                .fg(colors::TEXT)
-                .add_modifier(Modifier::BOLD),
-        )
-    });
-    let group_span = app
+    let group = app
         .active_group_label()
-        .map(|group| Span::styled(format!("  [{group}]"), Style::default().fg(colors::MAUVE)));
-    // Shown while the initial load or an R reload is in flight. Never dropped
-    // by the fit loop below: it is small, and while it lasts it is the most
-    // important thing on the line.
-    let loading_span = app
+        .map(|group| Span::styled(format!("[{group}]"), Style::default().fg(colors::MAUVE)));
+    let summary = footer::summary_spans(&app.summary());
+    let message = app.status_message.as_ref().map(|msg| {
+        let color = if msg.is_error {
+            colors::RED
+        } else {
+            colors::GREEN
+        };
+        Span::styled(msg.text.clone(), Style::default().fg(color))
+    });
+    let loading = app
         .loading
         .then(|| spinner_group(app.spinner_frame, "loading"));
     // Only a sweep the user asked for takes over this slot. A watch-timer
     // sweep runs silently and leaves the timestamp in place, so an interval
     // refresh cannot repaint a moving colored indicator over a dashboard
     // being read.
-    let ts_span = if let Some(phase) = app.refresh_phase() {
+    let refreshing = app.refresh_phase().map(|phase| {
         let label = match phase {
             crate::app::RefreshPhase::Local => "checking local changes…",
             crate::app::RefreshPhase::Remote => "checking remote…",
         };
-        Some(spinner_group(app.spinner_frame, label))
-    } else {
-        app.last_refreshed.map(|ts| {
-            let now = chrono::Local::now();
-            // Dimmer than the rest of the header on purpose: reassurance you
-            // glance at, not information you read. Unless it has gone stale,
-            // which is the one time it has something to say.
-            let color = if sweep_overdue(app.watch_mode, app.refresh_interval, ts, now) {
-                colors::PEACH
-            } else {
-                colors::OVERLAY
-            };
-            vec![Span::styled(
-                format!(" swept {}  ", swept_label(ts, now)),
-                Style::default().fg(color),
-            )]
-        })
-    };
-    // A GitHub poll that keeps failing has to say so somewhere that survives
-    // a keypress. The status message it also sets is cleared by the next key,
-    // so a rate limit -- which lasts an hour and is the common way this fails
-    // -- left the CI lamps and the contribution strip frozen at their last
-    // good values with nothing on screen to say they had stopped moving.
-    //
-    // Never dropped by the fit loop, for the same reason `loading` is not:
-    // while it lasts it is the most important thing on the line. A narrow
-    // header gets the short form instead. Wording and colours live in
-    // `github_segment`.
-    let gh_segment = github_segment(app, chrono::Local::now());
-    // Persistent indicator so the `w` toggle's state is visible at a glance,
-    // not just in the transient status message when it flips.
-    //
-    // Two spans on the same terms as `spinner_group`: only the lamp moves, and
-    // the word beside it holds one steady colour. A label that pulsed along
-    // with the glyph made the whole group flicker, which is motion where the
-    // eye is trying to read a word rather than watch a light.
-    //
-    // The lamp pulses between two neighbouring reds, holding one shape. It
-    // used to do the opposite -- one colour, alternating disks -- on the
-    // reasoning that a changing shape separated it from the CI lamps, which
-    // say what they mean by colour. In use the shape change was the harder of
-    // the two to see at the edge of vision, which is the only place this
-    // indicator is ever read. The word `watch` is what actually distinguishes
-    // it from a CI lamp; the glyph never had to.
-    //
-    // Off is drawn too, as a crossed-out eye in a steady muted grey: an
-    // indicator that only exists while on cannot tell "off" from "not drawn
-    // at this width".
-    let watch_span = if app.watch_mode {
+        spinner_group(app.spinner_frame, label)
+    });
+    let swept = app.last_refreshed.map(|ts| {
+        // Dimmer than the rest on purpose: reassurance you glance at, not
+        // information you read. Unless it has gone stale, which is the
+        // one time it has something to say.
+        let color = if sweep_overdue(app.watch_mode, app.refresh_interval, ts, now) {
+            colors::PEACH
+        } else {
+            colors::OVERLAY
+        };
+        vec![Span::styled(
+            format!(" swept {} ", swept_label(ts, now)),
+            Style::default().fg(color),
+        )]
+    });
+    // Always drawn, in the colour of its health: a failing poll has to say so
+    // somewhere that survives a keypress, and a healthy one now says so too.
+    let (github_health, github_long, github_short) = github_status(app, now);
+    // The `w` toggle's state, at a glance. Only the lamp moves, the word
+    // beside it holds one steady colour (see `spinner_group`); off is drawn
+    // too, as a crossed-out eye, so "off" differs from "not drawn".
+    let watch = if app.watch_mode {
         let lamp = if app.blink_on {
             colors::WATCH_ON
         } else {
@@ -1165,49 +1338,144 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(" watch ".to_string(), off),
         ]
     };
-    let mut include_version = true;
+    FleetPieces {
+        window,
+        window_key,
+        group,
+        summary,
+        message,
+        loading,
+        refreshing,
+        swept,
+        github_health,
+        github_long,
+        github_short,
+        watch,
+    }
+}
+
+/// The narrowest and widest the fleet column of pane 2's header is drawn.
+/// Between them it takes the width of its window and summary rows, so a
+/// fleet with every counter reads whole (his look, 2026-11-05: `2 not
+/// clone…`). Never the activity row's: a message must not move the
+/// dividers.
+pub const FLEET_COLUMN_MIN: usize = 24;
+pub const FLEET_COLUMN_MAX: usize = 56;
+
+/// Trim each span's outer spaces: the status line pads its pieces, a
+/// column lays them out itself.
+fn trimmed(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    spans
+        .into_iter()
+        .map(|s| Span::styled(s.content.trim().to_string(), s.style))
+        .collect()
+}
+
+/// The fleet's state in three fixed rows, every piece always in its own
+/// place whether or not it has anything to say, so nothing moves to make
+/// room (his look, 2026-11-05):
+///
+/// 0. the window and its `[t]`, the group after it
+/// 1. the summary
+/// 2. activity: a manual refresh, the last action's message; blank when
+///    there is none
+///
+/// Loading, GitHub, watch and the sweep time sit on the header's divider.
+pub fn fleet_lines(app: &App, now: chrono::DateTime<chrono::Local>) -> Vec<Line<'static>> {
+    let p = fleet_pieces(app, now);
+
+    let mut window: Vec<Span> = Vec::new();
+    if let Some(w) = p.window {
+        window.push(w);
+        window.push(p.window_key);
+    }
+    if let Some(g) = p.group {
+        window.push(Span::raw("  "));
+        window.push(g);
+    }
+
+    let mut activity: Vec<Span> = Vec::new();
+    if let Some(spinner) = p.refreshing {
+        activity.extend(trimmed(spinner));
+        activity.push(Span::raw("  "));
+    }
+    if let Some(message) = p.message {
+        activity.push(message);
+    }
+
+    vec![
+        Line::from(window),
+        Line::from(p.summary),
+        Line::from(activity),
+    ]
+}
+
+/// Render the compact view's status line: the time window, the group and
+/// the fleet's summary on the left; loading, GitHub, watch and the sweep
+/// time on the right.
+///
+/// The two sides are positioned independently by ratatui with no mutual
+/// awareness, so on a narrow line they can overlap. To avoid that, drop the
+/// least important piece until both fit: the sweep time, then the group,
+/// then GitHub's long form, then the summary, then the window. Loading,
+/// GitHub's short form and watch are never dropped.
+fn render_status_line(frame: &mut Frame, area: Rect, app: &App) {
+    let width = area.width as usize;
+    let mut p = fleet_pieces(app, chrono::Local::now());
+    let gh_style = Style::default().fg(p.github_health.color());
+    // One row has no room for slots of their own: a message takes the
+    // summary's place while it lasts, a manual refresh the sweep time's.
+    if let Some(message) = p.message.take() {
+        p.summary = vec![message];
+    }
+    if let Some(refreshing) = p.refreshing.take() {
+        p.swept = Some(refreshing);
+    }
+
     let mut include_ts = true;
     let mut include_group = true;
-    let mut include_header = true;
     let mut gh_long = true;
+    let mut include_summary = true;
+    let mut include_window = true;
 
     loop {
-        let mut left: Vec<Span> = vec![name.clone()];
-        if include_version {
-            left.push(version_span.clone());
+        let mut left: Vec<Span> = vec![Span::raw(" ")];
+        if include_window && let Some(ref w) = p.window {
+            left.push(w.clone());
+            left.push(p.window_key.clone());
         }
-        if include_header && let Some(ref h) = header_span {
-            left.push(h.clone());
-            if let Some(ref k) = window_key_span {
-                left.push(k.clone());
-            }
-        }
-        if include_group && let Some(ref g) = group_span {
+        if include_group && let Some(ref g) = p.group {
+            left.push(Span::raw("  "));
             left.push(g.clone());
+        }
+        if include_summary && !p.summary.is_empty() {
+            left.push(Span::raw("  "));
+            left.extend(p.summary.iter().cloned());
+            left.push(Span::raw(" "));
         }
 
         let mut right: Vec<Span> = Vec::new();
-        if let Some(ref l) = loading_span {
+        if let Some(ref l) = p.loading {
             right.extend(l.iter().cloned());
         }
-        if let Some((ref long, ref short, color)) = gh_segment {
-            let text = if gh_long { long } else { short };
-            right.push(Span::styled(text.clone(), Style::default().fg(color)));
-        }
-        right.extend(watch_span.iter().cloned());
-        if include_ts && let Some(ref t) = ts_span {
+        let gh_text = if gh_long {
+            &p.github_long
+        } else {
+            &p.github_short
+        };
+        right.push(Span::styled(gh_text.clone(), gh_style));
+        right.extend(p.watch.iter().cloned());
+        if include_ts && let Some(ref t) = p.swept {
             right.extend(t.iter().cloned());
+            right.push(Span::raw(" "));
         }
 
         // Characters, not bytes: every glyph here is one column wide, and a
-        // byte count charged the separator, arrows and eye up to four each.
+        // byte count charged the arrows and the eye up to four each.
         let left_w: usize = left.iter().map(|s| s.content.chars().count()).sum();
         let right_w: usize = right.iter().map(|s| s.content.chars().count()).sum();
-        let exhausted = !include_version
-            && !include_ts
-            && !include_group
-            && !include_header
-            && (!gh_long || gh_segment.is_none());
+        let exhausted =
+            !include_ts && !include_group && !gh_long && !include_summary && !include_window;
 
         if left_w + right_w < width || exhausted {
             let block = Block::default()
@@ -1219,16 +1487,16 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             return;
         }
 
-        if include_version {
-            include_version = false;
-        } else if include_ts {
+        if include_ts {
             include_ts = false;
         } else if include_group {
             include_group = false;
-        } else if include_header {
-            include_header = false;
-        } else {
+        } else if gh_long {
             gh_long = false;
+        } else if include_summary {
+            include_summary = false;
+        } else {
+            include_window = false;
         }
     }
 }
@@ -1264,7 +1532,7 @@ mod tests {
             .expect("unambiguous local time")
     }
 
-    /// The rendered header line, border and all.
+    /// The rendered status line, border and all.
     fn header_row(header: &str, width: u16) -> String {
         header_row_with(header, width, |_| {})
     }
@@ -1282,7 +1550,9 @@ mod tests {
         setup(&mut app);
         let app = app;
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
-        terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
+        terminal
+            .draw(|f| render_status_line(f, f.area(), &app))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..width)
             .map(|x| buffer[(x, 0)].symbol())
@@ -1301,7 +1571,9 @@ mod tests {
         app.blink_on = blink_on;
         let app = app;
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
-        terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
+        terminal
+            .draw(|f| render_status_line(f, f.area(), &app))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
         let x = (0..width)
             .find(|x| buffer[(*x, 0)].symbol() == WATCH_ON_GLYPH)
@@ -1324,7 +1596,9 @@ mod tests {
         app.blink_on = blink_on;
         let app = app;
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
-        terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
+        terminal
+            .draw(|f| render_status_line(f, f.area(), &app))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
         let lamp = (0..width)
             .find(|x| buffer[(*x, 0)].symbol() == WATCH_ON_GLYPH)
@@ -1432,7 +1706,9 @@ mod tests {
             let mut app = crate::app::App::new(Vec::new(), "t".to_string(), width, 40);
             app.blink_on = blink_on;
             let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
-            terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
+            terminal
+                .draw(|f| render_status_line(f, f.area(), &app))
+                .unwrap();
             let buffer = terminal.backend().buffer().clone();
             let x = (0..width)
                 .find(|x| buffer[(*x, 0)].symbol() == WATCH_OFF_GLYPH)
@@ -2382,29 +2658,180 @@ mod tests {
         );
     }
 
-    /// A header carrying every piece the fit loop can drop: the version, a
-    /// window label with an arrow, a group, a fixed sweep time, and the
-    /// Nerd Font watch eye. Several of these are multi-byte but one column.
+    /// The header row is the name and the version, with GitHub, watch and
+    /// the sweep time flush right outside the compact view, whose status
+    /// line carries those instead. The window and the summary are in pane
+    /// 2's fleet column or on that line, never here.
+    #[test]
+    fn the_header_draws_the_name_and_version_with_github_watch_and_sweep() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        for (view, expected) in [
+            (
+                View::Detail,
+                vec![
+                    "fleetz",
+                    VERSION,
+                    "○",
+                    "github",
+                    watch_icon(false),
+                    "watch",
+                    "swept",
+                    "Jan",
+                    "2",
+                    "03:04",
+                ],
+            ),
+            (View::Compact, vec!["fleetz", VERSION]),
+        ] {
+            let mut app = crate::app::App::new(Vec::new(), "since 5 days".to_string(), 120, 40);
+            full_header_app(&mut app);
+            app.view = view;
+            let mut terminal = Terminal::new(TestBackend::new(120, 1)).unwrap();
+            terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let row: String = (0..120).map(|x| buffer[(x, 0)].symbol()).collect();
+            let words = row.replace('─', " ");
+            assert_eq!(
+                words.split_whitespace().collect::<Vec<_>>(),
+                expected,
+                "{view:?}: {row:?}"
+            );
+        }
+    }
+
+    /// While the fleet loads the header row says so, left of GitHub: pane 2
+    /// has no header to carry it until the first repo lands, and launch
+    /// used to be a blank screen of pane outlines (his look, 2026-11-05).
+    #[test]
+    fn the_header_says_loading_before_any_repo_lands() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = crate::app::App::new(Vec::new(), String::new(), 120, 40);
+        app.view = View::Detail;
+        app.loading = true;
+        let mut terminal = Terminal::new(TestBackend::new(120, 1)).unwrap();
+        terminal.draw(|f| render_header(f, f.area(), &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row: String = (0..120).map(|x| buffer[(x, 0)].symbol()).collect();
+        let loading = row.find("loading").expect("no loading on the header");
+        let github = row.find("github").expect("no github on the header");
+        assert!(loading < github, "{row:?}");
+    }
+
+    /// The window is drawn in its own colour, not one more grey phrase, and
+    /// on no ground of its own: a tinted chip read as a selection.
+    #[test]
+    fn the_window_is_drawn_in_teal_on_no_ground() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let app = crate::app::App::new(Vec::new(), "since 5 days".to_string(), 100, 40);
+        let mut terminal = Terminal::new(TestBackend::new(100, 1)).unwrap();
+        terminal
+            .draw(|f| render_status_line(f, f.area(), &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row: String = (0..100).map(|x| buffer[(x, 0)].symbol()).collect();
+        let x = row.find("since").expect("window drawn") as u16;
+        let style = buffer[(x, 0)].style();
+        assert_eq!(style.fg, Some(colors::TEAL));
+        assert_ne!(style.bg, Some(colors::SELECTED_BG));
+    }
+
+    /// The GitHub lamp's colour for each state: green connected, peach for
+    /// an issue that clears on its own, red for an error, grey before any
+    /// poll answered.
+    #[test]
+    fn the_github_lamp_says_connected_issue_or_error() {
+        let now = chrono::Local::now();
+        let fresh = || crate::app::App::new(Vec::new(), String::new(), 100, 40);
+
+        let app = fresh();
+        assert_eq!(github_status(&app, now).0, GithubHealth::Unknown);
+
+        let mut app = fresh();
+        app.dirty_mode = true;
+        let (health, long, _) = github_status(&app, now);
+        assert_eq!(health, GithubHealth::Unknown);
+        assert!(long.contains("github off"), "{long:?}");
+
+        let mut app = fresh();
+        app.github_freshness.succeeded(now);
+        let (health, long, short) = github_status(&app, now);
+        assert_eq!(health, GithubHealth::Connected);
+        assert_eq!(health.color(), colors::GREEN);
+        assert!(long.contains("github connected"), "{long:?}");
+        assert!(short.contains("github"), "{short:?}");
+
+        let mut app = fresh();
+        fail_github(&mut app);
+        let (health, long, _) = github_status(&app, now);
+        assert_eq!(health, GithubHealth::Error);
+        assert_eq!(health.color(), colors::RED);
+        assert!(long.contains("⚠ github"), "{long:?}");
+
+        let mut app = fresh();
+        app.github_freshness.failed(
+            crate::github::Failure::rate_limit("API rate limit exceeded"),
+            now,
+        );
+        let (health, _, _) = github_status(&app, now);
+        assert_eq!(health, GithubHealth::Issue);
+        assert_eq!(health.color(), colors::PEACH);
+    }
+
+    /// A healthy poll is drawn too, in green: silence used to stand for
+    /// connected, which a narrow terminal could not tell from not drawn.
+    #[test]
+    fn a_healthy_github_poll_says_connected_in_green() {
+        let row = header_row_with("", 100, |app| {
+            app.github_freshness.succeeded(chrono::Local::now())
+        });
+        assert!(row.contains("● github connected"), "{row:?}");
+    }
+
+    /// The chrome is three rows in both views, as it was before the status
+    /// box: a row less drops the inspector at its minimum height. Only the
+    /// compact view, with no pane 1 to dock the box under, has a status line.
+    #[test]
+    fn both_views_keep_the_main_area_height() {
+        let area = Rect::new(0, 0, 120, 30);
+        let mut app = crate::app::App::new(Vec::new(), String::new(), 120, 30);
+        app.view = View::Detail;
+        let detail = frame_chunks(area, &app);
+        app.view = View::Compact;
+        let compact = frame_chunks(area, &app);
+        assert_eq!(detail.main.height, area.height - 3);
+        assert_eq!(compact.main.height, area.height - 3);
+        assert_eq!(detail.status, None);
+        assert_eq!(compact.status.map(|r| r.y), Some(1));
+    }
+
+    /// A status line carrying every piece the fit loop can drop: a window
+    /// label with an arrow, a group, a fixed sweep time, a status message in
+    /// the summary's slot, and the Nerd Font watch eye. Several of these are
+    /// multi-byte but one column.
     fn full_header_app(app: &mut crate::app::App) {
         app.group_names = vec!["work".to_string()];
         app.active_group = Some(0);
         app.last_refreshed = Some(at(2026, 1, 2, 3, 4));
+        app.set_status("1↓ · 2↑ copied".to_string(), false);
     }
 
     const ARROW_HEADER: &str = "since 2 weeks → before 2026-09-01";
 
-    /// The columns a header row draws: everything but the border filler.
+    /// The columns a status line draws: everything but the border filler.
     fn drawn_columns(row: &str) -> usize {
         row.chars().filter(|c| *c != '─').count()
     }
 
     /// Regression: the fit was measured in bytes, so the arrow, the
-    /// separator and the watch eye cost two to four columns each and the
-    /// version went while there was room for it. At the width the pieces
-    /// draw, plus the one column the loop keeps between them, everything is
-    /// kept; one column less, the version goes first.
+    /// separator and the watch eye cost two to four columns each and a piece
+    /// went while there was room for it. At the width the pieces draw, plus
+    /// the one column the loop keeps between them, everything is kept; one
+    /// column less, the sweep time goes first.
     #[test]
-    fn the_header_keeps_every_piece_that_fits_as_drawn() {
+    fn the_status_line_keeps_every_piece_that_fits_as_drawn() {
         let wide = header_row_with(ARROW_HEADER, 200, full_header_app);
         let drawn = drawn_columns(&wide);
         let pieces = wide.replace('─', "");
@@ -2412,9 +2839,9 @@ mod tests {
         let width = (drawn + 1) as u16;
 
         let row = header_row_with(ARROW_HEADER, width, full_header_app);
-        assert!(row.contains(VERSION), "version dropped: {row:?}");
         assert!(row.contains(&format!("{ARROW_HEADER} [t]")), "{row:?}");
         assert!(row.contains("[work]"), "{row:?}");
+        assert!(row.contains("1↓ · 2↑ copied"), "{row:?}");
         assert!(row.contains("swept Jan 2 03:04"), "{row:?}");
         assert!(
             row.contains(&format!("{} watch", watch_icon(false))),
@@ -2422,27 +2849,27 @@ mod tests {
         );
 
         let tighter = header_row_with(ARROW_HEADER, width - 1, full_header_app);
-        assert!(!tighter.contains(VERSION), "{tighter:?}");
-        assert!(tighter.contains("swept Jan 2 03:04"), "{tighter:?}");
+        assert!(!tighter.contains("swept"), "{tighter:?}");
+        assert!(tighter.contains("[work]"), "{tighter:?}");
     }
 
-    /// The drop order, read from the drawn header at every width from wide
-    /// to narrow: version, then the sweep time, then the group, then the
-    /// window label, then the GitHub segment's long form. A reordering, or a
-    /// step that is skipped, fails.
+    /// The drop order, read from the drawn status line at every width from
+    /// wide to narrow: the sweep time, then the group, then the GitHub
+    /// segment's long form, then the summary, then the window. A
+    /// reordering, or a step that is skipped, fails.
     #[test]
-    fn the_header_drops_its_pieces_in_order() {
+    fn the_status_line_drops_its_pieces_in_order() {
         let setup = |app: &mut crate::app::App| {
             full_header_app(app);
             fail_github(app);
         };
         let state = |row: &str| {
             (
-                row.contains(VERSION),
                 row.contains("swept"),
                 row.contains("[work]"),
-                row.contains("since 2 weeks"),
                 row.contains("http error"),
+                row.contains("copied"),
+                row.contains("since 2 weeks"),
             )
         };
         let mut states = Vec::new();

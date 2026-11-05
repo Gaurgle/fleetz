@@ -8,13 +8,11 @@ use crate::app::{App, ContributionsMode, FocusedPanel, HistoryView, Overlay, Vie
 use crate::model::{NOT_CLONED, Summary};
 use crate::ui::colors;
 
-/// Render the footer: summary stats on the left, keybind hints on the right.
+/// Render the footer: keybind hints and nothing else.
 ///
-/// The hints open with the focused pane's keys (`focus_hints`). Never lets
-/// the two sides collide: when tight, the global keys drop their
-/// descriptions, then the pane's keys do, then the pane's keys go, and the
-/// summary drops entirely if even the bare global keys don't fit, rather
-/// than risk a negative spacer width.
+/// The hints open with the focused pane's keys (`focus_hints`). When tight,
+/// the global keys drop their descriptions, then the pane's keys do, then
+/// the pane's keys go.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // An in-flight window apply takes over the whole footer with a gauge,
     // so the user sees real-time progress instead of a frozen list.
@@ -35,64 +33,62 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let summary = app.summary();
-    // The fit and spacer math below is about the *padded* width, not the
-    // footer's full rect: the block insets the content on both sides so the
-    // summary lines up with the pane content above it rather than starting two
-    // columns further left, hard against the terminal edge.
+    // The fit math below is about the *padded* width, not the footer's full
+    // rect: the block insets the content on both sides so the keys line up
+    // with the pane content above them rather than starting two columns
+    // further left, hard against the terminal edge.
     let width = area.width.saturating_sub(2 * crate::ui::PANE_CONTENT_INSET) as usize;
-
-    // A transient status message (fetch/switch/refresh result) takes over the
-    // left side while present, so single-shot actions actually report back --
-    // otherwise the summary just sits there and the action looks like a no-op.
-    let left = match &app.status_message {
-        Some(msg) => {
-            let color = if msg.is_error {
-                colors::RED
-            } else {
-                colors::GREEN
-            };
-            vec![Span::styled(msg.text.clone(), Style::default().fg(color))]
-        }
-        None => summary_spans(&summary),
-    };
+    let nothing: [Span; 0] = [];
 
     // Widest first (Andreas, 2026-10-17): the global row's words go before
     // the segment's, since they are the same every day and the segment is
-    // the news; the segment goes before the summary, which outranks it.
+    // the news. The summary that used to share this row lives on the status
+    // line now, so the whole width is the keys'.
     let with_segment = [
         hints_with_segment(app, true, true),
         hints_with_segment(app, true, false),
         hints_with_segment(app, false, false),
     ];
-    let compact_hints = keybind_hints(app, false);
-
-    let (mut spans, hints) = if let Some(hints) = with_segment
+    let hints = with_segment
         .into_iter()
-        .find(|hints| fits(width, &left, hints))
-    {
-        (left, hints)
-    } else if fits(width, &left, &compact_hints) {
-        (left, compact_hints)
-    } else {
-        (Vec::new(), compact_hints)
-    };
+        .find(|hints| fits(width, &nothing, hints))
+        .unwrap_or_else(|| keybind_hints(app, false));
 
-    let spacer_width = width.saturating_sub(line_width(&spans) + line_width(&hints));
-    spans.push(Span::raw(" ".repeat(spacer_width.max(1))));
+    // Right-aligned, as the keys were beside the summary. Measured in
+    // columns, so the row ends flush with the content's right edge.
+    let mut spans = vec![Span::raw(
+        " ".repeat(width.saturating_sub(line_width(&hints))),
+    )];
     spans.extend(hints);
-
     let line = Line::from(spans);
+    // Under the compact view's status line the keys take the bottom row
+    // alone, the grid's border dividing them; elsewhere a rule above them,
+    // as it always was.
+    let (area, borders) = if crate::ui::uses_status_line(app) {
+        let last = area.bottom().saturating_sub(1);
+        (
+            Rect {
+                y: last,
+                height: 1,
+                ..area
+            },
+            Borders::NONE,
+        )
+    } else {
+        (area, Borders::TOP)
+    };
     let paragraph = Paragraph::new(line).block(
         Block::default()
-            .borders(Borders::TOP)
+            .borders(borders)
             .border_style(Style::default().fg(colors::SURFACE))
             .padding(Padding::horizontal(crate::ui::PANE_CONTENT_INSET)),
     );
     frame.render_widget(paragraph, area);
 }
 
-fn summary_spans(summary: &Summary) -> Vec<Span<'static>> {
+/// The fleet's counters, `3↓ · 2↑ · 4! · 17 synced`, as the status line
+/// draws them.
+pub(crate) fn summary_spans(summary: &Summary) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let dot = || Span::styled(" · ", Style::default().fg(colors::SURFACE));
 
@@ -658,48 +654,22 @@ mod tests {
         (inset + left.chars().count() + hints.chars().count() + 1) as u16
     }
 
-    /// Regression: the fit was measured in bytes, so a summary's arrows and
-    /// dots cost two or three columns each and the key descriptions went
-    /// while there was room for them. At the snug width the summary and the
-    /// full hints are both drawn; one column less, the descriptions go.
+    /// At the snug width the full hints are drawn; one column less, the
+    /// global descriptions go. The summary that used to share this row is
+    /// on the status line (`ui::tests`), so the keys have the whole width.
     #[test]
-    fn the_key_descriptions_stay_while_they_fit_beside_a_glyph_summary() {
+    fn the_key_descriptions_stay_while_they_fit() {
         let app = app_with_glyph_summary();
-        let summary = text(&summary_spans(&app.summary()));
-        assert_eq!(summary, "1↓ · 1↑ · 1! · 1 synced");
-        assert!(
-            summary.len() > summary.chars().count(),
-            "no multi-byte glyph"
-        );
         let full = text(&keybind_hints(&app, true));
         let segment = text(&focus_hints(&app, true));
-        let width = snug_width(&summary, &format!("{segment}{SEGMENT_GAP}{full}"));
+        let width = snug_width("", &format!("{segment}{SEGMENT_GAP}{full}"));
 
         let row = footer_row(&app, width);
-        assert!(row.contains(&summary), "summary dropped: {row:?}");
         assert!(row.contains(&full), "descriptions dropped: {row:?}");
+        assert!(!row.contains("synced"), "summary in the footer: {row:?}");
 
         let tighter = footer_row(&app, width - 1);
-        assert!(tighter.contains(&summary), "{tighter:?}");
         assert!(!tighter.contains(" lazygit"), "{tighter:?}");
-    }
-
-    /// The same for the summary itself: at the width where it fits beside
-    /// the keys-only hints, it is drawn rather than dropped.
-    #[test]
-    fn a_glyph_summary_stays_while_it_fits_beside_the_keys() {
-        let app = app_with_glyph_summary();
-        let summary = text(&summary_spans(&app.summary()));
-        let keys = text(&keybind_hints(&app, false));
-        let width = snug_width(&summary, &keys);
-
-        let row = footer_row(&app, width);
-        assert!(row.contains(&summary), "summary dropped: {row:?}");
-        assert!(row.contains(&keys), "{row:?}");
-
-        let tighter = footer_row(&app, width - 1);
-        assert!(!tighter.contains("synced"), "{tighter:?}");
-        assert!(tighter.contains(&keys), "{tighter:?}");
     }
 
     /// The spacer is measured the same way, so the hints end flush with the
@@ -714,23 +684,6 @@ mod tests {
         let drawn = row.trim_end().chars().count();
         assert_eq!(drawn, right_edge, "{row:?}");
         assert!(row.trim_end().ends_with("[q] quit"), "{row:?}");
-    }
-
-    /// The drop order: the descriptions go first, then the left side. Read
-    /// from the drawn footer at every width from wide to narrow, so a
-    /// reordering, or a step that is skipped, fails.
-    #[test]
-    fn the_footer_drops_descriptions_before_the_summary() {
-        let app = app_with_glyph_summary();
-        let mut states: Vec<(bool, bool)> = Vec::new();
-        for width in (20u16..=260).rev() {
-            let row = footer_row(&app, width);
-            let state = (row.contains("synced"), row.contains(" lazygit"));
-            if states.last() != Some(&state) {
-                states.push(state);
-            }
-        }
-        assert_eq!(states, vec![(true, true), (true, false), (false, false)]);
     }
 
     /// Wide enough for every pane's segment and the global row, both with
@@ -911,8 +864,8 @@ mod tests {
     }
 
     /// The owner's order of 2026-10-17, widest first: the global row's
-    /// words go before the segment's, the segment's before the segment,
-    /// and the summary last. Read from the drawn footer at every width for
+    /// words go before the segment's, the segment's before the segment.
+    /// The summary that went last is on the status line now. Read from the drawn footer at every width for
     /// every pane, so a reordering, or a skipped step, fails.
     #[test]
     fn the_footer_degrades_in_the_owners_order_in_every_pane() {
@@ -931,14 +884,13 @@ mod tests {
             // pane's segment or the global row draws in that place.
             let first_key = segment.split(' ').next().unwrap().to_string();
             let first_desc: String = segment.split("  ").next().unwrap().to_string();
-            let mut states: Vec<(bool, bool, bool, bool)> = Vec::new();
+            let mut states: Vec<(bool, bool, bool)> = Vec::new();
             for width in (20u16..=300).rev() {
                 let row = footer_row(&app, width);
                 let state = (
                     row.contains(&first_key),
                     row.contains(&format!("{first_desc}  ")),
                     row.contains(" lazygit"),
-                    row.contains("synced"),
                 );
                 if states.last() != Some(&state) {
                     states.push(state);
@@ -947,46 +899,33 @@ mod tests {
             assert_eq!(
                 states,
                 vec![
-                    (true, true, true, true),
-                    (true, true, false, true),
-                    (true, false, false, true),
-                    (false, false, false, true),
-                    (false, false, false, false),
+                    (true, true, true),
+                    (true, true, false),
+                    (true, false, false),
+                    (false, false, false),
                 ],
                 "{pane:?}"
             );
         }
     }
 
-    /// Where the segment does not fit even bare, the footer is exactly the
-    /// row it drew before the segment existed: the summary beside the bare
-    /// keys, then the bare keys alone.
+    /// Where the segment does not fit even bare, the footer is the bare
+    /// global keys alone, flush right, as it was before the segment existed.
     #[test]
-    fn without_room_for_the_segment_the_row_is_todays() {
+    fn without_room_for_the_segment_the_row_is_the_bare_keys() {
         let app = app_with_glyph_summary();
-        let summary = text(&summary_spans(&app.summary()));
         let keys = text(&keybind_hints(&app, false));
         let inset = crate::ui::PANE_CONTENT_INSET as usize;
         let n = |s: &str| s.chars().count();
-        // The narrowest width the bare segment fits at, beside the summary.
-        let segment_from = 2 * inset + n(&summary) + n(LIST_SEGMENT_BARE) + n("   ") + n(&keys) + 1;
-        let mut with_summary = 0;
-        let mut without = 0;
+        // The narrowest width the bare segment fits at.
+        let segment_from = 2 * inset + n(LIST_SEGMENT_BARE) + n("   ") + n(&keys) + 1;
         for width in (2 * inset + n(&keys) + 1)..segment_from {
             let content = width - 2 * inset;
-            let left = if n(&summary) + n(&keys) < content {
-                with_summary += 1;
-                summary.clone()
-            } else {
-                without += 1;
-                String::new()
-            };
-            let spacer = " ".repeat(content - n(&left) - n(&keys));
+            let spacer = " ".repeat(content - n(&keys));
             let pad = " ".repeat(inset);
-            let today = format!("{pad}{left}{spacer}{keys}{pad}");
+            let today = format!("{pad}{spacer}{keys}{pad}");
             assert_eq!(footer_row(&app, width as u16), today, "at {width}");
         }
-        assert!(with_summary > 0 && without > 0);
     }
 
     /// The strip's segment names `c` as that pane's key, but plainly: the

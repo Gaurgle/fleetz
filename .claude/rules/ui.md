@@ -19,9 +19,9 @@ lives in one function called by both (`detail::split_inspector`, and
 `ui::contributions::split_main_area` for the strip, over `dock_bottom`; the
 `notes` layout splits columns first with `detail::split_main`, docks no
 inspector under pane 1, and `detail::notes_pane_body` splits pane 2's inner
-area with `detail::split_notes_pane` into the tree's column (readout, pinned
-header, tree) and, right of the divider, the file's facts above the `NOTES`
-rule and the preview below it); never
+area with `detail::split_notes_pane` into the tree's column (pinned header,
+tree, the file's facts divider at its foot) and, right of the divider, the
+fleet's state above the `NOTES` rule and the preview below it); never
 reintroduce a second copy of that arithmetic. Drift here misroutes clicks silently, with nothing
 failing.
 
