@@ -2824,6 +2824,11 @@ fn refresh_key(
         None => app.set_status("Refreshing…".to_string(), false),
     }
     start_sweep(app, tx, false, args.author.clone(), true);
+    // A watch sweep already running holds the sweep lock, so none was
+    // started: its rows are the ones this refresh waits for (FZ-85).
+    if app.sweep_started.is_some() {
+        app.sweep_manual = true;
+    }
     if limited.is_none() {
         start_github_poll(app, tx, config);
     }
@@ -5941,6 +5946,92 @@ mod tests {
         assert!(
             !app.is_refreshing(),
             "a timed-out fetch left the spinner running"
+        );
+    }
+
+    /// `r` pressed while the watch timer's sweep and poll are both in
+    /// flight, which with a short `refresh_interval` is most of the time.
+    /// Neither is started again, so nothing is spawned and no runtime is
+    /// needed. Returns the poll's attempt, for its answer.
+    fn r_during_a_watch_sweep(app: &mut App) -> u64 {
+        app.watch_mode = true;
+        app.sweep_started = Some(std::time::Instant::now());
+        app.sweep_manual = false;
+        let attempt = claim_github_poll(app).expect("no poll in flight");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let args = Args::parse_from(["fleetz"]);
+        refresh_key(
+            app,
+            &tx,
+            &args,
+            &config::Config::default(),
+            chrono::Local::now(),
+        );
+        assert!(app.is_refreshing(), "r did not start the spinner");
+        attempt
+    }
+
+    /// FZ-85 (#142): the events of `r` pressed during a watch sweep, in the
+    /// order they arrive. The sweep lock made `r`'s own sweep a no-op and
+    /// left the running sweep unmarked, so the spinner keyed on the poll
+    /// alone: `AppEvent::Github` landed in a second and stopped it, and the
+    /// watch sweep's fetched `RepoUpdated` rows landed after it.
+    #[test]
+    fn r_during_a_watch_sweep_spins_until_that_sweeps_rows_land() {
+        let mut app = fleet_app(2);
+        let attempt = r_during_a_watch_sweep(&mut app);
+
+        answer(&mut app, attempt, ok_with(None));
+        assert!(
+            app.is_refreshing(),
+            "stopped at the poll, before the sweep's rows landed"
+        );
+        land(&mut app, 0, git::FetchOutcome::Succeeded);
+        assert!(app.is_refreshing(), "stopped before the last row landed");
+        land(&mut app, 1, git::FetchOutcome::Succeeded);
+        // `spawn_sweep` sends `SweepDone` once every row has been sent.
+        app.sweep_landed(chrono::Local::now());
+        assert!(!app.is_refreshing(), "spun on after the last row landed");
+    }
+
+    /// FZ-85 (#142): a fetch that fails still ends its part of the refresh,
+    /// both the poll's fetch of a moved remote and the sweep's own.
+    #[tokio::test]
+    async fn r_during_a_watch_sweep_ends_when_a_fetch_fails() {
+        let mut app = missing_paths_app(2, "fz85");
+        app.dataset = vec![
+            gh("repo-0", "2026-11-05T10:00:00Z"),
+            gh("repo-1", "2026-11-05T10:00:00Z"),
+        ];
+        let attempt = r_during_a_watch_sweep(&mut app);
+        let (moved, swept) = (
+            app.repos[0].path.clone().unwrap(),
+            app.repos[1].path.clone().unwrap(),
+        );
+        let mut fetch = ok_with(None).unwrap();
+        fetch.repos = vec![
+            gh("repo-0", "2026-11-05T11:00:00Z"),
+            gh("repo-1", "2026-11-05T10:00:00Z"),
+        ];
+        answer(&mut app, attempt, Ok(fetch));
+        assert!(
+            app.refresh_fetches.contains(&moved),
+            "the push was not fetched"
+        );
+
+        let failed = fetch_failed(git::FetchFailureKind::Unreachable);
+        let status = app.repos[1].clone();
+        apply_repo_updated(&mut app, &swept, status, failed.clone());
+        app.sweep_landed(chrono::Local::now());
+        assert!(
+            app.is_refreshing(),
+            "stopped before the moved remote's fetch landed"
+        );
+        let status = app.repos[0].clone();
+        apply_repo_updated(&mut app, &moved, status, failed);
+        assert!(
+            !app.is_refreshing(),
+            "a failed fetch left the spinner running"
         );
     }
 
