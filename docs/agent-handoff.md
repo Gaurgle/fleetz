@@ -7,11 +7,10 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Baton released 2026-11-05 15:35 CET by session `ea56f412`
-(`claude-opus-5-5` since 13:55) at his 95% usage warning. No worker or
-reviewer running (FZ-83's review stopped unfinished). 0.6.1 is pushed
-(`d5cf417`); tag `v0.6.1` local only, his. Worktrees on at-a: `issue-121`,
-`issue-137`, `issue-140`, `issue-88`, `issue-152` (FZ-95), `status-bar` (sweep).
+Taken 2026-11-06 15:48 CET by session `3f0d864a` (`claude-opus-5-5`) on
+RoosMacbookA. at-a holds FZ-83's uncommitted tree (stuck there); his 15:45:
+work "what makes sense ... that doesnt clash with the stuck 83". Here:
+`issue-116`, `issue-119` (uncommitted, 10-30 base), `issue-45`, `79`, `81`.
 
 ## Standing authority
 
@@ -28,6 +27,9 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 
 ## In flight
 
+- Running 11-06 (records on the issues): FZ-81 #137 resolution (`fz-small`),
+  FZ-85 #142 (`fz-worker` opus:high), FZ-91 #148 (opus:medium), base `09f15f0`.
+  FZ-95 held: its header rewrite clashes with FZ-83's `header_lines`.
 - FZ-81 (#137, yank flash, `35f17cc`, diff `7900ef870c0e`): his look
   accepted 14:25; merging with `main` conflicts in README's `yy`/`yp`
   row: a resolution cycle, review, gate, merge. FZ-83 (#140, CI lamp,
@@ -39,7 +41,7 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
   fix list on #152. Next: one fix cycle, fresh review, gate, merge.
 - FZ-65 (#121): built, `9f4018d7160d` unreviewed, his wheel decision.
   #88 (FZ-38) parked, uncommitted. FZ-63 (#119), FZ-60 (#116): trees
-  lost 11-03; redispatch on his word.
+  found uncommitted on RoosMacbookA (10-30 base); his word.
 
 ## Open questions
 
@@ -53,8 +55,6 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 
 ## Next step
 
-He stopped 11-05 19:20. Merged 11-05: FZ-74, 88, 82, 68, 77, 93 (log).
-FZ-96 folded into FZ-95. Next: FZ-95; FZ-81, merge; FZ-83, his look;
-FZ-85, 86, 84, 87, 89, 90 to 92, 77 round 2, 78, 79. Worktrees pruned
-at merge (log). Suggest `cargo install` before a screenshot.
+Finish the three running; then FZ-86, 90, 78 (clear of FZ-83). FZ-83,
+FZ-95, 79, 84, 89, 92 wait for at-a. Suggest `cargo install` first.
 
