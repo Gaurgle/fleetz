@@ -1794,6 +1794,7 @@ mod tests {
     #[test]
     fn the_log_body_draws_the_marked_jobs_whole_log() {
         let mut app = on_failed_run();
+        app.inspector_pct = 30;
         app.ci_body = CiBody::Log;
         let text = body_text(&app);
         assert!(text.contains(&"check log".to_string()), "{text:#?}");
@@ -1820,6 +1821,7 @@ mod tests {
     #[test]
     fn the_whole_log_is_wrapped_once_per_job_and_width() {
         let mut app = on_failed_run();
+        app.inspector_pct = 30;
         app.ci_body = CiBody::Log;
         draw(&app, 160, 50);
         let width = {
@@ -1850,6 +1852,7 @@ mod tests {
     #[test]
     fn another_jobs_log_at_the_same_width_is_wrapped_afresh() {
         let mut app = on_failed_run();
+        app.inspector_pct = 30;
         let mut second = jobs()[0].clone();
         second.id = 7;
         second.name = "docs".to_string();
