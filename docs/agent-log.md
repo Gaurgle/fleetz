@@ -289,6 +289,57 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### 2026-11-06
+
+Lead `3f0d864a` (`claude-opus-5-5`) on RoosMacbookA from 15:48 CET; at-a
+(the "smbp") holds FZ-83's uncommitted tree. Owner's words: 15:45 "i think
+you can start working on what ever you feel makes sense. what makes sense
+ackording to tickets and state, and taht doesnt clash with the stuck 83?";
+on the denied FZ-81 merge, "you are the lead, just not fable"; 16:05 his
+pin list again (PR pane, ordering on refresh, two sorts, a shorter
+inspector, the commit message row, pane 2's header notes and "takes long
+time to load fleetz now"), filed as FZ-97 to FZ-99 (#154 to #156) on his
+yes; FZ-95 header decisions on #152; FZ-91 parked on his look ("i prefer
+the old shading. lets revert and defer this ticket for later"); 16:50
+"lets do 90, 98, 87 and 57 ... after those, lets wrap it up for today".
+FZ-57 (#113) closed as done by FZ-68 round 2. FZ-90 and FZ-87 workers
+stopped before code on wrong premises (rulings on #147, #144); FZ-98
+parked on his look ("it should depend on window size and everything. i
+dont want it to look bare and empty. defer this as well"). Baton released
+16:50.
+
+- **#137 (FZ-81), yank flash.** Merged `676094d`. Merge-resolution cycle
+  on `35f17cc`: the lead ran `git merge --no-commit main` (the `fz-small`
+  call was denied by the permission classifier); `fz-small` resolved the
+  README row (first with a stale `[3] file` card mention, sent back).
+  Review 1 (`d48632c997e9`) needs change: main's reader has no frame, so
+  its flash washed the note's first text row; lead ruled the reader
+  flashes its `notes preview` title (#137). Rework `fz-worker` sonnet:
+  `reader_label_rect`, a test of exactly the label's cells. Re-review
+  (`3890b19a6561`) accepted. Resolution commit `be76335`, branch CI
+  42243117468, combined on `d431d28` (1659), gate holds. Remembered:
+  nothing new (the shared-target lesson is the 11-04 practical note).
+  FZ-81: review changes 1; fix cycles 1; owner decisions 1; worker 11 (denied) + 2 + 2 + 4; review 2 + 3; models sonnet:low, sonnet:medium/opus:medium; usage worker 14857, 23164, 25832, 37511 tokens; reviewer 59798, 76631 tokens
+- **#143 (FZ-86), pane 1 re-sorts after a poll or a sweep.** Merged
+  `d431d28`. Commit `5621916` on base `712eeba`. One activity rule
+  (`activity_position`), `order_rows_by_activity` keyed as the launch lays
+  rows out, `App::reorder_repos` keeps the cursor by identity and leaves a
+  text search alone. Lead rulings on #143 (criterion 2 cannot occur: a
+  sweep never changes a row's section; "also active" keeps the launch
+  layout). Review 1 (`d811599ec3da`) accepted; follow-ups: the digest
+  cursor and `ListHits` are index-based across a reorder. CI 42242572035,
+  combined on `712eeba` (1641), gate holds. Remembered: nothing to keep.
+  FZ-86: review accepted first; fix cycles 0; owner decisions 0; worker 9; review 4; models opus:high/opus:high; usage worker 127091 tokens, reviewer 84409 tokens
+- **#142 (FZ-85), the refresh spinner runs until the rows land.** Merged
+  `712eeba`. Commit `1b589f0` on base `09f15f0`. Cause: `r` during a
+  running watch sweep left `sweep_manual` false, so the spinner rested on
+  the poll alone; `refresh_key` now adopts the running sweep. Review 1
+  (`38b333b57330`) accepted; follow-ups: a test that the next watch sweep
+  is silent, the poll-after-`SweepDone` order, `SweepDone` carries no
+  sweep id. CI 42239570605, combined on `b70a25d` (1635), gate holds.
+  Remembered: nothing to keep.
+  FZ-85: review accepted first; fix cycles 0; owner decisions 0; worker 7; review 3; models opus:high/opus:high; usage worker 111516 tokens, reviewer 69520 tokens
+
 ### 2026-11-05
 
 Owner's words, 2026-11-05 about 12:20 CET (the lead took the baton
