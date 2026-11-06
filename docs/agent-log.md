@@ -305,8 +305,22 @@ the old shading. lets revert and defer this ticket for later"); 16:50
 FZ-57 (#113) closed as done by FZ-68 round 2. FZ-90 and FZ-87 workers
 stopped before code on wrong premises (rulings on #147, #144); FZ-98
 parked on his look ("it should depend on window size and everything. i
-dont want it to look bare and empty. defer this as well"). Baton released
-16:50.
+dont want it to look bare and empty. defer this as well"), then "lets sat
+it at 15% for now", "no i mean 25%", "155 is great at 25%"; merged.
+
+- **#155 (FZ-98), the inspector opens at 25 percent.** Merged `761295b`.
+  Commit `033688e` on base `676094d`. `DEFAULT_INSPECTOR_PCT` 30 to 25;
+  the 8-row `INSPECTOR_MIN_HEIGHT` floor unchanged; a stored size wins.
+  His approved existing-test edits on #155: the default test compares
+  against the constant with tolerance `want - 2` (25 draws as 23 at
+  200x60), four layout tests pin 30. Review 1 (`4978623a4eef`, at 22)
+  needs change: an orphaned helper failed clippy (the worker had claimed
+  clean from an empty output). Re-review (`f510413b9830`) accepted; at
+  160x40 the inspector still sits at the floor (no commit body, no CI log
+  line). CI 42247216380, combined on `8b218c6` (1660), gate holds, his
+  look 25%. Remembered: a check's evidence is its exit code, not an empty
+  output (the worker template already asks for output; nothing new).
+  FZ-98: review changes 1; fix cycles 1; owner decisions 5; worker 3 + 1 + 1 + 2 + 2; review 2 + 2; models sonnet:medium/opus:medium; usage worker 38332, 46174, 48643, 31148, 32730 tokens; reviewer 40802, 52831 tokens
 
 - **#137 (FZ-81), yank flash.** Merged `676094d`. Merge-resolution cycle
   on `35f17cc`: the lead ran `git merge --no-commit main` (the `fz-small`

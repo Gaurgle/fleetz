@@ -11,7 +11,7 @@ Baton released 2026-11-06 16:50 CET by session `3f0d864a`
 (`claude-opus-5-5`, RoosMacbookA, since 15:48); he wrapped up for the day.
 No worker or reviewer running. at-a holds FZ-83's uncommitted tree.
 Worktrees here: `issue-116`, `119` (uncommitted, 10-30 base), `45`, `79`,
-`81`, `144` (clean), `147` (clean), `148` (FZ-91), `155` (FZ-98).
+`81`, `144` (clean), `147` (clean), `148` (FZ-91, parked).
 
 ## Standing authority
 
@@ -28,8 +28,6 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 
 ## In flight
 
-- FZ-98 (#155) parked on his look ("depend on window size ... not bare
-  and empty"), Backlog; tree `a507ce72f223` uncommitted, unreviewed.
 - FZ-83 (#140): uncommitted on at-a, diff `5f4c44d114ce` vs `334e9a6`;
   next a fresh full review, commit, merge with `main`, his look.
 - FZ-95 (#152): `c3c6830`, fix list plus his 11-06 header criteria
@@ -56,5 +54,5 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 
 Stopped for the day: no dispatch until he says so. Next: FZ-97 (launch
 time), FZ-90; on at-a, FZ-83 then FZ-95, FZ-87. FZ-95 priority unset
-(his). Suggest `cargo install` (`main` has FZ-85, 86, 81).
+(his). Suggest `cargo install` (`main` has FZ-85, 86, 81, 98).
 
