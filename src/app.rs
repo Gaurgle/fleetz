@@ -2323,7 +2323,9 @@ pub struct App {
     /// Whether the in-flight sweep was asked for by a keypress rather than by
     /// the watch timer. Only a manual one announces itself in the header: a
     /// background refresh firing on an interval should not repaint a big
-    /// colored indicator over a dashboard you are reading.
+    /// colored indicator over a dashboard you are reading. An `r` pressed
+    /// while a watch sweep runs marks that sweep manual: it starts none of
+    /// its own, so the running one's rows are the ones it waits for.
     ///
     /// Only meaningful while `sweep_started` is `Some`.
     pub sweep_manual: bool,
@@ -4028,7 +4030,7 @@ impl App {
     /// local sweep, then the GitHub poll it started and the fetches that poll
     /// set off. The spinner and the lit `[r]` key both read this, so neither
     /// stops before the last row lands. A watch-timer sweep does not count; it
-    /// runs silently.
+    /// runs silently, unless an `r` pressed during it marked it manual.
     pub fn refresh_phase(&self) -> Option<RefreshPhase> {
         if self.sweep_started.is_some() && self.sweep_manual {
             Some(RefreshPhase::Local)
