@@ -4179,6 +4179,48 @@ impl App {
         self.inspector_scroll = 0;
     }
 
+    /// Stable-sort `repos` by `keys` (one per row, in row order), keeping the
+    /// cursor on the repo it stood on (FZ-86). The caller supplies the keys,
+    /// so the order has one source (`main.rs::order_rows_by_activity`).
+    ///
+    /// A search in progress is left alone: its ranked list breaks ties by row
+    /// order, so moving rows under it would reshuffle what is being read. The
+    /// next update after the search ends applies the order. False, with no
+    /// redraw asked, when nothing moved.
+    pub fn reorder_repos<K: Ord>(&mut self, keys: Vec<K>) -> bool {
+        if self.has_text_query() || keys.len() != self.repos.len() {
+            return false;
+        }
+        let mut order: Vec<usize> = (0..keys.len()).collect();
+        order.sort_by(|&a, &b| keys[a].cmp(&keys[b]));
+        if order.iter().enumerate().all(|(new, &old)| new == old) {
+            return false;
+        }
+        // None on a section header, and there the cursor needs no help: the
+        // sections are by location, which no re-sort changes, so each one
+        // starts at the same visible position before and after.
+        let held = self.selected_repo_index();
+
+        let mut rows: Vec<Option<RepoStatus>> = std::mem::take(&mut self.repos)
+            .into_iter()
+            .map(Some)
+            .collect();
+        self.repos = order.iter().filter_map(|&old| rows[old].take()).collect();
+
+        if let Some(held) = held {
+            let moved_to = order.iter().position(|&old| old == held);
+            if let Some(pos) = self
+                .visible_repos()
+                .iter()
+                .position(|(i, _)| Some(*i) == moved_to)
+            {
+                self.selected = pos;
+            }
+        }
+        self.needs_redraw = true;
+        true
+    }
+
     /// Repos filtered by the current search query, active group, and quick
     /// filters -- the latter two both parsed out of `search_query`'s `#tag`
     /// words (see `parse_query`), so there's a single source of truth for
@@ -6418,6 +6460,50 @@ mod tests {
             .collect();
         assert_eq!(names[0], "repo-1");
         assert_eq!(names[1], "repo-4");
+    }
+
+    fn visible_names(app: &App) -> Vec<String> {
+        app.visible_repos()
+            .iter()
+            .map(|(_, r)| r.name.clone())
+            .collect()
+    }
+
+    /// FZ-86: rows move only when the order changes. An unchanged order
+    /// asks for no redraw, so a poll that moved nothing does not flicker.
+    #[test]
+    fn an_unchanged_order_moves_nothing_and_asks_no_redraw() {
+        let mut app = make_app(3);
+        app.selected = 1;
+        app.needs_redraw = false;
+        assert!(!app.reorder_repos(vec![0, 1, 1]));
+        assert!(!app.needs_redraw);
+        assert_eq!(visible_names(&app), ["repo-0", "repo-1", "repo-2"]);
+        assert_eq!(app.selected, 1);
+
+        assert!(app.reorder_repos(vec![2, 1, 0]));
+        assert!(app.needs_redraw);
+        assert_eq!(visible_names(&app), ["repo-2", "repo-1", "repo-0"]);
+    }
+
+    /// FZ-86: a cursor on a section header stays on the header when the
+    /// section's rows move under it; the repo it stands over is the
+    /// section's new first, as landing on the header would choose.
+    #[test]
+    fn a_cursor_on_a_header_stays_on_it_when_its_rows_move() {
+        use crate::digest::Section;
+        let mut app = make_app(3);
+        app.view = View::Detail;
+        app.repos[1].location = RepoLocation::LocalOnly;
+        app.repos[2].location = RepoLocation::LocalOnly;
+        app.land_on(ListRow::Header(Section::LocalChanges));
+        assert_eq!(app.on_header(), Some(Section::LocalChanges), "premise");
+        assert_eq!(app.repos[app.selected].name, "repo-1", "premise");
+
+        assert!(app.reorder_repos(vec![0, 2, 1]));
+        assert_eq!(app.on_header(), Some(Section::LocalChanges));
+        assert_eq!(visible_names(&app), ["repo-0", "repo-2", "repo-1"]);
+        assert_eq!(app.visible_repos()[app.selected].1.name, "repo-2");
     }
 
     #[test]
