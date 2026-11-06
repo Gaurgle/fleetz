@@ -7910,8 +7910,32 @@ mod tests {
         );
     }
 
-    fn inspector_screen(w: u16, h: u16) -> Vec<String> {
-        inspector_screen_at(w, h, crate::app::DEFAULT_INSPECTOR_PCT)
+    #[test]
+    fn fresh_app_inspector_opens_at_its_default_with_a_row_floor() {
+        use ratatui::layout::Rect;
+        let rects = |h: u16| {
+            let mut app = crate::app::App::new(vec![list_repo(3)], "h".to_string(), 120, h);
+            app.view = crate::app::View::Detail;
+            app.contributions_folded = true;
+            assert_eq!(app.inspector_pct, 25);
+            crate::ui::panel_rects(Rect::new(0, 0, 120, h), &app)
+        };
+        // Tall terminal: 25 percent of the body, above the floor.
+        let r = rects(80);
+        let tall = r
+            .inspector
+            .expect("tall terminal docks an inspector")
+            .height;
+        assert!(tall > INSPECTOR_MIN_HEIGHT, "not above the floor: {tall}");
+        assert_eq!(tall, r.body.height * 25 / 100, "not 25 percent: {tall}");
+        // Short terminal: 25 percent is under the floor, so the floor holds.
+        let r = rects(22);
+        assert!(r.body.height * 25 / 100 < INSPECTOR_MIN_HEIGHT);
+        let short = r
+            .inspector
+            .expect("short terminal keeps an inspector")
+            .height;
+        assert_eq!(short, INSPECTOR_MIN_HEIGHT, "floor lost: {short}");
     }
 
     fn inspector_screen_at(w: u16, h: u16, inspector_pct: u16) -> Vec<String> {
@@ -7952,7 +7976,7 @@ mod tests {
     /// is the one line only the inspector draws that fixes where that is.
     #[test]
     fn a_wide_inspector_lays_the_files_beside_the_message() {
-        let screen = inspector_screen(160, 40);
+        let screen = inspector_screen_at(160, 40, 30);
         let files_row = row_of(&screen, "changed files");
         assert_eq!(
             files_row,

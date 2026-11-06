@@ -427,7 +427,7 @@ persist_pane_sizes = false
 # keypress dismisses it. Set false to start on the empty dashboard instead.
 intro = true
 repo_list_pct = 35
-inspector_pct = 30
+inspector_pct = 25
 
 # Startup view: "detail", "compact", or "auto" (default). Auto drops to
 # compact only when the terminal is too small for three panels; pin it here

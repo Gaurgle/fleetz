@@ -2109,11 +2109,11 @@ mod tests {
         crate::app::App::new(Vec::new(), "test".to_string(), 120, 44)
     }
 
-    /// FZ-88: the inspector launches at 30% of the right column, and `=`
+    /// FZ-88: the inspector launches at its default share of the right column, and `=`
     /// (`reset_pane_sizes`) returns to it after a resize. Measured through
     /// `panel_rects`, the geometry clicks are tested against.
     #[test]
-    fn the_inspector_starts_at_thirty_percent_and_equals_returns_to_it() {
+    fn the_inspector_starts_at_its_default_and_equals_returns_to_it() {
         let area = Rect::new(0, 0, 200, 60);
         let mut app = layout_app();
         app.view = crate::app::View::Detail;
@@ -2127,8 +2127,12 @@ mod tests {
         };
 
         let launch = drawn_pct(&app);
-        assert_eq!(app.inspector_pct, 30);
-        assert!((29..=30).contains(&launch), "launch share was {launch}%");
+        assert_eq!(app.inspector_pct, crate::app::DEFAULT_INSPECTOR_PCT);
+        let want = crate::app::DEFAULT_INSPECTOR_PCT;
+        assert!(
+            (want - 2..=want).contains(&launch),
+            "launch share was {launch}%"
+        );
 
         app.resize_inspector(1);
         app.resize_inspector(1);
