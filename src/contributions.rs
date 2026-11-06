@@ -165,15 +165,44 @@ impl Default for DailyCounts {
     }
 }
 
+/// Where a day's count falls among the active days of its calendar (FZ-91).
+/// Steps by distribution, not by fraction of the busiest day, so one outlier
+/// cannot flatten the rest of the year into the palest shade.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShadeScale {
+    /// The 25th, 50th (median) and 75th percentiles: a count up to the
+    /// first is step 1, up to the median 2, up to the third 3, above it 4.
+    Quartiles([u32; 3]),
+    /// Fewer than four distinct counts (a tiny sample, or ties) cannot fill
+    /// four steps by percentile. They spread over the steps in order, the
+    /// smallest at 1 and the largest at 4; one distinct count is step 4.
+    Spread(Vec<u32>),
+}
+
+impl ShadeScale {
+    pub fn step(&self, count: u32) -> u8 {
+        if count == 0 {
+            return 0;
+        }
+        match self {
+            Self::Quartiles(bounds) => 1 + bounds.iter().filter(|&&b| count > b).count() as u8,
+            Self::Spread(distinct) => {
+                let k = distinct.len();
+                let rank = distinct.partition_point(|&d| d <= count).max(1);
+                (4 - (k.saturating_sub(rank) * 3) / k.saturating_sub(1).max(1)) as u8
+            }
+        }
+    }
+}
+
 /// A filled year of contribution counts.
 #[derive(Debug, Clone)]
 pub struct Calendar {
     start: NaiveDate,
     today: NaiveDate,
     counts: [u32; SLOTS],
-    /// GitHub's own shade for the day, where the payload carried one. None
-    /// falls back to `intensity`, which is how the local source and a cached
-    /// payload from before levels were fetched are drawn.
+    /// GitHub's own shade for the day, where the payload carried one. Not
+    /// drawn since FZ-91: the strip shades both sources by `shade_scale`.
     levels: [Option<u8>; SLOTS],
     source: Source,
 }
@@ -273,7 +302,9 @@ impl Calendar {
     }
 
     /// Shade step 0..=4 at a grid position: GitHub's where it gave one, else
-    /// `intensity` of the count.
+    /// `intensity` of the count. Test-only since FZ-91: the strip draws every
+    /// day by `shade_scale`, and this pins the level bookkeeping.
+    #[cfg(test)]
     pub fn level_at(&self, week: usize, weekday: usize) -> u8 {
         let slot = week * 7 + weekday;
         match self.levels.get(slot) {
@@ -364,18 +395,30 @@ impl Calendar {
         (slot < self.live()).then(|| (self.start + Duration::days(slot as i64), self.counts[slot]))
     }
 
-    /// Shade step 0..=4 for a count: quartiles of the calendar's own busiest
-    /// day, so a quiet fleet still shows shape instead of one flat tone. This
-    /// is the local source's scale, and the fallback for a GitHub day with
-    /// no level. It is paler than github.com, which trims outliers before
-    /// scaling; the GitHub source carries GitHub's own levels for that
-    /// reason (`level_at`).
-    pub fn intensity(&self, count: u32) -> u8 {
-        if count == 0 {
-            return 0;
+    /// The strip's one shade scale, for both sources, read off the active
+    /// days (count above zero) of the whole calendar, so scrolling never
+    /// reshades a day. Build it once per draw: it sorts every live day.
+    pub fn shade_scale(&self) -> ShadeScale {
+        let mut active: Vec<u32> = self.counts[..self.live()]
+            .iter()
+            .copied()
+            .filter(|&n| n > 0)
+            .collect();
+        active.sort_unstable();
+        let mut distinct = active.clone();
+        distinct.dedup();
+        if distinct.len() < 4 {
+            return ShadeScale::Spread(distinct);
         }
-        let max = self.max().max(1);
-        ((count as u64 * 4).div_ceil(max as u64)).clamp(1, 4) as u8
+        // Nearest-rank percentile: the smallest count with at least q
+        // quarters of the active days at or below it.
+        let percentile = |quarters: usize| active[(quarters * active.len()).div_ceil(4) - 1];
+        ShadeScale::Quartiles([percentile(1), percentile(2), percentile(3)])
+    }
+
+    /// Shade step 0..=4 for a count on this calendar's `shade_scale`.
+    pub fn intensity(&self, count: u32) -> u8 {
+        self.shade_scale().step(count)
     }
 
     /// Which column each month opens in, for the label row.
@@ -508,16 +551,84 @@ mod tests {
         assert_eq!(cal.day_at(WEEKS - 1, 6), None, "past today");
     }
 
+    /// FZ-91, replacing `intensity_buckets_by_quartile_of_the_busiest_day`
+    /// on Andreas's word: the scale is the distribution of the active days,
+    /// not quarters of the busiest one.
     #[test]
-    fn intensity_buckets_by_quartile_of_the_busiest_day() {
+    fn intensity_steps_by_the_quartiles_of_the_active_days() {
         let mut cal = Calendar::new(d("2026-08-18"), Source::Local);
-        cal.add(d("2026-01-05"), 100);
+        // Nine active days, 1 to 9 commits: quartiles 3, 5 (the median), 7.
+        for n in 1..=9u32 {
+            cal.add(d("2026-01-05") + Duration::days(n as i64), n);
+        }
+        assert_eq!(cal.shade_scale(), ShadeScale::Quartiles([3, 5, 7]));
         assert_eq!(cal.intensity(0), 0, "an empty day is never shaded");
         assert_eq!(cal.intensity(1), 1, "one contribution is visible");
-        assert_eq!(cal.intensity(25), 1, "top of the first quartile");
-        assert_eq!(cal.intensity(26), 2);
-        assert_eq!(cal.intensity(75), 3);
-        assert_eq!(cal.intensity(100), 4, "the busiest day is the brightest");
+        assert_eq!(cal.intensity(3), 1, "top of the first quartile");
+        assert_eq!(cal.intensity(4), 2);
+        assert_eq!(cal.intensity(5), 2, "the median day is step 2");
+        assert_eq!(cal.intensity(6), 3);
+        assert_eq!(cal.intensity(7), 3, "top of the third quartile");
+        assert_eq!(cal.intensity(8), 4);
+        assert_eq!(cal.intensity(9), 4, "the busiest day is the brightest");
+    }
+
+    /// The old scale took quarters of the busiest day, so one 500-commit
+    /// day pressed every ordinary day into step 1.
+    #[test]
+    fn one_outlier_day_leaves_four_steps_across_the_ordinary_days() {
+        let mut cal = Calendar::new(d("2026-08-18"), Source::Local);
+        for n in 1..=8u32 {
+            cal.add(d("2026-02-01") + Duration::days(n as i64), n);
+        }
+        cal.add(d("2026-03-01"), 500);
+        let steps: std::collections::BTreeSet<u8> = (1..=8).map(|n| cal.intensity(n)).collect();
+        assert_eq!(steps.into_iter().collect::<Vec<_>>(), vec![1, 2, 3, 4]);
+        assert_eq!(cal.intensity(500), 4);
+    }
+
+    #[test]
+    fn the_median_active_day_is_step_two_and_zero_days_step_zero() {
+        let mut cal = Calendar::new(d("2026-08-18"), Source::Github);
+        for (i, n) in [2u32, 40, 9, 1, 15].into_iter().enumerate() {
+            cal.set(d("2026-04-01") + Duration::days(i as i64), n);
+        }
+        cal.set(d("2026-04-10"), 0);
+        assert_eq!(cal.intensity(9), 2, "9 is the median of 1, 2, 9, 15, 40");
+        let empty = cal.slot(d("2026-04-10")).unwrap();
+        assert_eq!(
+            cal.level_at(empty / 7, empty % 7),
+            0,
+            "a zero day is step 0"
+        );
+        assert_eq!(cal.intensity(0), 0);
+    }
+
+    /// Fewer than four active days cannot be split by percentile: the
+    /// distinct counts spread over the steps, lowest at 1, highest at 4.
+    #[test]
+    fn fewer_than_four_active_days_spread_over_the_steps_in_order() {
+        let mut cal = Calendar::new(d("2026-08-18"), Source::Local);
+        cal.add(d("2026-05-01"), 3);
+        assert_eq!(cal.intensity(3), 4, "a lone day is the brightest");
+        cal.add(d("2026-05-02"), 10);
+        assert_eq!((cal.intensity(3), cal.intensity(10)), (1, 4));
+        cal.add(d("2026-05-03"), 6);
+        assert_eq!(
+            [3, 6, 10].map(|n| cal.intensity(n)),
+            [1, 3, 4],
+            "three days keep their order"
+        );
+        // Ties count once: four days on three distinct counts still spread.
+        cal.add(d("2026-05-04"), 6);
+        assert_eq!([3, 6, 10].map(|n| cal.intensity(n)), [1, 3, 4]);
+    }
+
+    #[test]
+    fn an_empty_year_has_an_empty_scale() {
+        let cal = Calendar::new(d("2026-08-18"), Source::Local);
+        assert_eq!(cal.shade_scale(), ShadeScale::Spread(Vec::new()));
+        assert_eq!(cal.intensity(0), 0);
     }
 
     fn at(cal: &Calendar, date: NaiveDate) -> u8 {

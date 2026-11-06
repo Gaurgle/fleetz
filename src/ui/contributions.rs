@@ -502,6 +502,9 @@ fn day_line(
         _ => "    ",
     };
     let ladder = colors::contrib_ladder(calendar.source());
+    // One scale for both sources, by count: GitHub's `contributionLevel`
+    // is not drawn (FZ-91).
+    let scale = calendar.shade_scale();
     let mut spans = vec![
         Span::raw(" ".repeat(pad as usize)),
         Span::styled(label.to_string(), Style::default().fg(colors::OVERLAY)),
@@ -510,14 +513,14 @@ fn day_line(
     for column in 0..visible {
         let week = first + column;
         match calendar.day_at(week, weekday) {
-            Some(_) => {
+            Some((_, count)) => {
                 // The marked day is painted in plain text white: it has to
                 // beat both ladders, and every status colour in the palette
                 // already means something else.
                 let color = if marked == Some((column, weekday)) {
                     colors::TEXT
                 } else {
-                    ladder[calendar.level_at(week, weekday) as usize]
+                    ladder[scale.step(count) as usize]
                 };
                 spans.push(Span::styled(glyph, Style::default().fg(color)));
             }
@@ -1415,6 +1418,40 @@ mod tests {
         assert_ne!(github[4], local[4], "a busy day is not");
         for step in 1..5 {
             assert_ne!(github[step], local[step], "step {step} must differ");
+        }
+    }
+
+    /// FZ-91: both sources shade a day by `shade_scale` of its count, and a
+    /// GitHub day carrying a `contributionLevel` that disagrees is still
+    /// drawn by count.
+    #[test]
+    fn both_sources_shade_by_count_and_a_github_level_is_not_drawn() {
+        let today = day("2026-08-18");
+        let start = crate::contributions::grid_start(today);
+        // Week 0, Sunday to Saturday: 1, 2, ..., 6 commits and an empty day.
+        let counts = [1u32, 2, 3, 4, 5, 6, 0];
+        for source in [Source::Github, Source::Local] {
+            let mut cal = Calendar::new(today, source);
+            for (weekday, n) in counts.iter().enumerate() {
+                let date = start + chrono::Duration::days(weekday as i64);
+                cal.set(date, *n);
+                // GitHub's verdict, inverted against the counts.
+                cal.set_level(date, 4 - (weekday as u8).min(4));
+            }
+            let scale = cal.shade_scale();
+            let ladder = colors::contrib_ladder(source);
+            for (weekday, n) in counts.iter().enumerate() {
+                let line = day_line(&cal, 0, 1, weekday, None, 0, CELL);
+                let cell = line.spans.iter().find(|s| s.content == CELL).unwrap();
+                assert_eq!(
+                    cell.style.fg,
+                    Some(ladder[scale.step(*n) as usize]),
+                    "{source:?} weekday {weekday} ({n} commits) not drawn by count"
+                );
+            }
+            let busiest = day_line(&cal, 0, 1, 5, None, 0, CELL);
+            let cell = busiest.spans.iter().find(|s| s.content == CELL).unwrap();
+            assert_eq!(cell.style.fg, Some(ladder[4]), "{source:?}: 6 is the top");
         }
     }
 

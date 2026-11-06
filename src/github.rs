@@ -375,6 +375,8 @@ fn parse_calendar(
         // The days just overwritten lost their levels with their counts. Put
         // them back on the current year window's scale, which is the only
         // scale those days' neighbours are on; see `derive_missing_levels`.
+        // Levels are kept, not drawn: the strip shades every day by count
+        // (`Calendar::shade_scale`, FZ-91).
         if let Some((from, _)) = crate::contributions::year_windows(today).first() {
             calendar.derive_missing_levels(*from);
         }
@@ -729,9 +731,10 @@ fn build_query(repo_limit: u32, today: chrono::NaiveDate, rotation: i64) -> Stri
     // still no `first:` connection to pay for.
     //
     // No `contributionLevel` here: GitHub scales a level to the window asked
-    // for, and this window's `from` rotates, so its levels would re-shade the
-    // newest week every few minutes. Those days get the year window's scale
-    // instead (`Calendar::derive_missing_levels`).
+    // for, and this window's `from` rotates, so its levels would sit on a
+    // scale that changes every few minutes. Those days get the year window's
+    // level instead (`Calendar::derive_missing_levels`). No level is drawn:
+    // the strip shades by count (`Calendar::shade_scale`, FZ-91).
     let (recent_from, recent_to) = crate::contributions::recent_window(today, rotation);
     let recent_field = format!(
         r#"  recent: contributionsCollection(from: "{}T00:00:00Z", to: "{}T23:59:59Z") {{
@@ -2225,14 +2228,14 @@ mod tests {
         );
     }
 
-    /// The year windows' `contributionLevel` is the shade drawn, not a bucket
-    /// of the count: github.com trims outliers before scaling and the formula
-    /// does not, so the two disagree on ordinary days. A day the `recent`
-    /// window overwrote has no level of its own and is put on the year's
-    /// scale by example. Measured cost of the field: none (`rateLimit` cost
-    /// 1, nodeCount 0 with and without it).
+    /// The year windows' `contributionLevel` is parsed and kept as given, and
+    /// may disagree with the count's own shade: since FZ-91 the strip draws
+    /// every day by `Calendar::shade_scale` of its count, not by the level.
+    /// A day the `recent` window overwrote has no level of its own and is
+    /// put on the year's scale by example. Measured cost of the field: none
+    /// (`rateLimit` cost 1, nodeCount 0 with and without it).
     #[test]
-    fn github_levels_are_drawn_as_given_and_recent_days_join_their_scale() {
+    fn github_levels_are_kept_as_given_and_recent_days_join_their_scale() {
         let json = r#"{"data":{"viewer":{
             "repositories":{"nodes":[]},
             "y0":{"contributionCalendar":{"weeks":[
@@ -2254,7 +2257,7 @@ mod tests {
             let slot = cal.slot(day(date)).unwrap();
             cal.level_at(slot / 7, slot % 7)
         };
-        assert_eq!(cal.intensity(12), 2, "the formula would have said 2");
+        assert_eq!(cal.intensity(12), 1, "by count: 1, where github said 3");
         assert_eq!(at("2026-08-10"), 3, "github said 3, and github is drawn");
         assert_eq!(at("2026-08-11"), 4);
         assert_eq!(
