@@ -7,10 +7,10 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Session `ea56f412` (`claude-fable-5-1`, `at-a`) holds the baton again
-since 2026-11-05 12:26 CET, on his batch of feedback (it released it
-11-04 16:15). No worker or reviewer running. Worktrees on at-a:
-`issue-121`, `issue-124`, `issue-130`, `issue-134`, `issue-88`.
+Taken 2026-11-06 15:48 CET by session `3f0d864a` (`claude-opus-5-5`) on
+RoosMacbookA. at-a holds FZ-83's uncommitted tree (stuck there); his 15:45:
+work "what makes sense ... that doesnt clash with the stuck 83". Here:
+`issue-116`, `issue-119` (uncommitted, 10-30 base), `issue-45`, `79`, `81`.
 
 ## Standing authority
 
@@ -27,34 +27,34 @@ choose tickets as you see fit best", log). Astra is the preferred lead. No
 
 ## In flight
 
-- Ready to integrate for his look, reviewed, committed, pushed: FZ-68
-  (#124, `f22d8aa` incl. the merge of `main` `8ce524a`, accepted diff
-  `c3221a9861ed`), FZ-74 (#130, `3d9078b`, `b72913604e3c`), FZ-77
-  (#134, `4db738c`, `e6344b76473c`, CI 41855222452 was running at the
-  stop; round 2 planned, `ideas.md`). Ready: FZ-78, FZ-79 after FZ-68; FZ-80
-  (#136) Backlog. FZ-75 (#131) is another session's research ticket.
+- Running 11-06 (records on the issues): FZ-81 #137 resolution (`fz-small`),
+  FZ-85 #142 (`fz-worker` opus:high), FZ-91 #148 (opus:medium), base `09f15f0`.
+  FZ-95 held: its header rewrite clashes with FZ-83's `header_lines`.
+- FZ-81 (#137, yank flash, `35f17cc`, diff `7900ef870c0e`): his look
+  accepted 14:25; merging with `main` conflicts in README's `yy`/`yp`
+  row: a resolution cycle, review, gate, merge. FZ-83 (#140, CI lamp,
+  Vercel rows, source column; uncommitted, diff `5f4c44d114ce` vs
+  `334e9a6`, 1631 green): his design yes 15:32; next a fresh full
+  review, commit, a merge with `main` (behind FZ-82/68/77), his look. Ready: FZ-84 to
+  FZ-87, FZ-89 to FZ-92, FZ-78, FZ-79. FZ-80 Backlog.
+- FZ-95 (#152): `c3c6830` pushed, his look given, review 1 changes requested;
+  fix list on #152. Next: one fix cycle, fresh review, gate, merge.
 - FZ-65 (#121): built, `9f4018d7160d` unreviewed, his wheel decision.
   #88 (FZ-38) parked, uncommitted. FZ-63 (#119), FZ-60 (#116): trees
-  lost 11-03; redispatch on his word.
+  found uncommitted on RoosMacbookA (10-30 base); his word.
 
 ## Open questions
 
-- His yes wanted: four design tickets from "Agents in fleetz" and the
-  `info` boxes (`ideas.md`): contributors in the `info` inspector, a
-  day's work box, `AGENTS` box, `RELAY` box; the FZ-66 band on every
-  list; an ssh README paragraph; `fleetz doctor` (M5); whether FZ-77's
-  subpage lists uncommitted files. The CI YAML needs a tenth grammar.
+- To file on his 11-05 13:50 answers (log): an ssh README paragraph,
+  `fleetz doctor` (M5), contributors in the `info` inspector; the day's
+  work, `AGENTS` and `RELAY` boxes after FZ-79 (his "what you think
+  makes sense": lead's order in `ideas.md`). FZ-77 round 2: facts and
+  commits; uncommitted files belong to `changes` (FZ-60).
 - #88 worktree: stays or goes; FZ-38 with font-checked glyphs? #81 and
   #79 test edits; pane 1 wheel coalescing, flaky `clipboard::tests`: his yes.
 
 ## Next step
 
-Merged 11-04: FZ-67 `2e71935`, FZ-70 `f968c79`, FZ-69 `01b51cb`, FZ-73
-`14f44e3`, FZ-71 `9130491`, FZ-72 `8f92063`, FZ-76 `5ed9b4e`. Next: on
-his look, merge FZ-74, FZ-68, FZ-77 in that order (fresh checks and gate
-each; merge-resolution cycles between them, they share `app.rs`,
-`main.rs`, `detail.rs`); then FZ-77 round 2, FZ-78, FZ-79; then FZ-65,
-the `{`/`}` ticket on his yes, FZ-41 (#97); FZ-63, FZ-60 on his word.
-One target dir per worktree, pruned at merge (log, 15:45).
+Finish the three running; then FZ-86, 90, 78 (clear of FZ-83). FZ-83,
+FZ-95, 79, 84, 89, 92 wait for at-a. Suggest `cargo install` first.
 
-Start a lead at the root: `claude --agent fz-coordinator`; Codex: `AGENTS.md`.

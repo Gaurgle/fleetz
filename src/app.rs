@@ -43,6 +43,12 @@ pub enum HistoryView {
     Commits,
     Reflog,
     Graph,
+    /// The selected repo's worktrees, the main checkout first, the
+    /// highlighted one's facts and newest commits in the inspector (FZ-77).
+    /// Reads a worktree's log only while on screen
+    /// (`App::worktrees_wanted`). Beside `branches`, whose checkouts these
+    /// are, and before it: `branches`, `ci` and `notes` keep their order.
+    Worktrees,
     Branches,
     /// The selected repo's recent workflow runs (FZ-30d). The only view that
     /// polls: the CI data layer asks GitHub only while this one is on
@@ -56,11 +62,12 @@ pub enum HistoryView {
 
 impl HistoryView {
     /// Every view, in the order the tab strip draws them and `V` cycles them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Info,
         Self::Commits,
         Self::Reflog,
         Self::Graph,
+        Self::Worktrees,
         Self::Branches,
         Self::Ci,
         Self::Notes,
@@ -74,9 +81,10 @@ impl HistoryView {
             Self::Commits => 1,
             Self::Reflog => 2,
             Self::Graph => 3,
-            Self::Branches => 4,
-            Self::Ci => 5,
-            Self::Notes => 6,
+            Self::Worktrees => 4,
+            Self::Branches => 5,
+            Self::Ci => 6,
+            Self::Notes => 7,
         }
     }
 
@@ -89,6 +97,7 @@ impl HistoryView {
             Self::Branches => "branches",
             Self::Ci => "ci",
             Self::Notes => "notes",
+            Self::Worktrees => "worktrees",
         }
     }
 }
@@ -569,7 +578,7 @@ impl SettingField {
 /// Repo list width as a percentage of the main area, and the inspector's share
 /// of the right column. These are the sizes every launch starts from.
 pub const DEFAULT_REPO_LIST_PCT: u16 = 35;
-pub const DEFAULT_INSPECTOR_PCT: u16 = 40;
+pub const DEFAULT_INSPECTOR_PCT: u16 = 30;
 
 /// Bounds the resize keys clamp to. Both panes stay wide/tall enough to be
 /// worth drawing, so a held key can never collapse one to nothing.
@@ -2177,6 +2186,13 @@ pub struct App {
     /// are written on the first frame, which is always drawn before any input
     /// is processed.
     pub detail_max_scroll: std::cell::Cell<u16>,
+    /// Whether this frame drew the fleet's state in pane 2 (FZ-93): its
+    /// header's fleet column, or the `notes` layout's slot beside it. Reset
+    /// at the start of every frame and read by the footer, drawn after pane
+    /// 2, which carries the summary and the message itself when nothing
+    /// else did (a section's digest, no repo, a pane too narrow for the
+    /// column), so an action never ends in silence.
+    pub fleet_drawn: std::cell::Cell<bool>,
     /// Set when the cursor moves, cleared once the renderer has scrolled to
     /// show it.
     ///
@@ -2453,6 +2469,16 @@ pub struct App {
     /// (`RefCell` for the reason `detail_row_tops` is one). A held log never
     /// changes, so its job id and the width are the whole key.
     pub ci_log_wrap: std::cell::RefCell<Option<CiLogWrap>>,
+    /// The `worktrees` view's newest commits per worktree, keyed by the
+    /// worktree's path as the row holds it, for the session (FZ-77). Read
+    /// only while the view is on screen (`worktrees_wanted`).
+    pub worktree_logs: std::collections::HashMap<String, WorktreeLog>,
+    /// Bumped when a sweep lands: a held worktree log from an older
+    /// generation is read again the next time it is shown.
+    pub worktree_logs_generation: u64,
+    /// The row path the cursor rests on in the `worktrees` view and since
+    /// when, for the dwell (`ci::DWELL`) before a log read starts.
+    pub worktrees_cursor: Option<(Option<String>, std::time::Instant)>,
     /// The `notes` view's walk per repo, keyed by the row's path, held for
     /// the session and never written to disk (FZ-53). Walked only while the
     /// view is on screen (`notes_wanted`).
@@ -2466,11 +2492,11 @@ pub struct App {
     /// The row path the cursor rests on in the `notes` view and since when,
     /// for the dwell (`ci::DWELL`) before a walk starts.
     pub notes_cursor: Option<(Option<String>, std::time::Instant)>,
-    /// The highlighted file's body and facts, for the reader and the card:
-    /// one file at a time.
+    /// The highlighted file's body and facts, for the reader and the facts
+    /// beside pane 2's header: one file at a time.
     pub note_body: Option<NoteBody>,
     /// The reader's scroll offset (FZ-62), its own rather than the
-    /// inspector's, which the card scrolls. Reset when the file changes.
+    /// inspector's. Reset when the file changes.
     pub reader_scroll: u16,
     /// Largest useful reader offset, measured by the renderer for the
     /// reason `inspector_max_scroll` is.
@@ -2523,7 +2549,7 @@ pub struct NotesState {
 }
 
 /// The body and facts of one file in the `notes` view: the reader draws the
-/// text, the card the facts.
+/// text, the facts beside pane 2's header the facts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoteBody {
     pub path: std::path::PathBuf,
@@ -2559,6 +2585,30 @@ pub struct NoteRender {
     pub text: String,
 }
 
+/// One worktree's newest commits as the `worktrees` view's inspector draws
+/// them (FZ-77): `None` until a read lands.
+#[derive(Debug, Clone, Default)]
+pub struct WorktreeLog {
+    pub commits: Option<Vec<crate::model::Commit>>,
+    /// The generation `commits` was read in (`App::worktree_logs_generation`).
+    pub generation: u64,
+    /// A read is in flight; one per worktree at a time.
+    pub reading: bool,
+}
+
+/// How many commits the `worktrees` inspector lists for a worktree.
+pub const WORKTREE_LOG_COUNT: u32 = 6;
+
+/// A claimed log read of one worktree, for `git::branch_commits` on `HEAD`
+/// off the UI thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeLogRead {
+    /// The worktree's path as its row holds it, the `worktree_logs` key.
+    pub key: String,
+    pub dir: std::path::PathBuf,
+    pub generation: u64,
+}
+
 /// A claimed walk of one repo, for `notes::walk` off the UI thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotesWalk {
@@ -2568,7 +2618,7 @@ pub struct NotesWalk {
 }
 
 /// A claimed read of the highlighted file, for `notes::read_body` and the
-/// card's facts.
+/// file's facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteRead {
     pub path: std::path::PathBuf,
@@ -3012,6 +3062,7 @@ impl App {
             detail_selections: [0; HistoryView::COUNT],
             inspector_scroll: 0,
             detail_max_scroll: std::cell::Cell::new(0),
+            fleet_drawn: std::cell::Cell::new(false),
             follow_selection: std::cell::Cell::new(false),
             detail_row_tops: std::cell::RefCell::new(Vec::new()),
             detail_hits: std::cell::RefCell::new(Default::default()),
@@ -3081,6 +3132,9 @@ impl App {
             yank_flash: YankFlash::default(),
             ci_inspected: None,
             ci_log_wrap: std::cell::RefCell::new(None),
+            worktree_logs: std::collections::HashMap::new(),
+            worktree_logs_generation: 0,
+            worktrees_cursor: None,
             notes: std::collections::HashMap::new(),
             notes_generation: 0,
             notes_all_markdown: false,
@@ -3465,6 +3519,106 @@ impl App {
         self.ci_wanted() && !self.inspector_folded
     }
 
+    /// Whether the `worktrees` view is on screen (FZ-77): the one gate its
+    /// log read passes.
+    pub fn worktrees_wanted(&self) -> bool {
+        self.view == View::Detail && self.history_view == HistoryView::Worktrees
+    }
+
+    /// The worktrees the `worktrees` view lists for the selected repo, in
+    /// drawing order: the main checkout first, then the linked ones as
+    /// `git worktree list` gave them. Empty for a row with nothing on disk.
+    pub fn worktrees_listed(&self) -> Vec<crate::model::Worktree> {
+        let Some(repo) = self.selected_repo() else {
+            return Vec::new();
+        };
+        let Some(main) = repo.main_worktree() else {
+            return Vec::new();
+        };
+        std::iter::once(main)
+            .chain(repo.worktrees.iter().cloned())
+            .collect()
+    }
+
+    /// The worktree the `worktrees` view's cursor is on, clamped to the
+    /// rows there are.
+    pub fn worktree_highlighted(&self) -> Option<crate::model::Worktree> {
+        let mut listed = self.worktrees_listed();
+        let last = listed.len().checked_sub(1)?;
+        let at = self.detail_selections[HistoryView::Worktrees.index()].min(last);
+        Some(listed.swap_remove(at))
+    }
+
+    /// The directory `Enter`, `e` and `o` act in, `~` expanded: the
+    /// highlighted worktree's while pane 2 has focus on the `worktrees`
+    /// view (FZ-77), else the selected repo's. `None` for a row with
+    /// nothing on disk.
+    pub fn action_dir(&self) -> Option<String> {
+        let worktree = (self.worktrees_wanted() && self.focused_panel == FocusedPanel::Detail)
+            .then(|| self.worktree_highlighted())
+            .flatten();
+        let path = match worktree {
+            Some(wt) => wt.path,
+            None => self.selected_repo()?.path.clone()?,
+        };
+        Some(shellexpand::tilde(&path).to_string())
+    }
+
+    /// The held log of the highlighted worktree, `None` while none landed.
+    pub fn worktree_log(&self) -> Option<&[crate::model::Commit]> {
+        let wt = self.worktree_highlighted()?;
+        self.worktree_logs.get(&wt.path)?.commits.as_deref()
+    }
+
+    /// Claim the log read of the highlighted worktree at `instant`, or
+    /// `None`: only while the `worktrees` view is on screen with the
+    /// inspector open, once the cursor has rested on the repo for
+    /// `ci::DWELL` (as `claim_notes_walk` waits), and only when the log is
+    /// missing or from an older generation. One read per worktree at a time.
+    pub fn claim_worktree_log(&mut self, instant: std::time::Instant) -> Option<WorktreeLogRead> {
+        if !self.worktrees_wanted() || !self.inspector_is_expanded() {
+            return None;
+        }
+        let repo = self.selected_repo().and_then(|r| r.path.clone());
+        let settled_for = match &self.worktrees_cursor {
+            Some((held, since)) if *held == repo => instant.duration_since(*since),
+            _ => {
+                self.worktrees_cursor = Some((repo, instant));
+                std::time::Duration::ZERO
+            }
+        };
+        if settled_for < crate::ci::DWELL {
+            return None;
+        }
+        let key = self.worktree_highlighted()?.path;
+        let generation = self.worktree_logs_generation;
+        let state = self.worktree_logs.entry(key.clone()).or_default();
+        let fresh = state.commits.is_some() && state.generation == generation;
+        if state.reading || fresh {
+            return None;
+        }
+        state.reading = true;
+        let dir = std::path::PathBuf::from(shellexpand::tilde(&key).as_ref());
+        Some(WorktreeLogRead {
+            key,
+            dir,
+            generation,
+        })
+    }
+
+    /// Land a log read (`AppEvent::WorktreeLogRead`) and ask for a redraw.
+    pub fn apply_worktree_log(
+        &mut self,
+        read: WorktreeLogRead,
+        commits: Vec<crate::model::Commit>,
+    ) {
+        let state = self.worktree_logs.entry(read.key).or_default();
+        state.reading = false;
+        state.commits = Some(commits);
+        state.generation = read.generation;
+        self.needs_redraw = true;
+    }
+
     /// Whether the `notes` view may walk a repo or read a file: pane 2 is on
     /// screen showing it. The one gate the walk and the body read pass.
     pub fn notes_wanted(&self) -> bool {
@@ -3501,8 +3655,8 @@ impl App {
         Some(std::path::PathBuf::from(shellexpand::tilde(root).as_ref()).join(&file.rel))
     }
 
-    /// The walk's entry for the file the cursor is on: what the card and the
-    /// reader's border describe (FZ-62).
+    /// The walk's entry for the file the cursor is on: what the facts and
+    /// the reader describe (FZ-62, FZ-68).
     pub fn notes_highlighted_file(&self) -> Option<&crate::notes::NoteFile> {
         let listed = self.notes_listed();
         let last = listed.len().checked_sub(1)?;
@@ -3560,7 +3714,7 @@ impl App {
     /// Claim the read of the highlighted file, or `None`: only while the
     /// `notes` view shows, and only when the body held is another file's or
     /// from an older generation. One file at a time, whatever the cursor
-    /// passed over since the last tick. A folded card still reads: the
+    /// passed over since the last tick. A folded inspector still reads: the
     /// reader beside the tree shows the body (FZ-62). A new file starts the
     /// reader at its top; a re-read of the same one keeps its place.
     pub fn claim_note_read(&mut self) -> Option<NoteRead> {
@@ -3695,7 +3849,8 @@ impl App {
     }
 
     /// Whether the main area takes the `notes` layout (FZ-62): pane 2 at
-    /// full height split into tree and reader, the card under pane 1. Not on
+    /// full height split into tree and reader, the facts beside its header,
+    /// and no inspector under pane 1 (FZ-68). Not on
     /// a section header, where pane 2 is the digest and the usual layout
     /// returns. Read by `ui::panel_rects`, so render and hit-testing agree.
     pub fn notes_layout(&self) -> bool {
@@ -3753,6 +3908,7 @@ impl App {
         self.sweep_started = None;
         self.last_refreshed = Some(at);
         self.invalidate_notes();
+        self.worktree_logs_generation += 1;
         self.needs_redraw = true;
     }
 
@@ -4150,8 +4306,11 @@ impl App {
     /// the block needs. Read by both `ui::panel_rects` and `ui::render`
     /// through `detail::split_inspector`, so the two cannot disagree about
     /// whether the pane exists.
+    ///
+    /// The `notes` layout docks none either: the file's facts sit in pane 2
+    /// beside the header (FZ-68), and `ui::panel_rects` gives pane 1 the rows.
     pub fn shows_inspector(&self) -> bool {
-        self.history_view != HistoryView::Graph
+        self.history_view != HistoryView::Graph && !self.notes_layout()
     }
 
     /// Whether the inspector is drawn with its content, not folded to an
@@ -4484,6 +4643,8 @@ impl App {
                 .map_or(0, |s| s.runs.len()),
             // The files the tree lists, in its current mode.
             HistoryView::Notes => self.notes_listed().len(),
+            // The main checkout and the linked worktrees.
+            HistoryView::Worktrees => self.worktrees_listed().len(),
         }
     }
 
@@ -4583,6 +4744,26 @@ impl App {
             HistoryView::Ci => None,
             // A file is not a commit; the inspector reads the file itself.
             HistoryView::Notes => None,
+            // A worktree names its HEAD, as a branch names its tip; the main
+            // checkout first, as the view draws it. Borrowed from the rows
+            // the hash came from, not from a list built here.
+            HistoryView::Worktrees => match i {
+                0 => repo.main_worktree().and_then(|_| {
+                    repo.branches
+                        .iter()
+                        .find(|b| b.is_head)
+                        .map(|b| b.tip.as_str())
+                        .filter(|t| !t.is_empty())
+                        // Detached: the 7-digit form the row's
+                        // `detached @ <sha>` names (`main_worktree`).
+                        .or(repo
+                            .work_key
+                            .as_ref()
+                            .map(|k| k.head_sha.get(..7).unwrap_or(&k.head_sha)))
+                }),
+                _ => repo.worktrees.get(i - 1).map(|w| w.head.as_str()),
+            }
+            .filter(|h| !h.is_empty()),
         }
     }
 
@@ -4747,6 +4928,15 @@ impl App {
                     }
                 }
             }
+            // A worktree's branch and its directory; a detached one has no
+            // branch to name (FZ-77 on FZ-74).
+            (FocusedPanel::Detail, HistoryView::Worktrees) => {
+                let wt = self.worktree_highlighted()?;
+                match kind {
+                    Thing => (!wt.branch.is_empty()).then_some((wt.branch, YankWord::Value)),
+                    Path => Some((shellexpand::tilde(&wt.path).into_owned(), YankWord::Path)),
+                }
+            }
             (FocusedPanel::Detail, HistoryView::Ci) => {
                 let run = self.ci_highlighted_run()?;
                 match kind {
@@ -4884,7 +5074,7 @@ impl App {
         Some(match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             // In the `notes` layout the pane after the tree is the reader,
-            // as Tab goes, ahead of the card.
+            // as Tab goes.
             FocusedPanel::Detail if self.notes_layout() => FocusedPanel::Reader,
             FocusedPanel::Detail if self.inspector_is_expanded() => FocusedPanel::Inspector,
             // The graph docks no inspector, so there is no next pane to reach
@@ -4972,7 +5162,8 @@ impl App {
             };
             return;
         }
-        // The `notes` layout puts its reader between pane 2 and the card.
+        // The `notes` layout puts its reader after pane 2, and docks no
+        // inspector after it (FZ-68).
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             FocusedPanel::Detail if self.notes_layout() => FocusedPanel::Reader,
@@ -5682,6 +5873,11 @@ impl App {
                 if self.selected != pos {
                     self.selected = pos;
                     self.reset_detail_view();
+                }
+                // Off a header onto a repo in `notes` the layout returns and
+                // docks no inspector; focus cannot stay on it (FZ-68).
+                if self.focused_panel == FocusedPanel::Inspector && !self.shows_inspector() {
+                    self.focused_panel = FocusedPanel::Detail;
                 }
             }
             ListRow::Results | ListRow::Gap => return,
@@ -9452,6 +9648,89 @@ mod tests {
         assert!(!app.fetch_held("~/repos/repo-0", t0 + chrono::Duration::seconds(60)));
     }
 
+    // --- The `worktrees` view (FZ-77) ---
+
+    /// An app on one repo with one linked worktree, pane 2 in the detail
+    /// view.
+    fn worktrees_app() -> App {
+        let mut app = make_app(1);
+        app.view = View::Detail;
+        app.repos[0].worktrees = vec![crate::model::Worktree {
+            path: "~/repos/repo-0-wt".to_string(),
+            branch: "side".to_string(),
+            head: "b2c3d4e".to_string(),
+            dirty: Some(0),
+            ..Default::default()
+        }];
+        app
+    }
+
+    /// `[` and `]` reach the view: forward from `graph`, back from
+    /// `branches`.
+    #[test]
+    fn brackets_reach_the_worktrees_view() {
+        let mut app = worktrees_app();
+        app.history_view = HistoryView::Graph;
+        app.press_bracket(false);
+        assert_eq!(app.history_view, HistoryView::Worktrees);
+        app.history_view = HistoryView::Branches;
+        app.press_bracket(true);
+        assert_eq!(app.history_view, HistoryView::Worktrees);
+        assert!(app.worktrees_wanted());
+    }
+
+    /// The log is read only while the view is on screen with the inspector
+    /// open, once the cursor has rested on the repo for the dwell, one read
+    /// per worktree at a time, held once landed, and read again after a
+    /// sweep.
+    #[test]
+    fn a_worktree_log_is_read_on_demand_and_again_after_a_sweep() {
+        let start = std::time::Instant::now();
+        let after = |ms: u64| start + std::time::Duration::from_millis(ms);
+        let rested = after(2000) + crate::ci::DWELL;
+        let mut app = worktrees_app();
+        app.inspector_folded = false;
+        for view in HistoryView::ALL {
+            if view == HistoryView::Worktrees {
+                continue;
+            }
+            app.history_view = view;
+            assert_eq!(app.claim_worktree_log(start), None, "{view:?}");
+            assert_eq!(app.claim_worktree_log(after(1000)), None, "{view:?}");
+        }
+        app.history_view = HistoryView::Worktrees;
+        app.view = View::Compact;
+        assert_eq!(app.claim_worktree_log(after(1500)), None, "compact");
+        app.view = View::Detail;
+
+        app.detail_selections[HistoryView::Worktrees.index()] = 1;
+        assert_eq!(
+            app.claim_worktree_log(after(2000)),
+            None,
+            "the dwell starts"
+        );
+        let early = rested - std::time::Duration::from_millis(1);
+        assert_eq!(app.claim_worktree_log(early), None, "still dwelling");
+        app.inspector_folded = true;
+        assert_eq!(app.claim_worktree_log(rested), None, "inspector folded");
+        app.inspector_folded = false;
+        let read = app
+            .claim_worktree_log(rested)
+            .expect("reads the highlighted one");
+        assert_eq!(read.key, "~/repos/repo-0-wt");
+        assert!(read.dir.ends_with("repos/repo-0-wt"), "{:?}", read.dir);
+        assert_eq!(app.claim_worktree_log(rested), None, "one at a time");
+        app.apply_worktree_log(read, Vec::new());
+        assert_eq!(app.worktree_log().map(<[_]>::len), Some(0));
+        assert_eq!(app.claim_worktree_log(rested), None, "held, not read again");
+
+        app.sweep_landed(chrono::Local::now());
+        assert!(
+            app.claim_worktree_log(rested).is_some(),
+            "read again after a sweep"
+        );
+    }
+
     // --- The `notes` view (FZ-53) ---
 
     /// An app on one repo at `/notes-fixture`, pane 2 in the detail view.
@@ -9569,7 +9848,7 @@ mod tests {
 
     /// The body read is the highlighted file's alone, however far the cursor
     /// moved since the last tick, and nothing outside the view. Read again
-    /// after a suspend returns, and with the card folded: the reader beside
+    /// after a suspend returns, and with the inspector folded: the reader beside
     /// the tree still shows the body (FZ-62).
     #[test]
     fn only_the_highlighted_file_is_read() {
@@ -9632,18 +9911,18 @@ mod tests {
         assert!(app.notes_all_markdown, "not the view");
     }
 
-    /// In the `notes` layout Tab walks repo list, tree, reader, card, strip
-    /// and Shift-Tab walks it back; the reader takes focus nowhere else, and
-    /// leaving the view moves focus off it (FZ-62).
+    /// In the `notes` layout Tab walks repo list, tree, reader, strip and
+    /// Shift-Tab walks it back, with no card to stop on since FZ-68 round 2:
+    /// `3` does not reach an inspector there either. The reader takes focus
+    /// nowhere else, and leaving the view moves focus off it (FZ-62).
     #[test]
-    fn focus_walks_tree_reader_and_card_in_the_notes_layout() {
+    fn focus_walks_tree_and_reader_in_the_notes_layout() {
         let mut app = notes_app();
         app.history_view = HistoryView::Notes;
         let order = [
             FocusedPanel::RepoList,
             FocusedPanel::Detail,
             FocusedPanel::Reader,
-            FocusedPanel::Inspector,
             FocusedPanel::Contributions,
         ];
         app.focused_panel = FocusedPanel::RepoList;
@@ -9656,6 +9935,12 @@ mod tests {
             app.toggle_panel_focus_back();
             assert_eq!(app.focused_panel, *want, "Shift-Tab");
         }
+        app.focus_panel(FocusedPanel::Inspector);
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::RepoList,
+            "no card to focus"
+        );
 
         app.focus_panel(FocusedPanel::Reader);
         assert_eq!(app.focused_panel, FocusedPanel::Reader);
@@ -9668,21 +9953,23 @@ mod tests {
     }
 
     /// `J`/`K` in the `notes` layout scroll the reader a line from the tree,
-    /// with the card open (the default) as well as folded (FZ-62 review F1),
-    /// and from the reader itself, focus unmoved (finding 6).
+    /// with the inspector's fold open (the default) as well as folded
+    /// (FZ-62 review F1; no card is docked since FZ-68 round 2, so the fold
+    /// must not matter), and from the reader itself, focus unmoved
+    /// (finding 6).
     #[test]
-    fn shift_scroll_walks_tree_reader_card_in_the_notes_layout() {
+    fn shift_scroll_walks_tree_and_reader_in_the_notes_layout() {
         let mut app = notes_app();
         app.history_view = HistoryView::Notes;
         walked(&mut app, &["notez/a.md"]);
-        assert!(!app.inspector_folded, "the card is open");
+        assert!(!app.inspector_folded, "the fold is open");
 
         app.focused_panel = FocusedPanel::Detail;
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
         app.reader_max_scroll.set(20);
         app.scroll_next_panel(3);
         assert_eq!(app.reader_scroll, 3, "J from the tree scrolls the reader");
-        assert_eq!(app.inspector_scroll, 0, "not the card");
+        assert_eq!(app.inspector_scroll, 0, "not the inspector");
 
         assert_eq!(app.focused_panel, FocusedPanel::Detail, "focus unmoved");
 
@@ -9694,6 +9981,26 @@ mod tests {
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
         app.focused_panel = FocusedPanel::Detail;
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
+    }
+
+    /// FZ-68 round 2: on a section header in `notes` pane 2 is the digest and
+    /// the inspector is docked, so it can hold focus; stepping onto the repo
+    /// brings the `notes` layout back, which docks none, and focus lands on
+    /// pane 2 rather than staying on a pane that is not drawn.
+    #[test]
+    fn leaving_a_header_in_notes_moves_focus_off_the_inspector() {
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        app.repos[0].location = crate::model::RepoLocation::LocalOnly;
+        let section = crate::digest::Section::of(&app.repos[0]);
+        app.land_on(ListRow::Header(section));
+        assert!(!app.notes_layout(), "on the digest");
+        app.focus_panel(FocusedPanel::Inspector);
+        assert_eq!(app.focused_panel, FocusedPanel::Inspector, "docked here");
+
+        app.land_on(ListRow::Repo(0));
+        assert!(app.notes_layout(), "the notes layout is back");
+        assert_eq!(app.focused_panel, FocusedPanel::Detail);
     }
 
     /// `H`/`L` page the reader by the height its last frame drew, from the

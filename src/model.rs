@@ -758,6 +758,44 @@ impl RepoStatus {
         !self.is_not_cloned() && self.behind == 0 && self.ahead == 0 && self.dirty == 0
     }
 
+    /// The main checkout as a worktree row, for the `worktrees` view
+    /// (FZ-77), which lists it first: `worktrees` carries the linked ones
+    /// only. Built from what the sweep already holds: the checked-out
+    /// branch, its tip, the dirty count, and the tip's commit time when the
+    /// loaded commit list has it. `None` for a row with nothing on disk.
+    pub fn main_worktree(&self) -> Option<Worktree> {
+        if self.is_not_cloned() {
+            return None;
+        }
+        let path = self.path.clone()?;
+        let head_branch = self.branches.iter().find(|b| b.is_head);
+        let head = match head_branch {
+            Some(b) if !b.tip.is_empty() => b.tip.clone(),
+            _ => self
+                .work_key
+                .as_ref()
+                .map(|k| k.head_sha.chars().take(7).collect())
+                .unwrap_or_default(),
+        };
+        let head_at = self
+            .commits
+            .iter()
+            .find(|c| {
+                !c.hash.is_empty()
+                    && !head.is_empty()
+                    && (c.hash.starts_with(&head) || head.starts_with(&c.hash))
+            })
+            .and_then(|c| c.date);
+        Some(Worktree {
+            path,
+            branch: head_branch.map(|b| b.name.clone()).unwrap_or_default(),
+            detached: head_branch.is_none(),
+            head,
+            dirty: Some(self.dirty),
+            head_at,
+        })
+    }
+
     /// The owner to show in the UI: the API login when a GitHub fetch matched
     /// this repo, otherwise whatever the `origin` remote reveals. None when
     /// the repo has neither, which is the "no identity to show" case.

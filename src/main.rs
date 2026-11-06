@@ -175,13 +175,19 @@ pub enum AppEvent {
     /// jobs, a job's whole log or the workflow file, applied by
     /// `App::apply_ci_detail`.
     CiDetail(Box<ci::DetailAnswer>),
+    /// A `worktrees` view log read of one worktree (FZ-77), applied by
+    /// `App::apply_worktree_log`.
+    WorktreeLogRead {
+        read: app::WorktreeLogRead,
+        commits: Vec<model::Commit>,
+    },
     /// A `notes` view walk of one repo (FZ-53), applied by
     /// `App::apply_notes_walk`.
     NotesWalked {
         walk: app::NotesWalk,
         result: Result<notes::Notes, String>,
     },
-    /// The highlighted note's body and its metadata for the card, applied by
+    /// The highlighted note's body and its metadata for the facts, applied by
     /// `App::apply_note_read` and `App::apply_note_facts`, and a markdown
     /// body rendered at the read's `render_width` (FZ-59), applied by
     /// `App::apply_note_rendered` in the same turn so the reader never
@@ -1094,6 +1100,9 @@ async fn run_event_loop(
                 for request in app.claim_ci_details(now, instant) {
                     spawn_ci_detail(&tx, request);
                 }
+                if let Some(read) = app.claim_worktree_log(instant) {
+                    spawn_worktree_log(&tx, read);
+                }
                 if let Some(walk) = app.claim_notes_walk(instant) {
                     spawn_notes_walk(&tx, walk);
                 }
@@ -1169,6 +1178,7 @@ async fn run_event_loop(
             }
             AppEvent::Ci(answer) => app.apply_ci(*answer, chrono::Local::now()),
             AppEvent::CiDetail(answer) => app.apply_ci_detail(*answer, chrono::Local::now()),
+            AppEvent::WorktreeLogRead { read, commits } => app.apply_worktree_log(read, commits),
             AppEvent::NotesWalked { walk, result } => app.apply_notes_walk(walk, result),
             AppEvent::NoteRead {
                 read,
@@ -1941,21 +1951,15 @@ async fn handle_normal_input(
             app.jump_to_digest_line(chrono::Local::now())
         }
         KeyCode::Enter => {
-            // Open lazygit in selected repo
-            if let Some(repo) = app.selected_repo()
-                && let Some(ref path) = repo.path
-            {
-                let expanded = shellexpand::tilde(path).to_string();
+            // Open lazygit in the selected repo, or the highlighted worktree
+            if let Some(expanded) = app.action_dir() {
                 suspend_and_run(terminal, "lazygit", &["-p", &expanded])?;
                 app.invalidate_notes();
             }
         }
         KeyCode::Char('e') => {
-            // Open $EDITOR in selected repo
-            if let Some(repo) = app.selected_repo()
-                && let Some(ref path) = repo.path
-            {
-                let expanded = shellexpand::tilde(path).to_string();
+            // Open $EDITOR in the selected repo, or the highlighted worktree
+            if let Some(expanded) = app.action_dir() {
                 let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
                 suspend_and_run(terminal, &editor, &[&expanded])?;
                 app.invalidate_notes();
@@ -1965,11 +1969,8 @@ async fn handle_normal_input(
         // markdown file. Nothing elsewhere.
         KeyCode::Char('m') => app.toggle_notes_markdown(),
         KeyCode::Char('o') => {
-            // Open shell in repo dir
-            if let Some(repo) = app.selected_repo()
-                && let Some(ref path) = repo.path
-            {
-                let expanded = shellexpand::tilde(path).to_string();
+            // Open a shell in the repo dir, or the highlighted worktree's
+            if let Some(expanded) = app.action_dir() {
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
                 suspend_and_run_in_dir(terminal, &shell, &[], &expanded)?;
                 app.invalidate_notes();
@@ -2107,7 +2108,7 @@ async fn handle_normal_input(
 }
 
 /// The file `Enter` opens in $EDITOR: the `notes` view's highlighted file,
-/// while pane 2, the reader or the card has focus. `None` leaves `Enter` to
+/// while pane 2 or the reader has focus. `None` leaves `Enter` to
 /// open lazygit on the repo.
 fn note_to_open(app: &App) -> Option<std::path::PathBuf> {
     let focused = matches!(
@@ -3091,6 +3092,19 @@ fn spawn_ci_detail(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, request: c
     });
 }
 
+/// Read a worktree's newest commits for the `worktrees` inspector off the
+/// UI thread (FZ-77): one bounded `git log` on `HEAD` in that directory.
+fn spawn_worktree_log(
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    read: app::WorktreeLogRead,
+) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let commits = git::branch_commits(&read.dir, "HEAD", app::WORKTREE_LOG_COUNT).await;
+        let _ = tx.send(AppEvent::WorktreeLogRead { read, commits });
+    });
+}
+
 /// Walk a repo for the `notes` view off the UI thread and send the tree back.
 fn spawn_notes_walk(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, walk: app::NotesWalk) {
     let tx = tx.clone();
@@ -3105,7 +3119,7 @@ fn spawn_notes_walk(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, walk: app
 }
 
 /// Read the highlighted note off the UI thread and send its body back with
-/// its metadata for the card (FZ-62), then its last commit from a bounded
+/// its metadata for the facts (FZ-62), then its last commit from a bounded
 /// `git log`, "untracked" when git prints nothing. Two answers, body first:
 /// for a file git never saw it walks the whole history, and the reader
 /// shows the body without waiting for that. A markdown body is rendered in
@@ -11928,6 +11942,54 @@ mod tests {
         assert_eq!(yank_status(&app), Some(("copied url".to_string(), false)));
     }
 
+    /// FZ-77 on FZ-74: in `worktrees`, `yy` is the highlighted worktree's
+    /// branch and `yp` its absolute path, the main checkout first; a
+    /// detached one has no branch to copy.
+    #[test]
+    fn the_worktrees_view_copies_the_branch_and_its_absolute_path() {
+        let mut app = yank_on(app::HistoryView::Worktrees, FocusedPanel::Detail);
+        app.repos[0].branches = vec![model::BranchStatus {
+            name: "main".to_string(),
+            upstream: None,
+            behind: 0,
+            ahead: 0,
+            is_head: true,
+            tip: "aaa1111".to_string(),
+        }];
+        app.repos[0].worktrees = vec![
+            model::Worktree {
+                path: "~/wt/side".to_string(),
+                branch: "side".to_string(),
+                head: "bbb2222".to_string(),
+                ..Default::default()
+            },
+            model::Worktree {
+                path: "/tmp/wt-detached".to_string(),
+                detached: true,
+                head: "ccc3333".to_string(),
+                ..Default::default()
+            },
+        ];
+        assert_eq!(chord(&mut app, "yy"), ["main"]);
+        assert_eq!(yank_status(&app), Some(("copied main".to_string(), false)));
+        assert_eq!(chord(&mut app, "yp"), ["/tmp/yank"]);
+        app.set_detail_selected(1);
+        assert_eq!(chord(&mut app, "yy"), ["side"]);
+        assert_eq!(
+            chord(&mut app, "yp"),
+            [shellexpand::tilde("~/wt/side").into_owned()],
+            "the `~` expanded"
+        );
+        assert_eq!(yank_status(&app), Some(("copied path".to_string(), false)));
+        app.set_detail_selected(2);
+        assert!(chord(&mut app, "yy").is_empty(), "detached: no branch");
+        assert_eq!(
+            yank_status(&app),
+            Some(("nothing to copy".to_string(), false))
+        );
+        assert_eq!(chord(&mut app, "yp"), ["/tmp/wt-detached"]);
+    }
+
     /// `ci_app` on the `ci` view holding the fixture runs, the first
     /// highlighted, focused on `panel`.
     fn ci_yank_app(panel: FocusedPanel) -> App {
@@ -12345,6 +12407,35 @@ mod tests {
         assert_eq!(fading, want, "the label, and nothing else");
     }
 
+    /// The reader has no frame of its own: a copy from it flashes the
+    /// `notes preview` title on pane 2's frame, not the first text row.
+    #[test]
+    fn a_copy_from_the_reader_flashes_its_title_and_no_text_row() {
+        let mut app = notes_flash_app(FocusedPanel::Reader);
+        app.inspector_folded = false;
+        assert_eq!(chord(&mut app, "yp").len(), 1, "the path was copied");
+        let (fading, _) = flash_frames(&mut app, |r| r.repo_list, true);
+        let mut term = Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| ui::render(f, &app)).unwrap();
+        let buf = term.backend().buffer();
+        let label = "notes preview";
+        let want: Vec<_> = (0..buf.area.height)
+            .flat_map(|y| {
+                let row: String = (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect();
+                row.find(label)
+                    .map(|at| row[..at].chars().count() as u16)
+                    .map(|x| (0..label.len() as u16).map(move |i| (x + i, y)))
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(want.len(), label.len(), "the title is drawn once");
+        assert_eq!(fading, want, "the title, and no text row");
+    }
+
     /// `yank_on` in the `notes` view with one walked file, focused on
     /// `panel`, so the tree and the reader are on screen.
     fn notes_flash_app(panel: FocusedPanel) -> App {
@@ -12673,6 +12764,36 @@ mod tests {
         assert_eq!(note_to_open(&app), None, "another view opens lazygit");
     }
 
+    /// `Enter`, `e` and `o` act in the highlighted worktree's directory
+    /// while pane 2 has focus on the `worktrees` view (FZ-77), and in the
+    /// repo's everywhere else. Fails while the arms take the repo path only.
+    #[test]
+    fn enter_opens_lazygit_in_the_highlighted_worktree() {
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.repos = vec![RepoStatus {
+            path: Some("/repo".to_string()),
+            worktrees: vec![model::Worktree {
+                path: "/repo-wt".to_string(),
+                branch: "side".to_string(),
+                ..Default::default()
+            }],
+            ..test_repo()
+        }];
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Worktrees;
+        app.focused_panel = FocusedPanel::Detail;
+        assert_eq!(note_to_open(&app), None, "Enter reaches the lazygit arm");
+        assert_eq!(app.action_dir().as_deref(), Some("/repo"), "main first");
+        app.detail_selections[app::HistoryView::Worktrees.index()] = 1;
+        assert_eq!(app.action_dir().as_deref(), Some("/repo-wt"));
+
+        app.focused_panel = FocusedPanel::RepoList;
+        assert_eq!(app.action_dir().as_deref(), Some("/repo"), "pane 1");
+        app.focused_panel = FocusedPanel::Detail;
+        app.history_view = app::HistoryView::Info;
+        assert_eq!(app.action_dir().as_deref(), Some("/repo"), "another view");
+    }
+
     /// `Enter` on the focused reader opens the file it shows (FZ-62).
     #[test]
     fn enter_on_the_reader_opens_its_note() {
@@ -12776,7 +12897,7 @@ mod tests {
         }
     }
 
-    /// The card's facts are read off the UI thread (FZ-62): `spawn_note_read`
+    /// The file's facts are read off the UI thread (FZ-62): `spawn_note_read`
     /// returns before anything is sent. The body and its metadata come
     /// first and git's last commit after, so the reader never waits on git
     /// (review F4): a date for a committed file, "untracked" for one git
@@ -13494,9 +13615,9 @@ mod tests {
     }
 
     /// FZ-30f fix cycle 3: `]` from the focused inspector in `branches`
-    /// enters `ci` with its runs held and the next `]` goes on to `info`;
+    /// enters `ci` with its runs held and the next `[` goes back to `branches`;
     /// back in `ci`, any other key ends the streak and `]` steps the bodies.
-    /// Fails while the second `]` sticks on the bodies.
+    /// Fails while the second `[` sticks on the bodies.
     #[tokio::test]
     async fn a_bracket_streak_cycles_views_through_ci_until_another_key() {
         let args = Args::parse_from(["fleetz"]);
@@ -13514,7 +13635,7 @@ mod tests {
         app.focused_panel = FocusedPanel::Inspector;
         let repo_dir = Path::new("/nonexistent");
         let mut views = Vec::new();
-        for key in [']', ']', '[', 'j', ']'] {
+        for key in [']', '[', ']', 'j', ']'] {
             handle_normal_input(
                 &mut app,
                 &mut terminal,
@@ -13533,7 +13654,7 @@ mod tests {
             views,
             vec![
                 (HistoryView::Ci, CiBody::Jobs),
-                (HistoryView::Notes, CiBody::Jobs),
+                (HistoryView::Branches, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Jobs),
                 (HistoryView::Ci, CiBody::Log),
