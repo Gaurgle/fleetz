@@ -1127,9 +1127,7 @@ async fn run_event_loop(
                 apply_github_poll(app, attempt, result, &tx, &args.author);
                 start_account_rebuild(app, &tx, args, config, repo_dir);
             }
-            AppEvent::SweepDone { at } => {
-                app.sweep_landed(at);
-            }
+            AppEvent::SweepDone { at } => apply_sweep_done(app, at),
             AppEvent::Ci(answer) => app.apply_ci(*answer, chrono::Local::now()),
             AppEvent::CiDetail(answer) => app.apply_ci_detail(*answer, chrono::Local::now()),
             AppEvent::WorktreeLogRead { read, commits } => app.apply_worktree_log(read, commits),
@@ -2549,6 +2547,8 @@ fn apply_github_poll_at(
                 app.settle_refresh_poll(fetched_paths);
             }
             app.dataset = dataset;
+            // After the indices above are spent: this moves rows.
+            order_rows_by_activity(app);
         }
         Err(e) => {
             app.set_status(
@@ -4098,13 +4098,54 @@ fn sort_by_activity(
     targets: &mut [(discovery::FoundRepo, RepoLocation)],
     active: &[github::GithubRepo],
 ) {
-    // By owner and name, so two same-named repos each sort by their own push.
-    targets.sort_by_cached_key(|(f, _)| {
-        active
-            .iter()
-            .position(|r| names_remote(f.owner.as_deref(), &f.name, r))
-            .unwrap_or(usize::MAX)
-    });
+    targets.sort_by_cached_key(|(f, _)| activity_position(f.owner.as_deref(), &f.name, active));
+}
+
+/// The activity rule both orderings share: a repo's place in `active`,
+/// newest push first, by owner and name, so two same-named repos each sort
+/// by their own push. `usize::MAX` for a repo `active` does not hold.
+fn activity_position(owner: Option<&str>, name: &str, active: &[github::GithubRepo]) -> usize {
+    active
+        .iter()
+        .position(|r| names_remote(owner, name, r))
+        .unwrap_or(usize::MAX)
+}
+
+/// Re-order the rows by activity after a poll or a sweep lands (FZ-86), so
+/// a repo pushed since launch rises within its section as a fresh launch
+/// would put it. Before this the order was set once, by `sort_by_activity`
+/// at load, and a refresh or a watch poll only updated rows in place.
+///
+/// The key restates how `assemble_view` lays the rows out, so a re-sort
+/// moves nothing a launch on the same dataset would not: passes 1 and 2 by
+/// `activity_position`, then pass 3's rows in discovery order (a stable
+/// sort on an equal key keeps it), then the not-cloned rows by activity.
+/// `App::visible_repos` groups that into sections, as at launch.
+fn order_rows_by_activity(app: &mut App) {
+    let keys: Vec<(u8, usize)> = app
+        .repos
+        .iter()
+        .map(|repo| match repo.location {
+            RepoLocation::Primary | RepoLocation::Elsewhere => (
+                0,
+                activity_position(repo.owner.as_deref(), &repo.name, &app.dataset),
+            ),
+            RepoLocation::LocalOnly => (1, 0),
+            RepoLocation::NotCloned => (
+                2,
+                activity_position(repo.owner.as_deref(), &repo.name, &app.dataset),
+            ),
+        })
+        .collect();
+    app.reorder_repos(keys);
+}
+
+/// `AppEvent::SweepDone`: close the sweep's books, then apply the order. A
+/// sweep changes no row's activity, but an order a search held back
+/// (`App::reorder_repos`) lands here at the latest.
+fn apply_sweep_done(app: &mut App, at: chrono::DateTime<chrono::Local>) {
+    app.sweep_landed(at);
+    order_rows_by_activity(app);
 }
 
 /// Pass 3's candidates: the local repos passes 1-2 have not already shown,
@@ -13783,6 +13824,123 @@ mod tests {
         assert_eq!(
             ci_poll_after_handoff(&mut dirty, target, at(12, 1, 0)),
             None
+        );
+    }
+
+    // --- FZ-86: pane 1's order follows activity after a refresh ---
+
+    /// A row of Gaurgle's at `location`, with no path, so no poll fetches it.
+    fn owned_row(name: &str, location: RepoLocation) -> RepoStatus {
+        RepoStatus {
+            name: name.to_string(),
+            owner: Some("Gaurgle".to_string()),
+            location,
+            ..test_repo()
+        }
+    }
+
+    /// Land a successful poll whose dataset lists `names` newest push first,
+    /// the order the GraphQL `orderBy` and `merge_sources` give it.
+    fn poll_newest_first(app: &mut App, names: &[&str]) {
+        let repos = names
+            .iter()
+            .map(|name| github::GithubRepo {
+                owner: Some("Gaurgle".to_string()),
+                ..gh(name, "2026-11-06T10:00:00Z")
+            })
+            .collect();
+        poll_with(
+            app,
+            Ok(Box::new(github::GithubFetch {
+                repos,
+                calendar: None,
+                has_pr_counts: true,
+                origin: github::Origin::Network,
+                meta: Default::default(),
+            })),
+        );
+    }
+
+    fn shown(app: &App) -> Vec<String> {
+        app.visible_repos()
+            .iter()
+            .map(|(_, r)| r.name.clone())
+            .collect()
+    }
+
+    fn app_a_b_c_on_b() -> App {
+        let rows = ["a", "b", "c"].map(|n| owned_row(n, RepoLocation::Primary));
+        let mut app = App::new(rows.to_vec(), "h".to_string(), 120, 44);
+        app.selected = 1;
+        app
+    }
+
+    /// The reported case: launched A B C, then C is pushed. The poll that
+    /// says so re-orders the list as a launch would, and the cursor stays on
+    /// B rather than on whatever row now sits second.
+    #[test]
+    fn a_poll_moves_the_newest_pushed_repo_up_and_the_cursor_stays_on_its_repo() {
+        let mut app = app_a_b_c_on_b();
+        poll_newest_first(&mut app, &["c", "a", "b"]);
+        assert_eq!(shown(&app), ["c", "a", "b"]);
+        assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("b"));
+        assert!(app.needs_redraw);
+    }
+
+    /// A text search ranks its own list and breaks ties by row order, so an
+    /// answer landing under it must not reshuffle the results being read.
+    #[test]
+    fn a_poll_under_a_text_search_leaves_its_ranked_order_alone() {
+        let mut app = app_a_b_c_on_b();
+        // Every row matches on its owner alike: the ranking ties throughout.
+        app.search_query = "gaurgle".to_string();
+        let before = shown(&app);
+        assert_eq!(before.len(), 3, "premise: the query matches every row");
+        poll_newest_first(&mut app, &["c", "a", "b"]);
+        assert_eq!(shown(&app), before);
+        assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("b"));
+    }
+
+    /// A sweep landing applies the order too: one a search held back lands
+    /// on the next sweep after the search ends, with the cursor on its repo.
+    #[test]
+    fn a_sweep_landing_applies_an_order_a_search_held_back() {
+        let mut app = app_a_b_c_on_b();
+        app.search_query = "gaurgle".to_string();
+        poll_newest_first(&mut app, &["c", "a", "b"]);
+        app.clear_search();
+        assert_eq!(shown(&app), ["a", "b", "c"], "premise: held back");
+        app.selected = 1;
+        app.needs_redraw = false;
+
+        apply_sweep_done(&mut app, chrono::Local::now());
+        assert_eq!(shown(&app), ["c", "a", "b"]);
+        assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("b"));
+    }
+
+    /// The re-sort keeps the launch's layout: pass 3's rows stay in
+    /// discovery order however recent the repo one of them carries, and in
+    /// "also active" the clones elsewhere stay ahead of the not-cloned rows,
+    /// each by activity, as `assemble_view` appends them.
+    #[test]
+    fn a_poll_re_sorts_each_section_the_way_the_launch_assembled_it() {
+        let mut carrier = owned_row("x", RepoLocation::LocalOnly);
+        carrier.remote_url = Some("git@github.com:Gaurgle/x.git".to_string());
+        let rows = vec![
+            owned_row("p1", RepoLocation::Primary),
+            owned_row("p2", RepoLocation::Primary),
+            owned_row("e1", RepoLocation::Elsewhere),
+            owned_row("e2", RepoLocation::Elsewhere),
+            owned_row("plain", RepoLocation::LocalOnly),
+            carrier,
+            owned_row("n1", RepoLocation::NotCloned),
+            owned_row("n2", RepoLocation::NotCloned),
+        ];
+        let mut app = App::new(rows, "h".to_string(), 120, 44);
+        poll_newest_first(&mut app, &["n2", "x", "e2", "n1", "p2", "e1", "p1"]);
+        assert_eq!(
+            shown(&app),
+            ["p2", "p1", "plain", "x", "e2", "e1", "n2", "n1"]
         );
     }
 }
