@@ -68,7 +68,11 @@ workflow alongside the Relay workers and reviewer.
    conflicted files; the script then judges the staged tree against
    `MERGE_HEAD` by itself.
 2. Fill the worker template from `docs/agent-workflow.md` and dispatch
-   `fz-worker` (or `fz-small` for a truly small task). Pass the ticket, base,
+   `fz-worker` (or `fz-small` for a truly small task), with the model and
+   effort the ticket needs ("Choosing per dispatch" in
+   `docs/agent-workflow.md`; lighter is often right). Their questions come
+   to you, not Andreas: rule them, or re-dispatch heavier ("Decision
+   ladder" in the same file). Pass the ticket, base,
    branch, absolute worktree path and allowed files, not this conversation.
    Fill `Pointers` with `file:line` locations and the named sections of any
    design doc; never write "read all of". A worker that reads a whole
@@ -139,6 +143,14 @@ the harness showed none. Preserve authorization evidence and its limits:
 the standing-authority table keeps what holds, the log keeps the dated
 words. Record whether workers are stopped or still running, and mark the
 baton released. Read the clock before recording a timestamp.
+
+**Automatic handoff.** In a lead started with `relay`, a hook watches your
+context. Past 75% it tells you to hand back and to write your successor's
+first prompt to a file it names; when your turn then ends, it restarts this
+tmux pane with a fresh lead. That restart is your retirement and the
+successor's authorized takeover: standing scope carries over as recorded,
+nothing more. Follow its message; do not write the file while you still need
+an answer from Andreas.
 
 When a ticket closes, answer the remember-at-end question in "Records":
 what did the reviewer find, or what did you rule, that one sentence in the
