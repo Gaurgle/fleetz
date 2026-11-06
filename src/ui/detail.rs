@@ -2356,6 +2356,19 @@ fn render_rows(
 /// (FZ-68 round 2): the preview is a page of the `notes` view.
 const READER_LABEL: &str = "notes preview";
 
+/// Where `render_notes_heads` draws the reader's `notes preview` title in
+/// pane 2, for the copy flash (FZ-81). `None` when the header is not pinned
+/// and the title is not drawn.
+pub fn reader_label_rect(pane: Rect, app: &App) -> Option<Rect> {
+    let facts = notes_pane_body(pane, app)?.facts?;
+    (facts.height > 0).then(|| Rect {
+        y: facts.bottom() - 1,
+        width: (READER_LABEL.len() as u16).min(facts.width),
+        height: 1,
+        ..facts
+    })
+}
+
 /// The held body's markdown render, when the reader draws one: a markdown
 /// file, `p` not on raw, and a render landed (FZ-59). Until one lands the
 /// reader shows the source.

@@ -966,6 +966,12 @@ pub fn panel_title(num: u8, label: &str, focused: bool) -> Line<'static> {
 /// strip (see `filter_strip_line`), the way todoz folds its filter input
 /// into the list header.
 pub fn render(frame: &mut Frame, app: &App) {
+    render_at(frame, app, std::time::Instant::now());
+}
+
+/// `render` with the copy flash (FZ-81) drawn as it stands at `now`, so a
+/// test can pick the moment.
+pub fn render_at(frame: &mut Frame, app: &App, now: std::time::Instant) {
     let area = frame.area();
 
     // Pane 2 sets it when it draws the fleet's state; the footer, drawn
@@ -1020,6 +1026,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     // load error, which has no panes to divide: the grip landed mid-sentence.
     if !app.shows_load_error() {
         grips::render(frame, &rects, app);
+        paint_yank_flash(frame.buffer_mut(), &rects, app, now);
     }
 
     // Footer
@@ -1033,6 +1040,78 @@ pub fn render(frame: &mut Frame, app: &App) {
         Overlay::Settings(so) => settings::render(frame, area, so),
         Overlay::None => {}
     }
+}
+
+/// Paint the copy flash (FZ-81) at `now` over the frame just drawn.
+///
+/// A list pane's flash is its cursor row: the cells wearing the band
+/// (`SELECTED_BG`), which every list draws its cursor with, so the sweep
+/// crosses exactly what the band covers. The inspector and the reader have
+/// no cursor row, so theirs is their title: the inspector's label on its top
+/// border, the reader's `notes preview` above the rule in pane 2. Nothing once
+/// the app no longer points at the row the copy came from.
+fn paint_yank_flash(
+    buf: &mut ratatui::buffer::Buffer,
+    rects: &PanelRects,
+    app: &App,
+    now: std::time::Instant,
+) {
+    let Some(source) = app.yank_flash.source() else {
+        return;
+    };
+    if app.view != View::Detail || source != app.flash_source() {
+        return;
+    }
+    let cells = match source.pane {
+        FocusedPanel::RepoList => band_cells(buf, rects.repo_list),
+        FocusedPanel::Detail => rects.detail.and_then(|r| band_cells(buf, r)),
+        FocusedPanel::Inspector => rects.inspector.and_then(|r| border_label_cells(buf, r)),
+        FocusedPanel::Reader => rects
+            .detail
+            .and_then(|pane| detail::reader_label_rect(pane, app))
+            .and_then(|label| text_cells(buf, label)),
+        FocusedPanel::Contributions => None,
+    };
+    let Some((y, xs)) = cells else { return };
+    let width = xs.len() as u16;
+    for (col, x) in xs.into_iter().enumerate() {
+        buf[(x, y)].bg = app.yank_flash.cell_bg(now, col as u16, width);
+    }
+}
+
+/// The first row inside `pane`'s border that wears the band, and its band
+/// cells' columns. Only the part of `pane` inside the buffer is read: on a
+/// terminal too small for the layout a pane can lie past its edge.
+fn band_cells(buf: &ratatui::buffer::Buffer, pane: Rect) -> Option<(u16, Vec<u16>)> {
+    let inner = pane
+        .inner(ratatui::layout::Margin::new(1, 1))
+        .intersection(buf.area);
+    (inner.top()..inner.bottom()).find_map(|y| {
+        let xs: Vec<u16> = (inner.left()..inner.right())
+            .filter(|&x| buf[(x, y)].bg == colors::SELECTED_BG)
+            .collect();
+        (!xs.is_empty()).then_some((y, xs))
+    })
+}
+
+/// The label on `pane`'s top border: from the corner to the first rule
+/// cell after it. `None` when that border is not inside the buffer.
+fn border_label_cells(buf: &ratatui::buffer::Buffer, pane: Rect) -> Option<(u16, Vec<u16>)> {
+    let border = Rect::new(pane.x, pane.y, pane.width, pane.height.min(1)).intersection(buf.area);
+    if border.is_empty() {
+        return None;
+    }
+    let y = border.top();
+    let xs = (pane.left() + 1..pane.right().saturating_sub(1))
+        .take_while(|&x| border.contains(Position { x, y }) && buf[(x, y)].symbol() != "─")
+        .collect();
+    Some((y, xs))
+}
+
+/// The cells of the one-row `label` that lie inside the buffer.
+fn text_cells(buf: &ratatui::buffer::Buffer, label: Rect) -> Option<(u16, Vec<u16>)> {
+    let label = label.intersection(buf.area);
+    (!label.is_empty()).then(|| (label.y, (label.left()..label.right()).collect()))
 }
 
 /// Draw why there is nothing to show, in the space the repos would have

@@ -2462,6 +2462,8 @@ pub struct App {
     /// `y` copies the thing under the cursor, `p` its path, anything else
     /// copies nothing. Cleared by the next key whatever it is.
     pub pending_yank: bool,
+    /// The row a successful `yy` or `yp` copied from flashes once (FZ-81).
+    pub yank_flash: YankFlash,
     /// The run the scrolls and the mark belong to, and since when it is
     /// highlighted, for the dwell before the inspector fetches anything.
     pub ci_inspected: Option<(u64, std::time::Instant)>,
@@ -2894,6 +2896,110 @@ pub enum YankKind {
     Path,
 }
 
+/// How long the copy flash (FZ-81) takes to sweep over the cursor row: `yy`
+/// from the left edge, `yp` from the right. notez's timing.
+pub const YANK_SWEEP: std::time::Duration = std::time::Duration::from_millis(100);
+/// How long the swept row then takes to fade back to the band.
+pub const YANK_FADE: std::time::Duration = std::time::Duration::from_millis(200);
+/// The whole copy flash: the sweep, then the fade.
+pub const YANK_FLASH: std::time::Duration = YANK_SWEEP.saturating_add(YANK_FADE);
+/// The longest the event loop waits while the flash is live: about 8
+/// frames over the sweep.
+pub const YANK_FRAME: std::time::Duration = std::time::Duration::from_millis(12);
+
+/// Which row a copy flash belongs to: the pane, pane 2's view and the cursor
+/// there. The flash paints only while the app still points at it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlashSource {
+    pub pane: FocusedPanel,
+    pub view: HistoryView,
+    pub row: usize,
+}
+
+/// The one flash after a successful `yy` or `yp` (FZ-81), as notez draws
+/// it: a timestamp read at draw time, no thread and no timer task. While it
+/// lasts the event loop cuts its wait to `YankFlash::wait` and redraws
+/// when `YankFlash::tick` says so.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct YankFlash {
+    start: Option<(std::time::Instant, FlashSource)>,
+    from_right: bool,
+}
+
+impl YankFlash {
+    /// Start the flash at `now` on `source`, sweeping from the right edge
+    /// when `from_right`.
+    pub fn show(&mut self, source: FlashSource, from_right: bool, now: std::time::Instant) {
+        self.start = Some((now, source));
+        self.from_right = from_right;
+    }
+
+    pub fn clear(&mut self) {
+        self.start = None;
+    }
+
+    /// Whether a flash is started and not yet ended by `tick` or `clear`.
+    pub fn is_active(&self) -> bool {
+        self.start.is_some()
+    }
+
+    /// The row the flash belongs to, while there is one.
+    pub fn source(&self) -> Option<FlashSource> {
+        self.start.map(|(_, source)| source)
+    }
+
+    /// Time into a live flash at `now`, or `None` once it is over.
+    fn elapsed(&self, now: std::time::Instant) -> Option<std::time::Duration> {
+        let elapsed = now.saturating_duration_since(self.start?.0);
+        (elapsed < YANK_FLASH).then_some(elapsed)
+    }
+
+    /// The background at `now` of cell `col` of a flashed row `width` cells
+    /// wide: `YANKED_BG` where the sweep has reached and the band
+    /// (`SELECTED_BG`) ahead of it, then the whole row fading from
+    /// `YANKED_BG` back to the band; the band before a copy and after.
+    pub fn cell_bg(&self, now: std::time::Instant, col: u16, width: u16) -> ratatui::style::Color {
+        use crate::ui::colors::{SELECTED_BG, YANKED_BG, mix};
+        let Some(elapsed) = self.elapsed(now) else {
+            return SELECTED_BG;
+        };
+        if elapsed >= YANK_SWEEP {
+            let faded = (elapsed - YANK_SWEEP).as_secs_f64() / YANK_FADE.as_secs_f64();
+            return mix(YANKED_BG, SELECTED_BG, faded);
+        }
+        let reached = elapsed.as_secs_f64() / YANK_SWEEP.as_secs_f64();
+        let reached = ((reached * f64::from(width)).floor() as u16).min(width);
+        let swept = match self.from_right {
+            true => col >= width - reached,
+            false => col < reached,
+        };
+        if swept { YANKED_BG } else { SELECTED_BG }
+    }
+
+    /// True when the view should redraw at `now`: the flash is live, or its
+    /// time just ran out, which ends it.
+    pub fn tick(&mut self, now: std::time::Instant) -> bool {
+        if self.start.is_none() {
+            return false;
+        }
+        if self.elapsed(now).is_none() {
+            self.start = None;
+        }
+        true
+    }
+
+    /// `wait`, or no longer than the next frame while the flash lasts, or no
+    /// wait at all once its time is up but `tick` has not ended it yet, so a
+    /// late frame does not leave the row a shade off.
+    pub fn wait(&self, wait: std::time::Duration, now: std::time::Instant) -> std::time::Duration {
+        match self.elapsed(now) {
+            Some(elapsed) => wait.min(YANK_FRAME).min(YANK_FLASH - elapsed),
+            None if self.start.is_some() => std::time::Duration::ZERO,
+            None => wait,
+        }
+    }
+}
+
 /// How the status line names what a yank copied: a short value by itself
 /// (a hash, a branch, a run id), a url or a path by kind, a body by size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3025,6 +3131,7 @@ impl App {
             ci_job_follow: std::cell::Cell::new(JobFollow::Free),
             brackets_cycling_views: false,
             pending_yank: false,
+            yank_flash: YankFlash::default(),
             ci_inspected: None,
             ci_log_wrap: std::cell::RefCell::new(None),
             worktree_logs: std::collections::HashMap::new(),
@@ -4776,7 +4883,10 @@ impl App {
     /// `yy` or `yp`: copy what `kind` names under the focused cursor through
     /// `copy` and say so on the status line, `nothing to copy` where there
     /// is nothing (`yank_target`).
+    /// A successful copy starts the row's flash (FZ-81), `yp` sweeping from
+    /// the right; a failed one and `nothing to copy` end any flash.
     pub fn yank(&mut self, kind: YankKind, copy: impl FnOnce(&str) -> Result<(), String>) {
+        self.yank_flash.clear();
         let Some((text, word)) = self.yank_target(kind) else {
             self.set_status("nothing to copy".to_string(), false);
             return;
@@ -4792,8 +4902,33 @@ impl App {
             },
         };
         match copy(&text) {
-            Ok(()) => self.set_status(said, false),
+            Ok(()) => {
+                self.set_status(said, false);
+                let from_right = kind == YankKind::Path;
+                let source = self.flash_source();
+                self.yank_flash
+                    .show(source, from_right, std::time::Instant::now());
+            }
             Err(reason) => self.set_status(format!("copy failed: {reason}"), true),
+        }
+    }
+
+    /// The row a copy made now would flash (FZ-81): the focused pane, pane
+    /// 2's view and the cursor there. The inspector and the reader have no
+    /// cursor row; their flash is on their border label.
+    pub fn flash_source(&self) -> FlashSource {
+        let row = match self.focused_panel {
+            FocusedPanel::RepoList => self.selected,
+            FocusedPanel::Detail if self.history_view == HistoryView::Graph => {
+                usize::from(self.graph_cursor)
+            }
+            FocusedPanel::Detail => self.detail_selected(),
+            _ => 0,
+        };
+        FlashSource {
+            pane: self.focused_panel,
+            view: self.history_view,
+            row,
         }
     }
 
@@ -10164,6 +10299,89 @@ mod tests {
         app.claim_note_read().expect("b");
         app.apply_note_facts(&a, facts.clone());
         assert_eq!(app.note_body.as_ref().and_then(|b| b.facts.clone()), None);
+    }
+
+    // FZ-81: the copy flash, as pure functions of an injected instant.
+
+    fn flash_at(from_right: bool) -> (YankFlash, std::time::Instant) {
+        let start = std::time::Instant::now();
+        let source = FlashSource {
+            pane: FocusedPanel::RepoList,
+            view: HistoryView::Info,
+            row: 0,
+        };
+        let mut flash = YankFlash::default();
+        flash.show(source, from_right, start);
+        (flash, start)
+    }
+
+    fn ms(n: u64) -> std::time::Duration {
+        std::time::Duration::from_millis(n)
+    }
+
+    /// The backgrounds of a 10-cell row at `start + at`.
+    fn row_at(flash: &YankFlash, start: std::time::Instant, at: u64) -> Vec<ratatui::style::Color> {
+        (0..10)
+            .map(|c| flash.cell_bg(start + ms(at), c, 10))
+            .collect()
+    }
+
+    #[test]
+    fn yy_sweeps_the_row_from_the_left_then_fades_to_the_band() {
+        use crate::ui::colors::{SELECTED_BG, YANKED_BG, mix};
+        let (flash, start) = flash_at(false);
+        let (y, b) = (YANKED_BG, SELECTED_BG);
+        assert_eq!(row_at(&flash, start, 0), vec![b; 10], "nothing swept yet");
+        assert_eq!(
+            row_at(&flash, start, 50),
+            [vec![y; 5], vec![b; 5]].concat(),
+            "the left half at 50 ms"
+        );
+        assert_eq!(row_at(&flash, start, 100), vec![y; 10], "fully yanked");
+        let half = mix(YANKED_BG, SELECTED_BG, 0.5);
+        assert_ne!(half, y);
+        assert_ne!(half, b);
+        assert_eq!(row_at(&flash, start, 200), vec![half; 10], "halfway faded");
+        assert_eq!(row_at(&flash, start, 300), vec![b; 10], "the plain band");
+        assert_eq!(row_at(&flash, start, 900), vec![b; 10]);
+    }
+
+    #[test]
+    fn yp_sweeps_the_row_from_the_right() {
+        use crate::ui::colors::{SELECTED_BG, YANKED_BG};
+        let (flash, start) = flash_at(true);
+        assert_eq!(
+            row_at(&flash, start, 50),
+            [vec![SELECTED_BG; 5], vec![YANKED_BG; 5]].concat()
+        );
+        assert_eq!(row_at(&flash, start, 100), vec![YANKED_BG; 10]);
+    }
+
+    #[test]
+    fn no_flash_paints_the_plain_band() {
+        let flash = YankFlash::default();
+        let now = std::time::Instant::now();
+        assert_eq!(flash.cell_bg(now, 0, 10), crate::ui::colors::SELECTED_BG);
+        assert_eq!(flash.source(), None);
+    }
+
+    /// The loop waits at most `YANK_FRAME` while the flash lasts, not at
+    /// all once it is due to end, and the normal tick after `tick` ends it.
+    #[test]
+    fn the_loop_waits_a_frame_while_the_flash_is_live() {
+        let tick = ms(100);
+        let (mut flash, start) = flash_at(false);
+        for at in [0, 50, 150, 280] {
+            assert!(flash.wait(tick, start + ms(at)) <= YANK_FRAME, "at {at} ms");
+        }
+        assert_eq!(flash.wait(tick, start + ms(295)), ms(5), "the last frame");
+        assert_eq!(flash.wait(tick, start + ms(300)), ms(0), "due to end");
+        assert!(flash.tick(start + ms(150)), "live: redraw");
+        assert!(flash.is_active());
+        assert!(flash.tick(start + ms(300)), "ended: one last redraw");
+        assert!(!flash.is_active());
+        assert_eq!(flash.wait(tick, start + ms(310)), tick, "the normal tick");
+        assert!(!flash.tick(start + ms(320)), "nothing left to redraw");
     }
 }
 

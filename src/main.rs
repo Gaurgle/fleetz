@@ -119,12 +119,21 @@ fn should_paint(queue_empty: bool, held: u32, animating: bool) -> bool {
     animating || queue_empty || held >= MAX_COALESCED_FRAMES
 }
 
+/// Whether an animation is on screen whose frames `should_paint` must not
+/// hold: the loading field, or a live copy flash (FZ-81).
+fn is_animating(app: &App) -> bool {
+    app.loading_field.is_some() || app.yank_flash.is_active()
+}
+
 /// Everything the event loop reacts to. Terminal input, the periodic tick,
 /// and the results of background work all arrive on one channel, so the loop
 /// never blocks on any single source.
 pub enum AppEvent {
     Input(Event),
     Tick,
+    /// The copy flash's next frame is due (FZ-81): the loop's own wait ran
+    /// out while the flash is live. Comes from `next_event`, not the channel.
+    YankFrame,
     Loaded(Result<Box<LoadResult>, LoadError>),
     RepoUpdated {
         path: String,
@@ -387,6 +396,39 @@ fn draw_screen(frame: &mut ratatui::Frame, app: &App) {
     match app.loading_field.as_ref() {
         Some(field) => field.paint(frame.buffer_mut()),
         None => ui::render(frame, app),
+    }
+}
+
+/// The loop's next event. While a copy flash is live (FZ-81) the wait is cut
+/// to its next frame (`YankFlash::wait`) and a wait that runs out is a
+/// `YankFrame`; otherwise the loop waits on the channel alone, as before.
+async fn next_event(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    flash: &app::YankFlash,
+) -> Option<AppEvent> {
+    if !flash.is_active() {
+        return rx.recv().await;
+    }
+    let wait = flash.wait(TICK_INTERVAL, std::time::Instant::now());
+    tokio::time::timeout(wait, rx.recv())
+        .await
+        .unwrap_or(Some(AppEvent::YankFrame))
+}
+
+/// End the copy flash on the input that ends it in notez: a key press, a
+/// click or a scroll, a paste. Pointer motion, resize, focus and key releases
+/// leave it running. Called before the input is handled, so the `y` that
+/// finishes a new chord starts a fresh flash.
+fn end_yank_flash_on(app: &mut App, input: &Event) {
+    let ends = match input {
+        Event::Key(key) => key.kind == crossterm::event::KeyEventKind::Press,
+        Event::Mouse(mouse) => mouse.kind != MouseEventKind::Moved,
+        Event::Paste(_) => true,
+        Event::Resize(..) | Event::FocusGained | Event::FocusLost => false,
+    };
+    if ends && app.yank_flash.is_active() {
+        app.yank_flash.clear();
+        app.needs_redraw = true;
     }
 }
 
@@ -993,8 +1035,12 @@ async fn run_event_loop(
     // still gets drawn. See the paint at the foot of the loop.
     let mut coalesced: u32 = 0;
 
-    while let Some(ev) = rx.recv().await {
+    while let Some(ev) = next_event(&mut rx, &app.yank_flash).await {
+        if let AppEvent::Input(input) = &ev {
+            end_yank_flash_on(app, input);
+        }
         match ev {
+            AppEvent::YankFrame => {}
             AppEvent::Tick => {
                 app.on_tick();
                 app.observe_day(chrono::Local::now().date_naive());
@@ -1156,6 +1202,7 @@ async fn run_event_loop(
         if app.should_quit {
             return Ok(());
         }
+        app.needs_redraw |= app.yank_flash.tick(std::time::Instant::now());
         // Paint once per *burst* of events, not once per event.
         //
         // A trackpad flick delivers wheel events far faster than a full
@@ -1170,7 +1217,7 @@ async fn run_event_loop(
         // next pass through the loop inherits it, so nothing is lost, only
         // deferred.
         if app.needs_redraw {
-            let animating = app.loading_field.is_some();
+            let animating = is_animating(app);
             if should_paint(rx.is_empty(), coalesced, animating) {
                 coalesced = 0;
                 app.needs_redraw = false;
@@ -12276,6 +12323,331 @@ mod tests {
         assert_eq!(
             chord(&mut app, "yy"),
             ["https://github.com/Gaurgle/real-name"]
+        );
+    }
+
+    // FZ-81: a successful `yy` or `yp` flashes the row it copied from.
+
+    #[test]
+    fn yy_and_yp_start_a_flash_sweeping_their_way() {
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        let (before, ms) = (std::time::Instant::now(), std::time::Duration::from_millis);
+        assert!(!app.yank_flash.is_active());
+        chord(&mut app, "yy");
+        assert_eq!(app.yank_flash.source(), Some(app.flash_source()));
+        let row = |app: &App| -> Vec<_> {
+            (0..10)
+                .map(|c| app.yank_flash.cell_bg(before + ms(50), c, 10))
+                .collect()
+        };
+        assert_eq!(row(&app)[0], ui::colors::YANKED_BG, "`yy` from the left");
+        assert_eq!(row(&app)[9], ui::colors::SELECTED_BG);
+        chord(&mut app, "yp");
+        assert!(app.yank_flash.is_active(), "`yp` flashes too");
+        assert_eq!(row(&app)[9], ui::colors::YANKED_BG, "`yp` from the right");
+        assert_eq!(row(&app)[0], ui::colors::SELECTED_BG);
+    }
+
+    #[test]
+    fn a_failed_copy_and_nothing_to_copy_start_no_flash() {
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        app.yank(
+            app::YankKind::Thing,
+            |_| Err("pbcopy timed out".to_string()),
+        );
+        assert!(!app.yank_flash.is_active(), "a failed copy flashed");
+        chord(&mut app, "yy");
+        assert!(app.yank_flash.is_active());
+        app.yank(
+            app::YankKind::Thing,
+            |_| Err("pbcopy timed out".to_string()),
+        );
+        assert!(!app.yank_flash.is_active(), "a failed copy left the flash");
+        chord(&mut app, "yy");
+        app.repos[0].owner = None;
+        assert!(chord(&mut app, "yy").is_empty());
+        assert_eq!(
+            yank_status(&app),
+            Some(("nothing to copy".to_string(), false))
+        );
+        assert!(!app.yank_flash.is_active(), "`nothing to copy` flashed");
+    }
+
+    #[test]
+    fn a_key_press_a_click_or_a_scroll_ends_the_flash_and_motion_does_not() {
+        use crossterm::event::{KeyEventKind, KeyEventState};
+        let mouse = |kind| {
+            Event::Mouse(MouseEvent {
+                kind,
+                column: 3,
+                row: 3,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        let release = Event::Key(KeyEvent {
+            code: KeyCode::Char('j'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Release,
+            state: KeyEventState::NONE,
+        });
+        let keeps = [
+            mouse(MouseEventKind::Moved),
+            Event::Resize(80, 24),
+            Event::FocusLost,
+            Event::FocusGained,
+            release,
+        ];
+        let ends = [
+            Event::Key(press('j')),
+            mouse(MouseEventKind::Down(MouseButton::Left)),
+            mouse(MouseEventKind::ScrollDown),
+            Event::Paste("x".to_string()),
+        ];
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        for ev in &keeps {
+            chord(&mut app, "yy");
+            end_yank_flash_on(&mut app, ev);
+            assert!(app.yank_flash.is_active(), "{ev:?} ended the flash");
+        }
+        for ev in &ends {
+            chord(&mut app, "yy");
+            end_yank_flash_on(&mut app, ev);
+            assert!(!app.yank_flash.is_active(), "{ev:?} left the flash");
+        }
+    }
+
+    /// A screen cell, `(x, y)`.
+    type Cell = (u16, u16);
+
+    /// Restart `app`'s flash at a known instant and draw it at `start + 150`
+    /// and `start + 400` ms. Returns the cells wearing the fading colour at
+    /// 150 ms, and the band cells inside `pane` at 400 ms.
+    fn flash_frames(
+        app: &mut App,
+        pane: impl Fn(&ui::PanelRects) -> ratatui::layout::Rect,
+        from_right: bool,
+    ) -> (Vec<Cell>, Vec<Cell>) {
+        use ratatui::backend::TestBackend;
+        assert!(app.yank_flash.is_active(), "the copy started no flash");
+        let start = std::time::Instant::now();
+        app.yank_flash.show(app.flash_source(), from_right, start);
+        let draw = |at: u64| {
+            let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+            term.draw(|f| ui::render_at(f, app, start + std::time::Duration::from_millis(at)))
+                .unwrap();
+            term.backend().buffer().clone()
+        };
+        let fade = ui::colors::mix(ui::colors::YANKED_BG, ui::colors::SELECTED_BG, 0.25);
+        let at_150 = draw(150);
+        let fading: Vec<_> = at_150
+            .area
+            .positions()
+            .filter(|&p| at_150[p].bg == fade)
+            .map(|p| (p.x, p.y))
+            .collect();
+        let at_400 = draw(400);
+        let rect = pane(&ui::panel_rects(at_400.area, app));
+        let band: Vec<_> = rect
+            .positions()
+            .filter(|&p| at_400[p].bg == ui::colors::SELECTED_BG)
+            .map(|p| (p.x, p.y))
+            .collect();
+        assert!(
+            !at_400.area.positions().any(|p| at_400[p].bg == fade),
+            "the flash outlived 300 ms"
+        );
+        (fading, band)
+    }
+
+    #[test]
+    fn the_flash_fades_on_the_copied_repo_row_and_is_gone_by_400_ms() {
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        chord(&mut app, "yy");
+        let (fading, band) = flash_frames(&mut app, |r| r.repo_list, false);
+        assert!(!band.is_empty(), "no cursor band in pane 1");
+        assert_eq!(fading, band, "the cursor row fades, and only it");
+    }
+
+    #[test]
+    fn the_flash_fades_on_a_commits_row() {
+        let mut app = yank_on(app::HistoryView::Commits, FocusedPanel::Detail);
+        app.set_detail_selected(1);
+        chord(&mut app, "yy");
+        let (fading, band) = flash_frames(&mut app, |r| r.detail.unwrap(), false);
+        assert!(!band.is_empty(), "no cursor band in pane 2");
+        assert_eq!(fading, band);
+    }
+
+    #[test]
+    fn the_flash_fades_on_a_notes_tree_row() {
+        let scratch =
+            std::env::temp_dir().join(format!("fleetz_flash_notes_{}", std::process::id()));
+        let root = scratch.to_string_lossy().into_owned();
+        let mut app = yank_on(app::HistoryView::Notes, FocusedPanel::Detail);
+        app.repos[0].path = Some(root.clone());
+        let walk = app::NotesWalk {
+            key: root,
+            root: scratch,
+            generation: app.notes_generation,
+        };
+        let files = vec![notes::NoteFile {
+            rel: "notez/a.md".into(),
+            notez: Some("notez".into()),
+        }];
+        app.apply_notes_walk(walk, Ok(notes::Notes { files }));
+        assert_eq!(chord(&mut app, "yp").len(), 1, "the path was copied");
+        let (fading, band) = flash_frames(&mut app, |r| r.detail.unwrap(), true);
+        assert!(!band.is_empty(), "no cursor band in the tree");
+        assert_eq!(fading, band);
+    }
+
+    /// With a flash live and nothing queued, the loop wakes for a frame on
+    /// its own; with none it waits on the channel alone, as before FZ-81.
+    #[tokio::test]
+    async fn the_loop_wakes_for_the_flash_frame_and_only_while_it_lasts() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        let bound = std::time::Duration::from_millis(80);
+        let idle = tokio::time::timeout(bound, next_event(&mut rx, &app.yank_flash)).await;
+        assert!(idle.is_err(), "woke with no flash and nothing queued");
+        chord(&mut app, "yy");
+        let frame = tokio::time::timeout(bound, next_event(&mut rx, &app.yank_flash)).await;
+        assert!(matches!(frame, Ok(Some(AppEvent::YankFrame))), "no frame");
+        tx.send(AppEvent::Tick).unwrap();
+        let queued = next_event(&mut rx, &app.yank_flash).await;
+        assert!(
+            matches!(queued, Some(AppEvent::Tick)),
+            "a queued event waits"
+        );
+    }
+
+    #[test]
+    fn a_copy_from_the_inspector_flashes_its_label_and_no_list_row() {
+        let mut app = yank_on(app::HistoryView::Commits, FocusedPanel::Inspector);
+        app.inspector_folded = false;
+        // `yp`: the inspected hash; `yank_repo` loads no commit bodies.
+        assert_eq!(chord(&mut app, "yp"), [YANK_HASHES[0]]);
+        let (fading, _) = flash_frames(&mut app, |r| r.repo_list, true);
+        let inspector = ui::panel_rects(ratatui::layout::Rect::new(0, 0, 120, 40), &app)
+            .inspector
+            .expect("inspector");
+        let label = " [3] inspector ";
+        let x0 = inspector.x + 1;
+        let want: Vec<_> = (x0..x0 + label.len() as u16)
+            .map(|x| (x, inspector.y))
+            .collect();
+        assert_eq!(fading, want, "the label, and nothing else");
+    }
+
+    /// The reader has no frame of its own: a copy from it flashes the
+    /// `notes preview` title on pane 2's frame, not the first text row.
+    #[test]
+    fn a_copy_from_the_reader_flashes_its_title_and_no_text_row() {
+        let mut app = notes_flash_app(FocusedPanel::Reader);
+        app.inspector_folded = false;
+        assert_eq!(chord(&mut app, "yp").len(), 1, "the path was copied");
+        let (fading, _) = flash_frames(&mut app, |r| r.repo_list, true);
+        let mut term = Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| ui::render(f, &app)).unwrap();
+        let buf = term.backend().buffer();
+        let label = "notes preview";
+        let want: Vec<_> = (0..buf.area.height)
+            .flat_map(|y| {
+                let row: String = (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect();
+                row.find(label)
+                    .map(|at| row[..at].chars().count() as u16)
+                    .map(|x| (0..label.len() as u16).map(move |i| (x + i, y)))
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(want.len(), label.len(), "the title is drawn once");
+        assert_eq!(fading, want, "the title, and no text row");
+    }
+
+    /// `yank_on` in the `notes` view with one walked file, focused on
+    /// `panel`, so the tree and the reader are on screen.
+    fn notes_flash_app(panel: FocusedPanel) -> App {
+        let scratch =
+            std::env::temp_dir().join(format!("fleetz_flash_notes_{}", std::process::id()));
+        let root = scratch.to_string_lossy().into_owned();
+        let mut app = yank_on(app::HistoryView::Notes, panel);
+        app.repos[0].path = Some(root.clone());
+        let walk = app::NotesWalk {
+            key: root,
+            root: scratch,
+            generation: app.notes_generation,
+        };
+        let files = vec![notes::NoteFile {
+            rel: "notez/a.md".into(),
+            notez: Some("notez".into()),
+        }];
+        app.apply_notes_walk(walk, Ok(notes::Notes { files }));
+        app
+    }
+
+    /// A live flash from every source draws at every terminal size, down to
+    /// none at all: a resize does not end it, and a reader label on a
+    /// terminal a few rows tall lay outside the buffer and panicked.
+    #[test]
+    fn a_live_flash_draws_at_every_terminal_size() {
+        use ratatui::backend::TestBackend;
+        let sources = [
+            yank_on(app::HistoryView::Info, FocusedPanel::RepoList),
+            yank_on(app::HistoryView::Commits, FocusedPanel::Detail),
+            yank_on(app::HistoryView::Commits, FocusedPanel::Inspector),
+            notes_flash_app(FocusedPanel::Reader),
+        ];
+        let start = std::time::Instant::now();
+        for mut app in sources {
+            app.inspector_folded = false;
+            app.yank_flash.show(app.flash_source(), false, start);
+            for w in 0..=40u16 {
+                for h in 0..=20u16 {
+                    let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+                    let at = start + std::time::Duration::from_millis(50);
+                    term.draw(|f| ui::render_at(f, &app, at)).unwrap();
+                }
+            }
+        }
+    }
+
+    /// A live flash is an animation: its frames are painted through a burst
+    /// of queued background events, not held behind it.
+    #[test]
+    fn a_live_flash_is_never_held_behind_queued_events() {
+        let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
+        assert!(!is_animating(&app));
+        chord(&mut app, "yy");
+        assert!(is_animating(&app), "the flash is not an animation");
+        assert!(should_paint(false, 0, is_animating(&app)));
+        app.yank_flash.clear();
+        assert!(!is_animating(&app));
+    }
+
+    /// The flash belongs to the row it was copied from: a cursor moved by
+    /// anything other than input (which ends the flash first) leaves the
+    /// new row unflashed.
+    #[test]
+    fn a_flash_does_not_follow_the_cursor_to_another_row() {
+        use ratatui::backend::TestBackend;
+        let mut app = yank_on(app::HistoryView::Commits, FocusedPanel::Detail);
+        app.set_detail_selected(1);
+        chord(&mut app, "yy");
+        assert!(app.yank_flash.is_active());
+        app.set_detail_selected(2);
+        let at = std::time::Instant::now() + std::time::Duration::from_millis(50);
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| ui::render_at(f, &app, at)).unwrap();
+        let buf = term.backend().buffer();
+        assert!(
+            !buf.area
+                .positions()
+                .any(|p| buf[p].bg == ui::colors::YANKED_BG),
+            "the flash moved to the new row"
         );
     }
 
