@@ -259,6 +259,9 @@ pub fn history_view_color(view: crate::app::HistoryView) -> Color {
         // Yellow, the paper of a notes pad (FZ-53): the one tab hue left
         // that is neither the HEAD marker's teal nor a lamp's colour.
         HistoryView::Notes => YELLOW,
+        // The stash's flamingo (FZ-60): your own work not yet gone anywhere,
+        // the neighbour of uncommitted yellow, as this view is of `notes`.
+        HistoryView::Changes => STASH_CLR,
     }
 }
 

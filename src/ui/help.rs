@@ -73,8 +73,8 @@ const GROUPS: [Group; 6] = [
                 desc: &["detail / compact view"],
             },
             Row {
-                key: "[ ]",
-                desc: &["previous / next repo view"],
+                key: "[ ] u",
+                desc: &["repo view; changes base"],
             },
             // One row for the two in-view expanders: neither column has a
             // row to spare at 80x24.
@@ -147,7 +147,7 @@ const GROUPS: [Group; 6] = [
         rows: &[
             Row {
                 key: "Enter",
-                desc: &["lazygit; note; digest repo"],
+                desc: &["lazygit; file; digest repo"],
             },
             Row {
                 key: "e",
@@ -167,7 +167,7 @@ const GROUPS: [Group; 6] = [
             },
             Row {
                 key: "y",
-                desc: &["copy hash (or click it)"],
+                desc: &["copy hash; changes: path"],
             },
             Row {
                 key: "b s",

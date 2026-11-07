@@ -1207,6 +1207,20 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         lines.extend(rows);
     }
 
+    // The `changes` view (FZ-60): which base the second section uses,
+    // pinned with the header, then both sections, one cursor stop per file.
+    if view == HistoryView::Changes {
+        lines.push(changes_mode_line(app));
+        pinned_rows = lines.len();
+        let base = lines.len();
+        let (rows, tops, selected) = changes_rows(app, repo, width);
+        if let Some(row) = selected {
+            selected_block = Some((base + row, base + row));
+        }
+        block_tops.extend(tops.into_iter().map(|t| base + t));
+        lines.extend(rows);
+    }
+
     // PRs
     // Gated on `-p`: the header row already names the open PRs by number, so
     // this section is the opt-in detail rather than the news itself.
@@ -1982,6 +1996,10 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
         render_notes_card(frame, area, app);
         return;
     }
+    if app.changes_wanted() {
+        render_changes_inspector(frame, area, app);
+        return;
+    }
     let focused = app.focused_panel == FocusedPanel::Inspector;
     let border_color = if focused {
         colors::LAVENDER
@@ -2209,6 +2227,296 @@ fn render_ci_inspector(frame: &mut Frame, area: Rect, app: &App) {
         .skip(scroll as usize)
         .take(inner.height as usize)
         .cloned()
+        .collect();
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(visible), inner);
+}
+
+/// The `changes` view's two bases, in the mode line's and the help row's
+/// words (FZ-60).
+const CHANGES_BASES: [&str; 2] = ["upstream", "default"];
+
+/// The `changes` view's first line: both bases as a two-state switch, drawn
+/// as the `notes` mode line draws its modes: `vs: [upstream] default  (u)`.
+fn changes_mode_line(app: &App) -> Line<'static> {
+    let on = colors::history_view_color(HistoryView::Changes);
+    let active = usize::from(app.changes_base == crate::git::ChangesBase::DefaultBranch);
+    let mut spans = vec![Span::styled("vs: ", Style::default().fg(colors::OVERLAY))];
+    for (i, base) in CHANGES_BASES.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(match i == active {
+            true => Span::styled(
+                format!("[{base}]"),
+                Style::default().fg(on).add_modifier(Modifier::BOLD),
+            ),
+            false => Span::styled(base.to_string(), Style::default().fg(colors::SUBTEXT)),
+        });
+    }
+    spans.push(Span::styled("  (", Style::default().fg(colors::OVERLAY)));
+    spans.push(Span::styled(
+        "u",
+        Style::default()
+            .fg(colors::TEXT)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(")", Style::default().fg(colors::OVERLAY)));
+    Line::from(spans)
+}
+
+/// A file's status columns: porcelain's staged column in green and its
+/// unstaged one in the dirty counter's yellow, `??` dim; the other
+/// section's one letter in the churn colors when it adds or deletes.
+fn change_status_spans(status: &str) -> Vec<Span<'static>> {
+    let styled = |text: String, color| Span::styled(text, Style::default().fg(color));
+    if status == "??" {
+        return vec![styled("??".to_string(), colors::OVERLAY)];
+    }
+    let mut chars = status.chars();
+    let (x, y) = (chars.next().unwrap_or(' '), chars.next());
+    match y {
+        Some(y) => vec![
+            styled(x.to_string(), colors::GREEN),
+            styled(y.to_string(), colors::YELLOW),
+        ],
+        None => {
+            let color = match x {
+                'A' => colors::DIFF_ADD,
+                'D' => colors::DIFF_DEL,
+                _ => colors::TEXT,
+            };
+            vec![styled(format!("{x} "), color)]
+        }
+    }
+}
+
+/// The churn column of one changed file, in the widths its section uses.
+fn churn_spans(churn: Option<(u32, u32)>, add_w: usize, del_w: usize) -> Vec<Span<'static>> {
+    let (added, removed) = churn.unwrap_or((0, 0));
+    let token = |n: u32, sign: char, w: usize| match n {
+        0 => " ".repeat(w),
+        n => format!("{:>w$}", format!("{sign}{n}")),
+    };
+    let mut spans = Vec::new();
+    if add_w > 0 {
+        spans.push(Span::styled(
+            token(added, '+', add_w),
+            Style::default().fg(colors::DIFF_ADD),
+        ));
+    }
+    if del_w > 0 {
+        if add_w > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(
+            token(removed, '-', del_w),
+            Style::default().fg(colors::DIFF_DEL),
+        ));
+    }
+    spans
+}
+
+/// The `changes` view's lists for `repo` (FZ-60): its lines, the line each
+/// file is on, in cursor order, and the line the cursor's file is on. A row
+/// with nothing to list says why in one line.
+fn changes_rows(
+    app: &App,
+    repo: &RepoStatus,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<usize>, Option<usize>) {
+    use crate::git::Outgoing;
+    let dim = |text: String| Line::from(Span::styled(text, Style::default().fg(colors::OVERLAY)));
+    let say = |text: String| (vec![dim(text)], Vec::new(), None);
+    if repo.path.is_none() {
+        return say("not cloned: nothing to read".to_string());
+    }
+    let changes = match app.selected_changes().and_then(|(_, s)| s?.held.as_ref()) {
+        None => return say("reading changes…".to_string()),
+        Some(Err(e)) => return say(format!("could not read the repo: {e}")),
+        Some(Ok(changes)) => changes,
+    };
+    if let Outgoing::Unpushed {
+        upstream, ahead: 0, ..
+    } = &changes.outgoing
+        && changes.uncommitted.is_empty()
+    {
+        return say(format!("clean and pushed to {upstream}"));
+    }
+    let total = changes.uncommitted.len() + changes.outgoing.files().len();
+    let cursor = app.detail_selected().min(total.saturating_sub(1));
+    let mut lines = Vec::new();
+    let mut tops = Vec::with_capacity(total);
+    let mut selected = None;
+    let mut list = |lines: &mut Vec<Line<'static>>, files: &[crate::git::ChangedFile]| {
+        let add_w = files
+            .iter()
+            .map(|f| stat_part_width(f.churn.map_or(0, |c| c.0)))
+            .max()
+            .unwrap_or(0);
+        let del_w = files
+            .iter()
+            .map(|f| stat_part_width(f.churn.map_or(0, |c| c.1)))
+            .max()
+            .unwrap_or(0);
+        let tail = stat_tail_width(add_w, del_w);
+        let path_w = width.saturating_sub(2 + 2 + 2 + tail + usize::from(tail > 0) * 2);
+        for file in files {
+            let is_sel = tops.len() == cursor;
+            if is_sel {
+                selected = Some(lines.len());
+            }
+            tops.push(lines.len());
+            let path = crate::ui::truncate(&file.path, path_w);
+            let pad = path_w.saturating_sub(path.chars().count());
+            let mut spans = vec![Span::styled(
+                if is_sel { "▸ " } else { "  " },
+                Style::default().fg(colors::SAPPHIRE),
+            )];
+            spans.extend(change_status_spans(&file.status));
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(path, Style::default().fg(colors::TEXT)));
+            if tail > 0 {
+                spans.push(Span::raw(" ".repeat(pad + 2)));
+                spans.extend(churn_spans(file.churn, add_w, del_w));
+            }
+            if is_sel {
+                spans = wash(pad_to(spans, width));
+            }
+            lines.push(Line::from(spans));
+        }
+    };
+    match changes.uncommitted.len() {
+        0 => lines.push(dim("nothing uncommitted".to_string())),
+        n => {
+            lines.push(Line::from(section_label(&format!("uncommitted ({n})"))));
+            list(&mut lines, &changes.uncommitted);
+        }
+    }
+    lines.push(Line::from(""));
+    match &changes.outgoing {
+        Outgoing::Unpushed {
+            upstream, ahead: 0, ..
+        } => lines.push(dim(format!("nothing unpushed to {upstream}"))),
+        Outgoing::Unpushed {
+            upstream,
+            ahead,
+            files,
+        } => {
+            let heading = format!("unpushed ({ahead} ahead of {upstream})");
+            lines.push(Line::from(section_label(&heading)));
+            list(&mut lines, files);
+        }
+        Outgoing::VsDefault { base, files } => {
+            let heading = format!("on branch vs {base} ({})", files.len());
+            lines.push(Line::from(section_label(&heading)));
+            list(&mut lines, files);
+        }
+        Outgoing::NoUpstream { branch: Some(b) } => {
+            lines.push(dim(format!("no upstream: {b} tracks no remote branch")))
+        }
+        Outgoing::NoUpstream { branch: None } => {
+            lines.push(dim("no upstream: HEAD is detached".to_string()))
+        }
+        Outgoing::NoDefault => lines.push(dim("no default branch to compare with".to_string())),
+    }
+    (lines, tops, selected)
+}
+
+/// One line of a changed file's diff, in the churn column's green and red;
+/// hunk heads in the section labels' mauve, file headers dim. Tabs widened
+/// so the terminal draws them.
+fn diff_line(line: &str) -> Line<'static> {
+    let color = if line.starts_with("+++") || line.starts_with("---") {
+        colors::OVERLAY
+    } else if line.starts_with('+') {
+        colors::DIFF_ADD
+    } else if line.starts_with('-') {
+        colors::DIFF_DEL
+    } else if line.starts_with("@@") {
+        colors::MAUVE
+    } else if line.starts_with(' ') || line.is_empty() {
+        colors::TEXT
+    } else {
+        colors::OVERLAY
+    };
+    Line::from(Span::styled(
+        line.replace('\t', "    "),
+        Style::default().fg(color),
+    ))
+}
+
+/// The inspector's lines in the `changes` view: the highlighted file's
+/// path, then its diff (an untracked file's text plain), or why there is
+/// none.
+fn changes_inspector_lines(app: &App) -> Vec<Line<'static>> {
+    let dim = |text: &str| {
+        Line::from(Span::styled(
+            text.to_string(),
+            Style::default().fg(colors::OVERLAY),
+        ))
+    };
+    let Some((_, file)) = app.changes_highlighted() else {
+        return vec![dim("no file selected")];
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            file.path.clone(),
+            Style::default()
+                .fg(colors::TEXT)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+    match app.highlighted_change_diff().and_then(|d| d.text.as_ref()) {
+        None => lines.push(dim("reading…")),
+        Some(Err(e)) => lines.push(Line::from(Span::styled(
+            format!("could not read: {e}"),
+            Style::default().fg(colors::RED),
+        ))),
+        Some(Ok(text)) if file.status == "??" => lines.extend(text.lines().map(|l| {
+            Line::from(Span::styled(
+                l.replace('\t', "    "),
+                Style::default().fg(colors::TEXT),
+            ))
+        })),
+        Some(Ok(text)) => lines.extend(text.lines().map(diff_line)),
+    }
+    lines
+}
+
+/// The inspector while pane 2 shows `changes` (FZ-60). Lines are clipped,
+/// not wrapped, as a diff reads, so one line is one row and only the rows
+/// on screen are handed to the paragraph; scrolled by the inspector's
+/// offset, clamped to what this frame measured.
+fn render_changes_inspector(frame: &mut Frame, area: Rect, app: &App) {
+    let focused = app.focused_panel == FocusedPanel::Inspector;
+    let border_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .padding(Padding::new(2, 2, 1, 0))
+        .title_top(crate::ui::panel_title(
+            crate::ui::INSPECTOR_NUM,
+            "inspector",
+            focused,
+        ));
+    let inner = block.inner(area);
+    let lines = changes_inspector_lines(app);
+    let max_scroll = u16::try_from(lines.len())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(inner.height);
+    app.inspector_max_scroll.set(max_scroll);
+    let scroll = app.inspector_scroll.min(max_scroll);
+    let visible: Vec<Line> = lines
+        .into_iter()
+        .skip(scroll as usize)
+        .take(inner.height as usize)
         .collect();
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(visible), inner);
@@ -4985,6 +5293,7 @@ mod tests {
                 HistoryView::Notes => {
                     notes_pane_text(&notes_view_app(&[("notez/a.md", Some("notez"))]))
                 }
+                HistoryView::Changes => notes_pane_text(&changes_view_app(held_changes())),
                 _ => pane_text(view, 92),
             };
             assert!(
@@ -5353,7 +5662,7 @@ mod tests {
             app.history_view = view;
             // A run is not a commit; FZ-30f details runs.
             let expected = match view {
-                HistoryView::Ci | HistoryView::Notes => None,
+                HistoryView::Ci | HistoryView::Notes | HistoryView::Changes => None,
                 _ => Some("a1b2c3d"),
             };
             assert_eq!(
@@ -7729,6 +8038,168 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn changed(status: &str, path: &str, churn: Option<(u32, u32)>) -> crate::git::ChangedFile {
+        crate::git::ChangedFile {
+            status: status.to_string(),
+            path: path.to_string(),
+            from: None,
+            churn,
+        }
+    }
+
+    /// The design's example (FZ-60): three uncommitted kinds, two files
+    /// unpushed.
+    fn held_changes() -> crate::git::Changes {
+        crate::git::Changes {
+            uncommitted: vec![
+                changed(" M", "src/app.rs", Some((12, 3))),
+                changed("A ", "docs/foo.md", Some((40, 0))),
+                changed("??", "scratch/", None),
+            ],
+            outgoing: crate::git::Outgoing::Unpushed {
+                upstream: "origin/main".to_string(),
+                ahead: 2,
+                files: vec![
+                    changed("M", "src/ui/detail.rs", Some((88, 12))),
+                    changed("D", "src/old.rs", Some((0, 5))),
+                ],
+            },
+        }
+    }
+
+    /// The `changes` view on the busy repo with `changes` held for it.
+    fn changes_view_app(changes: crate::git::Changes) -> crate::app::App {
+        let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), 100, 44);
+        app.view = crate::app::View::Detail;
+        app.history_view = HistoryView::Changes;
+        app.inspector_folded = false;
+        let key = app.repos[0].path.clone().expect("cloned");
+        let read = crate::app::ChangesRead {
+            root: key.clone().into(),
+            key,
+            generation: 0,
+            base: app.changes_base,
+        };
+        app.apply_changes_read(read, Ok(changes));
+        app
+    }
+
+    /// FZ-60: both sections under their headings, porcelain's two status
+    /// columns, the churn column, the caret on the cursor's file, and the
+    /// base switch pinned on top.
+    #[test]
+    fn the_changes_view_draws_both_sections_with_status_and_churn() {
+        let mut app = changes_view_app(held_changes());
+        let text = notes_pane_text(&app);
+        for want in [
+            "vs: [upstream] default  (u)",
+            "uncommitted (3)",
+            "▸  M  src/app.rs",
+            "A   docs/foo.md",
+            "??  scratch/",
+            "unpushed (2 ahead of origin/main)",
+            "M   src/ui/detail.rs",
+            "D   src/old.rs",
+            "+88 -12",
+        ] {
+            assert!(text.contains(want), "{want:?} missing:\n{text}");
+        }
+        app.set_detail_selected(4);
+        let text = notes_pane_text(&app);
+        assert!(text.contains("▸ D   src/old.rs"), "{text}");
+    }
+
+    /// The one-line states: no upstream, detached, clean and pushed, the
+    /// default-branch section, and a not-cloned row.
+    #[test]
+    fn the_changes_view_says_why_a_section_is_missing() {
+        use crate::git::{Changes, Outgoing};
+        let with = |outgoing| Changes {
+            uncommitted: Vec::new(),
+            outgoing,
+        };
+        let cases = [
+            (
+                with(Outgoing::NoUpstream {
+                    branch: Some("feat".to_string()),
+                }),
+                "no upstream: feat tracks no remote branch",
+            ),
+            (
+                with(Outgoing::NoUpstream { branch: None }),
+                "no upstream: HEAD is detached",
+            ),
+            (
+                with(Outgoing::Unpushed {
+                    upstream: "origin/main".to_string(),
+                    ahead: 0,
+                    files: Vec::new(),
+                }),
+                "clean and pushed to origin/main",
+            ),
+            (
+                with(Outgoing::VsDefault {
+                    base: "origin/main".to_string(),
+                    files: vec![changed("A", "f.txt", Some((1, 0)))],
+                }),
+                "on branch vs origin/main (1)",
+            ),
+        ];
+        for (changes, want) in cases {
+            let text = notes_pane_text(&changes_view_app(changes));
+            assert!(text.contains(want), "{want:?} missing:\n{text}");
+            assert!(!text.contains("unpushed ("), "{text}");
+        }
+        let mut app = changes_view_app(held_changes());
+        app.repos[0].path = None;
+        let text = notes_pane_text(&app);
+        assert!(text.contains("not cloned: nothing to read"), "{text}");
+    }
+
+    /// The inspector draws the highlighted file's diff with added and
+    /// removed lines in the churn column's green and red, a failed read's
+    /// error in place, and scrolls with j/k when focused.
+    #[test]
+    fn the_changes_inspector_draws_the_diff_in_churn_colors_and_scrolls() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let draw = |app: &crate::app::App| {
+            let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
+            term.draw(|f| render_inspector(f, f.area(), app)).unwrap();
+            term.backend().buffer().clone()
+        };
+        let row_of = |buf: &ratatui::buffer::Buffer, needle: &str| {
+            (0..12u16).find_map(|y| {
+                let row: String = (0..80u16).map(|x| buf[(x, y)].symbol()).collect();
+                row.find(needle)
+                    .map(|x| (row[..x].chars().count() as u16, y))
+            })
+        };
+        let mut app = changes_view_app(held_changes());
+        let read = app.claim_change_diff().expect("the highlighted file");
+        let diff: String = "@@ -1 +1 @@\n-old line\n+new line\n"
+            .chars()
+            .chain((0..30).flat_map(|i| format!(" context {i}\n").chars().collect::<Vec<_>>()))
+            .collect();
+        app.apply_change_diff(read.clone(), Ok(diff));
+        let buf = draw(&app);
+        let (x, y) = row_of(&buf, "+new line").expect("added line drawn");
+        assert_eq!(buf[(x, y)].fg, colors::DIFF_ADD);
+        let (x, y) = row_of(&buf, "-old line").expect("removed line drawn");
+        assert_eq!(buf[(x, y)].fg, colors::DIFF_DEL);
+
+        app.focused_panel = FocusedPanel::Inspector;
+        app.inspector_nav(5);
+        let buf = draw(&app);
+        assert!(row_of(&buf, "+new line").is_none(), "scrolled past it");
+
+        app.change_diff = None;
+        let read = app.claim_change_diff().expect("again");
+        app.apply_change_diff(read, Err("boom".to_string()));
+        let buf = draw(&app);
+        assert!(row_of(&buf, "could not read: boom").is_some());
     }
 
     /// The tree draws each notes directory as a section, nested directories
