@@ -1,4 +1,4 @@
-<!-- relay-template: 0.8.0; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
+<!-- relay-template: 0.9.0; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
 <!-- relay-board: owner=Gaurgle project=1 prefix=FZ -->
 # Agent workflow for the release effort
 
@@ -62,8 +62,12 @@ authorization while migrating these instructions.
 
 - Andreas owns priorities, interaction acceptance, what he installs and runs,
   tags and releases.
-- Coordinator owns architecture, ticket readiness, assignments and integration,
-  including commits, pushes and merges under the safe-merge rule.
+- Coordinator owns ticket readiness, assignments and integration,
+  including commits, pushes and merges under the safe-merge rule, and rules
+  on the architect's findings.
+- Architect (`fz-architect`) keeps `docs/architecture.md` true and checks
+  tickets and branches against it ("Architecture" below). Run per trigger,
+  never standing.
 - Worker implements one assigned ticket and supplies evidence.
 - Reviewer independently evaluates that ticket's exact diff and criteria.
 
@@ -93,6 +97,16 @@ structure. Choose a proportionate path:
   spec and plan, then link them from the corresponding release tickets. Fleetz
   keeps these artifacts in `docs/superpowers/specs/` and
   `docs/superpowers/plans/`.
+- **Refactor ticket:** structure work with no behavior change, filed by the
+  lead from a worker's or reviewer's `Structure` note, or by the owner. One
+  seam per ticket: code moves, visibility widens only as far as the move
+  needs, nothing else changes. Acceptance: the same test names pass before
+  and after (compare the sorted test lists), the checks are clean, and no
+  public or persisted contract changes. Path-scoped rules and docs that name
+  moved symbols follow them in the same ticket. Schedule it when no open
+  ticket branch touches the files, since a move conflicts with every one of
+  them. A split across modules needs the owner's approval, per ticket or
+  for a named batch. Fleetz's plan: `docs/module-split-design.md`.
 
 Approval of a spec or plan accepts that artifact; it does not add tickets to
 the authorized scope. Use the owner's named tickets or standing instruction
@@ -101,6 +115,32 @@ the only dispatcher. Do not run another subagent-driven implementation
 workflow alongside Relay's worker and reviewer assignments. Workers may use
 relevant task skills within their ticket but cannot delegate. The independent
 Relay review remains required.
+
+## Architecture
+
+`docs/architecture.md` is the code map: the structure as it is, measured,
+and the target shape Andreas accepted on 2026-11-07. The architect
+(`fz-architect`) keeps it true. It is never a standing agent: the
+coordinator dispatches one run per trigger, and Andreas may run it at any
+time.
+
+- **Ticket check:** before a ticket is made Ready, when it adds a module,
+  an `AppEvent` or a new kind of state, or touches more than one layer.
+  Batch the waiting tickets in one run where possible. The verdict and the
+  doc sections it names go on the issue, and those sections go in the
+  worker's `Pointers`. The coordinator rules on `fits` and `fits with
+  note`; `refactor first` and `needs design` go to Andreas when they change
+  priorities.
+- **Branch check:** before a parked or long-lived branch resumes, and
+  before a batch of refactor tickets starts.
+- **Survey:** at each milestone retro, after a batch of refactor tickets
+  lands, and when two or more `Structure` notes are open.
+- **Consult:** before a design-heavy ticket.
+
+A ticket that adds a module, moves a responsibility, adds an `AppEvent` or
+changes a dependency edge updates the as-is sections of the doc in the same
+ticket; the reviewer checks it. Changes to the target shape are Andreas's,
+recorded in the doc's owner items.
 
 ## Model and context budget
 
@@ -151,6 +191,48 @@ with `scripts/relay-retro`, which groups the metrics lines by models, before
 widening use. The same trial applies to a lighter hosted worker (the small
 model alias on a scope-tight ticket): the owner names the tickets, the lead
 records the models field, the retro decides.
+
+**Choosing per dispatch.** The lead's row is fixed. The worker, reviewer and
+small rows are defaults, and the lead may pick another model and effort for
+each dispatch with the Agent tool's `model` and `effort` overrides; this
+paragraph is the instruction that permits them. The usual mistake is more
+model than the ticket needs, so start from the lightest that fits:
+
+- Mechanical work on named paths with no design (a rename, config, docs, a
+  known one-line fix): small on `haiku` or `sonnet`, effort `low`.
+- A normal bounded ticket: the defaults.
+- Invariants, concurrency, security, migrations, spec-first or investigation
+  tickets, or rework after a rejected review: worker at effort `high`.
+  `opus` covers nearly all of these; a `fable` worker is a rare exception
+  whose reason the dispatch names.
+- The reviewer never goes below its default; raise it to `high` with the
+  worker.
+
+This is judgment, not a rule to apply mechanically. Name the choice and a
+few words of reason in the handoff's `Model:` line, and record it in the
+metrics line as `alias:effort`, so `scripts/relay-retro` shows whether the
+picks paid off. Workers never dispatch, so the choice is the lead's.
+
+**Decision ladder.** A lighter model saves tokens only if it does not cost
+the owner attention. Agents never ask the owner; questions climb one rung at
+a time and stop at the first rung that can answer:
+
+1. **The agent decides** a reversible choice inside its scope and the
+   ticket's criteria (naming, structure, which of two equivalent approaches),
+   and lists it under `Assumptions` in its report.
+2. **The lead rules** anything else within the ticket, the repo's rules and
+   the standing authority: design questions, ambiguous criteria, a re-scope.
+   A question asked because the model was too light is not a reason to ask
+   the owner: the lead answers it, or re-dispatches on a stronger model or
+   higher effort and counts that in the models field.
+3. **The owner decides** only what is his: priorities, acceptance he kept,
+   scope or authority beyond the standing table, and the owner-only actions.
+   Even then the lead keeps other in-scope work moving and brings him one
+   batched, decision-ready question: options, its recommendation and why.
+
+The metrics line already counts owner decisions; `scripts/relay-retro` shows
+them per models group, so a lighter pick that sends more questions to the
+owner shows up in the retro and gets raised.
 
 The requested Claude IDs are verified in official documentation, but account
 entitlement still requires a successful model request. On Max, Fable shares the
@@ -219,6 +301,7 @@ contract, handoff templates and limits in this document apply unchanged.
 | `fz-worker` | `claude-opus-5-5` | `medium` | Assigned worktree, allowed files | Implementation, measurement, investigation |
 | `fz-reviewer` | `claude-opus-5-5` | `medium` | None | Independent review of the exact diff |
 | `fz-small` | `sonnet` | `medium` | Named paths only | Narrow scans, documentation, truly small changes |
+| `fz-architect` | `claude-fable-5-1` | `high` | `docs/architecture.md`, as-is sections | Code map, ticket and branch checks, per trigger |
 
 - The coordinator creates the ticket branch and worktree and passes its
   absolute path. The harness's `isolation: worktree` is not used: it branches
@@ -281,8 +364,9 @@ escalate with the evidence.
 7. After the reviewer accepts, the coordinator commits exactly the reviewed
    diff on the ticket branch and pushes the branch, which runs CI. It verifies
    integration against current `main` in an isolated checkout, reports conflicts
-   and runs checks on the combined result, then merges under the safe-merge
-   rule. If `main` moves, revalidate the changed integration result before merging.
+   and runs checks on the combined result, runs `scripts/relay-gate`, then
+   merges under the safe-merge rule. If `main` moves, revalidate the changed
+   integration result before merging; the gate refuses until you do.
    Worktree checks alone do not establish integration safety. Wait for CI with
    `gh run watch <run-id> --exit-status` as a background command, so the
    harness reports when it ends; never poll with short sleeps.
@@ -331,6 +415,16 @@ The coordinator may merge a ticket branch into `main` and push when all hold:
 - The ticket's acceptance does not rest on Andreas's judgment. Interaction,
   layout and look need him to try the branch build first.
 
+The first four are checked by a script, not by reading:
+`scripts/relay-gate <worktree> <accepted diff id> <verified-on>`, where
+`<verified-on>` is the `main` commit the combined checks ran on. It proves
+the committed tree is the accepted diff id, the pushed branch is that
+commit, scope and guarded files hold, CI at that commit is green and nothing
+landed after the combined checks. Merge only on exit 0, and record its
+result as the gate in the ticket record. `--guarded-approved` only with
+Andreas's ruling on the issue. Persistence and cache formats, external
+contracts and owner-look acceptance stay the coordinator's judgment.
+
 Merge with `git merge --no-ff` so one ticket is one revertable unit. Stage only
 the ticket's files, never `git add -A`. After the push, confirm CI on `main`;
 if it is red, revert the merge, push the revert and report. If a condition
@@ -372,7 +466,7 @@ Every piece of Relay state has one home, chosen by when it is read:
   (`gh issue comment --edit-last` or the comment's URL). It holds base,
   branch, worktree, worker and reviewer with model and effort, each review
   as diff id plus verdict and tokens, commit SHA, CI run id, the combined
-  verify SHA, the gate (`none`, `owner look`, `dependency`, `ci red`) and
+  verify SHA, the gate (`relay-gate holds`, `owner look`, `dependency`, `ci red`) and
   links to rulings. SHAs and run ids, not timestamps, say where a ticket
   is. Rulings stay separate comments, posted when made.
 - **Read never on the start path: the log**, [agent-log.md](agent-log.md).
@@ -381,7 +475,7 @@ Every piece of Relay state has one home, chosen by when it is read:
   metrics line:
 
 ```text
-<ticket>: review <accepted first | evidence n | changes n>; fix cycles <n>; owner decisions <n>; worker <min>; review <min>; models <worker alias>/<reviewer alias>; usage <worker tokens; reviewer tokens | not read>
+<ticket>: review <accepted first | evidence n | changes n>; fix cycles <n>; owner decisions <n>; worker <min>; review <min>; models <worker alias:effort>/<reviewer alias:effort>; usage <worker tokens; reviewer tokens | not read>
 ```
 
 `scripts/relay-retro` aggregates those lines (first-review rate, fix
@@ -408,6 +502,14 @@ four homes, or nowhere:
 - nowhere: most tickets, and a valid answer.
 
 The lesson is never kept in the baton, and the log notes which home got it.
+
+**Forget at the milestone.** Rules only accumulate unless something takes
+them out. At each milestone retro, and when a role's model family changes,
+the lead goes through the rules in `.claude/agents/`, this file and the
+path-scoped rules, and for each asks which failure in the log or on the
+issues it prevents and whether that failure has occurred since the last model
+change. Rules with no answer are proposed to the owner for removal; they are
+cut only with the owner's yes, and the log notes what went.
 Post every ruling on a ticket (scope, design or test decisions) as a comment
 on its issue when it is made.
 
@@ -480,8 +582,9 @@ Allowed files: <paths; read other files as needed>
 Pointers: <file:line for each place the change lands; design doc sections by heading; never "read all of">
 Dependencies accepted: <IDs or none>
 
-Read applicable repository instructions and docs/agent-workflow.md.
-Deliver exactly this ticket's outcome. Keep unrelated improvements out.
+Read applicable repository instructions, and from docs/agent-workflow.md
+only "Validation contract", "Blockers and rework", "Isolation and
+integration" and "Writing files". Deliver exactly this ticket's outcome. Keep unrelated improvements out.
 Read from the pointers with ranges, not whole files.
 Verify the reported issue before fixing it; report contradictory evidence.
 Do not change dependencies, CI, persistence schemas or external API contracts

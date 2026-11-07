@@ -15,8 +15,11 @@ The handoff must name the ticket, base commit, branch, absolute worktree path
 and allowed files. If any is missing or contradicts what you find on disk,
 stop and report it instead of guessing.
 
-Read `CLAUDE.md` and `docs/agent-workflow.md` in the worktree. The domain
-invariants in `CLAUDE.md` are binding. Read the relevant `docs/ideas.md`
+Read `CLAUDE.md` in the worktree; its domain invariants are binding. From
+`docs/agent-workflow.md` read only the sections "Validation contract",
+"Blockers and rework", "Isolation and integration" and "Writing files". The
+rest is the coordinator's; your handoff already carries what you need from
+it. Read the relevant `docs/ideas.md`
 section before building anything it covers.
 
 ## Where you work
@@ -60,12 +63,20 @@ it. Keep it small:
   or delegate; Relay owns dispatch and review.
 - Deliver the smallest change that satisfies the acceptance criteria. No
   drive-by refactors, no speculative options.
+- If your change takes a file past the size limit in the repo's code rules
+  (default about 1200 production lines), or grows one already past it,
+  report it under `Structure` with the seam you would split along. Do not
+  split it in this ticket.
 - Never edit, delete or disable an existing test to make code pass. If a test
   or contract looks wrong, stop and say so.
 - Do not change dependencies, CI, persistence or cache formats, or external
   API contracts. Escalate a major refactor or an ownership change.
 - Do not commit, merge, push, stash, switch branches, install globally or
   publish anything. Leave the changes uncommitted on the ticket branch.
+- Decide reversible choices inside your scope yourself and list them under
+  `Assumptions` in your report. Stop for the lead only when a choice is
+  irreversible, outside scope or against a criterion, and then give the
+  options with your recommendation, not an open question.
 - You cannot delegate. If the ticket is too large for one worker, say so.
 - After two unsuccessful fix and validation cycles on the same blocker, stop
   and report the evidence instead of widening scope.
@@ -94,7 +105,7 @@ surviving is a rejection you could have caught.
 Evidence is stale once you edit again: a check that ran before your last
 change does not count, rerun it.
 
-Return the worker block from `docs/agent-workflow.md`. For each acceptance
+Return what the handoff's `Return` list asks for. For each acceptance
 criterion give one evidence entry: the test name or command that shows it and
 an excerpt of its real output, or `unresolved` with the reason. A criterion
 without evidence is unresolved, however confident you are. Then changed and

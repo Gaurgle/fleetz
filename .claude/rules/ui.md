@@ -17,9 +17,11 @@ unchanged.
 so mouse clicks can be hit-tested against what is on screen. Shared geometry
 lives in one function called by both (`detail::split_inspector`, and
 `ui::contributions::split_main_area` for the strip, over `dock_bottom`; the
-`notes` layout splits columns first with `detail::split_main`, stacks pane 1
-over the card with `split_inspector`, and splits pane 2 into tree and reader
-with `detail::split_notes_pane`); never
+`notes` layout splits columns first with `detail::split_main`, docks no
+inspector under pane 1, and `detail::notes_pane_body` splits pane 2's inner
+area with `detail::split_notes_pane` into the tree's column (pinned header,
+tree, the file's facts divider at its foot) and, right of the divider, the
+fleet's state above the `NOTES` rule and the preview below it); never
 reintroduce a second copy of that arithmetic. Drift here misroutes clicks silently, with nothing
 failing.
 
@@ -64,6 +66,21 @@ github.com. The field is free (cost 1, nodeCount 0, with and without it). The
 scale that changes every few minutes. Days it overwrites are put on the year
 window's scale by example (`Calendar::derive_missing_levels`), and a payload
 cached before the field was asked for falls back to `intensity`.
+
+**The inspector's top border carries the resize grip.** `grips::render`
+paints six cells mid-border after the panes, so anything drawn on that
+border (the CI body tabs) budgets around `grips::inspector_grip_span`;
+pane 2's border has no grip and its arithmetic cannot be copied as is.
+
+**`detail::repo_row_spans` is the one repo row, and the slot digest draws
+it too.** A style that keys off the selected row reaches the digest's
+cursor line, whose own slots (count, authors, subject) must follow it:
+FZ-66's band stopped where the pane 1 part ended until
+`digest::render_pane` washed the rest of the line.
+
+**A view-local key never shadows a global one.** `r` is refresh in every
+view, `notes` included; a view that needs a new action takes a key that is
+unbound everywhere (FZ-59's toggle moved from `r` to `p` on his look).
 
 **Status vocabulary is split by kind.** Counters are numeric (`3↓ 2↑ 4!`),
 categorical states are words (`not cloned`). A not-cloned repo has all counters

@@ -8,6 +8,7 @@ pub const SAPPHIRE: Color = Color::Rgb(116, 199, 236); // repo names
 pub const LAVENDER: Color = Color::Rgb(180, 190, 254); // headers
 pub const MAUVE: Color = Color::Rgb(203, 166, 247); // section labels
 pub const MAROON: Color = Color::Rgb(235, 160, 172); // the `ci` view's tab
+pub const PINK: Color = Color::Rgb(245, 194, 231); // the `worktrees` view's tab
 
 /// Open pull requests, everywhere one is counted or listed.
 ///
@@ -40,14 +41,39 @@ pub const SUBTEXT: Color = Color::Rgb(166, 173, 200);
 
 pub const SURFACE: Color = Color::Rgb(69, 71, 90); // dots, dividers, borders
 
-/// Background of the selected row in the repo pane's history lists.
+/// Background of the selected row in the repo pane's history lists, and of
+/// the cursor's row in the repo list (FZ-66).
 ///
 /// A whole-row wash rather than a bolded hash. Bold marks one token; the eye
 /// still has to find which token, and in a list two hundred rows long that is
 /// the work. A band says it at a glance, which is what lazygit does and why
-/// its lists read so quickly. Catppuccin `surface1`, a lift off the pane
-/// rather than a colour, so it cannot be mistaken for status.
-pub const SELECTED_BG: Color = Color::Rgb(69, 71, 90);
+/// its lists read so quickly. A lift off the pane rather than a colour, so it
+/// cannot be mistaken for status.
+///
+/// Catppuccin `surface0` (49, 50, 68), halfway from `surface1` (`SURFACE`) to
+/// the base (30, 30, 46): "the list highlight can be 50% more dimmed"
+/// (Andreas, 2026-11-04). Strictly between the two, so it stays a visible lift
+/// but is no longer `SURFACE`'s RGB.
+pub const SELECTED_BG: Color = Color::Rgb(49, 50, 68);
+
+/// The cursor row's background for the one flash after `yy` or `yp`
+/// (FZ-81), swept over the band and then faded back to `SELECTED_BG`.
+///
+/// Catppuccin `surface2`, the colour notez's copy flash uses: a clear step
+/// up from the band and from `SURFACE`, still well below `OVERLAY` so the
+/// row's own text stays readable for the 300 ms it lasts.
+pub const YANKED_BG: Color = Color::Rgb(88, 91, 112);
+
+/// `from` moved `fraction` (clamped to 0..=1) of the way to `to`, channel by
+/// channel. A colour that is not RGB does not mix: `to` is returned.
+pub fn mix(from: Color, to: Color, fraction: f64) -> Color {
+    let (Color::Rgb(r0, g0, b0), Color::Rgb(r1, g1, b1)) = (from, to) else {
+        return to;
+    };
+    let t = fraction.clamp(0.0, 1.0);
+    let channel = |a: u8, b: u8| (f64::from(a) + (f64::from(b) - f64::from(a)) * t).round() as u8;
+    Color::Rgb(channel(r0, r1), channel(g0, g1), channel(b0, b1))
+}
 
 /// Stashed work, in the repo list's badge and in the repo pane alike.
 ///
@@ -259,6 +285,9 @@ pub fn history_view_color(view: crate::app::HistoryView) -> Color {
         // Yellow, the paper of a notes pad (FZ-53): the one tab hue left
         // that is neither the HEAD marker's teal nor a lamp's colour.
         HistoryView::Notes => YELLOW,
+        // Pink, not the `WT` badge's lavender: lavender is the `branches`
+        // tab already, and the tabs must stay distinct (FZ-77).
+        HistoryView::Worktrees => PINK,
     }
 }
 
@@ -269,4 +298,47 @@ pub fn history_view_color(view: crate::app::HistoryView) -> Color {
 /// previous flat near-invisible grey where every lane looked the same.
 pub fn graph_lane_color(col: usize) -> Color {
     GRAPH_PALETTE[col % GRAPH_PALETTE.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rgb(c: Color) -> (u8, u8, u8) {
+        match c {
+            Color::Rgb(r, g, b) => (r, g, b),
+            other => panic!("not an RGB colour: {other:?}"),
+        }
+    }
+
+    /// The list band is dimmer than `SURFACE` yet still lifts off the pane
+    /// (FZ-73): every channel lies strictly between the base and `SURFACE`.
+    #[test]
+    fn selected_band_lies_between_base_and_surface() {
+        let b = (30u8, 30u8, 46u8); // Catppuccin Mocha `base`, the pane
+        let (s, band) = (rgb(SURFACE), rgb(SELECTED_BG));
+        assert!(b.0 < band.0 && band.0 < s.0, "red {band:?}");
+        assert!(b.1 < band.1 && band.1 < s.1, "green {band:?}");
+        assert!(b.2 < band.2 && band.2 < s.2, "blue {band:?}");
+    }
+
+    /// The copy flash (FZ-81) is a brighter wash than the band: every
+    /// channel lies strictly between `SURFACE` and `OVERLAY`.
+    #[test]
+    fn yanked_wash_lies_between_surface_and_overlay() {
+        let (s, o, y) = (rgb(SURFACE), rgb(OVERLAY), rgb(YANKED_BG));
+        assert!(s.0 < y.0 && y.0 < o.0, "red {y:?}");
+        assert!(s.1 < y.1 && y.1 < o.1, "green {y:?}");
+        assert!(s.2 < y.2 && y.2 < o.2, "blue {y:?}");
+    }
+
+    #[test]
+    fn mix_runs_from_one_colour_to_the_other() {
+        let (a, b) = (Color::Rgb(0, 100, 200), Color::Rgb(100, 0, 100));
+        assert_eq!(mix(a, b, 0.0), a);
+        assert_eq!(mix(a, b, 0.5), Color::Rgb(50, 50, 150));
+        assert_eq!(mix(a, b, 1.0), b);
+        assert_eq!(mix(a, b, 7.0), b, "clamped");
+        assert_eq!(mix(Color::Reset, b, 0.2), b, "not RGB");
+    }
 }

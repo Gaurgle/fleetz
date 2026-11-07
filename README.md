@@ -25,7 +25,7 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
 - Open pull requests per repo
 - CI status as a `◉` status lamp: green passed, red failed, blinking orange while running. It pulses on the same phase in the repo row and in the repo pane, since both are reading one repo's CI. From GitHub's `statusCheckRollup`, kept live in watch mode
 - Active worktrees (`WT` badge, drawn in the dirty colour when a linked worktree has uncommitted work) and stashes (archive-glyph badge)
-- Open PR count and numbers on the repo row, in the repo pane, and in the footer
+- Open PR count and numbers on the repo row, in the repo pane, and in the fleet's summary
 - Repo pane header reads local-to-remote: local path, branch and stashes on the left of each row, remote URL, PRs and CI flush right
 - A slot digest: stand on a repo list section header ("github activity",
   "local changes", "also active") and pane 2 shows what happened across that
@@ -47,28 +47,60 @@ Multi-repo dashboard TUI. The interactive sibling of [repoz](https://github.com/
   line, colored and glyphed by kind (org, private, public)
 
 The dashboard opens immediately: the first frame paints before any GitHub or
-filesystem work, and a spinner in the header marks the load until repos land.
+filesystem work, and a spinner on the top row marks the load until repos
+land.
 
-The header says when the GitHub data (CI, PRs, the contribution strip) is not
-current, in one segment beside the watch eye:
+The top row is the name and the version, with GitHub's connection, the
+watch eye and the `swept` time flush right, and `loading` beside them while
+the fleet lands. The fleet's state is the right of three sections in the
+repo pane's header, after the repo's local facts (state, path, branch) and
+its remote ones (owner, remote URL, PRs and CI), a divider between each:
 
-- nothing, when the last request to GitHub succeeded and polling keeps its
-  interval;
-- `github cached 14:02` (dim), when launch painted from the disk cache and the
+```
+○ 2 uncommitted        │ ● Gaurgle                    │ since 2 weeks [t]
+  ~/repos/fleetz       │ github.com/Gaurgle/fleetz    │ 3↓ · 1! · 17 synced · 2 not cloned
+  * main · 5 worktrees │ 2 open PRs · CI ◉ passed     │ ⠿ checking remote…
+```
+
+Each piece of the fleet column has a row of its own that it keeps whether or
+not it has anything to say: the time window in teal with its `[t]` and the
+active group, the summary (`3↓ · 2↑ · 4! · 17 synced · 2 PRs`), and the
+activity row for what is passing (a manual refresh, the last action's
+message), blank when nothing is. The column takes the width of its window
+and summary, so a message never moves the dividers. On a narrow pane the
+remote section goes first; a pane too narrow for the local facts beside the
+column draws the header without it. Where pane 2 has no fleet column (a
+section's digest, no repo selected, or a pane too narrow for it) the footer
+carries the summary and the last action's message beside the keys. In the
+`notes` view the fleet column
+sits right of the divider, above `notes preview`. The compact view has no
+repo pane and draws the same pieces, GitHub included, on one status line
+under the top row. The view's title row under the header carries the
+cursor's place in the list flush right (`[1/6 · 61ab6be]`).
+
+GitHub's piece is always drawn, its colour saying how the connection is and
+its words when the data (CI, PRs, the contribution strip) is not current:
+
+- `● github connected` (green), when the last request to GitHub succeeded and
+  polling keeps its interval;
+- `○ github` (grey) before any request has answered, and `○ github off`
+  under `-d`, which polls nothing;
+- `○ github cached 14:02` (grey), when launch painted from the disk cache and the
   request that confirms it is still on its way. One request follows a cached
   launch even with watch off;
-- `⚠ github offline at 14:30, as of 14:02` (orange), when the last request
+- `⚠ github offline at 14:30, as of 14:02` (red), when the last request
   failed. The word says how (`offline`, `rate limited`, `server error`,
   `access refused`, `http error`, `api error`, `not signed in`,
   `bad response`, `timed out`), the first time is when that request failed
   and the second is when the data on screen left GitHub, both written like
   the `swept` time. A cache whose age cannot be read says `age unknown`
   instead. While a rate limit lasts it says when polling resumes in place of
-  when it failed: `⚠ github rate limited until 15:00, as of 14:02`;
-- `github slowed, allowance low` (dim), with watch on, when the account's
+  when it failed: `⚠ github rate limited until 15:00, as of 14:02`, in
+  orange, since it clears on its own;
+- `● github slowed, allowance low` (orange), with watch on, when the account's
   hourly GitHub allowance is running low and polls come further apart than
   `github_poll_interval`;
-- `github paused until 15:00, allowance nearly used` (orange), with watch on,
+- `● github paused until 15:00, allowance nearly used` (orange), with watch on,
   when the allowance is nearly gone and no automatic poll goes before it
   resets.
 
@@ -78,8 +110,8 @@ later; after that the wait doubles with each failure in a row, up to about ten
 minutes (8 to 12, randomised so several fleetz windows do not retry
 together). Offline and signed out keep retrying every interval, so the
 dashboard recovers as soon as the network or the sign-in is back. With watch
-off, none follows on its own, and `r` retries at once. The segment clears on
-the first success. A narrow header shortens it to `⚠ github`,
+off, none follows on its own, and `r` retries at once. It turns back to
+`● github connected` on the first success. Where the row is too narrow it shortens to `⚠ github`,
 `github cached`, `github slowed` or `github paused` rather than dropping it.
 
 fleetz also reads GitHub's hourly allowance off every answer and spaces its
@@ -125,7 +157,10 @@ A `git fetch` that fails (from `f`, `F`, `r`, `R`, launch or a watch sweep) is
 marked on the repo rather than passed off as a fetch:
 
 - the row, in the list and the compact grid, gets an orange marker beside the
-  status, `⚠ unreachable 3↓`. The word says how: `timeout`, `auth`,
+  status, `⚠ unreachable 3↓` (the triangle is the Nerd Font warning icon, or
+  `⚠` under `icons = "plain"`). The word says how: `timeout`, `auth` (an
+  https credential refused or wanted), `ssh` (ssh refused the key: add it to
+  the agent with `ssh-add`, since fetches never prompt for a passphrase),
   `unreachable` (network, DNS or host), `no remote` (missing, or not a
   repository), or `fetch` for anything else;
 - the repo pane spells it out under the counts, `⚠ fetch failed: remote
@@ -175,8 +210,9 @@ You also need:
 - `lazygit` (optional, for the `Enter` keybind)
 - a [Nerd Font](https://www.nerdfonts.com/) in your terminal, unless you set
   `icons = "plain"` in the config or the `,` settings, which draws the repo
-  kind, stash and watch marks as plain ASCII instead (the contribution strip's
-  day squares still need one)
+  kind, stash and watch marks as plain ASCII instead, and the failed-fetch
+  marker's warning icon as `⚠` (the contribution strip's day squares still
+  need one)
 
 ## Usage
 
@@ -233,12 +269,13 @@ fleetz --watch                        # live dashboard, auto-refreshes
 
 ## Keybindings
 
-The footer hints the global keys. A key whose action has an "on" state lights
+The footer holds only keys. A key whose action has an "on" state lights
 up green while it is on (`r` and `R` in flight, `v` in the compact view, `?`
 with help open); `c` lights in the strip's own colour. Watch shows its state
-in the header instead. The row opens with the focused pane's own keys; as
-the terminal narrows, the global keys lose their descriptions first, then the
-pane's keys lose theirs, then the pane's keys go, and the summary goes last.
+in the header instead. The row opens with the focused pane's own keys,
+so it changes with the focus; as the terminal narrows, the global keys lose
+their descriptions first, then the pane's keys lose theirs, then the pane's
+keys go.
 
 | Key | Action |
 |-----|--------|
@@ -249,20 +286,21 @@ pane's keys lose theirs, then the pane's keys go, and the summary goes last.
 | `J` / `K` | Drive the **next** pane without leaving the one you are in: repo list → window 2, window 2 → the inspector, inspector → back to the list. Aimed at window 2 it steps that pane's commit cursor, so the inspector reads out each commit in turn; past the last commit it falls through to scrolling, so the sections below a short list stay reachable. In `notes`, from the tree or the reader, `J` / `K` scroll the reader a line without moving focus (and `H` / `L` page it, below). Two exceptions: `graph` docks no inspector, so there the keys stay on the pane and walk its **rows** a line at a time where plain `j`/`k` jumps whole commit blocks; and the contributions strip is skipped, being a horizontal timeline with nothing below the fold to scroll into |
 | `PgUp` / `PgDn` | Scroll the focused pane itself by a page, leaving its selection where it is |
 | `v` | Toggle detail vs compact view. The compact grid packs as many columns as the terminal has room for |
-| `[` / `]` | Repo pane: step its body between seven views. `info` is the glance (branches; a `ci` section, below; worktrees, one row each with its branch or detached HEAD, dirty count, ahead/behind, last commit age and path, relative when inside the repo; stashes; newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`, wrapped to the pane and given the whole column (its blocks already carry what the inspector would repeat, so no inspector is docked there); `branches` every local branch and every remote-tracking branch in one list, read-only, with the inspector showing the highlighted branch's tip commit (a remote branch nothing local claims is marked `not fetched`, and its tip is not on any local branch, so the inspector says so rather than drawing a blank); `ci` the selected repo's recent workflow runs on every branch, newest first, one row each: a lamp in the CI colours (pulsing while a run is in progress, under watch), the workflow, the branch or tag, the event, the title, the duration (ticking while it runs) and the age. Its first line says how current the list is (`as of 12:02`), or when and why the last attempt failed (`⚠ 12:05  offline`, `rate limited until 12:40`, `not signed in`), or why there is nothing to list (`loading`, `no GitHub remote`, `no workflow runs`, `GitHub off under -d`). Only `ci` polls: the selected repo, while the view is on screen, over GitHub's REST API with conditional requests (a `304` costs nothing); runs read on an earlier visit stay for the session, so coming back paints at once. `info`'s `ci` section polls nothing: the default branch's check state as the fleet poll left it (`◉ default branch passed`, or `no checks`), then the latest run of each of the three most recently run branches once `ci` has read them, else a `] for runs` hint; a repo with no GitHub remote has no section. `notes` is the selected repo's notes as a tree: every `notez/` and `.notez/` directory at any depth is a section headed by its path in the repo, its files beneath and nested directories indented (`m` widens it to every markdown file in the repo, grouped by directory; the first line names both modes, `notes: [notez] markdown  (m)`, the active one bracketed), each file with a glyph for its kind (markdown, todo for any `TODO.md`, text, other; one letter each under `icons = "plain"`). In both modes the tree opens on a `todos` section: every `TODO.md` in the repo and the personal board `~/notez/personal/<repo dir>/TODO.md` when it exists, each with its place beside it (`./`, `notez/`, `personal`) and not listed again under its directory; there is no section without a board. `notes` has a layout of its own: pane 2 runs the full height and splits into the tree and a reader beside it, which shows the highlighted file's text raw (up to 256 KiB, a longer one says where it was cut), wrapped, with its own scroll, or why it could not be read; its border names the file, its kind and size (`README.md · markdown · 4.2 KiB`). A `TODO.md` reads as a todoz board instead, read-only: `##` sections, `[ ]` `[/]` `[x]` tasks with their subtasks drawn as a tree, the `#important` `#prio` `#longterm` `#idea` `#blocked` tags as coloured dots in the gutter and an `@YYYY-MM-DD` due date after the text, dimmed once done; its border counts what is open, unchecked and half done (`TODO.md · todoz · 3 open`). `Tab` or a click focuses it and `j` / `k` and the page keys scroll it. The inspector becomes a card as wide as pane 1, under it, `[3] file`: name, path, project, kind, where it lives (`notez/`, `.notez/`, the repo or, for the personal board, the personal store), size, modified, created where the filesystem keeps it, and the last commit date, `untracked` for a file git never saw; it keeps the inspector's size keys and fold. The repo is walked once, in the background, after the cursor has rested on it for a moment while the view is on screen, skipping hidden directories other than `.notez` and the directories discovery skips (`target`, `node_modules` and the like); the tree is held for the session and walked again after a sweep or after `Enter`, `e` or `o` return. A not-cloned row has nothing to walk and says so. Each keeps its own scroll position and selection, and the inspector follows whichever is active. The active view is named in the pane's top border in its own colour (the tabs are capitalised; the pane's own headliner repeats the same name over a divider that fades from the view's colour into the background across the pane), and the repo header below it stays pinned, so both survive scrolling. In `info` the local branches pin with it where the pane has the rows to spare, since they are what the repo's behind count is a sum of; the remote-only list below them collapses to a count, being bounded by what everyone else has pushed rather than by what you have: `B` expands it in place, and `branches` lists them all |
-| `[` / `]` on the inspector, in `ci` | While pane 2 shows `ci`, the inspector details the highlighted run in three bodies, and on the focused inspector holding a run `[` / `]` step between them (anywhere else they step pane 2's views, and a run of them pressed on the inspector in another view goes on through `ci` until another key); the title names the one shown, `[3] inspector  jobs`. `jobs`: one row per job with its lamp and duration; `j` / `k` move the `▸` job cursor (the first failed job, else the first) and the body follows it; only the marked job shows its steps on one line (`✓` passed, `✗` failed, `●` running, `·` queued or skipped) and, when it failed, its failing step and the last 12 lines of its log, dimmed, read once the run has been highlighted for a moment; the jobs never wait for the log. `log`: the marked job's whole log (its last 5000 lines when it is longer), timestamps and colours stripped, once the job has finished. `script`: the workflow file the run ran, at the run's commit, read from your clone when it has the commit and otherwise from GitHub, with the failing step's block marked in red when the run failed. Each body keeps its own scroll, reset when the highlighted run changes; `J` / `K` from pane 2 scroll it. Each log and file is fetched once and held for the session; nothing is fetched until the run has been highlighted for a moment |
+| `[` / `]` | Repo pane: step its body between eight views. `info` is the glance (branches; a `ci` section, below; worktrees, one row each with its branch or detached HEAD, dirty count, ahead/behind, last commit age and path, relative when inside the repo, which the `worktrees` view lists with the main checkout and details; stashes; newest 6 commits with diffstats); `commits` the complete history with a computed graph column, one row per commit; `reflog` every recorded HEAD movement; `graph` git's own expanded `log --graph`, wrapped to the pane and given the whole column (its blocks already carry what the inspector would repeat, so no inspector is docked there); `worktrees` the selected repo's worktrees, one row each in `info`'s worktree columns, the main checkout first and marked `*`, a repo with none besides it saying `no worktrees besides the main one` and a not-cloned row `not cloned`, with the inspector showing the highlighted worktree's path, branch, HEAD hash and subject, dirty count, ahead/behind against its upstream, last commit age and its newest 6 commits, read in the background while the view is on screen, held for the session and read again after a sweep; read-only, nothing is created, removed or pruned there; `branches` every local branch and every remote-tracking branch in one list, read-only, with the inspector showing the highlighted branch's tip commit (a remote branch nothing local claims is marked `not fetched`, and its tip is not on any local branch, so the inspector says so rather than drawing a blank); `ci` the selected repo's recent workflow runs on every branch, newest first, one row each: a lamp in the CI colours (pulsing while a run is in progress, under watch), the workflow, the branch or tag, the event, the title, the duration (ticking while it runs) and the age, under a dim headline naming the columns (`workflow  branch  trigger  title  duration  age`). The columns size to their longest entry and the title takes the slack; on a narrow pane the trigger goes first, then the title, then the workflow name truncates, the branch last, and the duration and age always stay. Its first line says how current the list is (`as of 12:02`), or when and why the last attempt failed (`⚠ 12:05  offline`, `rate limited until 12:40`, `not signed in`), or why there is nothing to list (`loading`, `no GitHub remote`, `no workflow runs`, `GitHub off under -d`). Only `ci` polls: the selected repo, while the view is on screen, over GitHub's REST API with conditional requests (a `304` costs nothing); runs read on an earlier visit stay for the session, so coming back paints at once. `info`'s `ci` section polls nothing: the default branch's check state as the fleet poll left it (`◉ default branch passed`, or `no checks`), then the latest run of each of the three most recently run branches once `ci` has read them, else a `] for runs` hint; a repo with no GitHub remote has no section. `notes` is the selected repo's notes as a tree: every `notez/` and `.notez/` directory at any depth is a section headed by its path in the repo, its files beneath and nested directories indented (`m` widens it to every markdown file in the repo, grouped by directory; the first line names both modes, `notes: [notez] markdown  (m)`, the active one bracketed), each file with a glyph for its kind (markdown, todo for any `TODO.md`, text, other; one letter each under `icons = "plain"`). In both modes the tree opens on a `todos` section: every `TODO.md` in the repo and the personal board `~/notez/personal/<repo dir>/TODO.md` when it exists, each with its place beside it (`./`, `notez/`, `personal`) and not listed again under its directory; there is no section without a board. `notes` has a layout of its own: pane 2 runs the full height under its whole top border (its title and every view tab, as in every view), divided by a vertical line from under that border to its bottom one and crossed by the `NOTES` rule, which runs the pane's full width. Above the rule, left of the line, the repo header and `NOTES`; right of it the fleet's state and `notes preview` level with `NOTES` in the view's colour. Below the rule the tree on the left, its last row a divider carrying the highlighted file's facts (`─ plan.md · markdown · 4.2 KiB · rendered · notez/ · modified 14:02 · last commit Oct 29 ─`: its name, kind, for a board how many of its tasks are open, size, for markdown which of the two it shows, where it lives (`notez/`, `.notez/`, the repo or, for the personal board, the personal store), when it was modified and its last commit date, `untracked` for a file git never saw; where the row is too narrow the facts give way, where it lives first, then the mode, the kind, the last commit, the modified time and the size, the name last), and the preview on the right, which shows the highlighted file's text (up to 256 KiB, a longer one says where it was cut), wrapped, with its own scroll, or why it could not be read. A markdown file is rendered: headings in notez's colours (bold mauve, bold sapphire, then bold in the text colour), lists with bullets, emphasis, inline code in peach, fenced code syntax highlighted with tree-sitter when its fence tag names one of nine languages (`rust`/`rs`, `python`/`py`, `kotlin`/`kt`, `java`, `c`, `toml`, `json`, `bash`/`sh`/`shell`, `markdown`/`md`; only the tag's first word counts, so `rust,ignore` is Rust) and in peach otherwise (a code line wider than the reader wraps inside its indent, keeping its colours), links as their text followed by the url, tables in columns, footnotes after the text, and raw HTML as its source; `p` shows the source instead, for every markdown file, until pressed again. Text and other files are always raw. A `TODO.md` reads as a todoz board instead, read-only, whatever `p` says: `##` sections, `[ ]` `[/]` `[x]` tasks with their subtasks drawn as a tree, the `#important` `#prio` `#longterm` `#idea` `#blocked` tags as coloured dots in the gutter and an `@YYYY-MM-DD` due date after the text, dimmed once done; its facts count what is open, unchecked and half done (`TODO.md · todo · 3 open`). The top border and the dividing line light while either side has focus, and the outline below the top border on each side while that side has it. `Tab` or a click focuses it and `j` / `k` and the page keys scroll it. A pane too short to pin the header scrolls it with the tree and leaves the facts out. `notes` docks no inspector, as `graph` docks none: pane 1 takes its rows, and the inspector's size keys and fold do nothing there. The repo is walked once, in the background, after the cursor has rested on it for a moment while the view is on screen, skipping hidden directories other than `.notez` and the directories discovery skips (`target`, `node_modules` and the like); the tree is held for the session and walked again after a sweep or after `Enter`, `e` or `o` return. A not-cloned row has nothing to walk and says so. Each keeps its own scroll position and selection, and the inspector follows whichever is active. The active view is named in the pane's top border in its own colour (the tabs are capitalised; the pane's own headliner repeats the same name over a divider that fades from the view's colour into the background across the pane), and the repo header below it stays pinned, so both survive scrolling. In `info` the local branches pin with it where the pane has the rows to spare, since they are what the repo's behind count is a sum of; the remote-only list below them collapses to a count, being bounded by what everyone else has pushed rather than by what you have: `B` expands it in place, and `branches` lists them all |
+| `[` / `]` on the inspector, in `ci` | While pane 2 shows `ci`, the inspector details the highlighted run in three bodies, and on the focused inspector holding a run `[` / `]` step between them (anywhere else they step pane 2's views, and a run of them pressed on the inspector in another view goes on through `ci` until another key); its top border names them as tabs at the right, as pane 2's names its views, `[/] JOBS · LOG · SCRIPT` with the shown one lit, or the shown one alone when the border is too narrow. `jobs`: one row per job with its lamp and duration; `j` / `k` move the `▸` job cursor (the first failed job, else the first) and the body follows it; only the marked job shows its steps on one line (`✓` passed, `✗` failed, `●` running, `·` queued or skipped) and, when it failed, its failing step and the last 12 lines of its log, dimmed, read once the run has been highlighted for a moment; the jobs never wait for the log. `log`: the marked job's whole log (its last 5000 lines when it is longer), timestamps and colours stripped, once the job has finished. `script`: the workflow file the run ran, at the run's commit, read from your clone when it has the commit and otherwise from GitHub, with the failing step's block marked in red when the run failed. Each body keeps its own scroll, reset when the highlighted run changes; `J` / `K` from pane 2 scroll it. Each log and file is fetched once and held for the session; nothing is fetched until the run has been highlighted for a moment |
 | `B` | `info`: expand or collapse the remote branch summary. The full list, with each branch's state, is the `branches` view |
 | `m` | `notes`: switch the tree between its two modes, `notez` (the `notez/` and `.notez/` directories) and `markdown` (every markdown file in the repo as well) |
 | `H` / `L` | `notes`, with the tree or the reader focused: page the reader up or down by its height, focus unmoved. `j` / `k` in the tree still walk the files |
-| `y` | Copy the hash of the commit pane 2's cursor is on to the clipboard; the status line says `copied <hash>`. Clicking a row in `info`'s recent commits, `commits`, `reflog` or `graph` moves the cursor there, and clicking the hash itself also copies it. Uses the first of `pbcopy`, `wl-copy`, `xclip`, `xsel` on `PATH`, else an OSC 52 escape to the terminal (works over ssh and tmux where the terminal allows it) |
+| `p` (in `notes`) | With the tree or the reader focused: switch the reader between rendered markdown and its source, for the rest of the session |
+| `yy` / `yp` | Yank to the clipboard: `yy` copies the thing the focused cursor is on, `yp` its path or address. On the repo list, `yy` copies the repo's GitHub page (`https://github.com/<owner>/<repo>`) and `yp` the clone's absolute path (nothing for a repo that is not cloned). In pane 2's `info`, `commits`, `reflog` and `graph`, `yy` copies the commit's hash and `yp` its GitHub page (`<repo url>/commit/<hash>`); in `branches` the branch's name and its tree on GitHub (`<repo url>/tree/<branch>`, a remote-tracking branch without its remote); in `worktrees` the worktree's branch (nothing for a detached one) and its absolute path; in `ci` the run's page and its id. In `notes`, from the tree or the reader, `yy` copies the file's text (up to the reader's 256 KiB) and `yp` its absolute path. On the inspector, a commit gives its whole message and its hash, a run the text of the shown body (the failed job's log tail in `jobs`, the whole log in `log`, the workflow file in `script`) and its page. The status line says what went: `copied <hash>` (a branch or a run id the same way), `copied url`, `copied path`, `copied 4.2 KB` (`copied 812 B` under a KB), or `nothing to copy` on the strip, a section header, the compact grid or a row with nothing there. A successful copy flashes the row it came from once, as notez does: a brighter wash sweeps across it (from the left for `yy`, from the right for `yp`) and fades back to the cursor band in about a third of a second; a copy from the inspector flashes its title on its border instead, and one from the reader flashes its `notes preview` title. Any key, click or scroll ends the flash early; a failed copy and `nothing to copy` do not flash. `y` followed by any other key copies nothing, and that key does what it does on its own. A plain `y` on pane 2's commit lists still copies the hash at once, as it always did. The footer hints `[yy/yp]` while pane 2, the inspector or the reader has focus. Clicking a row in `info`'s recent commits, `commits`, `reflog` or `graph` moves the cursor there, and clicking the hash itself also copies it. Uses the first of `pbcopy`, `wl-copy`, `xclip`, `xsel` on `PATH`, else an OSC 52 escape to the terminal (works over ssh and tmux where the terminal allows it) |
 | `c` | Switch the contributions strip's source, while it is unfolded (the footer's `[c]` lights up in that source's colour): GitHub's own calendar, or your commits in the listed repos. The strip is always on screen, folded or not: three years of activity, GitHub-style. Each day is a Nerd Font square icon, which sits level with the `Mon`/`Wed`/`Fri` labels where a half block cannot, in three sizes (`contributions_cell_size`); the grid scrolls rather than shrinking, with the newest week pinned to the right edge. It opens on today: the title reads out the marked day's count, and the total for the span rides the bottom border beside the legend |
 | `4` | Focus the contributions strip, unfolding it if it is folded; on the focused strip, fold or unfold it |
 | `h` / `l`, `←` / `→` | Contributions: move the day cursor back/forward a week. The grid scrolls with it, oldest weeks hiding off to the left |
 | mouse | Contributions: click picks a day, drag pans the grid, and any wheel axis (including shift-wheel) scrolls it sideways |
 | `Home` / `End` | Contributions: jump to the oldest / newest week |
-| `Enter` | Open repo in lazygit (pull / merge live here). In `notes`, with pane 2, the reader or the card focused, open the highlighted file in `$EDITOR` instead, or a `TODO.md` board in `todoz` (in `$EDITOR` when `todoz` is not on PATH, which the footer says once). On a section header: go to the row of the digest line pane 2's cursor is on |
-| `e` | Open repo in `$EDITOR` |
-| `o` | Open shell in repo dir |
+| `Enter` | Open repo in lazygit (pull / merge live here). In `notes`, with pane 2 or the reader focused, open the highlighted file in `$EDITOR` instead. A board `todoz` can name opens in `todoz`, started in the repo root with no file argument: the repo's `notez/TODO.md` with no flag, its `.notez/TODO.md` with `-l` and the personal board with `-p`. Every other board, a repo-root `TODO.md` or a nested one, opens in `$EDITOR`, and so does every board when `todoz` is not on PATH, which the status line says once. On a section header: go to the row of the digest line pane 2's cursor is on. In `worktrees`, with pane 2 focused, open lazygit in the highlighted worktree |
+| `e` | Open repo in `$EDITOR`; in `worktrees`, with pane 2 focused, the highlighted worktree |
+| `o` | Open shell in repo dir; in `worktrees`, with pane 2 focused, in the highlighted worktree's |
 | `O` | Open PR in browser |
 | `l` / `a` / `x` / `O` | `ci`, with pane 2 focused, on the highlighted run: `l` its log in the inspector (the `log` body, opened and focused, showing the failed job of a failed run), `a` rerun it with `gh run rerun` (`--failed` when it failed), `x` cancel it with `gh run cancel`, `O` open its page in the browser. `gh run rerun` and `gh run cancel` take over the terminal as `Enter` does for lazygit and name the repo with `-R`; back in fleetz the repo's runs are polled at once. A run that does not allow the action says why in the status line (`run has not finished`, `run is not in progress`). In every other view these keys keep their usual meaning |
 | `f` | Fetch selected repo (updates ahead/behind, no merge), with no size cap: how you pull a repo marked `fetch ~N MB, press f` or `fetch over N MB, press f` (see `fetch_max_mb`). The row shows `fetching N MB` while it runs. A failure is marked on the repo and named in the status line |
@@ -277,7 +315,7 @@ pane's keys lose theirs, then the pane's keys go, and the summary goes last.
 | `<` / `>` | Narrow / widen the repo list |
 | `+` / `-` | Grow / shrink the inspector pane |
 | `=` | Reset both panes to their default sizes |
-| `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates, and fetch the repos whose remote moved. No rediscovery. A failed poll keeps the rows as they are and marks the header; failed fetches are marked on their repos and counted in the status line. Goes at once even while automatic polling is slowed or backing off; under a rate limit it re-checks the local repos only and says when GitHub resumes |
+| `r` | Refresh: re-stat the listed repos and re-poll GitHub, so CI status updates, and fetch the repos whose remote moved. No rediscovery. A failed poll keeps the rows as they are and marks GitHub on the top row; failed fetches are marked on their repos and counted in the status line. Goes at once even while automatic polling is slowed or backing off; under a rate limit it re-checks the local repos only and says when GitHub resumes |
 | `R` | Reload: re-fetch GitHub (cache-bypassed) + rediscover repos, so new ones appear. If GitHub cannot be reached it rebuilds from the signed-in account's saved copy and says `Reloaded from cache: GitHub offline` (or why) instead of `Reloaded`; with no saved copy for that account the reload fails and says so, rather than showing another account's data. Under a rate limit it rescans your folders against the GitHub data already on screen, sends nothing, and says `Rebuilt locally: GitHub rate limited, resumes at 15:00`. Pressed while a reload is running, or under a rate limit while a GitHub refresh is still out, it says `Already refreshing` and does nothing |
 | `w` | Toggle watch: sweep the listed repos (fetch included) every `refresh_interval` seconds and re-poll GitHub. A fetch that fails is marked on its repo, not in the status line. While it is on, a red eye (`󰈈 watch`) in the header pulses between two shades so the dashboard says it is live without anything moving; off, it is a grey crossed-out eye (`󰈉 watch`). With `icons = "plain"` the eye is `o watch` on and `- watch` off |
 | `?` | Toggle help overlay |
@@ -389,7 +427,7 @@ persist_pane_sizes = false
 # keypress dismisses it. Set false to start on the empty dashboard instead.
 intro = true
 repo_list_pct = 35
-inspector_pct = 40
+inspector_pct = 25
 
 # Startup view: "detail", "compact", or "auto" (default). Auto drops to
 # compact only when the terminal is too small for three panels; pin it here

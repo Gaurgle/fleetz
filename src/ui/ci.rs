@@ -23,11 +23,24 @@ pub const INFO_RUNS: usize = 3;
 /// The `info` section's pointer to the full list, while no runs are held.
 pub const RUNS_HINT: &str = "] for runs";
 
-/// Column caps, so one long workflow or branch name cannot take the title's
-/// room. Longer names truncate with `…`.
-const WORKFLOW_MAX: usize = 16;
-const BRANCH_MAX: usize = 24;
-const EVENT_MAX: usize = 17;
+/// Column caps, so one long workflow, branch or trigger cannot take the
+/// title's room. Longer names truncate with `…`.
+const WORKFLOW_MAX: usize = 40;
+const BRANCH_MAX: usize = 30;
+const EVENT_MAX: usize = 18;
+
+/// The narrowest title worth drawing. Below it the trigger goes first, to
+/// give the title room, and then the title itself.
+const TITLE_MIN: usize = 20;
+
+/// How far the workflow name truncates before the branch gives way; past
+/// both, the two shrink to nothing and duration and age stay.
+const WORKFLOW_MIN: usize = 8;
+const BRANCH_MIN: usize = 6;
+
+/// The headline's words, one per column after the lamp's: workflow,
+/// branch, trigger, title, duration, age.
+const HEADINGS: [&str; 6] = ["workflow", "branch", "trigger", "title", "duration", "age"];
 
 /// Blank columns between two run columns.
 const COLUMN_GAP: &str = "  ";
@@ -78,15 +91,37 @@ pub fn run_rows(
         return Vec::new();
     };
     let dim_pending = app.watch_mode && !app.blink_on;
-    let widths = Widths::of(&state.runs, now);
+    let widths = Widths::of(&state.runs, now).headed();
     state
         .runs
         .iter()
         .enumerate()
         .map(|(i, run)| {
-            run_line(run, &widths, width, now, dim_pending).marked(i == selected, focused)
+            let line =
+                run_line(run, &widths, width, now, dim_pending).marked(i == selected, focused);
+            // Below the row's floor (lamp, duration and age) the row is cut,
+            // so the wrapping body never breaks it onto a second row.
+            Line::from(crate::ui::detail::clip_spans(line.spans, width))
         })
         .collect()
+}
+
+/// The headline over the run rows (FZ-40): each shown column's word, dim,
+/// in the columns `run_rows` draws at the same `width`. `None` while no
+/// runs are listed. Not a run, so not a cursor stop.
+pub fn headline(app: &App, width: usize, now: DateTime<Local>) -> Option<Line<'static>> {
+    let state = app.selected_ci().and_then(|(_, state)| state)?;
+    if state.runs.is_empty() {
+        return None;
+    }
+    let columns = Widths::of(&state.runs, now).headed().fit(width);
+    let mut text = " ".repeat(MARKER_W + 2);
+    text.extend(cells(&columns, HEADINGS).into_iter().map(|(_, cell)| cell));
+    let words = Span::styled(text, Style::default().fg(colors::OVERLAY));
+    Some(Line::from(crate::ui::detail::clip_spans(
+        vec![words],
+        width,
+    )))
 }
 
 /// The `info` view's `ci` section under its label, from what is in hand and
@@ -322,17 +357,124 @@ impl Widths {
         }
     }
 
-    /// Every column but the title's, with the marker, the lamp and the gaps.
-    fn fixed(&self) -> usize {
-        MARKER_W
-            + 2
-            + self.workflow
-            + self.branch
-            + self.event
-            + self.duration
-            + self.age
-            + COLUMN_GAP.len() * 5
+    /// Wide enough for the headline's words too, so a column of `ci`
+    /// names still reads `workflow` over it.
+    fn headed(self) -> Self {
+        let [workflow, branch, event, _, duration, age] = HEADINGS.map(str::len);
+        Self {
+            workflow: self.workflow.max(workflow),
+            branch: self.branch.max(branch),
+            event: self.event.max(event),
+            duration: self.duration.max(duration),
+            age: self.age.max(age),
+        }
     }
+
+    /// The columns a row `width` wide shows (spec "Amendment 2026-10-22"):
+    /// every column while the title keeps `TITLE_MIN`, the title taking the
+    /// slack; then without the trigger; then without the title; then the
+    /// workflow name truncates to `WORKFLOW_MIN`, then the branch to
+    /// `BRANCH_MIN`, then both to nothing. Duration and age always stay.
+    fn fit(&self, width: usize) -> Columns {
+        let gap = COLUMN_GAP.len();
+        let core = |workflow: usize, branch: usize| {
+            MARKER_W
+                + 2
+                + workflow
+                + if branch > 0 { gap + branch } else { 0 }
+                + gap
+                + self.duration
+                + gap
+                + self.age
+        };
+        let mut columns = Columns {
+            workflow: self.workflow,
+            branch: self.branch,
+            event: None,
+            title: None,
+            slack: 0,
+            duration: self.duration,
+            age: self.age,
+        };
+        let base = core(self.workflow, self.branch);
+        let with_event = base + gap + self.event;
+        if width >= with_event + gap + TITLE_MIN {
+            columns.event = Some(self.event);
+            columns.title = Some(width - with_event - gap);
+        } else if width >= base + gap + TITLE_MIN {
+            columns.title = Some(width - base - gap);
+        } else {
+            let mut over = base.saturating_sub(width);
+            let mut give = |column: &mut usize, floor: usize| {
+                let given = column.saturating_sub(floor).min(over);
+                *column -= given;
+                over -= given;
+            };
+            give(&mut columns.workflow, WORKFLOW_MIN);
+            give(&mut columns.branch, BRANCH_MIN);
+            give(&mut columns.workflow, 0);
+            give(&mut columns.branch, 0);
+            columns.slack = width.saturating_sub(core(columns.workflow, columns.branch));
+        }
+        columns
+    }
+}
+
+/// What one row `width` wide shows, from `Widths::fit`: the run rows and the
+/// headline both lay out through it, so the words sit over their columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Columns {
+    workflow: usize,
+    /// Zero once the branch has shrunk away, its gap with it.
+    branch: usize,
+    event: Option<usize>,
+    title: Option<usize>,
+    /// Blank columns before the duration while there is no title to fill.
+    slack: usize,
+    duration: usize,
+    age: usize,
+}
+
+/// Which column a cell is, for its style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cell {
+    Workflow,
+    Branch,
+    Event,
+    Title,
+    Duration,
+    Age,
+    Blank,
+}
+
+/// The cells of a row after the lamp, gaps included: `text` is the workflow,
+/// branch, trigger, title, duration and age, each padded or truncated with
+/// `…` to its column, the duration and the age right-aligned.
+fn cells(columns: &Columns, text: [&str; 6]) -> Vec<(Cell, String)> {
+    let [workflow, branch, event, title, duration, age] = text;
+    let pad = |text: &str, w: usize| format!("{:<w$}", crate::ui::truncate(text, w));
+    let gap = || (Cell::Blank, COLUMN_GAP.to_string());
+    let mut out = vec![(Cell::Workflow, pad(workflow, columns.workflow))];
+    if columns.branch > 0 {
+        out.extend([gap(), (Cell::Branch, pad(branch, columns.branch))]);
+    }
+    if let Some(w) = columns.event {
+        out.extend([gap(), (Cell::Event, pad(event, w))]);
+    }
+    match columns.title {
+        Some(w) => out.extend([gap(), (Cell::Title, pad(title, w))]),
+        None => out.push((Cell::Blank, " ".repeat(columns.slack))),
+    }
+    out.extend([
+        gap(),
+        (
+            Cell::Duration,
+            format!("{duration:>w$}", w = columns.duration),
+        ),
+        gap(),
+        (Cell::Age, format!("{age:>w$}", w = columns.age)),
+    ]);
+    out
 }
 
 /// One run row before the cursor is applied.
@@ -362,7 +504,8 @@ impl RunLine {
 }
 
 /// The cells of one run row (spec section E): lamp, workflow, branch, event,
-/// title, duration, age. The title takes whatever `width` leaves.
+/// title, duration, age, as many as `width` holds (`Widths::fit`). The title
+/// takes whatever `width` leaves.
 pub fn run_line(
     run: &WorkflowRun,
     widths: &Widths,
@@ -376,37 +519,37 @@ pub fn run_line(
     // `ci_display` draws no lamp for a repo without CI; a run always has
     // one, so a run with no verdict gets the same ring in that grey.
     let glyph = if glyph.is_empty() { "◉" } else { glyph };
-    let pad = |text: &str, w: usize| format!("{:<w$}", crate::ui::truncate(text, w));
-    let title_w = width.saturating_sub(widths.fixed());
     let dim = Style::default().fg(colors::OVERLAY);
-    let spans = vec![
-        Span::styled(format!("{glyph} "), Style::default().fg(color)),
-        Span::styled(
-            pad(workflow_text(run), widths.workflow),
-            Style::default()
-                .fg(colors::TEXT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(COLUMN_GAP),
-        Span::styled(
-            pad(branch_text(run), widths.branch),
-            Style::default().fg(colors::SAPPHIRE),
-        ),
-        Span::raw(COLUMN_GAP),
-        Span::styled(pad(&run.event, widths.event), dim),
-        Span::raw(COLUMN_GAP),
-        Span::styled(pad(&run.title, title_w), Style::default().fg(colors::TEXT)),
-        Span::raw(COLUMN_GAP),
-        Span::styled(
-            format!("{:>w$}", run_duration(run, utc_now), w = widths.duration),
-            dim,
-        ),
-        Span::raw(COLUMN_GAP),
-        Span::styled(
-            format!("{:>w$}", run_age(run, utc_now), w = widths.age),
-            dim,
-        ),
+    let duration = run_duration(run, utc_now);
+    let age = run_age(run, utc_now);
+    let text = [
+        workflow_text(run),
+        branch_text(run),
+        run.event.as_str(),
+        run.title.as_str(),
+        duration.as_str(),
+        age.as_str(),
     ];
+    let mut spans = vec![Span::styled(
+        format!("{glyph} "),
+        Style::default().fg(color),
+    )];
+    spans.extend(
+        cells(&widths.fit(width), text)
+            .into_iter()
+            .map(|(cell, text)| match cell {
+                Cell::Workflow => Span::styled(
+                    text,
+                    Style::default()
+                        .fg(colors::TEXT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Cell::Branch => Span::styled(text, Style::default().fg(colors::SAPPHIRE)),
+                Cell::Title => Span::styled(text, Style::default().fg(colors::TEXT)),
+                Cell::Event | Cell::Duration | Cell::Age => Span::styled(text, dim),
+                Cell::Blank => Span::raw(text),
+            }),
+    );
     RunLine(spans, width)
 }
 
@@ -1168,7 +1311,7 @@ mod tests {
             .expect("the first line");
         let held = runs();
         for (i, run) in held.iter().enumerate() {
-            let row = &rows[first + 1 + i];
+            let row = &rows[first + 2 + i];
             assert!(row.contains(&head(run)), "row {i}: {row}");
             assert_eq!(row.contains('▸'), i == 0, "cursor on the first: {row}");
         }
@@ -1251,6 +1394,292 @@ mod tests {
         let click = hits.at(hits.body.x + 4, y).expect("a run row");
         app.click_detail(&click);
         assert_eq!(app.detail_selected(), 2);
+    }
+
+    // --- The `ci` view's width (FZ-40) ---
+
+    /// His screenshot's workflow, on a manual dispatch from `main`.
+    const RELEASE: &str = "Release Traffic preview OTA";
+
+    /// The fixture's runs with a fourth run named as in his screenshot.
+    fn runs_with_release() -> Vec<WorkflowRun> {
+        let mut runs = runs();
+        let mut release = runs[1].clone();
+        release.workflow = Some(RELEASE.to_string());
+        release.branch = Some("main".to_string());
+        release.event = "workflow_dispatch".to_string();
+        runs.push(release);
+        runs
+    }
+
+    /// His screenshot's rows (FZ-82): `Frontend CI` on `feat/font-previews`
+    /// from a `pull_request`, `9m 14s`, `17h ago`, with a long title.
+    fn screenshot_runs() -> Vec<WorkflowRun> {
+        let created = Utc::now() - chrono::Duration::hours(17);
+        (0..3)
+            .map(|i| {
+                let mut run = runs()[1].clone();
+                run.id += i;
+                run.workflow = Some("Frontend CI".to_string());
+                run.branch = Some("feat/font-previews".to_string());
+                run.event = "pull_request".to_string();
+                run.title = "feat(fonts): preview every font in the picker".to_string();
+                run.created = created;
+                run.started = Some(created);
+                run.updated = created + chrono::Duration::seconds(554);
+                run
+            })
+            .collect()
+    }
+
+    /// His report of 2026-11-05: on a narrow pane 2 every run row kept the
+    /// trigger and broke `37s   6m ago` onto a second row. Pane 2 drawn
+    /// alone at each width from 40 to 80 columns: one rendered row per run,
+    /// each ending in its age, the headline too. Fails while a row is laid
+    /// out wider than the body it is drawn in.
+    #[test]
+    fn a_run_row_never_wraps_on_a_narrow_pane() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Detail;
+        landed(&mut app, screenshot_runs(), Local::now());
+        for pane in 40..=80u16 {
+            let mut terminal = Terminal::new(TestBackend::new(pane, 30)).unwrap();
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    crate::ui::detail::render(f, Rect::default(), area, None, None, &app);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let rows: Vec<String> = (0..30).map(|y| row_text(&buffer, y)).collect();
+            let first = rows
+                .iter()
+                .position(|r| r.contains("as of "))
+                .unwrap_or_else(|| panic!("the first line at {pane}: {rows:#?}"));
+            let body = |row: &str| row.trim_matches('│').trim_end().to_string();
+            let headline = body(&rows[first + 1]);
+            assert!(headline.ends_with("age"), "headline at {pane}: {rows:#?}");
+            for i in 0..3 {
+                let row = body(&rows[first + 2 + i]);
+                assert!(row.ends_with("17h ago"), "run {i} at {pane}: {rows:#?}");
+                assert!(row.contains("9m 14s"), "run {i} at {pane}: {rows:#?}");
+            }
+            let marked: usize = rows[first + 2..first + 5]
+                .iter()
+                .map(|r| r.matches('▸').count())
+                .sum();
+            assert_eq!(marked, 1, "the cursor on one row at {pane}");
+            assert!(
+                body(&rows[first + 5]).is_empty(),
+                "nothing under the runs at {pane}: {rows:#?}"
+            );
+        }
+    }
+
+    /// FZ-82: below the row's floor (lamp, duration and age, 23 columns)
+    /// the run rows and the headline are cut at the inner width, never
+    /// wrapped. Panes 20 to 26 hold 16 to 22 columns inside. Fails while a
+    /// row past the floor wraps its age onto a second row.
+    #[test]
+    fn below_its_floor_a_run_row_is_clipped_not_wrapped() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Detail;
+        landed(&mut app, screenshot_runs(), Local::now());
+        for pane in 20..=26u16 {
+            let mut terminal = Terminal::new(TestBackend::new(pane, 30)).unwrap();
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    crate::ui::detail::render(f, Rect::default(), area, None, None, &app);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let rows: Vec<String> = (0..30).map(|y| row_text(&buffer, y)).collect();
+            let first = rows
+                .iter()
+                .position(|r| r.contains("as of "))
+                .unwrap_or_else(|| panic!("the first line at {pane}: {rows:#?}"));
+            let body = |row: &str| row.trim_matches('│').trim().to_string();
+            assert!(
+                !body(&rows[first + 1]).contains('◉'),
+                "the headline on one row at {pane}: {rows:#?}"
+            );
+            for i in 0..3 {
+                let row = body(&rows[first + 2 + i]);
+                assert!(row.contains('◉'), "run {i} on one row at {pane}: {rows:#?}");
+            }
+            assert!(
+                body(&rows[first + 5]).is_empty(),
+                "nothing wrapped under the runs at {pane}: {rows:#?}"
+            );
+            // The pinned header draws unwrapped, so also hold the lines
+            // themselves to the inner width: a short pane scrolls the
+            // headline with the body, which wraps.
+            let inner = usize::from(pane) - 4;
+            let now = Local::now();
+            let head = headline(&app, inner, now).expect("runs are listed");
+            assert!(head.width() <= inner, "headline at {pane}: {head:?}");
+            for row in run_rows(&app, inner, now, 0, true) {
+                assert!(row.width() <= inner, "run at {pane}: {row:?}");
+            }
+        }
+    }
+
+    /// His look on #95: at 170 columns the workflow was cut at 18
+    /// characters beside 60 empty ones. Fails while the column is capped
+    /// short of the name.
+    #[test]
+    fn at_170_columns_the_workflow_name_is_drawn_in_full() {
+        let mut app = app();
+        landed(&mut app, runs_with_release(), Local::now());
+        let (rects, buffer) = draw(&app, 170, 50);
+        let detail = rects.detail.expect("detail pane laid out");
+        let rows: Vec<String> = (detail.y..detail.y + detail.height)
+            .map(|y| row_text(&buffer, y))
+            .collect();
+        assert!(
+            rows.iter().any(|r| r.contains(RELEASE)),
+            "{RELEASE} cut: {rows:#?}"
+        );
+    }
+
+    /// The headline and the run rows of `runs_with_release` at `width`, as
+    /// text. Headed widths: workflow 27, branch 30, trigger 17, duration 8,
+    /// age 7; so every column from 123, no trigger from 104, no title from
+    /// 82, and below 82 the workflow name gives way.
+    fn laid_out(width: usize) -> (String, Vec<String>) {
+        let now = local("2026-10-21T13:16:30+02:00");
+        let mut app = app();
+        landed(&mut app, runs_with_release(), now);
+        let headline = headline(&app, width, now).expect("runs are listed");
+        let rows = run_rows(&app, width, now, 0, false);
+        (line_text(&headline), rows.iter().map(line_text).collect())
+    }
+
+    /// The fixture's long branch, as its capped column draws it.
+    fn capped_branch() -> String {
+        crate::ui::truncate("feat/79-date-the-failed-attempt", BRANCH_MAX)
+    }
+
+    #[test]
+    fn a_wide_row_shows_every_column_under_its_word() {
+        let (head_row, rows) = laid_out(170);
+        assert_eq!(
+            head_row.split_whitespace().collect::<Vec<_>>(),
+            HEADINGS,
+            "{head_row}"
+        );
+        let release = &rows[3];
+        for cell in [
+            RELEASE,
+            "main",
+            "workflow_dispatch",
+            runs()[1].title.as_str(),
+        ] {
+            assert!(release.contains(cell), "{cell} missing: {release}");
+        }
+        assert!(rows[0].contains(&capped_branch()), "{}", rows[0]);
+        for row in &rows {
+            assert_eq!(row.chars().count(), 170, "the title fills: {row}");
+            assert!(row.ends_with("ago"), "{row}");
+        }
+        // In columns, not bytes: the lamp is wider in UTF-8 than the blank
+        // the headline holds for it.
+        let at = |row: &str, text: &str| row[..row.find(text).unwrap()].chars().count();
+        assert_eq!(at(&head_row, "workflow"), at(release, RELEASE));
+        assert_eq!(at(&head_row, "branch"), at(release, "main"));
+        assert_eq!(at(&head_row, "trigger"), at(release, "workflow_dispatch"));
+        assert_eq!(at(&head_row, "title"), at(release, &runs()[1].title));
+    }
+
+    #[test]
+    fn the_trigger_goes_first() {
+        let (head_row, rows) = laid_out(110);
+        assert!(!head_row.contains("trigger"), "{head_row}");
+        assert!(head_row.contains("title"), "{head_row}");
+        let release = &rows[3];
+        assert!(!release.contains("workflow_dispatch"), "{release}");
+        assert!(release.contains(RELEASE), "{release}");
+        assert!(release.contains(&head(&runs()[1])), "{release}");
+        assert_eq!(release.chars().count(), 110);
+    }
+
+    #[test]
+    fn the_title_goes_second() {
+        let (head_row, rows) = laid_out(90);
+        assert_eq!(
+            head_row.split_whitespace().collect::<Vec<_>>(),
+            ["workflow", "branch", "duration", "age"],
+            "{head_row}"
+        );
+        assert!(!rows[3].contains(&head(&runs()[1])), "{}", rows[3]);
+        assert!(
+            rows[3].contains(RELEASE),
+            "nothing truncated yet: {}",
+            rows[3]
+        );
+        assert!(rows[0].contains(&capped_branch()), "{}", rows[0]);
+        for row in &rows {
+            assert_eq!(row.chars().count(), 90, "{row}");
+            assert!(row.ends_with("ago"), "{row}");
+        }
+    }
+
+    #[test]
+    fn then_the_workflow_name_truncates_and_the_branch_holds() {
+        let (head_row, rows) = laid_out(70);
+        assert!(head_row.starts_with("    workflow  "), "{head_row}");
+        assert!(rows[3].contains("Release Traffi…  main"), "{}", rows[3]);
+        assert!(rows[0].contains(&capped_branch()), "{}", rows[0]);
+        // Branch last: only past the workflow's floor.
+        let (_, rows) = laid_out(50);
+        assert!(rows[3].contains("Release…  main"), "{}", rows[3]);
+        assert!(rows[0].contains("feat/79-date-the…"), "{}", rows[0]);
+    }
+
+    #[test]
+    fn duration_and_age_stay_at_every_width() {
+        let now = local("2026-10-21T13:16:30+02:00").with_timezone(&Utc);
+        let held = runs_with_release();
+        for width in 23..=200 {
+            let (head_row, rows) = laid_out(width);
+            let words: Vec<&str> = head_row.split_whitespace().collect();
+            assert!(words.ends_with(&["duration", "age"]), "{width}: {head_row}");
+            assert!(head_row.ends_with("age"), "{width}: {head_row}");
+            for (row, run) in rows.iter().zip(&held) {
+                let age = run_age(run, now);
+                let before_age = row.strip_suffix(&age).expect("age last");
+                assert!(
+                    before_age.trim_end().ends_with(&run_duration(run, now)),
+                    "{width}: {row}"
+                );
+                assert!(row.chars().count() <= width, "{width}: {row}");
+            }
+        }
+    }
+
+    /// The headline sits between the first line and the runs, and the
+    /// cursor starts on the first run, not on it. No runs, no headline.
+    #[test]
+    fn the_headline_heads_the_runs_and_is_not_a_cursor_stop() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Detail;
+        landed(&mut app, runs(), Local::now());
+        let rows = detail_rows(&app);
+        let at = rows
+            .iter()
+            .position(|r| r.contains("workflow") && r.contains("duration"))
+            .expect("the headline");
+        assert!(rows[at - 1].contains("as of "), "{}", rows[at - 1]);
+        assert!(!rows[at].contains('▸'), "{}", rows[at]);
+        assert!(rows[at + 1].contains('▸'), "{}", rows[at + 1]);
+        assert!(rows[at + 1].contains(&head(&runs()[0])), "{}", rows[at + 1]);
+        assert_eq!(app.selected_commit_count(), 3, "runs only");
+
+        landed(&mut app, Vec::new(), Local::now());
+        assert!(headline(&app, 120, Local::now()).is_none());
+        let rows = detail_rows(&app);
+        assert!(rows.iter().all(|r| !r.contains("duration")), "{rows:#?}");
     }
 
     // --- The inspector's run bodies (FZ-30f) ---
@@ -1365,6 +1794,7 @@ mod tests {
     #[test]
     fn the_log_body_draws_the_marked_jobs_whole_log() {
         let mut app = on_failed_run();
+        app.inspector_pct = 30;
         app.ci_body = CiBody::Log;
         let text = body_text(&app);
         assert!(text.contains(&"check log".to_string()), "{text:#?}");
@@ -1391,6 +1821,7 @@ mod tests {
     #[test]
     fn the_whole_log_is_wrapped_once_per_job_and_width() {
         let mut app = on_failed_run();
+        app.inspector_pct = 30;
         app.ci_body = CiBody::Log;
         draw(&app, 160, 50);
         let width = {
@@ -1421,6 +1852,7 @@ mod tests {
     #[test]
     fn another_jobs_log_at_the_same_width_is_wrapped_afresh() {
         let mut app = on_failed_run();
+        app.inspector_pct = 30;
         let mut second = jobs()[0].clone();
         second.id = 7;
         second.name = "docs".to_string();
@@ -1578,7 +2010,7 @@ mod tests {
         let (rects, buffer) = draw(&app, 160, 50);
         let inspector = rects.inspector.expect("inspector laid out");
         let title = row_text(&buffer, inspector.y);
-        assert!(title.contains("[3] inspector  log"), "{title}");
+        assert!(title.contains("[/] JOBS · LOG · SCRIPT"), "{title}");
 
         app.focused_panel = FocusedPanel::Detail;
         app.press_bracket(false);
@@ -1588,6 +2020,132 @@ mod tests {
             "pane 2 cycles its views"
         );
         assert_eq!(app.ci_body, CiBody::Log);
+    }
+
+    /// The cell where `needle` starts on row `y`, which must hold it.
+    fn cell_of<'a>(buffer: &'a Buffer, y: u16, needle: &str) -> &'a ratatui::buffer::Cell {
+        let row = row_text(buffer, y);
+        let byte = row
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} not on row {y}: {row}"));
+        let x = row[..byte].chars().count() as u16;
+        &buffer[(x, y)]
+    }
+
+    /// FZ-64: with room, the inspector's top border names every body as a
+    /// tab, as pane 2's names its views: the shown one bright in the `ci`
+    /// tab's colour, the others dim, and the title no longer repeats the
+    /// body's word.
+    #[test]
+    fn the_inspector_border_names_every_body_with_the_shown_one_lit() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.ci_body = CiBody::Log;
+        let (rects, buffer) = draw(&app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        assert!(title.contains("[/] JOBS · LOG · SCRIPT "), "{title}");
+        assert!(title.contains("[3] inspector "), "{title}");
+        assert!(!title.contains("inspector  log"), "{title}");
+        assert!(
+            title.trim_end().ends_with("SCRIPT ╮"),
+            "at the right: {title}"
+        );
+
+        let lit = cell_of(&buffer, inspector.y, "LOG");
+        assert_eq!(lit.fg, colors::history_view_color(HistoryView::Ci));
+        assert!(lit.modifier.contains(Modifier::BOLD));
+        for dim in ["JOBS", "SCRIPT"] {
+            assert_eq!(
+                cell_of(&buffer, inspector.y, dim).fg,
+                colors::SUBTEXT,
+                "{dim}"
+            );
+        }
+    }
+
+    /// FZ-64: a border too narrow for all three keeps the shown body alone,
+    /// as pane 2 drops to `[/] CI`.
+    #[test]
+    fn a_narrow_inspector_border_keeps_the_shown_body_alone() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.ci_body = CiBody::Script;
+        let (rects, buffer) = draw(&app, 40, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        assert!(title.contains("[/] SCRIPT "), "{title}");
+        assert!(!title.contains("JOBS"), "{title}");
+        assert!(!title.contains("LOG"), "{title}");
+        let lit = cell_of(&buffer, inspector.y, "SCRIPT");
+        assert_eq!(lit.fg, colors::history_view_color(HistoryView::Ci));
+        assert!(lit.modifier.contains(Modifier::BOLD));
+    }
+
+    /// FZ-64: the commit inspector keeps its plain title; the tabs belong to
+    /// a run only.
+    #[test]
+    fn the_commit_inspector_border_has_no_body_tabs() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.history_view = HistoryView::Commits;
+        assert!(!app.inspects_ci_run());
+        let (rects, buffer) = draw(&app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        // The title, then nothing but the rule (and its resize grip) to the
+        // corner.
+        let rest = title
+            .trim_end()
+            .strip_prefix("╭ [3] inspector ")
+            .unwrap_or_else(|| panic!("{title}"));
+        assert!(
+            rest.ends_with('╮') && rest.chars().all(|c| matches!(c, '─' | '⠶' | '╮')),
+            "{title}"
+        );
+    }
+
+    /// FZ-64: the resize grip sits mid-border and is painted after the
+    /// panes, so where the tabs would run under it they drop to the shown
+    /// body alone, clear of the mark. Before, widths 44 to 56 drew
+    /// `⠶⠶⠶⠶⠶⠶/] JOBS · LOG · SCRIPT`.
+    #[test]
+    fn the_inspector_tabs_never_run_under_the_resize_grip() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.ci_body = CiBody::Log;
+        for width in 44..=56 {
+            let (rects, buffer) = draw(&app, width, 50);
+            let inspector = rects.inspector.expect("inspector laid out");
+            let title = row_text(&buffer, inspector.y);
+            let tabs = &title[title.find(" [/] ").unwrap_or_else(|| panic!("{title}"))..];
+            assert!(!tabs.contains('⠶'), "w={width}: {title}");
+            assert!(tabs.contains(" LOG "), "w={width}: {title}");
+            let lit = cell_of(&buffer, inspector.y, "LOG");
+            assert_eq!(
+                lit.fg,
+                colors::history_view_color(HistoryView::Ci),
+                "w={width}"
+            );
+            assert!(title.contains('⠶'), "the grip is still drawn: {title}");
+        }
+    }
+
+    /// FZ-64: a `ci` view with no run to inspect (loading here, and likewise
+    /// empty, offline or without a remote) has no bodies to step, and `[`/`]`
+    /// step pane 2 there, so its border shows no tabs.
+    #[test]
+    fn the_inspector_border_has_no_tabs_without_a_highlighted_run() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Inspector;
+        assert!(app.inspects_ci_run());
+        assert!(app.ci_highlighted_run().is_none());
+        let (rects, buffer) = draw(&app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        assert!(title.contains("[3] inspector "), "{title}");
+        assert!(!title.contains("[/]"), "{title}");
+        assert!(!title.contains("JOBS"), "{title}");
     }
 
     /// Each body keeps its own scroll; a different highlighted run starts
@@ -1798,6 +2356,8 @@ mod tests {
     #[test]
     fn j_k_and_the_wheel_scroll_the_log_and_script_bodies() {
         let mut app = on_failed_run();
+        // Draws at the pre-FZ-88 inspector size (40%) it was written for.
+        app.inspector_pct = 40;
         let sha = runs()[FAILED_RUN].head_sha.clone().unwrap();
         app.ci.get_mut(&key()).unwrap().scripts.insert(
             (sha, WORKFLOW.to_string()),

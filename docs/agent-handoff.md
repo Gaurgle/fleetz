@@ -2,18 +2,16 @@
 
 The baton between leads: at most 60 lines, read on every start. GitHub
 (the issues and https://github.com/users/Gaurgle/projects/1) holds status,
-each ticket's issue holds its record and rulings, `docs/agent-log.md` holds
-finished work, the owner's dated words and the practical notes (the
-pre-0.8.0 baton is archived there verbatim, moved 2026-10-30). Also read
-`release-plan.md`.
+each issue its record and rulings, `docs/agent-log.md` finished work, the
+owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-None. Released 2026-10-29 14:00 CET by `claude-fable-5-1` (session
-`1ce7d882`) on "we can paus for today when this is done". Nothing running.
-Leads run on the `at-a` machine as well as this one: worktree state is
-per machine, reconcile with `git worktree list` before trusting any list.
-Migrated to Relay 0.8.0 on 2026-10-30 by the advisor session, no lead active.
+Baton released 2026-11-06 16:50 CET by session `3f0d864a`
+(`claude-opus-5-5`, RoosMacbookA, since 15:48); he wrapped up for the day.
+No worker or reviewer running. at-a holds FZ-83's uncommitted tree.
+Worktrees here: `issue-116`, `119` (uncommitted, 10-30 base), `45`, `79`,
+`81`, `144` (clean), `147` (clean), `148` (FZ-91, parked).
 
 ## Standing authority
 
@@ -24,37 +22,37 @@ Migrated to Relay 0.8.0 on 2026-10-30 by the advisor session, no lead active.
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
 
-Paused by his stop of 2026-10-29 15:35: nothing new starts until his word.
-Astra is the preferred lead, Fable when Astra is unavailable. Never `cargo
-install`, tag or release. UI rules from his FZ-45 look (2026-10-27) apply
-to every UI ticket; see the archive in the log.
+The 10-30 stop was lifted 2026-11-02 20:18 ("lets keep working then. you
+choose tickets as you see fit best", log). Astra is the preferred lead. No
+`cargo install`, tag or release. His FZ-45 look rules (10-27, log) apply.
 
 ## In flight
 
-- FZ-59 (#115): Ready to integrate, gate owner look. `b5b4168` on
-  `feat/115-markdown-reader`, branch CI 40876859246 green, verified in a
-  scratch merge with `main`. Merge with `Closes #115` on his word.
-- #96: Ready to integrate, gate owner look. #88 (FZ-38): parked, uncommitted.
+- FZ-83 (#140): uncommitted on at-a, diff `5f4c44d114ce` vs `334e9a6`;
+  next a fresh full review, commit, merge with `main`, his look.
+- FZ-95 (#152): `c3c6830`, fix list plus his 11-06 header criteria
+  (stacked width-dependent summary, subtitles, the long-note banner) on
+  #152. Waits for FZ-83 (both rewrite `header_lines`).
+- FZ-87 (#144): his rulings on #144 (A + V1 + O2, key `S`); worktree
+  `issue-144` clean; build after FZ-83 (shares model.rs, detail.rs).
+- FZ-90 (#147): re-scoped on his screenshot to the inspector's changed-
+  files paths (#147); Ready, next session. FZ-91 (#148) parked, Backlog.
+- Filed 11-06: FZ-97 #154 slow launch (P1, first next), FZ-99 #156 PR
+  view (design). Ready: FZ-78, 84, 89, 92 (last three wait for FZ-83).
+- FZ-65 (#121): built, `9f4018d7160d` unreviewed, his wheel decision.
+  #88 (FZ-38) parked, uncommitted. FZ-63 (#119), FZ-60 (#116): trees
+  found uncommitted on RoosMacbookA (10-30 base); his word.
 
 ## Open questions
 
-- Syntax highlighting route: tree-sitter as notez (eleven crates), markdown
-  only, or own. A dependency decision, then a ticket on his yes.
-- #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
-- #81 and #79: his answer on the existing footer and header test edits.
-- Pane 1 wheel coalescing ticket needs his yes; the flaky `clipboard::tests`
-  issue needs his yes.
+- To file on his 11-05 13:50 answers (log): ssh README paragraph,
+  `fleetz doctor`, `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2.
+- #88 worktree: stays or goes; FZ-38 with font-checked glyphs? #81 and
+  #79 test edits; pane 1 wheel coalescing, flaky `clipboard::tests`: his yes.
 
 ## Next step
 
-On his word: merge FZ-59, then FZ-63 (#119) and FZ-58 (#114) as the two
-worker slots, FZ-60 (#116) after them, FZ-41 after #96. FZ-52 not before
-0.8.0 and his explicit word. Try FZ-59: `cargo run --release
---manifest-path .claude/worktrees/issue-115/Cargo.toml` on the machine
-that holds the worktree.
+Stopped for the day: no dispatch until he says so. Next: FZ-97 (launch
+time), FZ-90; on at-a, FZ-83 then FZ-95, FZ-87. FZ-95 priority unset
+(his). Suggest `cargo install` (`main` has FZ-85, 86, 81, 98).
 
-## Start the lead
-
-From the repo root: `claude --agent fz-coordinator` (normal permissions,
-Claude subscription, no provider override). A Codex lead starts from
-`AGENTS.md`.

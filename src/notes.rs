@@ -50,6 +50,12 @@ impl NoteKind {
             Self::Other => "other",
         }
     }
+
+    /// Whether the reader renders this kind as markdown (FZ-59): a `TODO.md`
+    /// is markdown too; text and other files are always raw.
+    pub fn is_markdown(self) -> bool {
+        matches!(self, Self::Markdown | Self::Todo)
+    }
 }
 
 impl NoteFile {

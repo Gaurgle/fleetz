@@ -35,8 +35,8 @@ where the session runs.
 
 ## Current state
 
-Used daily. All code is unit-tested in `#[cfg(test)]` modules in the same file
-as the code they cover. There is no integration test suite. CI is
+Used daily. All code is unit-tested in `#[cfg(test)] mod tests` child modules
+of the code they cover. There is no integration test suite. CI is
 `.github/workflows/ci.yml` (fmt, clippy, tests on a push to any branch, skipped
 when only prose changed), `docs.yml` (runs `scripts/check-docs.sh` on a prose
 push: links, the index below, no dashes) and
@@ -69,8 +69,10 @@ and blink, watch mode re-sweeps on an interval.
 | `docs/fetch-outcome-contract.md` | Accepted contract for per-repo `git fetch` outcomes (FZ-04): last success, attempt, outcome |
 | `docs/api-budget-design.md` | Accepted design for the GitHub API budget, pacing and retry (FZ-10): decisions A1 to A7, owner items O1 to O5, tickets FZ-10a to c |
 | `docs/repoz-print-design.md` | Proposed design: bash repoz rebuilt as a print mode of this binary, repoz's look held by a golden test, decisions D1 to D9, tickets FZ-46 to FZ-51, owner items O1 to O8 (naming deferred) |
+| `docs/architecture.md` | The code map: modules and what they own, dependencies, runtime flow, state ownership, measured drift, and the proposed target layers. Read section 1 first |
+| `docs/module-split-design.md` | Proposed plan from the target layers: the layer test (L1), tests into sibling files, the engine out of `main.rs` and `app.rs`, the front-end splits; the gate on open trees and where each lives |
 | `docs/coverage-cache-design.md` | Design for GitHub coverage and cache isolation (FZ-09): what the payload covers, the cache keyed by account, host and version, decisions C1 to C9, tickets FZ-09a to f, owner items accepted 2026-10-02 |
-| `.claude/agents/` | Claude-native workforce: `fz-coordinator`, `fz-worker`, `fz-reviewer`, `fz-small` |
+| `.claude/agents/` | Claude-native workforce: `fz-coordinator`, `fz-worker`, `fz-reviewer`, `fz-small`, `fz-architect` |
 | `.claude/rules/` | Domain invariants, one path-scoped file per area; loaded when a matching source file is touched |
 | `docs/superpowers/` | Dated plans and specs, paired, for landed work |
 
@@ -108,7 +110,13 @@ everything else is unbuilt, and its line references drift.
   class is decided from everything since the previous tag, so a prepared
   bump stays valid as long as later work fits its class; `1.0.0` is the
   public release (M5).
-- Tests live beside the code in `#[cfg(test)] mod tests`, not in `tests/`.
+- Tests live in a `#[cfg(test)] mod tests` child module of the code they
+  cover, not in `tests/`, so they reach private items: inline while the file
+  is small, in a sibling file once they push it past about 1200 lines
+  (`mod tests;` in `src/app.rs` reads `src/app/tests.rs`).
+- **Files stay under about 1200 lines of production code**, functions under
+  about 150. Past either, flag the seam; never split in passing. Splits are
+  refactor tickets (`docs/agent-workflow.md`, `docs/module-split-design.md`).
 - Every behavior change lands with a test that would have caught the old
   behavior; many existing tests name the regression they guard. Match that.
 
@@ -121,13 +129,14 @@ cargo fmt                     # must be clean before committing
 cargo install --path .        # to ~/.cargo/bin (the `fleetz` on PATH)
 ```
 
-Needs a Nerd Font for four uses of its codepoints: the repo kind glyph
+Needs a Nerd Font for five uses of its codepoints: the repo kind glyph
 (`ui/badges.rs::kind_glyph`), the stash mark (`badges::STASH_GLYPH`), the watch
-eye (`WATCH_ON_GLYPH` and `WATCH_OFF_GLYPH` in `ui/mod.rs`) and the contribution
+eye (`WATCH_ON_GLYPH` and `WATCH_OFF_GLYPH` in `ui/mod.rs`), the failed-fetch
+marker's warning icon (`badges::FETCH_WARNING_GLYPH`) and the contribution
 strip's day squares (`app::CellSize::glyph`). Without one they are tofu. The
 `icons = "plain"` config key, or the `,` settings row (`app::Icons::Plain`),
-swaps the first three for ASCII stand-ins; the day squares have no plain
-fallback. It also needs an authenticated `gh` on PATH, which the GitHub fetch
+swaps the first three for ASCII stand-ins and the warning icon for `⚠`; the
+day squares have no plain fallback. It also needs an authenticated `gh` on PATH, which the GitHub fetch
 uses.
 
 ## Domain invariants - do not violate

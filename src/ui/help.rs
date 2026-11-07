@@ -76,11 +76,12 @@ const GROUPS: [Group; 6] = [
                 key: "[ ]",
                 desc: &["previous / next repo view"],
             },
-            // One row for the two in-view expanders: neither column has a
-            // row to spare at 80x24.
+            // One row for the two in-view expanders and the `notes` reader's
+            // rendered / source toggle (FZ-59): neither column has a row to
+            // spare at 80x24.
             Row {
-                key: "B m",
-                desc: &["remotes; notez / markdown"],
+                key: "B m p",
+                desc: &["remotes; notez/md; source"],
             },
             Row {
                 key: "c",
