@@ -3285,12 +3285,12 @@ fn view_name(view: HistoryView) -> String {
 /// either side of a dimmed `/`, so the pair reads as "either bracket" rather
 /// than as the single `/` key -- which is bound to search.
 ///
-/// `budget` is the border width left over after the pane's own title. Too
-/// tight for every tab and it shows the active one between its two
-/// neighbours, the views `[` and `]` land on (wrapping around, as the keys
-/// do), so the keys still say where they go. Too tight even for those three
-/// and it shows the active one alone, which is the half that cannot be
-/// dropped.
+/// `budget` is the border width left over after the pane's own title, and
+/// the strip takes the widest of three forms that fits it: every tab with
+/// its full name; every tab cut to its first three letters (`INF · COM`),
+/// same separators, colours and keys; and, when even that does not fit,
+/// `[X/N]` alone, the active view's place in the cycle, its digits in the
+/// view's colour and no key hint beside it.
 fn view_switcher(active: HistoryView, focused: bool, budget: usize) -> Line<'static> {
     // The active tab wears its own view's colour in either state: which mode
     // the pane is in is worth reading from across the screen, and it is the
@@ -3316,6 +3316,29 @@ fn view_switcher(active: HistoryView, focused: bool, budget: usize) -> Line<'sta
     };
     let bold = |c| Style::default().fg(c).add_modifier(Modifier::BOLD);
 
+    // " [/] " + every label + " · " between each + a trailing space.
+    let strip_width = |labels: &[String]| -> usize {
+        let cells: usize = labels.iter().map(|l| l.chars().count()).sum();
+        5 + cells + 3 * (labels.len() - 1) + 1
+    };
+    let full: Vec<String> = HistoryView::ALL.iter().map(|v| view_name(*v)).collect();
+    let short: Vec<String> = full.iter().map(|l| l.chars().take(3).collect()).collect();
+    let labels = if strip_width(&full) <= budget {
+        full
+    } else if strip_width(&short) <= budget {
+        short
+    } else {
+        let position = format!("{}/{}", active.index() + 1, HistoryView::COUNT);
+        return Line::from(vec![
+            Span::raw(" "),
+            Span::styled("[", bold(key)),
+            Span::styled(position, bold(on)),
+            Span::styled("]", bold(key)),
+            Span::raw(" "),
+        ])
+        .right_aligned();
+    };
+
     let mut spans = vec![
         Span::raw(" "),
         Span::styled("[", bold(key)),
@@ -3323,40 +3346,13 @@ fn view_switcher(active: HistoryView, focused: bool, budget: usize) -> Line<'sta
         Span::styled("]", bold(key)),
         Span::raw(" "),
     ];
-
-    // " [/] " + every label + " · " between each + a trailing space.
-    let labels: usize = HistoryView::ALL
-        .iter()
-        .map(|v| view_name(*v).chars().count())
-        .sum();
-    let full = 5 + labels + 3 * (HistoryView::COUNT - 1) + 1;
-
-    // The views `[` and `]` land on, wrapping around `ALL` as the keys do.
-    let n = HistoryView::COUNT;
-    let at = active.index();
-    // Previous, active, next: the reduced strip keeps ALL's order.
-    let trio = [
-        HistoryView::ALL[(at + n - 1) % n],
-        active,
-        HistoryView::ALL[(at + 1) % n],
-    ];
-    let trio_labels: usize = trio.iter().map(|v| view_name(*v).chars().count()).sum();
-    let three = 5 + trio_labels + 3 * 2 + 1;
-
-    let tabs: Vec<HistoryView> = if full <= budget {
-        HistoryView::ALL.to_vec()
-    } else if three <= budget {
-        trio.to_vec()
-    } else {
-        vec![active]
-    };
-    for (i, view) in tabs.iter().enumerate() {
+    for (i, (view, label)) in HistoryView::ALL.iter().zip(labels).enumerate() {
         if i > 0 {
             spans.push(Span::styled(" · ", Style::default().fg(dot)));
         }
         spans.push(match *view == active {
-            true => Span::styled(view_name(*view), bold(on)),
-            false => Span::styled(view_name(*view), Style::default().fg(off)),
+            true => Span::styled(label, bold(on)),
+            false => Span::styled(label, Style::default().fg(off)),
         });
     }
     spans.push(Span::raw(" "));
@@ -5493,47 +5489,76 @@ mod tests {
         }
     }
 
-    /// The tab labels a switcher line draws, in order, with each one's colour.
-    fn switcher_tabs(line: &Line<'_>) -> Vec<(String, Option<ratatui::style::Color>)> {
-        let names: Vec<String> = HistoryView::ALL.iter().map(|v| view_name(*v)).collect();
-        line.spans
-            .iter()
-            .filter(|s| names.contains(&s.content.to_string()))
-            .map(|s| (s.content.to_string(), s.style.fg))
-            .collect()
+    /// A view's label cut to the first three letters, as the shortened
+    /// strip draws it.
+    fn short_name(view: HistoryView) -> String {
+        view_name(view).chars().take(3).collect()
     }
 
-    /// The cells a switcher line takes, its key hint and spacing included.
-    fn switcher_width(tabs: &[HistoryView]) -> usize {
-        let labels: usize = tabs.iter().map(|v| view_name(*v).chars().count()).sum();
-        5 + labels + 3 * (tabs.len() - 1) + 1
+    /// The cells a strip of these labels takes, key hint and spacing included.
+    fn switcher_width(labels: &[String]) -> usize {
+        let cells: usize = labels.iter().map(|l| l.chars().count()).sum();
+        5 + cells + 3 * (labels.len() - 1) + 1
+    }
+
+    fn full_width() -> usize {
+        switcher_width(&HistoryView::ALL.map(view_name))
+    }
+
+    fn short_width() -> usize {
+        switcher_width(&HistoryView::ALL.map(short_name))
+    }
+
+    /// A budget of exactly the full width still draws every full name: the
+    /// threshold is inclusive, so the strip never shortens a tab it had room for.
+    #[test]
+    fn a_budget_of_exactly_the_full_width_draws_every_full_name() {
+        let names = HistoryView::ALL.map(view_name);
+        for view in HistoryView::ALL {
+            let line = view_switcher(view, true, full_width());
+            let tabs: Vec<String> = line
+                .spans
+                .iter()
+                .filter(|s| names.contains(&s.content.to_string()))
+                .map(|s| s.content.to_string())
+                .collect();
+            assert_eq!(tabs, names.to_vec(), "{}", view.label());
+            assert!(
+                line.spans.iter().any(|s| s.content == "/"),
+                "{} dropped the [/] hint",
+                view.label()
+            );
+        }
     }
 
     /// FZ-60 regression: adding `CHANGES` widened the full strip by ten
-    /// columns, and at pane widths in that gap the switcher dropped to the
-    /// active name alone. There it now shows the active view between the two
-    /// `[` and `]` land on, the neighbours unlit, the key hint kept.
+    /// columns, and in that gap the switcher dropped to the active name
+    /// alone. There it now keeps every tab, each cut to three letters, in
+    /// ALL's order, the active one lit and the key hint kept.
     #[test]
-    fn a_strip_too_narrow_for_every_tab_shows_the_active_one_between_its_neighbours() {
-        let full = switcher_width(&HistoryView::ALL);
-        let n = HistoryView::COUNT;
-        for (i, view) in HistoryView::ALL.into_iter().enumerate() {
-            let prev = HistoryView::ALL[(i + n - 1) % n];
-            let next = HistoryView::ALL[(i + 1) % n];
-            let three = switcher_width(&[prev, view, next]);
-            assert!(three < full, "no gap for {}", view.label());
-            for budget in [three, full - 1] {
+    fn a_strip_too_narrow_for_full_names_shows_every_tab_shortened() {
+        assert!(short_width() < full_width());
+        for budget in [short_width(), full_width() - 1] {
+            for view in HistoryView::ALL {
                 let line = view_switcher(view, true, budget);
-                assert_eq!(
-                    switcher_tabs(&line),
-                    vec![
-                        (view_name(prev), Some(colors::SUBTEXT)),
-                        (view_name(view), Some(colors::history_view_color(view))),
-                        (view_name(next), Some(colors::SUBTEXT)),
-                    ],
-                    "{} at budget {budget}",
-                    view.label()
-                );
+                let shorts = HistoryView::ALL.map(short_name);
+                let tabs: Vec<_> = line
+                    .spans
+                    .iter()
+                    .filter(|s| shorts.contains(&s.content.to_string()))
+                    .map(|s| (s.content.to_string(), s.style.fg))
+                    .collect();
+                let want: Vec<_> = HistoryView::ALL
+                    .iter()
+                    .map(|v| {
+                        let colour = match *v == view {
+                            true => colors::history_view_color(view),
+                            false => colors::SUBTEXT,
+                        };
+                        (short_name(*v), Some(colour))
+                    })
+                    .collect();
+                assert_eq!(tabs, want, "{} at budget {budget}", view.label());
                 assert!(
                     line.spans.iter().any(|s| s.content == "/"),
                     "the key hint was dropped at budget {budget}"
@@ -5542,55 +5567,54 @@ mod tests {
         }
     }
 
-    /// Below even the three-tab width, the active view stands alone, its
-    /// key hint still beside it.
+    /// Too narrow even for the short labels, the strip is `[X/N]`: the active
+    /// view's place in the cycle, digits in its colour, no label text.
     #[test]
-    fn a_strip_too_narrow_for_three_tabs_shows_the_active_one_alone() {
+    fn a_strip_too_narrow_for_short_names_shows_the_position_alone() {
+        let budget = short_width() - 1;
         let n = HistoryView::COUNT;
-        for (i, view) in HistoryView::ALL.into_iter().enumerate() {
-            let prev = HistoryView::ALL[(i + n - 1) % n];
-            let next = HistoryView::ALL[(i + 1) % n];
-            let budget = switcher_width(&[prev, view, next]) - 1;
+        for (i, view) in [(1, HistoryView::ALL[0]), (n, HistoryView::ALL[n - 1])] {
             let line = view_switcher(view, true, budget);
-            assert_eq!(
-                switcher_tabs(&line),
-                vec![(view_name(view), Some(colors::history_view_color(view)))],
-                "{} at budget {budget}",
-                view.label()
-            );
-            assert!(line.spans.iter().any(|s| s.content == "/"));
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert_eq!(text, format!(" [{i}/{n}] "), "{}", view.label());
+            let digits = line
+                .spans
+                .iter()
+                .find(|s| s.content == format!("{i}/{n}"))
+                .expect("the position is one span");
+            assert_eq!(digits.style.fg, Some(colors::history_view_color(view)));
+            for bracket in ["[", "]"] {
+                let span = line.spans.iter().find(|s| s.content == bracket).unwrap();
+                assert_eq!(span.style.fg, Some(colors::TEXT), "{bracket} is not a key");
+            }
+            for other in HistoryView::ALL {
+                assert!(
+                    !text.contains(&short_name(other)),
+                    "{} label drawn",
+                    other.label()
+                );
+            }
         }
     }
 
-    /// The neighbours wrap as `[` and `]` do: the first view's left
-    /// neighbour is the last, the last view's right neighbour the first.
+    /// The position form drops the `[/]` hint: its own brackets already
+    /// stand there, and a second pair beside them reads as noise.
     #[test]
-    fn the_reduced_strip_wraps_around_at_the_first_and_last_view() {
-        let first = HistoryView::ALL[0];
-        let last = HistoryView::ALL[HistoryView::COUNT - 1];
-        let budget = switcher_width(&HistoryView::ALL) - 1;
-        let names = |v| -> Vec<String> {
-            switcher_tabs(&view_switcher(v, true, budget))
-                .into_iter()
-                .map(|(name, _)| name)
-                .collect()
-        };
-        assert_eq!(
-            names(first),
-            vec![
-                view_name(last),
-                view_name(first),
-                view_name(HistoryView::ALL[1])
-            ]
-        );
-        assert_eq!(
-            names(last),
-            vec![
-                view_name(HistoryView::ALL[HistoryView::COUNT - 2]),
-                view_name(last),
-                view_name(first)
-            ]
-        );
+    fn the_position_form_has_no_key_hint() {
+        for view in HistoryView::ALL {
+            let line = view_switcher(view, true, short_width() - 1);
+            assert!(
+                !line.spans.iter().any(|s| s.content == "/"),
+                "{} kept the [/] hint",
+                view.label()
+            );
+            let brackets = line
+                .spans
+                .iter()
+                .filter(|s| s.content == "[" || s.content == "]")
+                .count();
+            assert_eq!(brackets, 2, "{}", view.label());
+        }
     }
 
     /// The colours have to be four, not one repeated: the point is telling
