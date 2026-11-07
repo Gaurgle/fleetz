@@ -319,7 +319,7 @@ pub fn render_pane(
     let (first, shown, hidden) = visible_lines(digest.lines.len(), selected, body_rows);
     for (i, line) in digest.lines.iter().enumerate().skip(first).take(shown) {
         let repo = &app.repos[line.repo];
-        lines.push(Line::from(line_spans(
+        let mut spans = line_spans(
             line,
             repo,
             i == selected,
@@ -327,7 +327,14 @@ pub fn render_pane(
             width,
             dim_pending,
             app.is_not_in_last_poll(repo),
-        )));
+        );
+        // The cursor's band runs to the pane's edge, past the slots (FZ-66).
+        if i == selected {
+            let pad = width.saturating_sub(width_of(&spans));
+            spans.push(Span::raw(" ".repeat(pad)));
+            spans = crate::ui::detail::wash(spans);
+        }
+        lines.push(Line::from(spans));
     }
     if hidden > 0 {
         lines.push(crate::ui::detail::more_line(hidden));
@@ -1057,6 +1064,53 @@ mod tests {
             let all = screen.join("\n");
             assert!(!all.contains("h000 "), "{all}");
             assert!(all.contains("h005 "), "{all}");
+        }
+    }
+
+    /// FZ-66: the cursor's digest line wears pane 1's band across the whole
+    /// pane, slots and the blank past them included; the line below has none.
+    #[test]
+    fn the_cursor_line_wears_the_band_to_the_pane_edge() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Color as TermColor;
+
+        let mut alpha = counted("alpha", vec![commit("a1", "Ann Bee", "first")]);
+        alpha.repo = 0;
+        let mut beta = counted("beta", vec![commit("b1", "Cid Dee", "second")]);
+        beta.repo = 1;
+        let repos = vec![repo_for(&alpha), repo_for(&beta)];
+        let mut app = App::new(repos, String::new(), 120, 40);
+        app.digest_selected = 0;
+        let d = digest(Section::GithubActivity, vec![alpha, beta]);
+
+        let (w, h) = (100u16, 10u16);
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|f| {
+                let panel = Block::default().borders(Borders::ALL);
+                render_pane(f, Rect::new(0, 0, w, h), panel, &app, &d, true)
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let row_of = |needle: &str| {
+            (0..h)
+                .find(|&y| {
+                    let row: String = (0..w).map(|x| buf[(x, y)].symbol()).collect();
+                    row.contains(needle)
+                })
+                .unwrap_or_else(|| panic!("{needle:?} not drawn"))
+        };
+        let (on, off) = (row_of(" alpha "), row_of(" beta "));
+        assert_eq!(off, on + 1, "beta is the line below the cursor's");
+        let slot: String = (0..w).map(|x| buf[(x, on)].symbol()).collect();
+        assert!(
+            slot.contains("1 commit") && slot.contains("first"),
+            "{slot}"
+        );
+        for x in 1..w - 1 {
+            assert_eq!(buf[(x, on)].bg, colors::SELECTED_BG, "band at x {x}");
+            assert_eq!(buf[(x, off)].bg, TermColor::Reset, "no band at x {x}");
         }
     }
 

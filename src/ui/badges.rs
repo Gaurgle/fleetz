@@ -191,6 +191,20 @@ pub fn stash_icon() -> &'static str {
     }
 }
 
+/// nf-fa-warning: the Nerd Font triangle the row's failed-fetch marker wears.
+pub const FETCH_WARNING_GLYPH: &str = "\u{f071}";
+
+/// The plain-font failed-fetch mark: the Unicode warning sign, one column.
+const PLAIN_FETCH_WARNING_GLYPH: &str = "⚠";
+
+/// The failed-fetch marker's glyph in the active set (`active_icons`).
+pub fn fetch_warning_icon() -> &'static str {
+    match active_icons() {
+        Icons::Nerd => FETCH_WARNING_GLYPH,
+        Icons::Plain => PLAIN_FETCH_WARNING_GLYPH,
+    }
+}
+
 /// Worktrees get letters, not a glyph, because git worktrees have no
 /// conventional symbol at all. `⎇` was the obvious candidate and is wrong:
 /// U+2387 is the Alt key, adopted by shell prompts to mean *branch*, so it
@@ -470,6 +484,7 @@ mod tests {
     /// the counts it makes stale, and the status keeps the right edge.
     #[test]
     fn a_failed_fetch_is_marked_beside_the_status() {
+        set_active_icons(Icons::Plain);
         let mut behind = repo("behind");
         behind.behind = 3;
         let r = with_failed_fetch(behind, crate::git::FetchFailureKind::Unreachable);
@@ -483,6 +498,27 @@ mod tests {
             Some(status_color(&r)),
             "status keeps its colour"
         );
+    }
+
+    /// FZ-72 (#128): an ssh refusal reads `ssh`, an https one `auth`, and
+    /// the triangle is the Nerd warning glyph or the plain `⚠`, one column
+    /// either way so the marker measures the same under both sets.
+    #[test]
+    fn a_fetch_marker_wears_the_warning_glyph_of_the_icon_set() {
+        let mut behind = repo("behind");
+        behind.behind = 3;
+        let ssh = with_failed_fetch(behind.clone(), crate::git::FetchFailureKind::Ssh);
+        let auth = with_failed_fetch(behind, crate::git::FetchFailureKind::Auth);
+        let mut widths = Vec::new();
+        for (icons, glyph) in [(Icons::Nerd, "\u{f071}"), (Icons::Plain, "⚠")] {
+            set_active_icons(icons);
+            let (text, width) = rendered(&ssh);
+            assert_eq!(text, format!("{glyph} ssh 3↓"), "{icons:?}");
+            assert_eq!(width, Span::raw(text.clone()).width(), "{icons:?}");
+            assert_eq!(rendered(&auth).0, format!("{glyph} auth 3↓"), "{icons:?}");
+            widths.push(width);
+        }
+        assert_eq!(widths[0], widths[1], "the marker's width follows the set");
     }
 
     fn receiving(bytes: u64) -> crate::git::FetchProgress {
@@ -499,6 +535,7 @@ mod tests {
     /// before the first byte, and once it lands, the row is as it was.
     #[test]
     fn a_running_fetch_shows_its_received_size_on_the_row() {
+        set_active_icons(Icons::Plain);
         let mut behind = repo("behind");
         behind.behind = 3;
         let mut r = with_failed_fetch(behind, crate::git::FetchFailureKind::TimedOut);
