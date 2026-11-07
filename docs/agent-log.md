@@ -313,8 +313,27 @@ display, that changes color to the correlated page". About 20:10: "i think
 we can stop after the current tickets are finished", "but no loose ends.
 finish the tickets since worktrees dont sync to other machines". 20:15:
 apply the two Unreleased Relay rules (architect checks the baton, ticket
-in the subject) in one coordination commit: `00f4ab7`.
+in the subject) in one coordination commit: `00f4ab7`. 20:45, on his
+FZ-60 look: "fz-60 is a pass. ofund another bug tho; in notez mode, that
+divider should not affect the header divider, and thus not the spacing
+for the three sections (local, remote, summary)" (screenshot: in `notes`
+the tree/preview divider splits the header, so local and remote stack
+in the left column and the summary sits in the right; in every other
+view the three sections share one row). Not filed: needs his yes.
 
+- **#116 (FZ-60), the changes view in pane 2.** Merged `3dd6112`.
+  Commits `9c5522a` (10-30 snapshot), `b1db446`, `d1a367f` (the switcher:
+  his option 1 rejected on look, then full strip, three-letter prefixes,
+  `[X/N]`), `8b15028` (merge of `main` `047982e` with root-checked diffs,
+  the `ChangesRead`/`ChangeDiff` rows in architecture.md, four fixture
+  widths he approved). Reviews: `b2ed4f5edd0c` accepted, `78e3b0f03c13`
+  needs evidence (one boundary test), `175d4e0cb8a4` and `1549ceaf80e6`
+  accepted. Gate holds; his look passed twice (view 11-07 18:19, switcher
+  20:45). Record and follow-ups on #116. Lesson: a `yes` to a test edit
+  arrives once per forced edit, so a merge that adds a view should expect
+  the width fixtures to stop the worker; nothing to keep in a rule.
+  FZ-60: review evidence 1; fix cycles 1; owner decisions 5; worker 60;
+  review 12; models opus:medium/opus:medium; usage 527k; 165k
 - **#119 (FZ-63), todoz boards in the notes view.** Merged `b342d30`.
   Snapshot `7271bcb` and merge commit `687298a` on base `41ecd76`, merged
   with `main` `8dd79d5` by the worker (conflicts README, main.rs,
