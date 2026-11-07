@@ -289,6 +289,46 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### 2026-11-07
+
+Lead `4d31e22a` (`claude-fable-5-1`) on RoosMacbookA from 19:27 CET.
+Owner's words, 19:20: "Take over as lead. SMBP is out of reach today:
+FZ-83, FZ-65 and FZ-38 stay there untouched, and so do FZ-95 and FZ-87,
+which wait for FZ-83. Authorized now, in this order: 1. Commit and push
+the uncommitted trees FZ-60 (#116) and FZ-63 (#119) to their ticket
+branches, as-is. 2. FZ-63: the README Enter line, re-review, merge. My
+look passed (#119). 3. FZ-60: fix the view switcher with option 1 from
+#116 (the active view with its neighbours), then first review, then
+merge. I'll look at the fix. 4. L1, the layer test, from
+docs/module-split-design.md. 5. Run fz-architect for a ticket check of
+the Ready column, then FZ-97 (#154, P1)." 19:30: "Start no other ticket
+that touches main.rs, app.rs or ui/detail.rs: the refactor window comes
+after the SMBP trees are merged." Step 1 done 19:28: FZ-60 `9c5522a`,
+FZ-63 `7271bcb`, both pushed. About 20:05, on his look at the FZ-60
+switcher: "there's a stage inbetween, where it only show the pages
+CHANGES - INFO - COMMITS", "i think it should either show all the pages,
+or the fallback (whatever that may be)", then "the medium state can be
+the shortened prefix, and the smallest version is simply a '[X/N]'
+display, that changes color to the correlated page". About 20:10: "i think
+we can stop after the current tickets are finished", "but no loose ends.
+finish the tickets since worktrees dont sync to other machines". 20:15:
+apply the two Unreleased Relay rules (architect checks the baton, ticket
+in the subject) in one coordination commit: `00f4ab7`.
+
+- **#119 (FZ-63), todoz boards in the notes view.** Merged `b342d30`.
+  Snapshot `7271bcb` and merge commit `687298a` on base `41ecd76`, merged
+  with `main` `8dd79d5` by the worker (conflicts README, main.rs,
+  detail.rs; `main`'s borderless reader kept, the board drawn through
+  `held_board`, the open count in the facts row). Review 1 (10-30, diff
+  `936c88bf9c1e`): blocked, B1 `todoz <path>` is a quick-add; owner ruled
+  "todoz where a scope fits". Review 2 (11-07, diff `ef5136e93684`):
+  accepted; three low survived mutations recorded on #119. Combined
+  checks on `00f4ab7`, gate holds, owner look passed 11-07. Lesson: a
+  merge refuses to start over an uncommitted edit, so a pre-merge edit is
+  committed first (practical note, here); otherwise nothing to keep.
+  FZ-63: review changes 1; fix cycles 2; owner decisions 2; worker 35;
+  review 13; models opus:medium/opus:medium; usage 436k; 179k
+
 ### 2026-11-06
 
 Lead `3f0d864a` (`claude-opus-5-5`) on RoosMacbookA from 15:48 CET; at-a

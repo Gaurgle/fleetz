@@ -7,11 +7,9 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Baton released 2026-11-06 16:50 CET by session `3f0d864a`
-(`claude-opus-5-5`, RoosMacbookA, since 15:48); he wrapped up for the day.
-No worker or reviewer running. at-a holds FZ-83's uncommitted tree.
-Worktrees here: `issue-116`, `119` (uncommitted, 10-30 base), `45`, `79`,
-`81`, `144` (clean), `147` (clean), `148` (FZ-91, parked).
+Session `4d31e22a` (`claude-fable-5-1`, RoosMacbookA) took over 2026-11-07
+19:27 CET; the previous lead (`3f0d864a`) released the baton 11-06 16:50.
+Workers: FZ-60 merge-round `fz-worker` running (dispatched 20:03).
 
 ## Standing authority
 
@@ -21,38 +19,38 @@ Worktrees here: `issue-116`, `119` (uncommitted, 10-30 base), `45`, `79`,
 | Choose and dispatch tickets from the board | 2026-10-27 11:05, "you, as the lead, have authority to decide what tickets to start on" | two workers plus one `fz-small`; look items stop for him; FZ-52 and the `0.7.0` bump need his explicit word; issues only on his yes | revoked by word |
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
+| Today's order (11-07 19:20, log) | 1 commit+push FZ-60, FZ-63 as-is; 2 FZ-63 README row, re-review, merge; 3 FZ-60 switcher option 1, review, his look, merge; 4 L1; 5 architect ticket check of Ready, then FZ-97 | SMBP trees (FZ-83, 65, 38, and 95, 87 behind FZ-83) untouched; no other ticket touching `main.rs`, `app.rs`, `ui/detail.rs` before the SMBP trees merge (11-07 19:30) | this order done |
 
-The 10-30 stop was lifted 2026-11-02 20:18 ("lets keep working then. you
-choose tickets as you see fit best", log). Astra is the preferred lead. No
-`cargo install`, tag or release. His FZ-45 look rules (10-27, log) apply.
+Astra is the preferred lead. No `cargo install`, tag or release. His FZ-45
+look rules (10-27, log) apply.
 
 ## In flight
 
-- FZ-83 (#140): uncommitted on at-a, diff `5f4c44d114ce` vs `334e9a6`;
-  next a fresh full review, commit, merge with `main`, his look.
-- FZ-95 (#152): `c3c6830`, fix list plus his 11-06 header criteria
-  (stacked width-dependent summary, subtitles, the long-note banner) on
-  #152. Waits for FZ-83 (both rewrite `header_lines`).
-- FZ-87 (#144): his rulings on #144 (A + V1 + O2, key `S`); worktree
-  `issue-144` clean; build after FZ-83 (shares model.rs, detail.rs).
-- FZ-90 (#147): re-scoped on his screenshot to the inspector's changed-
-  files paths (#147); Ready, next session. FZ-91 (#148) parked, Backlog.
-- Filed 11-06: FZ-97 #154 slow launch (P1, first next), FZ-99 #156 PR
-  view (design). Ready: FZ-78, 84, 89, 92 (last three wait for FZ-83).
-- FZ-65 (#121): built, `9f4018d7160d` unreviewed, his wheel decision.
-  #88 (FZ-38) parked, uncommitted. FZ-63 (#119), FZ-60 (#116): trees
-  found uncommitted on RoosMacbookA (10-30 base); his word.
+- FZ-63 (#119): Done, merged `b342d30` 20:01, record in the log.
+- FZ-60 (#116): branch at `d1a367f` (snapshot, switcher rounds 1 and 2,
+  accepted diff `175d4e0cb8a4`). Worker: merge `main` `b342d30`
+  (6 conflicts) plus the root-compare fix and the architecture.md event
+  rows (#116 rulings), staged not committed. Then re-review vs `main`,
+  his look at the switcher (pending), CI, verify, gate, merge.
+- FZ-83 (#140), FZ-65 (#121), FZ-38 (#88): on at-a, untouched today.
+  FZ-95 (#152, `c3c6830`, no priority) and FZ-87 (#144) wait for FZ-83.
+- FZ-97 (#154, P1): step 5, after the architect's Ready check.
+- L1 (module-split-design.md): step 4, needs an issue (his yes) and one
+  line in `main.rs`; see open questions.
+- Ready: FZ-78, 79, 58, 84, 89, 90, 92 (84, 89, 92 wait for FZ-83).
 
 ## Open questions
 
+- L1 adds `#[cfg(test)] mod architecture;` to `main.rs`: does his 19:30
+  rule (no other ticket touching `main.rs`) exclude it, or is one line ok?
 - To file on his 11-05 13:50 answers (log): ssh README paragraph,
   `fleetz doctor`, `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2.
 - #88 worktree: stays or goes; FZ-38 with font-checked glyphs? #81 and
-  #79 test edits; pane 1 wheel coalescing, flaky `clipboard::tests`: his yes.
+  #45 trees here (test edits, CI): his yes. Flaky `clipboard::tests`.
 
 ## Next step
 
-Stopped for the day: no dispatch until he says so. Next: FZ-97 (launch
-time), FZ-90; on at-a, FZ-83 then FZ-95, FZ-87. FZ-95 priority unset
-(his). Suggest `cargo install` (`main` has FZ-85, 86, 81, 98).
-
+Stop condition (his word, 11-07 about 20:10: "we can stop after the
+current tickets are finished"): FZ-63 and FZ-60 through merge, then the
+lead stops. Steps 4 and 5 (L1, architect check, FZ-97) wait for his
+word in a later session. Suggest `cargo install` after the merges.
