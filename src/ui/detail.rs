@@ -1672,10 +1672,8 @@ fn notes_rows(
                 tops.push(lines.len());
                 // The kind's glyph before the name (FZ-62), dim so the name
                 // stays what the eye reads.
-                let glyph = notes
-                    .files
-                    .get(file)
-                    .map_or("", |f| badges::note_kind_icon(f.kind()));
+                let entry = notes.files.get(file);
+                let glyph = entry.map_or("", |f| badges::note_kind_icon(f.kind()));
                 let mut spans = vec![
                     Span::styled(
                         if is_sel { "▸ " } else { "  " },
@@ -1685,6 +1683,14 @@ fn notes_rows(
                     Span::styled(format!("{glyph} "), Style::default().fg(colors::OVERLAY)),
                     Span::styled(name, Style::default().fg(colors::TEXT)),
                 ];
+                // Every board is named `TODO.md` under `todos` (FZ-63); its
+                // place, dim, tells them apart.
+                if let Some(f) = entry.filter(|f| f.kind() == crate::notes::NoteKind::Todo) {
+                    spans.push(Span::styled(
+                        format!("  {}", f.place()),
+                        Style::default().fg(colors::OVERLAY),
+                    ));
+                }
                 if is_sel {
                     spans = wash(pad_to(spans, width));
                 }
@@ -1762,6 +1768,7 @@ fn notes_card_lines(app: &App) -> Vec<Line<'static>> {
         .unwrap_or_default();
     let lives = match &file.notez {
         Some(dir) => format!("{}/", dir.display()),
+        None if file.is_personal() => "the personal store".to_string(),
         None => "the repo".to_string(),
     };
     let mut lines = vec![
@@ -1852,10 +1859,18 @@ fn render_notes_card(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// The reader's border title: the file's name, kind and size, as in
-/// `README.md · markdown · 4.2 KiB`. The size waits for the read.
-fn reader_title(app: &App) -> Option<String> {
+/// `README.md · markdown · 4.2 KiB`. The size waits for the read. A board
+/// says `TODO.md · todoz · 3 open` instead, its `open` count once read
+/// (FZ-63).
+fn reader_title(app: &App, board: Option<&crate::ui::todo::Board>) -> Option<String> {
     let file = app.notes_highlighted_file()?;
     let name = file.rel.file_name()?.to_string_lossy().into_owned();
+    if file.kind() == crate::notes::NoteKind::Todo {
+        return Some(match board {
+            Some(board) => format!(" {name} · todoz · {} open ", board.open()),
+            None => format!(" {name} · todoz "),
+        });
+    }
     let mut title = format!(" {name} · {}", file.kind().label());
     if let Some(size) = held_note_body(app)
         .and_then(|b| b.facts.as_ref())
@@ -1889,7 +1904,14 @@ fn render_reader(frame: &mut Frame, area: Rect, app: &App) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
         .padding(Padding::new(1, 1, 0, 0));
-    if let Some(title) = reader_title(app) {
+    // A board is parsed from the body already read, here on the UI thread:
+    // measured cheap for a capped file (FZ-63).
+    let board = app
+        .notes_highlighted_file()
+        .filter(|f| f.kind() == crate::notes::NoteKind::Todo)
+        .and_then(|_| held_note_body(app)?.text.as_ref()?.as_ref().ok())
+        .map(|text| crate::ui::todo::Board::parse(text));
+    if let Some(title) = reader_title(app, board.as_ref()) {
         block = block.title_top(Line::from(Span::styled(title, title_style)).left_aligned());
     }
     let inner = block.inner(area);
@@ -1899,6 +1921,9 @@ fn render_reader(frame: &mut Frame, area: Rect, app: &App) {
     let dim = |text: String| Line::from(Span::styled(text, Style::default().fg(colors::OVERLAY)));
     let lines: Vec<Line<'static>> = match app.notes_highlighted_file() {
         None => vec![dim("no file selected".to_string())],
+        Some(_) if board.is_some() => board
+            .as_ref()
+            .map_or_else(Vec::new, |b| b.lines(inner.width as usize)),
         Some(_) => match held_note_body(app).and_then(|b| b.text.as_ref()) {
             None => vec![dim("reading…".to_string())],
             Some(Err(e)) => vec![Line::from(Span::styled(
@@ -7868,6 +7893,69 @@ mod tests {
             }
         }
         assert!(notes_pane_text(&notes_view_app(&walk)).contains("T TODO.md"));
+    }
+
+    /// FZ-63: a `TODO.md` draws in the reader as a todoz board, sections,
+    /// states, subtasks, tag dots and due dates, and the border counts its
+    /// unchecked and half tasks.
+    #[test]
+    fn the_reader_draws_a_board_and_counts_what_is_open() {
+        let mut app = notes_view_app(&[("TODO.md", None)]);
+        let read = app.claim_note_read().expect("a read");
+        let draw = |app: &crate::app::App| drawn_rows(60, 13, |f| render_reader(f, f.area(), app));
+        assert!(
+            draw(&app)[0].contains(" TODO.md · todoz "),
+            "before the read"
+        );
+
+        app.apply_note_read(read, Ok(crate::ui::todo::FIXTURE.to_string()));
+        let rows = draw(&app);
+        assert!(
+            rows[0].contains(" TODO.md · todoz · 4 open "),
+            "{}",
+            rows[0]
+        );
+        let body: Vec<String> = rows[1..11]
+            .iter()
+            .map(|r| {
+                r.trim_start_matches('│')
+                    .trim_end_matches('│')
+                    .trim_end()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            body,
+            [
+                "        ▼ Board",
+                " Loose prose line.",
+                "        ▼ Now",
+                "  ·●··· ├─▾ [ ] ship the reader @2026-11-01",
+                "  ●···· │ ├─▾ [/] parse it",
+                "  ···●· │ │ └─  [x] split lines @2026-10-30",
+                "  ··●·● │ └─  [ ] draw it",
+                "  ····· └─  [x] done thing",
+                "        ▼ Later",
+                "  ····· └─  [/] half way",
+            ]
+        );
+    }
+
+    /// FZ-63: the tree opens on `todos`, each board under its own name and
+    /// its place, and a board is not listed again in its directory.
+    #[test]
+    fn the_tree_pins_the_boards_first() {
+        let app = notes_view_app(&[
+            ("TODO.md", None),
+            ("notez/TODO.md", Some("notez")),
+            ("notez/plan.md", Some("notez")),
+        ]);
+        let text = notes_pane_text(&app);
+        let todos = text.find("todos").expect("a todos section");
+        assert!(todos < text.find("plan.md").unwrap(), "{text}");
+        assert!(text.contains("TODO.md  ./"), "{text}");
+        assert!(text.contains("TODO.md  notez/"), "{text}");
+        assert_eq!(text.matches("TODO.md").count(), 2, "{text}");
     }
 
     /// The reader's border names the file, its kind and size, and its body

@@ -13,6 +13,7 @@ pub mod intro;
 pub mod scroll;
 pub mod settings;
 pub mod timewindow;
+pub mod todo;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};

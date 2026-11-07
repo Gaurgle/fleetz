@@ -1823,12 +1823,29 @@ async fn handle_normal_input(
             app.set_status("\u{27f3} Fetching all…".to_string(), false);
             start_sweep(app, tx, true, args.author.clone(), true);
         }
-        // On a file in the `notes` view, $EDITOR on that file (FZ-53).
+        // On a file in the `notes` view, $EDITOR on that file (FZ-53), or
+        // `todoz` on a board (FZ-63).
         KeyCode::Enter if note_to_open(app).is_some() => {
-            let file = note_to_open(app).unwrap_or_default();
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
-            suspend_and_run(terminal, &editor, &[&file.to_string_lossy()])?;
+            let todoz = std::env::var_os("PATH").is_some_and(|p| on_path("todoz", &p));
+            let opener = note_opener(app, todoz, &editor);
+            if let Some(o) = &opener {
+                let args: Vec<&str> = o.args.iter().map(String::as_str).collect();
+                match &o.dir {
+                    Some(dir) => {
+                        suspend_and_run_in_dir(terminal, &o.program, &args, &dir.to_string_lossy())?
+                    }
+                    None => suspend_and_run(terminal, &o.program, &args)?,
+                }
+            }
             app.invalidate_notes();
+            if opener.is_some_and(|o| o.fell_back) && !app.todoz_fallback_said {
+                app.todoz_fallback_said = true;
+                app.set_status(
+                    "todoz not on PATH: board opened in $EDITOR".to_string(),
+                    false,
+                );
+            }
         }
         // On a header, Enter goes to the digest line's repo row (FZ-45).
         KeyCode::Enter if app.on_header().is_some() => {
@@ -1998,6 +2015,82 @@ fn note_to_open(app: &App) -> Option<std::path::PathBuf> {
     (app.notes_wanted() && focused)
         .then(|| app.notes_highlighted())
         .flatten()
+}
+
+/// What `Enter` suspends to on the `notes` view's highlighted file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NoteOpener {
+    program: String,
+    args: Vec<String>,
+    /// Where the program runs; `None` keeps fleetz's directory.
+    dir: Option<std::path::PathBuf>,
+    /// A board todoz could open went to the editor: `todoz` is not on PATH.
+    fell_back: bool,
+}
+
+/// The scope flags that make `todoz`, started in the repo root, open
+/// exactly `file`'s board, or `None` for a board it cannot name. notez
+/// resolves a scope from the git toplevel (`notez-core` `resolve::root`):
+/// no flag is `Public`, `<repo>/notez/TODO.md`; `-l` is `<repo>/.notez/
+/// TODO.md`; `-p` is `~/notez/personal/<project>/TODO.md`. A positional
+/// argument is never passed: `todoz <text>` quick-adds a task.
+fn todoz_scope(file: &notes::NoteFile) -> Option<&'static [&'static str]> {
+    if file.kind() != notes::NoteKind::Todo {
+        return None;
+    }
+    if file.is_personal() {
+        return Some(&["-p"]);
+    }
+    match file.rel.to_str()? {
+        "notez/TODO.md" => Some(&[]),
+        ".notez/TODO.md" => Some(&["-l"]),
+        _ => None,
+    }
+}
+
+/// The program `Enter` runs on the highlighted note (FZ-63): `todoz` in the
+/// repo root with the scope flag of a board it can open (`todoz_scope`),
+/// read-only here and edited there; `editor` on the file for every other
+/// note, every other board, and a todoz board when `todoz_on_path` is
+/// false.
+fn note_opener(app: &App, todoz_on_path: bool, editor: &str) -> Option<NoteOpener> {
+    let file = note_to_open(app)?;
+    let scope = app.notes_highlighted_file().and_then(todoz_scope);
+    let root = app
+        .selected_notes()
+        .map(|(p, _)| std::path::PathBuf::from(shellexpand::tilde(p).as_ref()));
+    Some(match (scope, todoz_on_path, root) {
+        (Some(flags), true, Some(root)) => NoteOpener {
+            program: "todoz".to_string(),
+            args: flags.iter().map(|f| f.to_string()).collect(),
+            dir: Some(root),
+            fell_back: false,
+        },
+        _ => NoteOpener {
+            program: editor.to_string(),
+            args: vec![file.to_string_lossy().into_owned()],
+            dir: None,
+            fell_back: scope.is_some() && !todoz_on_path,
+        },
+    })
+}
+
+/// Whether an executable `name` is in one of `path`'s directories.
+fn on_path(name: &str, path: &std::ffi::OsStr) -> bool {
+    std::env::split_paths(path).any(|dir| {
+        let candidate = dir.join(name);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            candidate
+                .metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        }
+        #[cfg(not(unix))]
+        {
+            candidate.is_file()
+        }
+    })
 }
 
 /// Suspend the TUI, run a command, then resume. Input reading is paused for
@@ -2977,10 +3070,13 @@ fn spawn_notes_walk(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, walk: app
     let tx = tx.clone();
     tokio::spawn(async move {
         let root = walk.root.clone();
-        let result = tokio::task::spawn_blocking(move || notes::walk(&root))
-            .await
-            .map_err(|e| e.to_string())
-            .and_then(|r| r.map_err(|e| e.to_string()));
+        let home = std::path::PathBuf::from(shellexpand::tilde("~").as_ref());
+        let result = tokio::task::spawn_blocking(move || {
+            notes::walk(&root).map(|n| n.with_personal(&root, notes::personal_board(&home, &root)))
+        })
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r.map_err(|e| e.to_string()));
         let _ = tx.send(AppEvent::NotesWalked { walk, result });
     });
 }
@@ -11778,6 +11874,105 @@ mod tests {
             note_to_open(&app),
             Some(std::path::PathBuf::from("/repo/notez/a.md"))
         );
+    }
+
+    /// FZ-63, review finding 1: `todoz <text>` quick-adds, so `Enter` on a
+    /// board runs `todoz` with no positional argument, in the repo root,
+    /// with the scope flag notez resolves to that board: none for
+    /// `notez/TODO.md`, `-l` for `.notez/TODO.md`, `-p` for the personal
+    /// board. Any other board, any other note, and a todoz board without
+    /// `todoz` on PATH (saying it fell back) go to `$EDITOR` on the file.
+    #[test]
+    fn enter_on_a_board_opens_todoz_and_falls_back_to_the_editor() {
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.repos = vec![RepoStatus {
+            path: Some("/repo".to_string()),
+            ..test_repo()
+        }];
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Notes;
+        app.focused_panel = FocusedPanel::Detail;
+        let walk = app::NotesWalk {
+            key: "/repo".to_string(),
+            root: "/repo".into(),
+            generation: 0,
+        };
+        let personal = "/home/u/notez/personal/repo/TODO.md";
+        let file = |rel: &str, notez: Option<&str>| notes::NoteFile {
+            rel: rel.into(),
+            notez: notez.map(Into::into),
+        };
+        let files = vec![
+            file("notez/TODO.md", Some("notez")),
+            file(".notez/TODO.md", Some(".notez")),
+            file("TODO.md", None),
+            file("crates/x/notez/TODO.md", Some("crates/x/notez")),
+            file("notez/a.md", Some("notez")),
+            file(personal, None),
+        ];
+        app.apply_notes_walk(walk, Ok(notes::Notes { files }));
+        let todoz = |args: &[&str]| NoteOpener {
+            program: "todoz".to_string(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            dir: Some("/repo".into()),
+            fell_back: false,
+        };
+        let editor = |path: &str, fell_back| NoteOpener {
+            program: "nvim".to_string(),
+            args: vec![path.to_string()],
+            dir: None,
+            fell_back,
+        };
+        // In drawing order: the boards by path, the personal one, then
+        // the `notez/` section.
+        let cases = [
+            (".notez/TODO.md", Some(todoz(&["-l"]))),
+            ("TODO.md", None),
+            ("crates/x/notez/TODO.md", None),
+            ("notez/TODO.md", Some(todoz(&[]))),
+            (personal, Some(todoz(&["-p"]))),
+            ("notez/a.md", None),
+        ];
+        for (i, (rel, with_todoz)) in cases.into_iter().enumerate() {
+            app.set_detail_selected(i);
+            let path = std::path::Path::new("/repo").join(rel);
+            let path = path.to_str().unwrap();
+            let board = with_todoz.is_some();
+            assert_eq!(
+                note_opener(&app, true, "nvim"),
+                Some(with_todoz.unwrap_or_else(|| editor(path, false))),
+                "{rel} with todoz on PATH"
+            );
+            assert_eq!(
+                note_opener(&app, false, "nvim"),
+                Some(editor(path, board)),
+                "{rel} without todoz"
+            );
+        }
+        app.focused_panel = FocusedPanel::RepoList;
+        assert_eq!(note_opener(&app, true, "nvim"), None);
+    }
+
+    #[test]
+    fn on_path_finds_an_executable_only() {
+        let dir = std::env::temp_dir().join("fleetz_test_on_path");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("todoz"), "#!/bin/sh\n").unwrap();
+        std::fs::write(dir.join("plain"), "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let exec = std::fs::Permissions::from_mode(0o755);
+            std::fs::set_permissions(dir.join("todoz"), exec).unwrap();
+            let plain = std::fs::Permissions::from_mode(0o644);
+            std::fs::set_permissions(dir.join("plain"), plain).unwrap();
+            assert!(!on_path("plain", dir.as_os_str()));
+        }
+        let path = std::env::join_paths(["/nonexistent".into(), dir.clone()]).unwrap();
+        assert!(on_path("todoz", &path));
+        assert!(!on_path("absent", &path));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The next answer `spawn_note_read` sent, split into its two kinds.
