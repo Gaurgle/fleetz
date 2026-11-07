@@ -40,6 +40,8 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 - FZ-100 (#157, P1, M3): his header bug in `notes`, filed 20:52; waits for
   the SMBP merges (touches detail.rs) and orders against FZ-95.
 - FZ-97 (#154, P1): investigation, docs only; first candidate on his word.
+- FZ-101 (#158, P2, Backlog): moved rows flash on a reorder, filed 21:15
+  as a ticket only; touches app.rs, so after the SMBP merges.
 - Ready: FZ-78, 79, 58, 84, 89, 90, 92 (84, 89, 92 wait for FZ-83).
 
 ## Open questions
