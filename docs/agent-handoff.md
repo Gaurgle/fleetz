@@ -37,11 +37,9 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
   next a fresh full review, commit, merge with `main`, his look.
 - FZ-95 (#152, `c3c6830`, no priority) and FZ-87 (#144) wait for FZ-83.
   FZ-65 (#121, `9f4018d7160d`, his wheel decision) and FZ-38 (#88) on at-a.
-- FZ-100 (#157, P1, M3): his header bug in `notes`, filed 20:52; waits for
-  the SMBP merges (touches detail.rs) and orders against FZ-95.
-- FZ-97 (#154, P1): investigation, docs only; first candidate on his word.
-- FZ-101 (#158, P2, Backlog): moved rows flash on a reorder, filed 21:15
-  as a ticket only; touches app.rs, so after the SMBP merges.
+- Filed 11-07, both after the SMBP merges: FZ-100 (#157, P1, Ready, his
+  `notes` header bug, ordered against FZ-95); FZ-101 (#158, P2, Backlog,
+  moved rows flash on a reorder). FZ-97 (#154, P1): docs-only, his word.
 - Ready: FZ-78, 79, 58, 84, 89, 90, 92 (84, 89, 92 wait for FZ-83).
 
 ## Open questions
