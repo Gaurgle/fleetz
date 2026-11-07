@@ -62,8 +62,12 @@ authorization while migrating these instructions.
 
 - Andreas owns priorities, interaction acceptance, what he installs and runs,
   tags and releases.
-- Coordinator owns architecture, ticket readiness, assignments and integration,
-  including commits, pushes and merges under the safe-merge rule.
+- Coordinator owns ticket readiness, assignments and integration,
+  including commits, pushes and merges under the safe-merge rule, and rules
+  on the architect's findings.
+- Architect (`fz-architect`) keeps `docs/architecture.md` true and checks
+  tickets and branches against it ("Architecture" below). Run per trigger,
+  never standing.
 - Worker implements one assigned ticket and supplies evidence.
 - Reviewer independently evaluates that ticket's exact diff and criteria.
 
@@ -93,6 +97,16 @@ structure. Choose a proportionate path:
   spec and plan, then link them from the corresponding release tickets. Fleetz
   keeps these artifacts in `docs/superpowers/specs/` and
   `docs/superpowers/plans/`.
+- **Refactor ticket:** structure work with no behavior change, filed by the
+  lead from a worker's or reviewer's `Structure` note, or by the owner. One
+  seam per ticket: code moves, visibility widens only as far as the move
+  needs, nothing else changes. Acceptance: the same test names pass before
+  and after (compare the sorted test lists), the checks are clean, and no
+  public or persisted contract changes. Path-scoped rules and docs that name
+  moved symbols follow them in the same ticket. Schedule it when no open
+  ticket branch touches the files, since a move conflicts with every one of
+  them. A split across modules needs the owner's approval, per ticket or
+  for a named batch. Fleetz's plan: `docs/module-split-design.md`.
 
 Approval of a spec or plan accepts that artifact; it does not add tickets to
 the authorized scope. Use the owner's named tickets or standing instruction
@@ -101,6 +115,32 @@ the only dispatcher. Do not run another subagent-driven implementation
 workflow alongside Relay's worker and reviewer assignments. Workers may use
 relevant task skills within their ticket but cannot delegate. The independent
 Relay review remains required.
+
+## Architecture
+
+`docs/architecture.md` is the code map: the structure as it is, measured,
+and the target shape Andreas accepted on 2026-11-07. The architect
+(`fz-architect`) keeps it true. It is never a standing agent: the
+coordinator dispatches one run per trigger, and Andreas may run it at any
+time.
+
+- **Ticket check:** before a ticket is made Ready, when it adds a module,
+  an `AppEvent` or a new kind of state, or touches more than one layer.
+  Batch the waiting tickets in one run where possible. The verdict and the
+  doc sections it names go on the issue, and those sections go in the
+  worker's `Pointers`. The coordinator rules on `fits` and `fits with
+  note`; `refactor first` and `needs design` go to Andreas when they change
+  priorities.
+- **Branch check:** before a parked or long-lived branch resumes, and
+  before a batch of refactor tickets starts.
+- **Survey:** at each milestone retro, after a batch of refactor tickets
+  lands, and when two or more `Structure` notes are open.
+- **Consult:** before a design-heavy ticket.
+
+A ticket that adds a module, moves a responsibility, adds an `AppEvent` or
+changes a dependency edge updates the as-is sections of the doc in the same
+ticket; the reviewer checks it. Changes to the target shape are Andreas's,
+recorded in the doc's owner items.
 
 ## Model and context budget
 
@@ -261,6 +301,7 @@ contract, handoff templates and limits in this document apply unchanged.
 | `fz-worker` | `claude-opus-5-5` | `medium` | Assigned worktree, allowed files | Implementation, measurement, investigation |
 | `fz-reviewer` | `claude-opus-5-5` | `medium` | None | Independent review of the exact diff |
 | `fz-small` | `sonnet` | `medium` | Named paths only | Narrow scans, documentation, truly small changes |
+| `fz-architect` | `claude-fable-5-1` | `high` | `docs/architecture.md`, as-is sections | Code map, ticket and branch checks, per trigger |
 
 - The coordinator creates the ticket branch and worktree and passes its
   absolute path. The harness's `isolation: worktree` is not used: it branches

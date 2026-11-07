@@ -63,6 +63,10 @@ it. Keep it small:
   or delegate; Relay owns dispatch and review.
 - Deliver the smallest change that satisfies the acceptance criteria. No
   drive-by refactors, no speculative options.
+- If your change takes a file past the size limit in the repo's code rules
+  (default about 1200 production lines), or grows one already past it,
+  report it under `Structure` with the seam you would split along. Do not
+  split it in this ticket.
 - Never edit, delete or disable an existing test to make code pass. If a test
   or contract looks wrong, stop and say so.
 - Do not change dependencies, CI, persistence or cache formats, or external
