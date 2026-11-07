@@ -142,6 +142,11 @@ changes a dependency edge updates the as-is sections of the doc in the same
 ticket; the reviewer checks it. Changes to the target shape are Andreas's,
 recorded in the doc's owner items.
 
+The architect checks the baton before it writes. Started by the owner while
+a lead holds the baton, it reports only and hands doc changes to the lead,
+so it never collides with the lead's commits; a run the lead dispatched, or
+one with the baton released, writes. The baton stays the lead's alone.
+
 ## Model and context budget
 
 The coordinator explicitly selects a model available in the running client.
@@ -444,13 +449,14 @@ At Ready to integrate and after each merge, tell Andreas how to try the build:
 Every commit traces to its ticket, so history, the board and any issue agree
 even before a merge and after a branch is deleted.
 
-- Ticket commit: Conventional Commits subject, a body for the why, and a last
-  line `Refs: <ticket>` (here `#72`).
+- Ticket commit: Conventional Commits subject ending with ` (<ticket>)`
+  inside the 72 characters, a body for the why, and a last line
+  `Refs: <ticket>`: the issue number (here `#72`).
 - Merge commit: `Merge branch '<branch>' (<ticket>)` as the subject and
   `Closes #<n>` in the body, so GitHub closes the issue when the merge
   reaches `main`.
-- Coordination commits about one ticket (handoff, specs, plans) also end with
-  `Refs: <ticket>`.
+- Coordination commits about one ticket (handoff, specs, plans) also end
+  their subject with ` (<ticket>)` and their message with `Refs: <ticket>`.
 
 ## Records
 

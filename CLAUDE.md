@@ -22,6 +22,9 @@ where the session runs.
   a hyphen, a colon, parentheses, or rewrite the sentence.
 - **Conventional Commits** (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`,
   `cleanup:`), first line under 72 characters. Body is for the why, not the what.
+- When a commit traces to an issue or ticket, end the subject with it, `(#143)`,
+  inside the 72 characters, and the body with `Refs: #143`. The merge or PR
+  that finishes the ticket says `Closes #143`.
 - **No `Co-Authored-By` lines.** Ever.
 - **Present the full `git commit -m "..."` command for review; do not commit.**
   Andreas owns commits, merges and pushes. **"Ship it"** means prepare and
