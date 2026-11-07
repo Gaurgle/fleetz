@@ -2497,6 +2497,9 @@ pub struct App {
     /// The highlighted file's body and facts, for the reader and the facts
     /// beside pane 2's header: one file at a time.
     pub note_body: Option<NoteBody>,
+    /// The footer has said once this session that a board went to
+    /// `$EDITOR` because `todoz` is not on PATH (FZ-63).
+    pub todoz_fallback_said: bool,
     /// The reader's scroll offset (FZ-62), its own rather than the
     /// inspector's. Reset when the file changes.
     pub reader_scroll: u16,
@@ -3142,6 +3145,7 @@ impl App {
             notes_all_markdown: false,
             notes_cursor: None,
             note_body: None,
+            todoz_fallback_said: false,
             reader_scroll: 0,
             reader_max_scroll: std::cell::Cell::new(0),
             reader_view_height: std::cell::Cell::new(0),

@@ -2164,10 +2164,8 @@ fn notes_rows(
                 tops.push(lines.len());
                 // The kind's glyph before the name (FZ-62), dim so the name
                 // stays what the eye reads.
-                let glyph = notes
-                    .files
-                    .get(file)
-                    .map_or("", |f| badges::note_kind_icon(f.kind()));
+                let entry = notes.files.get(file);
+                let glyph = entry.map_or("", |f| badges::note_kind_icon(f.kind()));
                 let mut spans = vec![
                     Span::styled(
                         if is_sel { "▸ " } else { "  " },
@@ -2177,6 +2175,14 @@ fn notes_rows(
                     Span::styled(format!("{glyph} "), Style::default().fg(NOTE_GLYPH_COLOR)),
                     Span::styled(name, Style::default().fg(NOTE_NAME_COLOR)),
                 ];
+                // Every board is named `TODO.md` under `todos` (FZ-63); its
+                // place, dim, tells them apart.
+                if let Some(f) = entry.filter(|f| f.kind() == crate::notes::NoteKind::Todo) {
+                    spans.push(Span::styled(
+                        format!("  {}", f.place()),
+                        Style::default().fg(colors::OVERLAY),
+                    ));
+                }
                 if is_sel {
                     spans = wash(pad_to(spans, width));
                 }
@@ -2248,10 +2254,15 @@ fn notes_fact_pieces(app: &App) -> Vec<(u8, Vec<Span<'static>>)> {
             )],
         ),
     ];
+    // A board counts what is open, unchecked and half done (FZ-63).
+    if let Some(board) = held_board(app) {
+        pieces.push((4, vec![dim(format!("{} open", board.open()))]));
+    }
     if let Some(size) = facts.and_then(|f| f.size) {
         pieces.push((1, vec![dim(crate::notes::size_label(size))]));
     }
-    if file.kind().is_markdown() {
+    // A board is drawn as one whatever `p` says, so it names no mode.
+    if file.kind().is_markdown() && file.kind() != crate::notes::NoteKind::Todo {
         let mode = match app.reader_raw {
             true => "raw",
             false => "rendered",
@@ -2260,6 +2271,7 @@ fn notes_fact_pieces(app: &App) -> Vec<(u8, Vec<Span<'static>>)> {
     }
     let lives = match &file.notez {
         Some(dir) => format!("{}/", dir.display()),
+        None if file.is_personal() => "the personal store".to_string(),
         None => "the repo".to_string(),
     };
     pieces.push((
@@ -2369,13 +2381,24 @@ pub fn reader_label_rect(pane: Rect, app: &App) -> Option<Rect> {
     })
 }
 
+/// The highlighted file's todoz board, parsed from the body already read,
+/// here on the UI thread: measured cheap for a capped file (FZ-63). `None`
+/// for any other kind, and until the read lands.
+fn held_board(app: &App) -> Option<crate::ui::todo::Board> {
+    app.notes_highlighted_file()
+        .filter(|f| f.kind() == crate::notes::NoteKind::Todo)?;
+    let text = held_note_body(app)?.text.as_ref()?.as_ref().ok()?;
+    Some(crate::ui::todo::Board::parse(text))
+}
+
 /// The held body's markdown render, when the reader draws one: a markdown
 /// file, `p` not on raw, and a render landed (FZ-59). Until one lands the
-/// reader shows the source.
+/// reader shows the source. A `TODO.md` draws as a board instead
+/// (`held_board`, FZ-63).
 fn reader_render(app: &App) -> Option<&crate::app::RenderedNote> {
     let markdown = app
         .notes_highlighted_file()
-        .is_some_and(|f| f.kind().is_markdown());
+        .is_some_and(|f| f.kind().is_markdown() && f.kind() != crate::notes::NoteKind::Todo);
     if !markdown || app.reader_raw {
         return None;
     }
@@ -2397,6 +2420,7 @@ fn render_reader(frame: &mut Frame, inner: Rect, app: &App) {
     // carry its titles (`render_notes_frame`, FZ-68).
     // One `H`/`L` page and the render width, which only this pass can
     // measure.
+    let board = held_board(app);
     app.reader_view_height.set(inner.height);
     app.reader_width.set(inner.width);
     if let Some(rendered) = reader_render(app) {
@@ -2424,6 +2448,9 @@ fn render_reader(frame: &mut Frame, inner: Rect, app: &App) {
     let dim = |text: String| Line::from(Span::styled(text, Style::default().fg(colors::OVERLAY)));
     let lines: Vec<Line<'static>> = match app.notes_highlighted_file() {
         None => vec![dim("no file selected".to_string())],
+        Some(_) if board.is_some() => board
+            .as_ref()
+            .map_or_else(Vec::new, |b| b.lines(inner.width as usize)),
         Some(_) => match held_note_body(app).and_then(|b| b.text.as_ref()) {
             None => vec![dim("reading…".to_string())],
             Some(Err(e)) => vec![Line::from(Span::styled(
@@ -9226,6 +9253,83 @@ mod tests {
             }
         }
         assert!(notes_pane_text(&notes_view_app(&walk)).contains("T TODO.md"));
+    }
+
+    /// FZ-63: a `TODO.md` draws in the reader as a todoz board, sections,
+    /// states, subtasks, tag dots and due dates, and the facts row counts
+    /// its unchecked and half tasks (FZ-68 moved the count there from the
+    /// reader's border).
+    #[test]
+    fn the_reader_draws_a_board_and_counts_what_is_open() {
+        let mut app = notes_view_app(&[("TODO.md", None)]);
+        let read = app.claim_note_read().expect("a read");
+        let draw = |app: &crate::app::App| drawn_rows(60, 12, |f| render_reader(f, f.area(), app));
+        let facts = |app: &crate::app::App| {
+            notes_pane_text(app)
+                .lines()
+                .find(|l| l.contains("─ TODO.md · todo"))
+                .map(str::to_string)
+                .expect("a facts row")
+        };
+        assert!(draw(&app)[0].contains("reading…"), "before the read");
+        assert!(!facts(&app).contains("open"), "before the read");
+
+        app.apply_note_read(read, Ok(crate::ui::todo::FIXTURE.to_string()));
+        let facts = facts(&app);
+        assert!(facts.contains("─ TODO.md · todo · 4 open ·"), "{facts}");
+        // A `TODO.md` is markdown, so a render lands for it too; the board
+        // still draws over it.
+        draw(&app);
+        let render = app.claim_note_render().expect("a render of the board");
+        let lines = crate::ui::markdown::render_markdown(&render.text, render.width);
+        let rendered = crate::app::RenderedNote {
+            width: render.width,
+            lines,
+        };
+        app.apply_note_rendered(&render.path, render.generation, rendered);
+        let body: Vec<String> = draw(&app)[..10]
+            .iter()
+            .map(|r| r.trim_end().to_string())
+            .collect();
+        assert_eq!(
+            body,
+            [
+                "       ▼ Board",
+                "Loose prose line.",
+                "       ▼ Now",
+                " ·●··· ├─▾ [ ] ship the reader @2026-11-01",
+                " ●···· │ ├─▾ [/] parse it",
+                " ···●· │ │ └─  [x] split lines @2026-10-30",
+                " ··●·● │ └─  [ ] draw it",
+                " ····· └─  [x] done thing",
+                "       ▼ Later",
+                " ····· └─  [/] half way",
+            ]
+        );
+    }
+
+    /// FZ-63: the tree opens on `todos`, each board under its own name and
+    /// its place, and a board is not listed again in its directory. The
+    /// facts row at the tree's foot names the highlighted file too, so the
+    /// count leaves it out.
+    #[test]
+    fn the_tree_pins_the_boards_first() {
+        let app = notes_view_app(&[
+            ("TODO.md", None),
+            ("notez/TODO.md", Some("notez")),
+            ("notez/plan.md", Some("notez")),
+        ]);
+        let text = notes_pane_text(&app);
+        let todos = text.find("todos").expect("a todos section");
+        assert!(todos < text.find("plan.md").unwrap(), "{text}");
+        assert!(text.contains("TODO.md  ./"), "{text}");
+        assert!(text.contains("TODO.md  notez/"), "{text}");
+        let tree_rows = text
+            .lines()
+            .filter(|l| !l.contains("─ TODO.md ·"))
+            .map(|l| l.matches("TODO.md").count())
+            .sum::<usize>();
+        assert_eq!(tree_rows, 2, "{text}");
     }
 
     /// The facts beside the header name the file, its kind and size (FZ-68

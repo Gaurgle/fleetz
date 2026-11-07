@@ -148,7 +148,7 @@ const GROUPS: [Group; 6] = [
         rows: &[
             Row {
                 key: "Enter",
-                desc: &["lazygit; note; digest repo"],
+                desc: &["lazygit/note/todoz/digest"],
             },
             Row {
                 key: "e",
