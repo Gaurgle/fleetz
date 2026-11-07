@@ -10,8 +10,8 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 Baton released 2026-11-07 20:55 CET by session `4d31e22a`
 (`claude-fable-5-1`, RoosMacbookA, since 19:27); he stopped for the day
 after FZ-63 and FZ-60 merged. No worker or reviewer running. at-a holds
-FZ-83's, FZ-65's and FZ-38's uncommitted trees. Worktrees here: `45`
-(CI edits) and `81` (test edits), both uncommitted and waiting on him.
+FZ-83's, FZ-65's and FZ-38's uncommitted trees. No worktrees here: the
+stale `45` and `81` trees went on his word (21:05; both tickets closed).
 
 ## Standing authority
 
@@ -49,9 +49,9 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
   `tests/` file against the repo convention. Lead recommends (a).
 - To file on his 11-05 13:50 answers (log): ssh README paragraph,
   `fleetz doctor`, `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2.
-- #88 worktree: stays or goes; FZ-38 with font-checked glyphs? #81 and
-  #45 trees here: his yes. Flaky `clipboard::tests`. The help `y` row
-  on `main` still says "copy hash; changes: path" (#116 follow-up).
+- #88 worktree: stays or goes; FZ-38 with font-checked glyphs? Flaky
+  `clipboard::tests`. The help `y` row on `main` still says "copy hash;
+  changes: path" (#116 follow-up).
 
 ## Next step
 
