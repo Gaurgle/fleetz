@@ -187,6 +187,18 @@ pub enum AppEvent {
         walk: app::NotesWalk,
         result: Result<notes::Notes, String>,
     },
+    /// A `changes` view read of one repo (FZ-60), applied by
+    /// `App::apply_changes_read`.
+    ChangesRead {
+        read: app::ChangesRead,
+        result: Result<git::Changes, String>,
+    },
+    /// The highlighted changed file's diff, applied by
+    /// `App::apply_change_diff`.
+    ChangeDiff {
+        read: app::DiffRead,
+        text: Result<String, String>,
+    },
     /// The highlighted note's body and its metadata for the facts, applied by
     /// `App::apply_note_read` and `App::apply_note_facts`, and a markdown
     /// body rendered at the read's `render_width` (FZ-59), applied by
@@ -1109,6 +1121,12 @@ async fn run_event_loop(
                 if let Some(read) = app.claim_note_read() {
                     spawn_note_read(&tx, read);
                 }
+                if let Some(read) = app.claim_changes_read(instant) {
+                    spawn_changes_read(&tx, read);
+                }
+                if let Some(read) = app.claim_change_diff() {
+                    spawn_change_diff(&tx, read);
+                }
                 if let Some(render) = app.claim_note_render() {
                     spawn_note_render(&tx, render);
                 }
@@ -1178,6 +1196,8 @@ async fn run_event_loop(
             AppEvent::CiDetail(answer) => app.apply_ci_detail(*answer, chrono::Local::now()),
             AppEvent::WorktreeLogRead { read, commits } => app.apply_worktree_log(read, commits),
             AppEvent::NotesWalked { walk, result } => app.apply_notes_walk(walk, result),
+            AppEvent::ChangesRead { read, result } => app.apply_changes_read(read, result),
+            AppEvent::ChangeDiff { read, text } => app.apply_change_diff(read, text),
             AppEvent::NoteRead {
                 read,
                 text,
@@ -1926,6 +1946,8 @@ async fn handle_normal_input(
             _ => app.scroll_detail(-10),
         },
         KeyCode::Char('v') => app.toggle_view(),
+        // The `changes` view's second section: upstream or default branch.
+        KeyCode::Char('u') => app.toggle_changes_base(),
         KeyCode::Char('?') => app.toggle_help(),
         KeyCode::Char('/') => app.start_search(),
         // Fetch (not pull): update remote-tracking refs so ahead/behind is
@@ -1953,6 +1975,7 @@ async fn handle_normal_input(
                 }
             }
             app.invalidate_notes();
+            app.invalidate_changes();
             if opener.is_some_and(|o| o.fell_back) && !app.todoz_fallback_said {
                 app.todoz_fallback_said = true;
                 app.set_status(
@@ -1960,6 +1983,14 @@ async fn handle_normal_input(
                     false,
                 );
             }
+        }
+        // On a file in the `changes` view, $EDITOR on that file (FZ-60).
+        KeyCode::Enter if change_to_open(app).is_some() => {
+            let file = change_to_open(app).unwrap_or_default();
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+            suspend_and_run(terminal, &editor, &[&file.to_string_lossy()])?;
+            app.invalidate_notes();
+            app.invalidate_changes();
         }
         // On a header, Enter goes to the digest line's repo row (FZ-45).
         KeyCode::Enter if app.on_header().is_some() => {
@@ -1970,6 +2001,7 @@ async fn handle_normal_input(
             if let Some(expanded) = app.action_dir() {
                 suspend_and_run(terminal, "lazygit", &["-p", &expanded])?;
                 app.invalidate_notes();
+                app.invalidate_changes();
             }
         }
         KeyCode::Char('e') => {
@@ -1978,6 +2010,7 @@ async fn handle_normal_input(
                 let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
                 suspend_and_run(terminal, &editor, &[&expanded])?;
                 app.invalidate_notes();
+                app.invalidate_changes();
             }
         }
         // The `notes` view's tree: notes directories only, or every
@@ -1989,6 +2022,7 @@ async fn handle_normal_input(
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
                 suspend_and_run_in_dir(terminal, &shell, &[], &expanded)?;
                 app.invalidate_notes();
+                app.invalidate_changes();
             }
         }
         KeyCode::Char('g') => {
@@ -2132,6 +2166,19 @@ fn note_to_open(app: &App) -> Option<std::path::PathBuf> {
     );
     (app.notes_wanted() && focused)
         .then(|| app.notes_highlighted())
+        .flatten()
+}
+
+/// The file `Enter` opens in $EDITOR in the `changes` view: the highlighted
+/// file, while pane 2 or the inspector has focus. `None` leaves `Enter` to
+/// open lazygit on the repo.
+fn change_to_open(app: &App) -> Option<std::path::PathBuf> {
+    let focused = matches!(
+        app.focused_panel,
+        FocusedPanel::Detail | FocusedPanel::Inspector
+    );
+    (app.changes_wanted() && focused)
+        .then(|| app.change_to_open())
         .flatten()
 }
 
@@ -3216,6 +3263,25 @@ fn spawn_notes_walk(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, walk: app
         .map_err(|e| e.to_string())
         .and_then(|r| r.map_err(|e| e.to_string()));
         let _ = tx.send(AppEvent::NotesWalked { walk, result });
+    });
+}
+
+/// Read a repo's `changes` off the UI thread and send them back (FZ-60).
+fn spawn_changes_read(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, read: app::ChangesRead) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let result = git::changes(&read.root, read.base).await;
+        let _ = tx.send(AppEvent::ChangesRead { read, result });
+    });
+}
+
+/// Read the highlighted changed file's diff off the UI thread and send it
+/// back (FZ-60).
+fn spawn_change_diff(tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>, read: app::DiffRead) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let text = git::changed_file_diff(&read.root, read.base.as_deref(), &read.file).await;
+        let _ = tx.send(AppEvent::ChangeDiff { read, text });
     });
 }
 
@@ -12992,6 +13058,49 @@ mod tests {
         assert_eq!(note_to_open(&app), None, "another view opens lazygit");
     }
 
+    /// FZ-60: `Enter` opens the highlighted changed file in `$EDITOR` while
+    /// pane 2 or the inspector has focus in `changes`, and lazygit
+    /// everywhere else, a repo with nothing read included.
+    #[test]
+    fn enter_opens_the_highlighted_changed_file_only_in_the_changes_view() {
+        let mut app = App::new(Vec::new(), String::new(), 120, 40);
+        app.repos = vec![RepoStatus {
+            path: Some("/repo".to_string()),
+            ..test_repo()
+        }];
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Changes;
+        app.focused_panel = FocusedPanel::Detail;
+        assert_eq!(change_to_open(&app), None, "nothing read yet");
+
+        let read = app::ChangesRead {
+            key: "/repo".to_string(),
+            root: "/repo".into(),
+            generation: 0,
+            base: git::ChangesBase::Upstream,
+        };
+        let changes = git::Changes {
+            uncommitted: vec![git::ChangedFile {
+                status: " M".to_string(),
+                path: "src/a b.rs".to_string(),
+                from: None,
+                churn: Some((1, 0)),
+            }],
+            outgoing: git::Outgoing::NoUpstream { branch: None },
+        };
+        app.apply_changes_read(read, Ok(changes));
+        let file = Some(std::path::PathBuf::from("/repo/src/a b.rs"));
+        assert_eq!(change_to_open(&app), file);
+        app.focused_panel = FocusedPanel::Inspector;
+        assert_eq!(change_to_open(&app), file);
+
+        app.focused_panel = FocusedPanel::RepoList;
+        assert_eq!(change_to_open(&app), None, "the repo list opens lazygit");
+        app.focused_panel = FocusedPanel::Detail;
+        app.history_view = app::HistoryView::Notes;
+        assert_eq!(change_to_open(&app), None, "another view opens lazygit");
+    }
+
     /// `Enter`, `e` and `o` act in the highlighted worktree's directory
     /// while pane 2 has focus on the `worktrees` view (FZ-77), and in the
     /// repo's everywhere else. Fails while the arms take the repo path only.
@@ -14849,5 +14958,19 @@ mod digest_handler_tests {
         assert_eq!(app.selected, 0);
         assert_eq!(app.on_header(), None);
         assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("alpha"));
+    }
+
+    /// FZ-60: `u` reaches the base toggle from the key handler, in
+    /// `changes` only.
+    #[tokio::test]
+    async fn u_toggles_the_changes_base_in_its_view_only() {
+        let mut app = sectioned_app();
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Info;
+        press_key(&mut app, KeyCode::Char('u')).await;
+        assert_eq!(app.changes_base, git::ChangesBase::Upstream);
+        app.history_view = app::HistoryView::Changes;
+        press_key(&mut app, KeyCode::Char('u')).await;
+        assert_eq!(app.changes_base, git::ChangesBase::DefaultBranch);
     }
 }

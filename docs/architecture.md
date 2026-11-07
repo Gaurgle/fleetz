@@ -63,7 +63,7 @@ touches the disk, `term` draws or reads the terminal.
 | `main.rs` | 4,820 | Startup, the event loop, every input handler, task spawning, sweep and fetch planning, GitHub poll scheduling, view assembly (discovery passes, carriers), editor and opener handoff | proc, term |
 | `app.rs` | 5,990 | `App`: all TUI state (109 fields), the overlays, filters and query parsing, API budget and backoff, fetch claims, per-view caches for ci, notes, worktrees and digest | none (holds ratatui types) |
 | `ui/` (18 files) | 12,075 | Drawing every view from `&App`; `detail.rs` alone is 3,984 | term |
-| `git.rs` | 2,245 | Every git read and fetch, fetch outcomes and progress, `WorkKey` | proc, fs |
+| `git.rs` | 2,245 | Every git read and fetch, fetch outcomes and progress, `WorkKey`, the `changes` read (`changes`, `changed_file_diff`) | proc, fs |
 | `report/` | 2,062 | Print mode: run, render byte for byte as repoz, golden parity harness | proc, fs |
 | `github.rs` | 1,594 | The GraphQL query and its cost, the HTTP client, token lookup, failure kinds | net, proc |
 | `ci.rs` | 1,089 | Workflow runs, jobs and log tails over REST, with ETags | net |
@@ -178,12 +178,14 @@ defined order. Sent by functions in `main.rs` unless noted.
 | `NotesWalked` | `spawn_notes_walk` | `App::apply_notes_walk` |
 | `NoteRead`, `NoteCommit` | `spawn_note_read` | `App::apply_note_read`, `apply_note_facts`, `apply_note_rendered`, `apply_note_commit` |
 | `NoteRendered` | `spawn_note_render` | the loop |
+| `ChangesRead` | `spawn_changes_read` | `App::apply_changes_read` |
+| `ChangeDiff` | `spawn_change_diff` | `App::apply_change_diff` |
 | `DigestLog` | `spawn_digest_log` | `App::apply_digest_log` |
 
 **Stale answers.** A task's answer can land after a newer one. The guards:
 the poll's `attempt` id (`GithubFreshness::begin_attempt`), fetch claim
 tokens (`FetchClaims`), and per-view generations and cursors for notes,
-worktrees and ci. Contracts: `docs/freshness-contract.md`,
+worktrees, changes and ci. Contracts: `docs/freshness-contract.md`,
 `docs/fetch-outcome-contract.md`.
 
 ## 5. State and who changes it

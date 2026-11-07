@@ -288,6 +288,9 @@ pub fn history_view_color(view: crate::app::HistoryView) -> Color {
         // Pink, not the `WT` badge's lavender: lavender is the `branches`
         // tab already, and the tabs must stay distinct (FZ-77).
         HistoryView::Worktrees => PINK,
+        // The stash's flamingo (FZ-60): your own work not yet gone anywhere,
+        // the neighbour of uncommitted yellow, as this view is of `notes`.
+        HistoryView::Changes => STASH_CLR,
     }
 }
 

@@ -58,11 +58,15 @@ pub enum HistoryView {
     /// inspector (FZ-53). Walks the repo only while on screen
     /// (`App::notes_wanted`).
     Notes,
+    /// The selected repo's files that have not left this machine:
+    /// uncommitted, then unpushed, the highlighted file's diff in the
+    /// inspector (FZ-60). Read only while on screen (`App::changes_wanted`).
+    Changes,
 }
 
 impl HistoryView {
     /// Every view, in the order the tab strip draws them and `V` cycles them.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Info,
         Self::Commits,
         Self::Reflog,
@@ -71,6 +75,7 @@ impl HistoryView {
         Self::Branches,
         Self::Ci,
         Self::Notes,
+        Self::Changes,
     ];
     pub const COUNT: usize = Self::ALL.len();
 
@@ -85,6 +90,7 @@ impl HistoryView {
             Self::Branches => 5,
             Self::Ci => 6,
             Self::Notes => 7,
+            Self::Changes => 8,
         }
     }
 
@@ -98,6 +104,7 @@ impl HistoryView {
             Self::Ci => "ci",
             Self::Notes => "notes",
             Self::Worktrees => "worktrees",
+            Self::Changes => "changes",
         }
     }
 }
@@ -2540,6 +2547,69 @@ pub struct App {
     /// The section header under the resting pointer and since when; the
     /// tick lands on it after `HOVER_DWELL` (`settle_hover`).
     pub hover_pending: Option<(crate::digest::Section, std::time::Instant)>,
+    /// The `changes` view's read per repo, keyed by the row's path, held for
+    /// the session and never written to disk (FZ-60). Read only while the
+    /// view is on screen (`changes_wanted`).
+    pub changes: std::collections::HashMap<String, ChangesState>,
+    /// Bumped when a sweep lands or a suspend returns: a read or a diff from
+    /// an older generation is read again the next time it is shown.
+    pub changes_generation: u64,
+    /// `u`: what the second section compares `HEAD` with.
+    pub changes_base: crate::git::ChangesBase,
+    /// The row path the cursor rests on in the `changes` view and since
+    /// when, for the dwell (`ci::DWELL`) before a read starts.
+    pub changes_cursor: Option<(Option<String>, std::time::Instant)>,
+    /// The highlighted file's diff for the inspector: one file at a time.
+    pub change_diff: Option<ChangeDiff>,
+}
+
+/// The `changes` view's read of one repo (FZ-60).
+#[derive(Debug, Clone, Default)]
+pub struct ChangesState {
+    /// The last read's answer, kept on screen while a newer one runs.
+    pub held: Option<Result<crate::git::Changes, String>>,
+    /// A read is running.
+    pub reading: bool,
+    /// The generation and base `held` was read in.
+    pub generation: u64,
+    pub base: crate::git::ChangesBase,
+}
+
+/// A claimed read of one repo's `changes`, for `git::changes` off the UI
+/// thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangesRead {
+    pub key: String,
+    pub root: std::path::PathBuf,
+    pub generation: u64,
+    pub base: crate::git::ChangesBase,
+}
+
+/// Which section of the `changes` view a file is listed in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeSection {
+    Uncommitted,
+    Outgoing,
+}
+
+/// A claimed diff of the highlighted `changes` file, for
+/// `git::changed_file_diff`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffRead {
+    pub root: std::path::PathBuf,
+    pub section: ChangeSection,
+    pub file: crate::git::ChangedFile,
+    /// The outgoing section's base ref; `None` for an uncommitted file.
+    pub base: Option<String>,
+    pub generation: u64,
+}
+
+/// The highlighted file's diff, as `read` asked for it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChangeDiff {
+    pub read: DiffRead,
+    /// `None` while the read runs.
+    pub text: Option<Result<String, String>>,
 }
 
 /// The `notes` view's walk of one repo (FZ-53).
@@ -3159,6 +3229,11 @@ impl App {
             work_hours: (9, 18),
             list_hits: std::cell::Cell::new(ListHits::default()),
             hover_pending: None,
+            changes: std::collections::HashMap::new(),
+            changes_generation: 0,
+            changes_base: crate::git::ChangesBase::default(),
+            changes_cursor: None,
+            change_diff: None,
         }
     }
 
@@ -3523,6 +3598,206 @@ impl App {
     /// inspector is open.
     pub fn inspects_ci_run(&self) -> bool {
         self.ci_wanted() && !self.inspector_folded
+    }
+
+    /// Whether the `changes` view may read a repo or a diff: pane 2 is on
+    /// screen showing it. The one gate both reads pass (FZ-60).
+    pub fn changes_wanted(&self) -> bool {
+        self.view == View::Detail && self.history_view == HistoryView::Changes
+    }
+
+    /// The selected row's read, by its path; `None` for a row with nothing
+    /// on disk to read, and a `None` state while nothing was read yet.
+    pub fn selected_changes(&self) -> Option<(&str, Option<&ChangesState>)> {
+        let path = self.selected_repo()?.path.as_deref()?;
+        Some((path, self.changes.get(path)))
+    }
+
+    /// The selected row's sections as last read, when the read succeeded.
+    pub fn changes_held(&self) -> Option<&crate::git::Changes> {
+        self.selected_changes()?.1?.held.as_ref()?.as_ref().ok()
+    }
+
+    /// The files the `changes` view lists, uncommitted then outgoing, in
+    /// drawing order: what its cursor walks.
+    pub fn changes_listed(&self) -> Vec<(ChangeSection, &crate::git::ChangedFile)> {
+        let Some(changes) = self.changes_held() else {
+            return Vec::new();
+        };
+        let uncommitted = changes
+            .uncommitted
+            .iter()
+            .map(|f| (ChangeSection::Uncommitted, f));
+        let outgoing = changes
+            .outgoing
+            .files()
+            .iter()
+            .map(|f| (ChangeSection::Outgoing, f));
+        uncommitted.chain(outgoing).collect()
+    }
+
+    /// The file the `changes` view's cursor is on, clamped to the files
+    /// there are.
+    pub fn changes_highlighted(&self) -> Option<(ChangeSection, &crate::git::ChangedFile)> {
+        let listed = self.changes_listed();
+        let last = listed.len().checked_sub(1)?;
+        Some(listed[self.detail_selections[HistoryView::Changes.index()].min(last)])
+    }
+
+    /// Claim the read of the selected repo the `changes` view needs at
+    /// `instant`, or `None`. Nothing unless the view is on screen, the
+    /// cursor has rested on the row for `ci::DWELL`, and the row's read is
+    /// missing, from an older generation or for the other base; one read
+    /// per repo at a time.
+    pub fn claim_changes_read(&mut self, instant: std::time::Instant) -> Option<ChangesRead> {
+        if !self.changes_wanted() {
+            return None;
+        }
+        let key = self.selected_repo().and_then(|r| r.path.clone());
+        let settled_for = match &self.changes_cursor {
+            Some((held, since)) if *held == key => instant.duration_since(*since),
+            _ => {
+                self.changes_cursor = Some((key.clone(), instant));
+                std::time::Duration::ZERO
+            }
+        };
+        let key = key?;
+        if settled_for < crate::ci::DWELL {
+            return None;
+        }
+        let (generation, base) = (self.changes_generation, self.changes_base);
+        let state = self.changes.entry(key.clone()).or_default();
+        let fresh = state.held.is_some() && state.generation == generation && state.base == base;
+        if state.reading || fresh {
+            return None;
+        }
+        state.reading = true;
+        let root = std::path::PathBuf::from(shellexpand::tilde(&key).as_ref());
+        Some(ChangesRead {
+            key,
+            root,
+            generation,
+            base,
+        })
+    }
+
+    /// Land a read (`AppEvent::ChangesRead`) and ask for a redraw.
+    pub fn apply_changes_read(
+        &mut self,
+        read: ChangesRead,
+        result: Result<crate::git::Changes, String>,
+    ) {
+        let state = self.changes.entry(read.key).or_default();
+        state.reading = false;
+        state.held = Some(result);
+        state.generation = read.generation;
+        state.base = read.base;
+        self.needs_redraw = true;
+    }
+
+    /// Claim the diff of the highlighted file, or `None`: only while the
+    /// `changes` view shows with the inspector open, and only when the diff
+    /// held is another file's, base's or generation's. One file at a time,
+    /// whatever the cursor passed over since the last tick. A new file
+    /// starts the inspector at its top.
+    pub fn claim_change_diff(&mut self) -> Option<DiffRead> {
+        if !self.changes_wanted() || self.inspector_folded {
+            return None;
+        }
+        let root = self.changes_root()?;
+        let base = self
+            .changes_held()
+            .and_then(|c| c.outgoing.base_ref())
+            .map(str::to_string);
+        let (section, file) = self.changes_highlighted()?;
+        let read = DiffRead {
+            root,
+            section,
+            file: file.clone(),
+            base: match section {
+                ChangeSection::Uncommitted => None,
+                ChangeSection::Outgoing => base,
+            },
+            generation: self.changes_generation,
+        };
+        let held = self.change_diff.as_ref().map(|d| &d.read);
+        if held == Some(&read) {
+            return None;
+        }
+        if held.is_none_or(|h| {
+            h.root != read.root || h.file.path != read.file.path || h.section != read.section
+        }) {
+            self.inspector_scroll = 0;
+        }
+        self.change_diff = Some(ChangeDiff {
+            read: read.clone(),
+            text: None,
+        });
+        Some(read)
+    }
+
+    /// Land a diff (`AppEvent::ChangeDiff`); one no longer wanted is dropped.
+    pub fn apply_change_diff(&mut self, read: DiffRead, text: Result<String, String>) {
+        if let Some(held) = &mut self.change_diff
+            && held.read == read
+        {
+            held.text = Some(text);
+            self.needs_redraw = true;
+        }
+    }
+
+    /// The held diff, when it is the highlighted file's in the selected
+    /// repo: a same-named file in another repo is not it.
+    pub fn highlighted_change_diff(&self) -> Option<&ChangeDiff> {
+        let root = self.changes_root()?;
+        let (section, file) = self.changes_highlighted()?;
+        self.change_diff.as_ref().filter(|d| {
+            d.read.root == root && d.read.section == section && d.read.file.path == file.path
+        })
+    }
+
+    /// The selected row's directory, `~` expanded, as a diff read names it.
+    fn changes_root(&self) -> Option<std::path::PathBuf> {
+        let (path, _) = self.selected_changes()?;
+        Some(std::path::PathBuf::from(shellexpand::tilde(path).as_ref()))
+    }
+
+    /// A sweep landed or a suspend returned: the held reads and the diff
+    /// are read again the next time they are shown.
+    pub fn invalidate_changes(&mut self) {
+        self.changes_generation += 1;
+        self.needs_redraw = true;
+    }
+
+    /// `u` in the `changes` view: compare `HEAD` with the default branch
+    /// instead of the upstream, or back. Nothing elsewhere.
+    pub fn toggle_changes_base(&mut self) {
+        if !self.changes_wanted() {
+            return;
+        }
+        use crate::git::ChangesBase;
+        self.changes_base = match self.changes_base {
+            ChangesBase::Upstream => ChangesBase::DefaultBranch,
+            ChangesBase::DefaultBranch => ChangesBase::Upstream,
+        };
+        self.needs_redraw = true;
+    }
+
+    /// The highlighted `changes` file as an absolute path, for `Enter`.
+    pub fn change_to_open(&self) -> Option<std::path::PathBuf> {
+        let root = self.selected_changes()?.0;
+        let (_, file) = self.changes_highlighted()?;
+        Some(std::path::PathBuf::from(shellexpand::tilde(root).as_ref()).join(&file.path))
+    }
+
+    /// `y` in the `changes` view: copy the highlighted file's repo-relative
+    /// path through `copy`.
+    pub fn yank_change_path(&mut self, copy: impl FnOnce(&str) -> Result<(), String>) {
+        let Some(path) = self.changes_highlighted().map(|(_, f)| f.path.clone()) else {
+            self.set_status("nothing to copy".to_string(), false);
+            return;
+        };
+        self.copy_hash(&path, copy);
     }
 
     /// Whether the `worktrees` view is on screen (FZ-77): the one gate its
@@ -3914,6 +4189,7 @@ impl App {
         self.sweep_started = None;
         self.last_refreshed = Some(at);
         self.invalidate_notes();
+        self.invalidate_changes();
         self.worktree_logs_generation += 1;
         self.needs_redraw = true;
     }
@@ -4693,6 +4969,8 @@ impl App {
             HistoryView::Notes => self.notes_listed().len(),
             // The main checkout and the linked worktrees.
             HistoryView::Worktrees => self.worktrees_listed().len(),
+            // Both sections' files, uncommitted first.
+            HistoryView::Changes => self.changes_listed().len(),
         }
     }
 
@@ -4812,6 +5090,8 @@ impl App {
                 _ => repo.worktrees.get(i - 1).map(|w| w.head.as_str()),
             }
             .filter(|h| !h.is_empty()),
+            // Nor is a changed file; the inspector reads its diff.
+            HistoryView::Changes => None,
         }
     }
 
@@ -4868,6 +5148,8 @@ impl App {
         self.pending_yank = true;
         if self.on_commit_list() {
             self.yank_with(copy);
+        } else if self.on_changed_file() {
+            self.yank_change_path(copy);
         }
         true
     }
@@ -4881,6 +5163,17 @@ impl App {
             && matches!(
                 self.history_view,
                 HistoryView::Info | HistoryView::Commits | HistoryView::Reflog | HistoryView::Graph
+            )
+    }
+
+    /// Whether pane 2 or the inspector has focus on the `changes` view,
+    /// where a plain `y` copies the highlighted file's path at once (FZ-60),
+    /// as it copies the hash on a commit list.
+    fn on_changed_file(&self) -> bool {
+        self.changes_wanted()
+            && matches!(
+                self.focused_panel,
+                FocusedPanel::Detail | FocusedPanel::Inspector
             )
     }
 
@@ -4962,6 +5255,18 @@ impl App {
                 }
             }
             (FocusedPanel::Reader, _) => None,
+            // A changed file's path in the repo and its absolute path
+            // (FZ-60), from pane 2 or the inspector showing its diff.
+            (_, HistoryView::Changes) => {
+                let (_, file) = self.changes_highlighted()?;
+                match kind {
+                    Thing => Some((file.path.clone(), YankWord::Value)),
+                    Path => Some((
+                        self.change_to_open()?.to_string_lossy().into_owned(),
+                        YankWord::Path,
+                    )),
+                }
+            }
             (FocusedPanel::Detail, HistoryView::Branches) => {
                 let (name, on_remote) = self.highlighted_branch(repo)?;
                 match kind {
@@ -6465,7 +6770,9 @@ mod tests {
 
         // And backwards, which a shifted letter could not have given us.
         app.cycle_history_view(true);
-        assert_eq!(app.history_view, HistoryView::Notes, "wraps backward");
+        assert_eq!(app.history_view, HistoryView::Changes, "wraps backward");
+        app.cycle_history_view(true);
+        assert_eq!(app.history_view, HistoryView::Notes);
         app.cycle_history_view(true);
         assert_eq!(app.history_view, HistoryView::Ci);
     }
@@ -10586,5 +10893,273 @@ mod digest_log_tests {
         assert_eq!(app.list_rows(), vec![ListRow::Repo(0), ListRow::Repo(1)]);
         app.move_up();
         assert_eq!(app.on_header(), None);
+    }
+}
+
+/// The `changes` view's reads and their gates (FZ-60).
+#[cfg(test)]
+mod changes_tests {
+    use super::*;
+    use crate::digest::tests::repo;
+
+    fn changes_app() -> App {
+        let repos = vec![repo("fixture", RepoLocation::Primary)];
+        let mut app = App::new(repos, String::new(), 120, 40);
+        app.repos[0].path = Some("/changes-fixture".to_string());
+        app.view = View::Detail;
+        app.inspector_folded = false;
+        app
+    }
+
+    fn changed_file(status: &str, path: &str) -> crate::git::ChangedFile {
+        crate::git::ChangedFile {
+            status: status.to_string(),
+            path: path.to_string(),
+            from: None,
+            churn: Some((1, 0)),
+        }
+    }
+
+    /// Land a read of `/changes-fixture`: `uncommitted`, and `unpushed`
+    /// ahead of `origin/main`.
+    fn changes_landed(app: &mut App, uncommitted: &[&str], unpushed: &[&str]) {
+        let read = ChangesRead {
+            key: "/changes-fixture".to_string(),
+            root: "/changes-fixture".into(),
+            generation: app.changes_generation,
+            base: app.changes_base,
+        };
+        let files = |paths: &[&str], status: &str| -> Vec<crate::git::ChangedFile> {
+            paths.iter().map(|p| changed_file(status, p)).collect()
+        };
+        let changes = crate::git::Changes {
+            uncommitted: files(uncommitted, " M"),
+            outgoing: crate::git::Outgoing::Unpushed {
+                upstream: "origin/main".to_string(),
+                ahead: 1,
+                files: files(unpushed, "M"),
+            },
+        };
+        app.apply_changes_read(read, Ok(changes));
+    }
+
+    /// FZ-60: the read starts only while `changes` is on screen in the
+    /// detail view, and only once the cursor has rested on the row for the
+    /// dwell. Fails if any other view, or the compact grid, reads the repo.
+    #[test]
+    fn the_changes_read_waits_for_its_view_and_the_dwell() {
+        let start = std::time::Instant::now();
+        let after = |ms: u64| start + std::time::Duration::from_millis(ms);
+        let mut app = changes_app();
+        for view in HistoryView::ALL {
+            if view == HistoryView::Changes {
+                continue;
+            }
+            app.history_view = view;
+            assert_eq!(app.claim_changes_read(start), None, "{view:?}");
+            assert_eq!(app.claim_changes_read(after(1000)), None, "{view:?}");
+        }
+        app.history_view = HistoryView::Changes;
+        app.view = View::Compact;
+        assert_eq!(app.claim_changes_read(after(2000)), None, "compact");
+
+        app.view = View::Detail;
+        assert_eq!(app.claim_changes_read(after(3000)), None, "dwell starts");
+        assert_eq!(app.claim_changes_read(after(3299)), None, "still dwelling");
+        let read = app.claim_changes_read(after(3300)).expect("reads");
+        assert_eq!(read.root, std::path::PathBuf::from("/changes-fixture"));
+        assert_eq!(read.base, crate::git::ChangesBase::Upstream);
+        assert_eq!(app.claim_changes_read(after(4000)), None, "one at a time");
+    }
+
+    /// A not-cloned row has nothing to read.
+    #[test]
+    fn a_not_cloned_row_reads_no_changes() {
+        let start = std::time::Instant::now();
+        let mut app = changes_app();
+        app.repos[0].path = None;
+        app.history_view = HistoryView::Changes;
+        app.claim_changes_read(start);
+        let later = start + std::time::Duration::from_secs(5);
+        assert_eq!(app.claim_changes_read(later), None);
+        assert!(app.changes.is_empty());
+    }
+
+    /// Held for the session: leaving the view and coming back reads
+    /// nothing, until a sweep lands or a suspend returns, or the base
+    /// toggle asks for the other section.
+    #[test]
+    fn coming_back_to_changes_rereads_only_after_a_sweep_a_suspend_or_the_toggle() {
+        let start = std::time::Instant::now();
+        let after = |ms: u64| start + std::time::Duration::from_millis(ms);
+        let mut app = changes_app();
+        app.history_view = HistoryView::Changes;
+        app.claim_changes_read(start);
+        app.claim_changes_read(after(300)).expect("first read");
+        changes_landed(&mut app, &["a.txt"], &[]);
+
+        app.history_view = HistoryView::Info;
+        app.claim_changes_read(after(400));
+        app.history_view = HistoryView::Changes;
+        assert_eq!(app.claim_changes_read(after(5000)), None, "held");
+        assert_eq!(app.changes_listed().len(), 1);
+
+        app.sweep_landed(chrono::Local::now());
+        let read = app.claim_changes_read(after(5100)).expect("after a sweep");
+        assert_eq!(app.changes_listed().len(), 1, "the old read stays drawn");
+        app.apply_changes_read(read, Err("gone".to_string()));
+        assert_eq!(app.claim_changes_read(after(5200)), None, "held again");
+
+        app.invalidate_changes();
+        let read = app
+            .claim_changes_read(after(5300))
+            .expect("after a suspend");
+        app.apply_changes_read(read, Err("gone".to_string()));
+
+        app.toggle_changes_base();
+        let read = app.claim_changes_read(after(5400)).expect("the toggle");
+        assert_eq!(read.base, crate::git::ChangesBase::DefaultBranch);
+    }
+
+    /// The diff read is the highlighted file's alone, however far the
+    /// cursor moved, nothing outside the view or with the inspector folded,
+    /// and an outgoing file is read against its section's base.
+    #[test]
+    fn only_the_highlighted_changed_file_is_diffed() {
+        let mut app = changes_app();
+        app.history_view = HistoryView::Changes;
+        changes_landed(&mut app, &["a.txt", "b.txt"], &["c.txt"]);
+        app.history_view = HistoryView::Info;
+        assert_eq!(app.claim_change_diff(), None, "another view reads nothing");
+
+        app.history_view = HistoryView::Changes;
+        app.select_commit_down();
+        let b = app.claim_change_diff().expect("reads");
+        assert_eq!(b.file.path, "b.txt");
+        assert_eq!(b.base, None, "uncommitted diffs against HEAD");
+        assert_eq!(app.claim_change_diff(), None, "read once");
+
+        app.select_commit_down();
+        let c = app.claim_change_diff().expect("c");
+        assert_eq!(c.file.path, "c.txt");
+        assert_eq!(c.section, ChangeSection::Outgoing);
+        assert_eq!(c.base.as_deref(), Some("origin/main"));
+
+        app.apply_change_diff(b, Ok("b".to_string()));
+        assert_eq!(app.highlighted_change_diff().unwrap().text, None, "stale");
+        app.apply_change_diff(c, Ok("c".to_string()));
+        assert_eq!(
+            app.highlighted_change_diff().unwrap().text,
+            Some(Ok("c".to_string()))
+        );
+
+        app.invalidate_changes();
+        app.inspector_folded = true;
+        assert_eq!(app.claim_change_diff(), None, "folded inspector");
+        app.inspector_folded = false;
+        assert!(app.claim_change_diff().is_some(), "re-read after a suspend");
+    }
+
+    /// The merge with the yank chord (FZ-74): in `changes`, a plain `y`
+    /// still copies the file's path in the repo at once, `yy` copies it
+    /// again and `yp` copies its absolute path. Fails while the chord has no
+    /// `changes` arm and the first `y` copies nothing there.
+    #[test]
+    fn the_yank_chord_copies_a_changed_files_paths() {
+        let mut app = changes_app();
+        app.history_view = HistoryView::Changes;
+        app.focused_panel = FocusedPanel::Detail;
+        changes_landed(&mut app, &["src/a b.rs"], &[]);
+        let mut copied = Vec::new();
+        for key in ['y', 'y', 'y', 'p'] {
+            assert!(app.press_yank_key(Some(key), |s| {
+                copied.push(s.to_string());
+                Ok(())
+            }));
+        }
+        assert_eq!(
+            copied,
+            [
+                "src/a b.rs",
+                "src/a b.rs",
+                "src/a b.rs",
+                "/changes-fixture/src/a b.rs"
+            ]
+        );
+    }
+
+    /// Review 1 on #116: a diff held for one repo is not another's. Two
+    /// repos each with `a.txt` uncommitted; the first one's diff is held
+    /// and scrolled, a search moves the cursor to the second: it draws no
+    /// diff until its own lands, and its claim starts the inspector at the
+    /// top. Fails while the held diff is matched on section and path alone.
+    #[test]
+    fn a_same_named_file_in_another_repo_draws_no_held_diff() {
+        let mut app = changes_app();
+        app.repos.push(repo("second", RepoLocation::Primary));
+        app.repos[1].path = Some("/changes-second".to_string());
+        app.history_view = HistoryView::Changes;
+        for key in ["/changes-fixture", "/changes-second"] {
+            let read = ChangesRead {
+                key: key.to_string(),
+                root: key.into(),
+                generation: app.changes_generation,
+                base: app.changes_base,
+            };
+            let changes = crate::git::Changes {
+                uncommitted: vec![changed_file(" M", "a.txt")],
+                outgoing: crate::git::Outgoing::NoUpstream { branch: None },
+            };
+            app.apply_changes_read(read, Ok(changes));
+        }
+        assert_eq!(
+            app.selected_repo().map(|r| r.name.as_str()),
+            Some("fixture")
+        );
+        let first = app.claim_change_diff().expect("the first repo's diff");
+        app.apply_change_diff(first, Ok("first".to_string()));
+        assert!(app.highlighted_change_diff().is_some(), "held for its repo");
+        app.inspector_scroll = 7;
+
+        // A search moves the cursor without the list's scroll reset, so the
+        // claim's own reset is what starts the new diff at its top.
+        app.start_search();
+        "second".chars().for_each(|c| app.search_push_char(c));
+        assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("second"));
+        assert_eq!(
+            app.highlighted_change_diff(),
+            None,
+            "the first repo's diff under the second's heading"
+        );
+        let second = app.claim_change_diff().expect("the second repo's diff");
+        assert_eq!(second.root, std::path::PathBuf::from("/changes-second"));
+        assert_eq!(
+            app.inspector_scroll, 0,
+            "a new repo's diff starts at its top"
+        );
+    }
+
+    /// `y` copies the highlighted file's repo-relative path; `u` toggles
+    /// the base only in the view.
+    #[test]
+    fn y_copies_the_changed_path_and_u_toggles_only_in_the_view() {
+        let mut app = changes_app();
+        app.history_view = HistoryView::Info;
+        app.toggle_changes_base();
+        assert_eq!(app.changes_base, crate::git::ChangesBase::Upstream);
+        app.history_view = HistoryView::Changes;
+        changes_landed(&mut app, &["src/a b.rs"], &[]);
+        let mut copied = String::new();
+        app.yank_change_path(|s| {
+            copied = s.to_string();
+            Ok(())
+        });
+        assert_eq!(copied, "src/a b.rs");
+        assert_eq!(
+            app.change_to_open(),
+            Some(std::path::PathBuf::from("/changes-fixture/src/a b.rs"))
+        );
+        app.toggle_changes_base();
+        assert_eq!(app.changes_base, crate::git::ChangesBase::DefaultBranch);
     }
 }
