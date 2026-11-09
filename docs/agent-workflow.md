@@ -1,4 +1,4 @@
-<!-- relay-template: 0.8.1; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
+<!-- relay-template: 0.9.0; local-deviations: hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main) -->
 <!-- relay-board: owner=Gaurgle project=1 prefix=FZ -->
 # Agent workflow for the release effort
 
@@ -62,8 +62,12 @@ authorization while migrating these instructions.
 
 - Andreas owns priorities, interaction acceptance, what he installs and runs,
   tags and releases.
-- Coordinator owns architecture, ticket readiness, assignments and integration,
-  including commits, pushes and merges under the safe-merge rule.
+- Coordinator owns ticket readiness, assignments and integration,
+  including commits, pushes and merges under the safe-merge rule, and rules
+  on the architect's findings.
+- Architect (`fz-architect`) keeps `docs/architecture.md` true and checks
+  tickets and branches against it ("Architecture" below). Run per trigger,
+  never standing.
 - Worker implements one assigned ticket and supplies evidence.
 - Reviewer independently evaluates that ticket's exact diff and criteria.
 
@@ -93,6 +97,16 @@ structure. Choose a proportionate path:
   spec and plan, then link them from the corresponding release tickets. Fleetz
   keeps these artifacts in `docs/superpowers/specs/` and
   `docs/superpowers/plans/`.
+- **Refactor ticket:** structure work with no behavior change, filed by the
+  lead from a worker's or reviewer's `Structure` note, or by the owner. One
+  seam per ticket: code moves, visibility widens only as far as the move
+  needs, nothing else changes. Acceptance: the same test names pass before
+  and after (compare the sorted test lists), the checks are clean, and no
+  public or persisted contract changes. Path-scoped rules and docs that name
+  moved symbols follow them in the same ticket. Schedule it when no open
+  ticket branch touches the files, since a move conflicts with every one of
+  them. A split across modules needs the owner's approval, per ticket or
+  for a named batch. Fleetz's plan: `docs/module-split-design.md`.
 
 Approval of a spec or plan accepts that artifact; it does not add tickets to
 the authorized scope. Use the owner's named tickets or standing instruction
@@ -101,6 +115,37 @@ the only dispatcher. Do not run another subagent-driven implementation
 workflow alongside Relay's worker and reviewer assignments. Workers may use
 relevant task skills within their ticket but cannot delegate. The independent
 Relay review remains required.
+
+## Architecture
+
+`docs/architecture.md` is the code map: the structure as it is, measured,
+and the target shape Andreas accepted on 2026-11-07. The architect
+(`fz-architect`) keeps it true. It is never a standing agent: the
+coordinator dispatches one run per trigger, and Andreas may run it at any
+time.
+
+- **Ticket check:** before a ticket is made Ready, when it adds a module,
+  an `AppEvent` or a new kind of state, or touches more than one layer.
+  Batch the waiting tickets in one run where possible. The verdict and the
+  doc sections it names go on the issue, and those sections go in the
+  worker's `Pointers`. The coordinator rules on `fits` and `fits with
+  note`; `refactor first` and `needs design` go to Andreas when they change
+  priorities.
+- **Branch check:** before a parked or long-lived branch resumes, and
+  before a batch of refactor tickets starts.
+- **Survey:** at each milestone retro, after a batch of refactor tickets
+  lands, and when two or more `Structure` notes are open.
+- **Consult:** before a design-heavy ticket.
+
+A ticket that adds a module, moves a responsibility, adds an `AppEvent` or
+changes a dependency edge updates the as-is sections of the doc in the same
+ticket; the reviewer checks it. Changes to the target shape are Andreas's,
+recorded in the doc's owner items.
+
+The architect checks the baton before it writes. Started by the owner while
+a lead holds the baton, it reports only and hands doc changes to the lead,
+so it never collides with the lead's commits; a run the lead dispatched, or
+one with the baton released, writes. The baton stays the lead's alone.
 
 ## Model and context budget
 
@@ -151,6 +196,48 @@ with `scripts/relay-retro`, which groups the metrics lines by models, before
 widening use. The same trial applies to a lighter hosted worker (the small
 model alias on a scope-tight ticket): the owner names the tickets, the lead
 records the models field, the retro decides.
+
+**Choosing per dispatch.** The lead's row is fixed. The worker, reviewer and
+small rows are defaults, and the lead may pick another model and effort for
+each dispatch with the Agent tool's `model` and `effort` overrides; this
+paragraph is the instruction that permits them. The usual mistake is more
+model than the ticket needs, so start from the lightest that fits:
+
+- Mechanical work on named paths with no design (a rename, config, docs, a
+  known one-line fix): small on `haiku` or `sonnet`, effort `low`.
+- A normal bounded ticket: the defaults.
+- Invariants, concurrency, security, migrations, spec-first or investigation
+  tickets, or rework after a rejected review: worker at effort `high`.
+  `opus` covers nearly all of these; a `fable` worker is a rare exception
+  whose reason the dispatch names.
+- The reviewer never goes below its default; raise it to `high` with the
+  worker.
+
+This is judgment, not a rule to apply mechanically. Name the choice and a
+few words of reason in the handoff's `Model:` line, and record it in the
+metrics line as `alias:effort`, so `scripts/relay-retro` shows whether the
+picks paid off. Workers never dispatch, so the choice is the lead's.
+
+**Decision ladder.** A lighter model saves tokens only if it does not cost
+the owner attention. Agents never ask the owner; questions climb one rung at
+a time and stop at the first rung that can answer:
+
+1. **The agent decides** a reversible choice inside its scope and the
+   ticket's criteria (naming, structure, which of two equivalent approaches),
+   and lists it under `Assumptions` in its report.
+2. **The lead rules** anything else within the ticket, the repo's rules and
+   the standing authority: design questions, ambiguous criteria, a re-scope.
+   A question asked because the model was too light is not a reason to ask
+   the owner: the lead answers it, or re-dispatches on a stronger model or
+   higher effort and counts that in the models field.
+3. **The owner decides** only what is his: priorities, acceptance he kept,
+   scope or authority beyond the standing table, and the owner-only actions.
+   Even then the lead keeps other in-scope work moving and brings him one
+   batched, decision-ready question: options, its recommendation and why.
+
+The metrics line already counts owner decisions; `scripts/relay-retro` shows
+them per models group, so a lighter pick that sends more questions to the
+owner shows up in the retro and gets raised.
 
 The requested Claude IDs are verified in official documentation, but account
 entitlement still requires a successful model request. On Max, Fable shares the
@@ -219,6 +306,7 @@ contract, handoff templates and limits in this document apply unchanged.
 | `fz-worker` | `claude-opus-5-5` | `medium` | Assigned worktree, allowed files | Implementation, measurement, investigation |
 | `fz-reviewer` | `claude-opus-5-5` | `medium` | None | Independent review of the exact diff |
 | `fz-small` | `sonnet` | `medium` | Named paths only | Narrow scans, documentation, truly small changes |
+| `fz-architect` | `claude-fable-5-1` | `high` | `docs/architecture.md`, as-is sections | Code map, ticket and branch checks, per trigger |
 
 - The coordinator creates the ticket branch and worktree and passes its
   absolute path. The harness's `isolation: worktree` is not used: it branches
@@ -361,13 +449,14 @@ At Ready to integrate and after each merge, tell Andreas how to try the build:
 Every commit traces to its ticket, so history, the board and any issue agree
 even before a merge and after a branch is deleted.
 
-- Ticket commit: Conventional Commits subject, a body for the why, and a last
-  line `Refs: <ticket>` (here `#72`).
+- Ticket commit: Conventional Commits subject ending with ` (<ticket>)`
+  inside the 72 characters, a body for the why, and a last line
+  `Refs: <ticket>`: the issue number (here `#72`).
 - Merge commit: `Merge branch '<branch>' (<ticket>)` as the subject and
   `Closes #<n>` in the body, so GitHub closes the issue when the merge
   reaches `main`.
-- Coordination commits about one ticket (handoff, specs, plans) also end with
-  `Refs: <ticket>`.
+- Coordination commits about one ticket (handoff, specs, plans) also end
+  their subject with ` (<ticket>)` and their message with `Refs: <ticket>`.
 
 ## Records
 
@@ -392,7 +481,7 @@ Every piece of Relay state has one home, chosen by when it is read:
   metrics line:
 
 ```text
-<ticket>: review <accepted first | evidence n | changes n>; fix cycles <n>; owner decisions <n>; worker <min>; review <min>; models <worker alias>/<reviewer alias>; usage <worker tokens; reviewer tokens | not read>
+<ticket>: review <accepted first | evidence n | changes n>; fix cycles <n>; owner decisions <n>; worker <min>; review <min>; models <worker alias:effort>/<reviewer alias:effort>; usage <worker tokens; reviewer tokens | not read>
 ```
 
 `scripts/relay-retro` aggregates those lines (first-review rate, fix

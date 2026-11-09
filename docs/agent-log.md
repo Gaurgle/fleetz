@@ -289,6 +289,171 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### 2026-11-09
+
+Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
+need to finish ticket fz-83". His look, 12:40: "allright ooks good to me".
+
+- **#140 (FZ-83), the CI lamp and the header agree with the `ci` view and
+  name their branch.** Merged `985b682` at 12:45 CET on his look; ticket
+  commits `85692a5` (the diff built 11-05, base `334e9a6`), `96385c3` (the
+  merge of `main` `748b6de`, 60 commits, reviewed) and `ae5b7ae` (test
+  times UTC-safe). Worker `fz-worker` 11-05 and today (rework 1, the merge
+  cycle), `fz-small` (rework 2), reviewer `fz-reviewer`, architect
+  `fz-architect` (branch check, `fits with note`, 71474 tokens), all
+  `claude-fable-5-1`. Built under option C (the default tip learned inside
+  the `ci` view from `commits/HEAD/status`, its check runs and status
+  history; the fleet query untouched; `CiTip` in memory only): `App::ci_shown`
+  for every CI word on screen, `CI ◉ main failed: Vercel`, status rows with
+  a `source` column, the `◦` side-run mark. Review 1 (11-05) had no verdict;
+  review 2 (`5f4c44d114ce`) needs change: the digest card still read the
+  fleet poll; the lead also took follow-up 1 (a refused tip read no longer
+  skips the jobs and log). Review 3 (`72ee8ba1a63c`) accepted. Branch CI
+  red in UTC: the `ui/ci.rs` tests' `local()` helper attaches the machine's
+  zone to wall-clock fields, invisible to everyone here in CET; fixed by
+  `instant()` at the FZ-83 sites, review 5 (`15e50b1431e8`) accepted; the
+  merge resolution review 4 (`fac250c6f9d7`) accepted. Gate held on
+  `18ca717`. Owner's words: 11-05 13:50 "sure, that could be nice!" (the
+  side-run mark), 14:40 the source column, 14:41 colours and rows, 15:32 "1.
+  yes ... 2. sounds good?". Open from the reviews, for a later ticket: the
+  branch name comes from the newest held run at the tip whatever its event
+  (a PR run at `main`'s tip could name the PR branch); `ci_side_run` matches
+  by sha, so an overtaken run on `main` shows the mark; the culprit drops
+  from the header between a fleet poll and the next `ci` poll; `no workflow
+  runs` above a Vercel row. `src/ci.rs` is 1537 production lines, over the
+  flag; seam `ci/tip.rs`, a refactor ticket now that the window opens.
+  `docs/architecture.md` sections 1, 2 and 5 updated in the merge; the
+  `ui/` and `detail.rs` figures want a whole-table re-measure (section 9).
+  Observed, out of scope: `docs/architecture.md:64` (`app.rs` figure not
+  re-measured), `docs/architecture.md:65` (`detail.rs` 3,984 already behind
+  `main`). Remembered (CLAUDE.md, tests): tests with fixed times hold under
+  `TZ=UTC`, where CI runs.
+  FZ-83: review changes 1; fix cycles 2; owner decisions 6; worker 114; review 17; models claude-fable-5-1:medium/claude-fable-5-1:default; usage worker 448129 + 52645 + 59823 + 25377 tokens, reviewer 127405 + 36860 + 38794 + 22347 tokens
+
+### 2026-11-07
+
+Lead `4d31e22a` (`claude-fable-5-1`) on RoosMacbookA from 19:27 CET.
+Owner's words, 19:20: "Take over as lead. SMBP is out of reach today:
+FZ-83, FZ-65 and FZ-38 stay there untouched, and so do FZ-95 and FZ-87,
+which wait for FZ-83. Authorized now, in this order: 1. Commit and push
+the uncommitted trees FZ-60 (#116) and FZ-63 (#119) to their ticket
+branches, as-is. 2. FZ-63: the README Enter line, re-review, merge. My
+look passed (#119). 3. FZ-60: fix the view switcher with option 1 from
+#116 (the active view with its neighbours), then first review, then
+merge. I'll look at the fix. 4. L1, the layer test, from
+docs/module-split-design.md. 5. Run fz-architect for a ticket check of
+the Ready column, then FZ-97 (#154, P1)." 19:30: "Start no other ticket
+that touches main.rs, app.rs or ui/detail.rs: the refactor window comes
+after the SMBP trees are merged." Step 1 done 19:28: FZ-60 `9c5522a`,
+FZ-63 `7271bcb`, both pushed. About 20:05, on his look at the FZ-60
+switcher: "there's a stage inbetween, where it only show the pages
+CHANGES - INFO - COMMITS", "i think it should either show all the pages,
+or the fallback (whatever that may be)", then "the medium state can be
+the shortened prefix, and the smallest version is simply a '[X/N]'
+display, that changes color to the correlated page". About 20:10: "i think
+we can stop after the current tickets are finished", "but no loose ends.
+finish the tickets since worktrees dont sync to other machines". 20:15:
+apply the two Unreleased Relay rules (architect checks the baton, ticket
+in the subject) in one coordination commit: `00f4ab7`. 20:45, on his
+FZ-60 look: "fz-60 is a pass. ofund another bug tho; in notez mode, that
+divider should not affect the header divider, and thus not the spacing
+for the three sections (local, remote, summary)" (screenshot: in `notes`
+the tree/preview divider splits the header, so local and remote stack
+in the left column and the summary sits in the right; in every other
+view the three sections share one row). Not filed: needs his yes.
+
+- **#116 (FZ-60), the changes view in pane 2.** Merged `3dd6112`.
+  Commits `9c5522a` (10-30 snapshot), `b1db446`, `d1a367f` (the switcher:
+  his option 1 rejected on look, then full strip, three-letter prefixes,
+  `[X/N]`), `8b15028` (merge of `main` `047982e` with root-checked diffs,
+  the `ChangesRead`/`ChangeDiff` rows in architecture.md, four fixture
+  widths he approved). Reviews: `b2ed4f5edd0c` accepted, `78e3b0f03c13`
+  needs evidence (one boundary test), `175d4e0cb8a4` and `1549ceaf80e6`
+  accepted. Gate holds; his look passed twice (view 11-07 18:19, switcher
+  20:45). Record and follow-ups on #116. Lesson: a `yes` to a test edit
+  arrives once per forced edit, so a merge that adds a view should expect
+  the width fixtures to stop the worker; nothing to keep in a rule.
+  FZ-60: review evidence 1; fix cycles 1; owner decisions 5; worker 60;
+  review 12; models opus:medium/opus:medium; usage 527k; 165k
+- **#119 (FZ-63), todoz boards in the notes view.** Merged `b342d30`.
+  Snapshot `7271bcb` and merge commit `687298a` on base `41ecd76`, merged
+  with `main` `8dd79d5` by the worker (conflicts README, main.rs,
+  detail.rs; `main`'s borderless reader kept, the board drawn through
+  `held_board`, the open count in the facts row). Review 1 (10-30, diff
+  `936c88bf9c1e`): blocked, B1 `todoz <path>` is a quick-add; owner ruled
+  "todoz where a scope fits". Review 2 (11-07, diff `ef5136e93684`):
+  accepted; three low survived mutations recorded on #119. Combined
+  checks on `00f4ab7`, gate holds, owner look passed 11-07. Lesson: a
+  merge refuses to start over an uncommitted edit, so a pre-merge edit is
+  committed first (practical note, here); otherwise nothing to keep.
+  FZ-63: review changes 1; fix cycles 2; owner decisions 2; worker 35;
+  review 13; models opus:medium/opus:medium; usage 436k; 179k
+
+### 2026-11-06
+
+Lead `3f0d864a` (`claude-opus-5-5`) on RoosMacbookA from 15:48 CET; at-a
+(the "smbp") holds FZ-83's uncommitted tree. Owner's words: 15:45 "i think
+you can start working on what ever you feel makes sense. what makes sense
+ackording to tickets and state, and taht doesnt clash with the stuck 83?";
+on the denied FZ-81 merge, "you are the lead, just not fable"; 16:05 his
+pin list again (PR pane, ordering on refresh, two sorts, a shorter
+inspector, the commit message row, pane 2's header notes and "takes long
+time to load fleetz now"), filed as FZ-97 to FZ-99 (#154 to #156) on his
+yes; FZ-95 header decisions on #152; FZ-91 parked on his look ("i prefer
+the old shading. lets revert and defer this ticket for later"); 16:50
+"lets do 90, 98, 87 and 57 ... after those, lets wrap it up for today".
+FZ-57 (#113) closed as done by FZ-68 round 2. FZ-90 and FZ-87 workers
+stopped before code on wrong premises (rulings on #147, #144); FZ-98
+parked on his look ("it should depend on window size and everything. i
+dont want it to look bare and empty. defer this as well"), then "lets sat
+it at 15% for now", "no i mean 25%", "155 is great at 25%"; merged.
+
+- **#155 (FZ-98), the inspector opens at 25 percent.** Merged `761295b`.
+  Commit `033688e` on base `676094d`. `DEFAULT_INSPECTOR_PCT` 30 to 25;
+  the 8-row `INSPECTOR_MIN_HEIGHT` floor unchanged; a stored size wins.
+  His approved existing-test edits on #155: the default test compares
+  against the constant with tolerance `want - 2` (25 draws as 23 at
+  200x60), four layout tests pin 30. Review 1 (`4978623a4eef`, at 22)
+  needs change: an orphaned helper failed clippy (the worker had claimed
+  clean from an empty output). Re-review (`f510413b9830`) accepted; at
+  160x40 the inspector still sits at the floor (no commit body, no CI log
+  line). CI 42247216380, combined on `8b218c6` (1660), gate holds, his
+  look 25%. Remembered: a check's evidence is its exit code, not an empty
+  output (the worker template already asks for output; nothing new).
+  FZ-98: review changes 1; fix cycles 1; owner decisions 5; worker 3 + 1 + 1 + 2 + 2; review 2 + 2; models sonnet:medium/opus:medium; usage worker 38332, 46174, 48643, 31148, 32730 tokens; reviewer 40802, 52831 tokens
+
+- **#137 (FZ-81), yank flash.** Merged `676094d`. Merge-resolution cycle
+  on `35f17cc`: the lead ran `git merge --no-commit main` (the `fz-small`
+  call was denied by the permission classifier); `fz-small` resolved the
+  README row (first with a stale `[3] file` card mention, sent back).
+  Review 1 (`d48632c997e9`) needs change: main's reader has no frame, so
+  its flash washed the note's first text row; lead ruled the reader
+  flashes its `notes preview` title (#137). Rework `fz-worker` sonnet:
+  `reader_label_rect`, a test of exactly the label's cells. Re-review
+  (`3890b19a6561`) accepted. Resolution commit `be76335`, branch CI
+  42243117468, combined on `d431d28` (1659), gate holds. Remembered:
+  nothing new (the shared-target lesson is the 11-04 practical note).
+  FZ-81: review changes 1; fix cycles 1; owner decisions 1; worker 11 (denied) + 2 + 2 + 4; review 2 + 3; models sonnet:low, sonnet:medium/opus:medium; usage worker 14857, 23164, 25832, 37511 tokens; reviewer 59798, 76631 tokens
+- **#143 (FZ-86), pane 1 re-sorts after a poll or a sweep.** Merged
+  `d431d28`. Commit `5621916` on base `712eeba`. One activity rule
+  (`activity_position`), `order_rows_by_activity` keyed as the launch lays
+  rows out, `App::reorder_repos` keeps the cursor by identity and leaves a
+  text search alone. Lead rulings on #143 (criterion 2 cannot occur: a
+  sweep never changes a row's section; "also active" keeps the launch
+  layout). Review 1 (`d811599ec3da`) accepted; follow-ups: the digest
+  cursor and `ListHits` are index-based across a reorder. CI 42242572035,
+  combined on `712eeba` (1641), gate holds. Remembered: nothing to keep.
+  FZ-86: review accepted first; fix cycles 0; owner decisions 0; worker 9; review 4; models opus:high/opus:high; usage worker 127091 tokens, reviewer 84409 tokens
+- **#142 (FZ-85), the refresh spinner runs until the rows land.** Merged
+  `712eeba`. Commit `1b589f0` on base `09f15f0`. Cause: `r` during a
+  running watch sweep left `sweep_manual` false, so the spinner rested on
+  the poll alone; `refresh_key` now adopts the running sweep. Review 1
+  (`38b333b57330`) accepted; follow-ups: a test that the next watch sweep
+  is silent, the poll-after-`SweepDone` order, `SweepDone` carries no
+  sweep id. CI 42239570605, combined on `b70a25d` (1635), gate holds.
+  Remembered: nothing to keep.
+  FZ-85: review accepted first; fix cycles 0; owner decisions 0; worker 7; review 3; models opus:high/opus:high; usage worker 111516 tokens, reviewer 69520 tokens
+
 ### 2026-11-05
 
 Owner's words, 2026-11-05 about 12:20 CET (the lead took the baton

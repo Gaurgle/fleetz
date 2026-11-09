@@ -7,11 +7,11 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Baton released 2026-11-05 15:35 CET by session `ea56f412`
-(`claude-opus-5-5` since 13:55) at his 95% usage warning. No worker or
-reviewer running (FZ-83's review stopped unfinished). 0.6.1 is pushed
-(`d5cf417`); tag `v0.6.1` local only, his. Worktrees on at-a: `issue-121`,
-`issue-137`, `issue-140`, `issue-88`, `status-bar` (FZ-93, merged: sweep).
+Session `6d8fd7f3` (`claude-fable-5-1`, at-a) took over 2026-11-09
+09:49 CET on his "we need to finish ticket fz-83"; the previous lead
+(`4d31e22a`, RoosMacbookA) released the baton 11-07 20:55. at-a holds the
+FZ-83 (`issue-140`), FZ-65 (`issue-121`), FZ-38 (`issue-88`) and FZ-95
+(`issue-152`) trees; `issue-137` and `status-bar` are merged, sweepable.
 
 ## Standing authority
 
@@ -21,40 +21,38 @@ reviewer running (FZ-83's review stopped unfinished). 0.6.1 is pushed
 | Choose and dispatch tickets from the board | 2026-10-27 11:05, "you, as the lead, have authority to decide what tickets to start on" | two workers plus one `fz-small`; look items stop for him; FZ-52 and the `0.7.0` bump need his explicit word; issues only on his yes | revoked by word |
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
+| No ticket touching `main.rs`, `app.rs` or `ui/detail.rs` | 2026-11-07 19:30 (log) | the refactor window opens after the SMBP trees (FZ-83, 65, 38) merge | those merges |
 
-The 10-30 stop was lifted 2026-11-02 20:18 ("lets keep working then. you
-choose tickets as you see fit best", log). Astra is the preferred lead. No
-`cargo install`, tag or release. His FZ-45 look rules (10-27, log) apply.
+The 11-07 order (steps 1 to 3) is done; steps 4 and 5 (L1, the architect's
+Ready check, FZ-97) were not reached and need his word again: he stopped
+the session at "the current tickets" (20:10, log). Astra is the preferred
+lead. No `cargo install`, tag or release. His FZ-45 look rules (10-27,
+log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 
 ## In flight
 
-- FZ-81 (#137, yank flash, `35f17cc`, diff `7900ef870c0e`): his look
-  accepted 14:25; merging with `main` conflicts in README's `yy`/`yp`
-  row: a resolution cycle, review, gate, merge. FZ-83 (#140, CI lamp,
-  Vercel rows, source column; uncommitted, diff `5f4c44d114ce` vs
-  `334e9a6`, 1631 green): his design yes 15:32; next a fresh full
-  review, commit, a merge with `main` (behind FZ-82/68/77), his look. Ready: FZ-84 to
-  FZ-87, FZ-89 to FZ-92, FZ-78, FZ-79. FZ-80 Backlog.
-- FZ-93 (#150) merged `b8c6115` (log), 0.6.2 untagged. Filed 18:48: FZ-95
-  (#152) and FZ-96 (#153) Ready, FZ-94 (#151) Backlog.
-- FZ-65 (#121): built, `9f4018d7160d` unreviewed, his wheel decision.
-  #88 (FZ-38) parked, uncommitted. FZ-63 (#119), FZ-60 (#116): trees
-  lost 11-03; redispatch on his word.
+- `main` at the FZ-83 merge `985b682`, CI 42596419465 green; `issue-140`,
+  `issue-137` and `status-bar` swept. FZ-83 Done 12:45 on his look; its
+  record is in the log. Follow-ups named there: branch name from any held
+  run at the tip, side-run by sha, culprit flicker, `ci/tip.rs` split.
+- FZ-95 (#152, no priority) and FZ-87 (#144) were waiting for FZ-83 and
+  are free now; FZ-65 (#121, `9f4018d7160d`, his wheel decision) and
+  FZ-38 (#88) sit uncommitted on at-a.
+- Filed 11-07, after the SMBP merges: FZ-100 (#157, P1, Ready, `notes`
+  header, ordered against FZ-95); FZ-101 (#158, P2, Backlog, moved rows
+  flash). FZ-97 (#154, P1): docs-only, his word.
+- Ready: FZ-78, 79, 58, 84, 89, 90, 92 (84, 89, 92 were waiting for FZ-83).
 
 ## Open questions
 
-- To file on his 11-05 13:50 answers (log): an ssh README paragraph,
-  `fleetz doctor` (M5), contributors in the `info` inspector; the day's
-  work, `AGENTS` and `RELAY` boxes after FZ-79 (his "what you think
-  makes sense": lead's order in `ideas.md`). FZ-77 round 2: facts and
-  commits; uncommitted files belong to `changes` (FZ-60).
-- #88 worktree: stays or goes; FZ-38 with font-checked glyphs? #81 and
-  #79 test edits; pane 1 wheel coalescing, flaky `clipboard::tests`: his yes.
+- L1 adds one line to `main.rs` (`mod architecture;`): allowed under the
+  19:30 rule (a, lead's pick), after the SMBP merges (b), or a `tests/` file (c)?
+- To file on his 11-05 13:50 answers (log): ssh README paragraph,
+  `fleetz doctor`, `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2.
+- #88 worktree: stays or goes; FZ-38 with font-checked glyphs? Flaky
+  `clipboard::tests`. Help `y` row still "copy hash; changes: path" (#116).
 
 ## Next step
 
-He stopped 11-05 18:55. Merged 11-05: FZ-74, 88, 82, 68, 77, 93 (log).
-Next: FZ-81 against FZ-93, merge; FZ-95, 96; FZ-83's review, his look;
-FZ-85, 86, 84, 87, 89, 90 to 92, 77 round 2, 78, 79. Worktrees pruned
-at merge (log). Suggest `cargo install` before a screenshot.
-
+The 19:30 rule still holds until FZ-65 and FZ-38 merge. On his word: FZ-97, the L1 answer, which of
+the freed tickets (FZ-95, 87, 84, 89, 92) next. Suggest `cargo install`.
