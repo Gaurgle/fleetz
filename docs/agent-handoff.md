@@ -42,10 +42,8 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
   into `.claude/worktrees/fz-110` (expect `docs/architecture.md` to
   conflict with FZ-111's and FZ-112's rows), resolve, scope, re-review
   the resolution, checks, commit, CI, gate, merge, sweep, log.
-- FZ-113 (#170, E3 `GithubSync`) Ready: body and the architect's check
-  on the issue; starts after FZ-110 merges (shares `app.rs`); hard tier.
-  Then E2b, A1a, A1c to A1i, R2 per `docs/app-split-design.md`
-  (accepted 21:56). No worker or reviewer running at handback.
+- FZ-113 (#170, E3) Ready, body and check on the issue; after FZ-110
+  merges (shares `app.rs`); hard tier. Then E2b, A1a, A1c to A1i, R2.
 - FZ-100 (#157), FZ-102 (#159), the build label and FZ-97 (#154) wait
   on his word; FZ-83 and FZ-95 follow-ups in the log.
 
