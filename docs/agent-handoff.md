@@ -7,11 +7,10 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Session `6d8fd7f3` (`claude-fable-5-1`, at-a) took over 2026-11-09
-09:49 CET on his "we need to finish ticket fz-83"; the previous lead
-(`4d31e22a`, RoosMacbookA) released the baton 11-07 20:55. at-a holds the
-FZ-83 (`issue-140`), FZ-65 (`issue-121`), FZ-38 (`issue-88`) and FZ-95
-(`issue-152`) trees; `issue-137` and `status-bar` are merged, sweepable.
+Baton released 2026-11-09 13:26 CET by session `6d8fd7f3`
+(`claude-fable-5-1`, at-a, since 09:49) on his "stop after fz-95 is
+complete". No worker or reviewer running; no worktrees anywhere (all
+six swept or removed today); `main` CI green at `63db73b`.
 
 ## Standing authority
 
@@ -21,7 +20,6 @@ FZ-83 (`issue-140`), FZ-65 (`issue-121`), FZ-38 (`issue-88`) and FZ-95
 | Choose and dispatch tickets from the board | 2026-10-27 11:05, "you, as the lead, have authority to decide what tickets to start on" | two workers plus one `fz-small`; look items stop for him; FZ-52 and the `0.7.0` bump need his explicit word; issues only on his yes | revoked by word |
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
-| No ticket touching `main.rs`, `app.rs` or `ui/detail.rs` | 2026-11-07 19:30 (log) | ended 11-09 13:10 with FZ-65's merge (FZ-83 merged, FZ-38 closed): the refactor window is open; FZ-95 runs on his 11-09 word | ended, row to the log at the next edit |
 
 The 11-07 order (steps 1 to 3) is done; steps 4 and 5 (L1, the architect's
 Ready check, FZ-97) were not reached and need his word again: he stopped
@@ -31,18 +29,20 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 
 ## In flight
 
-- `main` at `cb9987f` (FZ-83 merged `985b682` 10:50, Done; FZ-38 #88
-  closed 11:25; both logged). Comment times before 12:30 drift ahead (log).
-- FZ-65 (#121): merged `e2fa215` 13:10 on his second look, `main` CI
-  green, `issue-121` swept, Done and logged with metrics.
-- FZ-95 (#152, P1): `c3c6830` + merge `5f12f3b` (reviewed), pushed. Fix
-  cycle reviewed, committed `cbff8e5` (both placements behind `W`), CI
-  42609778666 watched. **Asked him 12:20:** may the `badges.rs` hold-text
-  test be rewritten (glyph in pane 1, text in the banner)? Then his look
-  (pick the placement), remove the loser, re-review, gate. FZ-100 (#157,
-  P1) follows it, not started on his 12:40 word. Record: #152.
-- FZ-102 (#159, P2, wrapped rows in the other views); FZ-101 (#158, P2);
-  FZ-97 (#154, P1, docs-only, his word). Ready: 78, 79, 58, 84, 87, 89, 90, 92.
+- Nothing dispatched. `main` at the FZ-95 merge `63db73b`, CI 42616557816
+  green, `issue-152` swept.
+  Done today, all logged with metrics: FZ-83 (`985b682`), FZ-65
+  (`e2fa215`), FZ-95 (`63db73b`); FZ-38 (#88) closed unmerged. The 11-07
+  19:30 rule ended with FZ-65's merge: the refactor window is open.
+- Open from today's reviews (in the log entries): FZ-83's branch-name and
+  side-run follow-ups and `ci/tip.rs` split; FZ-95's held-fetch glyph
+  (needs his yes on a `badges.rs` test rewrite), two-row header block,
+  his "more ideas for its placement", `detail.rs` seams; FZ-102 (#159,
+  P2) wrapped rows in the other views. His build-label idea (ticket number
+  in the top border for non-main builds): file as FZ-103 on his yes.
+- FZ-100 (#157, P1) next after FZ-95 by his 11-09 order, not started on
+  his word. FZ-101 (#158, P2); FZ-97 (#154, P1, docs-only, his word).
+  Ready: 78, 79, 58, 84, 87, 89, 90, 92. Suggest `cargo install`.
 
 ## Open questions
 
@@ -54,5 +54,5 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 
 ## Next step
 
-His 12:40 word: finish FZ-65 and FZ-95 completely, start no new ticket
-(FZ-100 included), then a summary of fleetz's state. Then his word again.
+Stopped on his word ("stop after fz-95 is complete", 13:15). Nothing
+starts without his word; FZ-100 is first in his stated order.

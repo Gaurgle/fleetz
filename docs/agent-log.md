@@ -317,8 +317,45 @@ issues, the commit and comment timestamps being authoritative.
   #88 for a fresh ticket if wanted. Remembered: nothing to keep.
   FZ-38: review none; fix cycles 0; owner decisions 3; worker 40; review 0; models claude-opus-5-5:medium/none; usage not read
 
+- **#152 (FZ-95), summary box in pane 1, pane 2's header in fixed
+  sections, the time window on pane 1's border.** Merged `63db73b` at
+  13:23 CET on his look ("fz-95 i prefer it in pane 1 border, i
+  might have more ideas for its placement, but we can take that later.
+  approved!"); ticket commits `c3c6830` (built 11-05 in his own session,
+  base `44c78ab`, review 1 changes requested), `5f12f3b` (merge of `main`
+  `1609119`: FZ-83's CI word into the new header, the `header_ci` test
+  helper stopping at the divider), `cbff8e5` (the fix cycle: B2, B3, N1 to
+  N6, his 11-06/11-07 amendments, both window placements behind a `W`
+  toggle for his pick), `823d538` (placement 2 hard-wired, placement 1 and
+  the toggle removed, one colour table for the summary, no double space
+  before load), `a655b95` (merge of `main` `13de554` with FZ-65, clean).
+  His 11-07 principle: pane 2 is per repo, fleet-wide information goes to
+  pane 1; the summary (words wide, glyph counts narrow, `[work]` first)
+  sits under a divider at pane 1's foot and the time window on pane 1's
+  top border, so pane 2's header is `local` │ `remote`, split in the
+  middle, widths from the pane alone, long fetch notes in one orange
+  banner row with the full text in `info`. Reviews: 2 (merge) accepted; 3
+  (fix cycle, `fd5b63d0a764`) accepted, 16 worker mutations, 6 repeated;
+  4 (`6492d45295e8`) accepted, six placement-1 tests rewritten on the
+  lead's ruling (his pick made their assertions impossible), one low
+  finding (an assertion order in `identity_is_dropped_whole_on_a_narrow_pane`);
+  5 (merge, `39aacc836783`) accepted. Open, for later tickets: the
+  held-fetch row still draws "fetch over N MB, press f" (his 11-06 "just a
+  glyph" needs a yes on the `badges.rs` test rewrite); a repo without a
+  third header row gets a two-row block, so banner and body sit a row
+  higher; his "more ideas for its placement"; `src/ui/detail.rs` at about
+  4630 production lines, seams `ui/detail/header.rs` and
+  `ui/detail/summary.rs`; stale doc comments at `detail.rs:1546` and
+  `:1663`. FZ-100 (#157) rebases on this header. Workers `fz-worker`
+  fable high (fix cycle) and opus high (final round), fable medium (merge);
+  reviewers fable (merge), opus high, opus high, opus medium. The lead's
+  comment times on #152 from "13:35" to "14:12" were again estimates, 30
+  to 50 minutes ahead; corrected on the issue. Remembered: nothing to
+  keep beyond FZ-65's (own target dir for mutation clones).
+  FZ-95: review changes 1; fix cycles 2; owner decisions 9; worker 85 + 18 + 7; review 7 + 15 + 5 + 1; models claude-fable-5-1:high+claude-opus-5-5:high/mixed; usage worker 249300 + 172448 + 57802 tokens, reviewer 43146 + 137944 + 98639 + 31086 tokens
+
 - **#121 (FZ-65), the notes tree wheel moves the highlight two rows a tick
-  while the view follows one.** Merged `e2fa215` at 13:10 CET on his
+  while the view follows one.** Merged `e2fa215` at 12:49 CET on his
   second look ("fz-65 / 121 now works. approved"); ticket commits
   `b546e1e` (built 11-03 by `fz-worker` fable, base `b8d394b`, held for
   his wheel decision), `64034b7` (merge of `main` `64aa4a8`, 119 commits,
