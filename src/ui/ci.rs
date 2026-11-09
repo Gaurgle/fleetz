@@ -3021,11 +3021,13 @@ mod tests {
         chrono::Duration::minutes(n)
     }
 
-    /// Pane 2's header CI word as drawn: from `CI` to the pane's border.
+    /// Pane 2's header CI word as drawn: from `CI` to the next section
+    /// divider, or to the pane's border where none follows.
     fn header_ci(app: &App) -> Option<String> {
         detail_rows(app).iter().find_map(|row| {
             let at = row.find("CI ◉")?;
-            Some(row[at..].trim_end_matches(['│', ' ']).to_string())
+            let word = row[at..].split(" │ ").next().unwrap_or_default();
+            Some(word.trim_end_matches(['│', ' ']).to_string())
         })
     }
 

@@ -20,10 +20,18 @@ lives in one function called by both (`detail::split_inspector`, and
 `notes` layout splits columns first with `detail::split_main`, docks no
 inspector under pane 1, and `detail::notes_pane_body` splits pane 2's inner
 area with `detail::split_notes_pane` into the tree's column (pinned header,
-tree, the file's facts divider at its foot) and, right of the divider, the
-fleet's state above the `NOTES` rule and the preview below it); never
+tree, the file's facts divider at its foot) and, right of the divider,
+`notes preview` above the `NOTES` rule and the preview below it); never
 reintroduce a second copy of that arithmetic. Drift here misroutes clicks silently, with nothing
-failing.
+failing. Pane 1's summary box (FZ-95) takes rows off the foot of the repo
+list only, in `detail::split_summary_box`; clicks resolve against where
+the list lands (`ListHits`), so `panel_rects` needs no copy of that split.
+Pane 2's header is two sections, `local` and `remote`, whose widths come
+from the pane's width alone (`detail::section_widths` takes nothing
+else), never from a repo's text or the time window's label, so the
+divider stands in the same column for every repo and every window. The
+window lives on pane 1's top border (`detail::list_title_window`), which
+may shorten it but never reaches pane 2's divider.
 
 **`App::visible_repos` order must match the order the repo list draws.** The
 cursor walks one while the eye walks the other. A free-text query switches both
@@ -85,4 +93,8 @@ unbound everywhere (FZ-59's toggle moved from `r` to `p` on his look).
 **Status vocabulary is split by kind.** Counters are numeric (`3↓ 2↑ 4!`),
 categorical states are words (`not cloned`). A not-cloned repo has all counters
 at zero and must never render as synced: `RepoStatus::is_synced()` excludes it
-deliberately.
+deliberately. One exception, his (2026-11-06): pane 1's summary box on a
+narrow pane counts the categories too, synced as a green `19✓` and not cloned
+as a grey `4-` (`detail::glyph_counters`); the words come back wherever they
+fit two rows. Both forms read one table, `footer::summary_counters`, for
+their order and colours.

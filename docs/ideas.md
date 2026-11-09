@@ -669,17 +669,50 @@ clears on its own, red for an error, grey before any answer), watch and
 the sweep time flush right. The window, the summary that used to share the
 footer and an activity row for what is passing form a column at the right
 of the repo pane's header, after the repo's local and remote sections, so
-every piece keeps its row and nothing moves to make room. Where pane 2
-draws no such column (a section's digest, no repo, a pane too narrow) the
-footer carries the summary and the message, so an action never ends in
-silence. The commit counter moved onto the view's title row, giving pane 2
-a row back. The footer is
+every piece keeps its row and nothing moves to make room. The commit
+counter moved onto the view's title row, giving pane 2 a row back.
+
+**Amended again the same evening (FZ-95, #152), on his look.** The fleet
+column moved out: the summary and the activity row to a box at the foot
+of pane 1, the window to a teal box of its own at the right of pane 2's
+header, framed with `[t]` on its border. Pane 2's header is three fixed
+sections sized by the pane's width alone, local and remote split evenly
+by the first divider, the remote right-aligned and named `owner/name`, so
+no divider moves between repos. Where pane 1 is too short for its box,
+the footer carries the summary and the message. The footer is
 keys only. `notes` carries the file's facts on a divider at the tree's
 foot. Tried and dropped the same day: a one-row status line under the
-header, and a status box under pane 1 (beside the inspector, or at the
-foot of pane 1's column), which narrowed the inspector and repeated what
-the repo header already says. The chrome stays three rows: a row less
-dropped the inspector at its minimum height.
+header, and an earlier status box docked beside the inspector, which
+narrowed the inspector and repeated what the repo header already says.
+The box inside pane 1's own frame, at the foot of the list, is the one
+kept. The chrome stays three rows: a row less dropped the inspector at
+its minimum height.
+
+**Amended 2026-11-06 and 2026-11-07 (FZ-95's fix cycle), on his notes.**
+The principle, in his words: pane 2 is per repo, fleet-wide information
+goes to pane 1. The summary stays in pane 1's box, in words where they
+fit two rows (`19 synced · 4 not cloned · 8 PRs`) and as glyphs and
+counts where they do not (`3↓ 2! 19✓ 4- 8 PRs`); the active group leads
+it. Each header section carries a small subtitle (`local`, `remote`, and
+`window` on the box's top rule). On a narrow pane local and remote keep
+their floors and the window box shrinks first (`◷ 4w`), then the remote
+section goes. Long notes (a failed fetch, git's reason, the
+earlier-refresh note) leave the sections for one orange banner row under
+them, cut with `…`, and stand whole in `info`; this replaced the 11-05
+ruling that put them whole under the block. Whether the window stays in
+pane 2's header or moves to pane 1's top border was left to his look,
+both built behind a temporary `W` toggle.
+
+**Resolved 2026-11-09 (FZ-95), on his look: pane 1's border.** "i prefer
+it in pane 1 border, i might have more ideas for its placement, but we can
+take that later." The window sits on pane 1's top border between the
+title and the count (`[1] repos · ◷ since 1 week [t] ── 23`), shortened
+to `◷ 1w [t]` where the border is narrow; pane 2's third section, the
+window box, is dropped with its `window` subtitle, its short form and the
+toggle. Pane 2's header is two sections, `local` and `remote`, split in
+the middle by the pane's width alone, so neither the window's label nor
+its shortening moves the divider. In `notes` nothing window-related is
+drawn above `notes preview`. Further placement ideas are his, for later.
 
 Fixing the pulse exposed a latent bug worth recording: `SLOW_REPAINT_TICKS` was
 10 against a `BLINK_TICKS` of 5, so between any two repaints the blink flipped
