@@ -1,110 +1,22 @@
 use super::*;
-use crate::engine::{PROGRESS_EVENT_GAP, assemble_view_in, with_coverage_note};
+use crate::engine::{LoadError, SweepTarget, ViewNotes, assemble_view_in, tilde_display};
+use crate::event::LoadResult;
+use crate::handoff::{RunHandoff, ci_poll_after_handoff};
+use crate::input::{
+    apply_live_settings, click_detail, handle_settings_input, refresh_key, settings_overlay,
+};
+use crate::load::{apply_load_result, apply_load_result_saving_to, memory_rebuild_result};
+use crate::model::RepoStatus;
+use crate::poll::{
+    CI_POLL_STUCK_AFTER, apply_github_poll, apply_github_poll_at, ci_poll_request,
+    claim_github_poll, github_limit_until, github_poll_due,
+};
+use crate::sweep::{ContribProbe, apply_repo_updated, rebuild_repo_status};
 use std::path::PathBuf;
-
-/// Regression (#68): returning from lazygit or `$EDITOR` left the mouse
-/// dead for the rest of the session. Both switch mouse reporting off as
-/// they exit, and the modes belong to the terminal, not to a screen, so
-/// re-entering the alternate screen does not bring them back. Measured in
-/// tmux: `mouse_any_flag` and `mouse_sgr_flag` went from 1 to 0 across
-/// one Enter-and-quit of lazygit, and the same across `e` and nvim.
-#[test]
-fn reclaiming_the_terminal_asks_for_the_mouse_again() {
-    let mut capture = Vec::new();
-    crossterm::execute!(capture, EnableMouseCapture).unwrap();
-    let mut written = Vec::new();
-    reclaim_terminal(&mut written).unwrap();
-    assert!(
-        written
-            .windows(capture.len())
-            .any(|window| window == capture.as_slice()),
-        "reclaim wrote {:?}, without the mouse capture request {:?}",
-        String::from_utf8_lossy(&written),
-        String::from_utf8_lossy(&capture),
-    );
-}
-
-/// Handing the terminal to a child must switch mouse reporting off first,
-/// or the child inherits fleetz's capture and its own mouse handling
-/// receives events it did not ask for (#82). The capture-off request has
-/// to precede leaving the screen, mirroring the reclaim order.
-#[test]
-fn releasing_the_terminal_switches_the_mouse_off_before_leaving_the_screen() {
-    let mut capture_off = Vec::new();
-    crossterm::execute!(capture_off, DisableMouseCapture).unwrap();
-    let mut leave = Vec::new();
-    crossterm::execute!(leave, LeaveAlternateScreen).unwrap();
-    let mut written = Vec::new();
-    release_terminal(&mut written).unwrap();
-    let position_of = |needle: &[u8]| {
-        written
-            .windows(needle.len())
-            .position(|window| window == needle)
-    };
-    let off_at = position_of(&capture_off);
-    let leave_at = position_of(&leave);
-    assert!(
-        off_at.is_some() && leave_at.is_some(),
-        "release wrote {:?}, missing the capture-off {:?} or the screen leave {:?}",
-        String::from_utf8_lossy(&written),
-        String::from_utf8_lossy(&capture_off),
-        String::from_utf8_lossy(&leave),
-    );
-    assert!(
-        off_at < leave_at,
-        "release wrote {:?}: the mouse must go off before the screen is left",
-        String::from_utf8_lossy(&written),
-    );
-}
-
-/// An idle loop paints as soon as it has something to paint. This is the
-/// ordinary case and must not be delayed by the coalescing at all.
-#[test]
-fn an_empty_queue_paints_immediately() {
-    assert!(should_paint(true, 0, false));
-}
-
-/// An animation frame is a deadline, not a data update: it is never held,
-/// however much background work is queued behind it. Holding them is what
-/// made the intro stutter under a release build's faster repo probes.
-#[test]
-fn an_animation_frame_is_never_held() {
-    assert!(should_paint(false, 0, true));
-    assert!(should_paint(false, MAX_COALESCED_FRAMES - 1, true));
-    assert!(should_paint(true, 0, true));
-}
-
-/// The bug: a trackpad flick delivers wheel events faster than a repaint
-/// takes, so painting one frame per event let the queue run away and the
-/// scroll froze, then played out the backlog after the gesture had ended.
-#[test]
-fn a_queued_burst_holds_the_paint() {
-    assert!(!should_paint(false, 0, false));
-    assert!(!should_paint(false, 1, false));
-    assert!(!should_paint(false, MAX_COALESCED_FRAMES - 1, false));
-}
-
-/// The hold is bounded, so a source that never stops arriving still gets
-/// drawn rather than freezing the pane for as long as it lasts.
-#[test]
-fn a_queue_that_never_drains_still_paints_eventually() {
-    assert!(should_paint(false, MAX_COALESCED_FRAMES, false));
-    assert!(should_paint(false, MAX_COALESCED_FRAMES + 1, false));
-}
-
-/// `intro = false` puts no loading field up, and neither does a launch
-/// with no load running. `intro = true` with a load running does.
-#[test]
-fn intro_off_shows_no_loading_field() {
-    assert!(!shows_loading_field(false, true));
-    assert!(!shows_loading_field(false, false));
-    assert!(!shows_loading_field(true, false));
-    assert!(shows_loading_field(true, true));
-}
 
 /// An empty app at launch, with the loading field up as `run_event_loop`
 /// puts it.
-fn app_under_loading_field() -> App {
+pub(crate) fn app_under_loading_field() -> App {
     let mut app = App::new(Vec::new(), String::new(), 120, 40);
     app.loading = true;
     app.loading_field = Some(ui::intro::Loading::new());
@@ -112,134 +24,14 @@ fn app_under_loading_field() -> App {
 }
 
 /// Whether any row of `buf` holds the top row of the `LOADING` banner.
-fn shows_loading_banner(buf: &ratatui::buffer::Buffer) -> bool {
+pub(crate) fn shows_loading_banner(buf: &ratatui::buffer::Buffer) -> bool {
     (0..buf.area.height).any(|y| {
         let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
         row.contains("█    ████ ████ ███  ███ █  █ ████")
     })
 }
 
-/// The loading field is up until the load lands, and the very next frame
-/// is the finished screen exactly: nothing is drawn in between, so there is
-/// no wave frame and no noise left over. The removed intro wave painted
-/// 1.5 s of frames here.
-#[test]
-fn the_frame_after_the_load_lands_is_the_finished_screen() {
-    use ratatui::backend::TestBackend;
-    let mut app = app_under_loading_field();
-    let running = std::sync::atomic::AtomicBool::new(true);
-    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
-    term.draw(|frame| draw_screen(frame, &app)).unwrap();
-    assert!(
-        shows_loading_banner(term.backend().buffer()),
-        "the loading field was not painted while the load ran"
-    );
-
-    // What the `Loaded` arm does: the load is applied, then the field goes.
-    app.loading = false;
-    dismiss_loading_field(&mut app, &running);
-    assert!(app.loading_field.is_none(), "the field is still up");
-    assert!(
-        !running.load(std::sync::atomic::Ordering::Relaxed),
-        "the field's frame timer is still running"
-    );
-    term.draw(|frame| draw_screen(frame, &app)).unwrap();
-
-    let mut finished = Terminal::new(TestBackend::new(120, 40)).unwrap();
-    finished.draw(|frame| ui::render(frame, &app)).unwrap();
-    assert_eq!(
-        term.backend().buffer(),
-        finished.backend().buffer(),
-        "the frame after the load is not the finished screen"
-    );
-}
-
-/// The bug (#64): a `LoadingFrame` queued behind `Loaded` arrives after the
-/// load's paint was held for it, and overwrote `needs_redraw` with false.
-/// The held paint was lost and the loading field stayed on screen until
-/// something else asked for a redraw.
-#[test]
-fn a_late_loading_frame_keeps_the_held_paint_of_the_finished_screen() {
-    let mut app = app_under_loading_field();
-    let running = std::sync::atomic::AtomicBool::new(true);
-
-    // What the `Loaded` arm does: the load is applied, the field goes, and
-    // the finished screen is asked for.
-    app.loading = false;
-    dismiss_loading_field(&mut app, &running);
-    app.needs_redraw = true;
-    // The late frame is already queued and nothing animates, so the loop
-    // holds that paint for it and leaves the flag set.
-    assert!(!should_paint(false, 0, app.loading_field.is_some()));
-
-    on_loading_frame(&mut app);
-    assert!(
-        app.needs_redraw,
-        "the late frame cancelled the held paint of the finished screen"
-    );
-    // The queue is drained now, so the finished screen paints at once.
-    assert!(should_paint(true, 1, app.loading_field.is_some()));
-}
-
-/// While the field is up, each of its frames asks for a repaint.
-#[test]
-fn a_loading_frame_while_the_field_is_up_asks_for_a_redraw() {
-    let mut app = app_under_loading_field();
-    app.needs_redraw = false;
-    on_loading_frame(&mut app);
-    assert!(app.needs_redraw);
-}
-
-/// A frame that arrives after the field is gone, with nothing pending,
-/// does not invent a repaint.
-#[test]
-fn a_late_loading_frame_with_no_pending_paint_asks_for_none() {
-    let mut app = app_under_loading_field();
-    let running = std::sync::atomic::AtomicBool::new(true);
-    dismiss_loading_field(&mut app, &running);
-    app.needs_redraw = false;
-    on_loading_frame(&mut app);
-    assert!(!app.needs_redraw);
-}
-
-/// A resize while the field is up paints the field at the new size, banner
-/// re-centred and no cell left over from the old layout.
-#[test]
-fn a_resize_while_loading_paints_the_field_at_the_new_size() {
-    use ratatui::backend::TestBackend;
-    let app = app_under_loading_field();
-    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
-    term.draw(|frame| draw_screen(frame, &app)).unwrap();
-
-    term.backend_mut().resize(80, 24);
-    term.draw(|frame| draw_screen(frame, &app)).unwrap();
-    let buf = term.backend().buffer();
-    assert_eq!(buf.area, ratatui::layout::Rect::new(0, 0, 80, 24));
-    assert!(
-        shows_loading_banner(buf),
-        "the banner is gone after a resize"
-    );
-
-    let mut fresh = ratatui::buffer::Buffer::empty(buf.area);
-    app.loading_field
-        .as_ref()
-        .expect("the field")
-        .paint(&mut fresh);
-    let differing_symbols = (0..24u16)
-        .flat_map(|y| (0..80u16).map(move |x| (x, y)))
-        .filter(|(x, y)| {
-            // The noise churns with the clock, so compare where the banner
-            // sits, which is still and derived from the area alone.
-            buf[(*x, *y)].symbol().starts_with('█') != fresh[(*x, *y)].symbol().starts_with('█')
-        })
-        .count();
-    assert_eq!(
-        differing_symbols, 0,
-        "the banner is not where a fresh field at the new size puts it"
-    );
-}
-
-fn test_repo() -> RepoStatus {
+pub(crate) fn test_repo() -> RepoStatus {
     RepoStatus {
         daily: None,
         daily_key: None,
@@ -275,7 +67,7 @@ fn test_repo() -> RepoStatus {
     }
 }
 
-fn key(head: &str) -> git::WorkKey {
+pub(crate) fn key(head: &str) -> git::WorkKey {
     git::WorkKey {
         head_sha: head.to_string(),
         index_mtime: None,
@@ -287,27 +79,16 @@ fn key(head: &str) -> git::WorkKey {
     }
 }
 
-/// A missing key is never "unchanged": two sweeps whose ref queries both
-/// failed must both re-probe, not reuse each other's empty answer.
-#[test]
-fn two_missing_work_keys_never_count_as_unchanged() {
-    assert!(!key_unchanged(&None, &None));
-    assert!(!key_unchanged(&None, &Some(key("aaa"))));
-    assert!(!key_unchanged(&Some(key("aaa")), &None));
-    assert!(!key_unchanged(&Some(key("aaa")), &Some(key("bbb"))));
-    assert!(key_unchanged(&Some(key("aaa")), &Some(key("aaa"))));
-}
-
 // --- FZ-02: a local sweep result must not undo a newer GitHub poll ---
 //
 // The race, driven with controlled events: a sweep snapshots the row
 // (`sweep_targets`) while CI is pending, a poll lands and says passed,
 // then the sweep's result lands carrying the snapshot's GitHub fields.
 
-const SWEPT_PATH: &str = "~/repos/r";
+pub(crate) const SWEPT_PATH: &str = "~/repos/r";
 
 /// An app with one cloned repo whose CI is pending, as at launch.
-fn app_with_pending_repo() -> App {
+pub(crate) fn app_with_pending_repo() -> App {
     let mut repo = test_repo();
     repo.path = Some(SWEPT_PATH.to_string());
     repo.ci_status = model::CiStatus::Pending;
@@ -324,7 +105,7 @@ fn app_with_pending_repo() -> App {
 
 /// What `rebuild_repo_status` returns: the snapshot taken when the sweep
 /// started, with every local probe re-run and moved on.
-fn rebuilt_from(snapshot: &RepoStatus) -> RepoStatus {
+pub(crate) fn rebuilt_from(snapshot: &RepoStatus) -> RepoStatus {
     let mut status = snapshot.clone();
     status.dirty = 3;
     status.ahead = 2;
@@ -364,7 +145,7 @@ fn commit_template(hash: &str) -> model::Commit {
 }
 
 /// A successful poll reporting `r` as passed with one open PR.
-fn poll_says_passed() -> Result<Box<github::GithubFetch>, String> {
+pub(crate) fn poll_says_passed() -> Result<Box<github::GithubFetch>, String> {
     let pr = model::PullRequest {
         number: 7,
         title: "Fix it".to_string(),
@@ -393,7 +174,7 @@ fn poll_says_passed() -> Result<Box<github::GithubFetch>, String> {
     }))
 }
 
-fn poll(app: &mut App, result: Result<Box<github::GithubFetch>, String>) {
+pub(crate) fn poll(app: &mut App, result: Result<Box<github::GithubFetch>, String>) {
     let result = result.map_err(|message| github::FetchError {
         failure: github::Failure::new(github::FailureKind::Http, message),
         fallback: None,
@@ -403,13 +184,16 @@ fn poll(app: &mut App, result: Result<Box<github::GithubFetch>, String>) {
 }
 
 /// Start an attempt and land `result` as its answer.
-fn poll_with(app: &mut App, result: Result<Box<github::GithubFetch>, github::FetchError>) {
+pub(crate) fn poll_with(
+    app: &mut App,
+    result: Result<Box<github::GithubFetch>, github::FetchError>,
+) {
     let attempt = claim_github_poll(app).expect("no poll in flight");
     answer(app, attempt, result);
 }
 
 /// Land `result` as the answer to `attempt`.
-fn answer(
+pub(crate) fn answer(
     app: &mut App,
     attempt: u64,
     result: Result<Box<github::GithubFetch>, github::FetchError>,
@@ -420,7 +204,7 @@ fn answer(
     apply_github_poll(app, attempt, result, &tx, &None);
 }
 
-fn assert_poll_fields(repo: &RepoStatus) {
+pub(crate) fn assert_poll_fields(repo: &RepoStatus) {
     assert_eq!(repo.ci_status, model::CiStatus::Passed);
     assert_eq!(repo.ci_workflow.as_deref(), Some("release"));
     assert_eq!(repo.ci_duration.as_deref(), Some("1m 4s"));
@@ -430,7 +214,7 @@ fn assert_poll_fields(repo: &RepoStatus) {
     assert_eq!(repo.repo_kind, model::RepoKind::Private);
 }
 
-fn assert_sweep_fields(repo: &RepoStatus) {
+pub(crate) fn assert_sweep_fields(repo: &RepoStatus) {
     assert_eq!(repo.dirty, 3);
     assert_eq!(repo.ahead, 2);
     assert_eq!(repo.behind, 1);
@@ -448,63 +232,7 @@ fn assert_sweep_fields(repo: &RepoStatus) {
     );
 }
 
-/// The regression: local start, GitHub update, local finish. The sweep's
-/// result restored the snapshot's `Pending` over the poll's `Passed`.
-#[test]
-fn a_sweep_landing_after_a_poll_keeps_the_polls_github_fields() {
-    let mut app = app_with_pending_repo();
-    let snapshot = sweep_targets(&app, None).remove(0).old;
-    poll(&mut app, poll_says_passed());
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        rebuilt_from(&snapshot),
-        git::FetchOutcome::NotAttempted,
-    );
-    let repo = &app.repos[0];
-    assert_poll_fields(repo);
-    assert_sweep_fields(repo);
-}
-
-/// The other completion order: the sweep lands first, then the poll.
-/// Both halves must end up on the row either way.
-#[test]
-fn a_poll_landing_after_a_sweep_keeps_the_sweeps_local_fields() {
-    let mut app = app_with_pending_repo();
-    let snapshot = sweep_targets(&app, None).remove(0).old;
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        rebuilt_from(&snapshot),
-        git::FetchOutcome::NotAttempted,
-    );
-    poll(&mut app, poll_says_passed());
-    let repo = &app.repos[0];
-    assert_poll_fields(repo);
-    assert_sweep_fields(repo);
-}
-
-/// A failed poll changes no GitHub field, so the row keeps the last good
-/// values, and the sweep landing after it still updates the local half.
-#[test]
-fn a_failed_poll_mid_sweep_leaves_github_fields_and_lands_the_sweep() {
-    let mut app = app_with_pending_repo();
-    poll(&mut app, poll_says_passed());
-    let snapshot = sweep_targets(&app, None).remove(0).old;
-    poll(&mut app, Err("HTTP 502".to_string()));
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        rebuilt_from(&snapshot),
-        git::FetchOutcome::Succeeded,
-    );
-    assert!(app.github_freshness.is_failing());
-    let repo = &app.repos[0];
-    assert_poll_fields(repo);
-    assert_sweep_fields(repo);
-}
-
-fn local(h: u32, m: u32) -> chrono::DateTime<chrono::Local> {
+pub(crate) fn local(h: u32, m: u32) -> chrono::DateTime<chrono::Local> {
     use chrono::TimeZone;
     chrono::Local
         .with_ymd_and_hms(2026, 10, 1, h, m, 0)
@@ -563,7 +291,7 @@ fn a_successful_poll_after_a_failure_clears_it() {
     assert_poll_fields(&app.repos[0]);
 }
 
-fn watching(app: &mut App) -> config::Config {
+pub(crate) fn watching(app: &mut App) -> config::Config {
     app.watch_mode = true;
     config::Config {
         github_poll_interval: 90,
@@ -571,107 +299,7 @@ fn watching(app: &mut App) -> config::Config {
     }
 }
 
-/// Rule 6: a failure advances the retry clock, so the next automatic
-/// attempt waits one whole interval. Not at once, and not in a loop.
-#[test]
-fn no_attempt_sooner_than_one_interval_after_a_failure() {
-    let mut app = app_with_pending_repo();
-    app.repos[0].ci_status = model::CiStatus::Passed;
-    let config = watching(&mut app);
-    poll(&mut app, Err("HTTP 502".to_string()));
-    let failed_at = app.github_freshness.last_attempt.expect("clock advanced");
-
-    let early = failed_at + chrono::Duration::seconds(89);
-    assert!(!github_poll_due(&app, &config, early), "retried early");
-    let on_time = failed_at + chrono::Duration::seconds(90);
-    assert!(github_poll_due(&app, &config, on_time));
-
-    // A detected push does not jump the queue while polls fail either.
-    app.push_detected = true;
-    assert!(!github_poll_due(&app, &config, early), "push retried early");
-}
-
-/// Decision D4: a poll that never answers is recorded as a timed-out
-/// failure and advances the clock, so the next tick does not open a
-/// second request beside the first.
-#[test]
-fn a_poll_given_up_on_is_recorded_as_a_timed_out_failure() {
-    let mut app = app_with_pending_repo();
-    let config = watching(&mut app);
-    claim_github_poll(&mut app).unwrap();
-    app.github_poll_started = std::time::Instant::now()
-        .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
-    let now = chrono::Local::now();
-    expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, now);
-
-    assert!(!app.github_poll_inflight);
-    assert!(matches!(
-        &app.github_freshness.outcome,
-        app::Outcome::Failed(f) if f.kind == github::FailureKind::TimedOut
-    ));
-    assert_eq!(app.github_freshness.last_attempt, Some(now));
-    assert!(!github_poll_due(&app, &config, now), "restarted at once");
-}
-
-/// Rule 10: once a newer attempt has been applied, a late answer from
-/// the one given up on is discarded, so the rows and the data time
-/// never go backwards.
-#[test]
-fn an_answer_from_an_older_attempt_is_discarded_once_a_newer_one_applied() {
-    let mut app = app_with_pending_repo();
-    let first = claim_github_poll(&mut app).unwrap();
-    app.github_poll_started = std::time::Instant::now()
-        .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
-    expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, chrono::Local::now());
-    let second = claim_github_poll(&mut app).unwrap();
-    answer(&mut app, second, Ok(poll_says_passed().ok().unwrap()));
-    let applied = app.github_freshness.clone();
-
-    let mut late = poll_says_passed().ok().unwrap();
-    late.repos[0].ci_status = model::CiStatus::Failed;
-    late.repos[0].pushed_at = app.dataset[0].pushed_at;
-    answer(&mut app, first, Ok(late));
-
-    assert_poll_fields(&app.repos[0]);
-    assert_eq!(app.github_freshness, applied);
-}
-
-/// The other order: the given-up attempt answers while the newer one is
-/// still out. Its data is the newest there is, so it lands, but the lock
-/// belongs to the newer request and stays held.
-#[test]
-fn a_late_answer_does_not_release_the_newer_attempts_lock() {
-    let mut app = app_with_pending_repo();
-    let first = claim_github_poll(&mut app).unwrap();
-    app.github_poll_started = std::time::Instant::now()
-        .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
-    expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, chrono::Local::now());
-    let _second = claim_github_poll(&mut app).unwrap();
-    answer(&mut app, first, Ok(poll_says_passed().ok().unwrap()));
-
-    assert_poll_fields(&app.repos[0]);
-    assert!(app.github_poll_inflight, "the newer request lost its lock");
-    assert!(app.github_poll_started.is_some());
-}
-
-/// Decision D3: a `Pending` frozen by a failing poll does not hold the
-/// interval at the floor.
-#[test]
-fn a_pending_repo_does_not_shorten_the_interval_while_polls_fail() {
-    let config = config::Config {
-        github_poll_interval: 90,
-        ..config::Config::default()
-    };
-    let mut app = app_with(&[model::CiStatus::Pending]);
-    assert_eq!(github_poll_secs(&app, &config), GITHUB_POLL_MIN as i64);
-    app.github_freshness.failed(
-        github::Failure::new(github::FailureKind::Offline, "no route"),
-        chrono::Local::now(),
-    );
-    assert_eq!(github_poll_secs(&app, &config), 90);
-}
-
-fn launch(app: &mut App, kind: LoadKind, source: app::DatasetSource) {
+pub(crate) fn launch(app: &mut App, kind: LoadKind, source: app::DatasetSource) {
     apply_load_result(
         app,
         &config::Config::default(),
@@ -686,57 +314,6 @@ fn launch(app: &mut App, kind: LoadKind, source: app::DatasetSource) {
             meta: None,
         })),
     );
-}
-
-/// Decision D2: a cache-served launch is followed by one attempt even with
-/// watch off, and only one. Watch decides whether polling continues.
-#[test]
-fn a_cache_served_launch_with_watch_off_makes_exactly_one_attempt() {
-    for outcome in [Ok(()), Err(())] {
-        let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
-        let config = config::Config::default();
-        assert!(!app.watch_mode);
-        assert!(
-            !github_poll_due(&app, &config, chrono::Local::now()),
-            "before load"
-        );
-        launch(
-            &mut app,
-            LoadKind::Initial,
-            app::DatasetSource::Cache {
-                written: Some(local(8, 0)),
-            },
-        );
-        assert!(github_poll_due(&app, &config, chrono::Local::now()));
-
-        let attempt = claim_github_poll(&mut app).unwrap();
-        assert!(!github_poll_due(&app, &config, chrono::Local::now()));
-        let result = match outcome {
-            Ok(()) => poll_says_passed(),
-            Err(()) => Err("HTTP 502".to_string()),
-        };
-        let result = result.map_err(|m| github::FetchError {
-            failure: github::Failure::new(github::FailureKind::Http, m),
-            fallback: None,
-            meta: Default::default(),
-        });
-        answer(&mut app, attempt, result);
-
-        let tomorrow = chrono::Local::now() + chrono::Duration::days(1);
-        assert!(
-            !github_poll_due(&app, &config, tomorrow),
-            "watch off kept polling after {outcome:?}"
-        );
-    }
-}
-
-/// A network-served launch with watch off owes nothing more.
-#[test]
-fn a_network_served_launch_with_watch_off_does_not_poll() {
-    let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
-    launch(&mut app, LoadKind::Initial, app::DatasetSource::Network);
-    let tomorrow = chrono::Local::now() + chrono::Duration::days(1);
-    assert!(!github_poll_due(&app, &config::Config::default(), tomorrow));
 }
 
 /// Rule 1 with a planted age: the cache's write time is the data time,
@@ -769,30 +346,9 @@ fn a_launch_from_a_cache_of_unreadable_age_leaves_the_age_unknown() {
     assert_eq!(app.github_freshness.data_time, app::DataTime::Unknown);
 }
 
-/// No usable cache and the request fails: the error panel, as before, and
-/// the failed attempt is recorded so the retry clock advances.
-#[test]
-fn a_launch_with_no_usable_cache_records_the_failed_attempt() {
-    let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
-    let failure = github::Failure::new(github::FailureKind::Auth, "not authenticated");
-    apply_load_result(
-        &mut app,
-        &config::Config::default(),
-        Err(LoadError {
-            message: failure.message.clone(),
-            github_failure: Some(failure.clone()),
-            budget: None,
-        }),
-    );
-    assert_eq!(app.load_error.as_deref(), Some("not authenticated"));
-    assert_eq!(app.github_freshness.outcome, app::Outcome::Failed(failure));
-    assert!(app.github_freshness.last_attempt.is_some());
-    assert_eq!(app.github_freshness.data_time, app::DataTime::NoData);
-}
-
 /// An `R` that went to GitHub, landing over the row `app_with_pending_repo`
 /// draws, the way a reload rebuilds it: CI as the reload saw it.
-fn reload_lands(app: &mut App, source: app::DatasetSource) {
+pub(crate) fn reload_lands(app: &mut App, source: app::DatasetSource) {
     let mut repo = app.repos[0].clone();
     repo.ci_status = model::CiStatus::Passed;
     apply_load_result(
@@ -812,108 +368,10 @@ fn reload_lands(app: &mut App, source: app::DatasetSource) {
 }
 
 /// A poll answer older than the `R` that landed: CI as it was before.
-fn stale_answer() -> Result<Box<github::GithubFetch>, github::FetchError> {
+pub(crate) fn stale_answer() -> Result<Box<github::GithubFetch>, github::FetchError> {
     let mut old = poll_says_passed().ok().unwrap();
     old.repos[0].ci_status = model::CiStatus::Failed;
     Ok(old)
-}
-
-/// Rule 10 with `R` as the newer attempt. A watch poll hangs and is
-/// given up on, `R` succeeds, then the hung request answers. Loads never
-/// touched the attempt ids, so the old payload was written over the
-/// reload's rows and stamped fresh.
-#[test]
-fn a_late_poll_answer_after_a_successful_reload_is_discarded() {
-    let mut app = app_with_pending_repo();
-    let hung = claim_github_poll(&mut app).unwrap();
-    app.github_poll_started = std::time::Instant::now()
-        .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
-    expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, chrono::Local::now());
-    reload_lands(&mut app, app::DatasetSource::Network);
-    let after_reload = app.github_freshness.clone();
-
-    answer(&mut app, hung, stale_answer());
-
-    assert_eq!(
-        app.repos[0].ci_status,
-        model::CiStatus::Passed,
-        "rows rewound"
-    );
-    assert_eq!(app.github_freshness, after_reload, "freshness rewound");
-    assert!(!app.github_poll_inflight);
-    assert!(app.github_poll_started.is_none());
-    let config = watching(&mut app);
-    let later = chrono::Local::now() + chrono::Duration::seconds(90);
-    assert!(
-        github_poll_due(&app, &config, later),
-        "polling never resumed"
-    );
-}
-
-/// The mirror case: the poll is still in flight, not given up on, when
-/// `R` lands, with an `r` waiting on it. `R` wins: it is applied first and
-/// rebuilt every row, and an answer that cannot be ordered against it
-/// must not overwrite it. The answer still releases the lock and settles
-/// the waiting `r`, or polling and the spinner would stall for good.
-#[test]
-fn a_poll_in_flight_when_a_reload_lands_is_superseded_but_releases_its_lock() {
-    let mut app = app_with_pending_repo();
-    let in_flight = claim_github_poll(&mut app).unwrap();
-    app.refresh_awaits_poll = true;
-    reload_lands(&mut app, app::DatasetSource::Network);
-    let after_reload = app.github_freshness.clone();
-    assert!(
-        app.github_poll_inflight,
-        "the lock is the request's to release"
-    );
-
-    answer(&mut app, in_flight, stale_answer());
-
-    assert_eq!(
-        app.repos[0].ci_status,
-        model::CiStatus::Passed,
-        "rows rewound"
-    );
-    assert_eq!(app.github_freshness, after_reload);
-    assert!(!app.github_poll_inflight, "lock left set");
-    assert!(app.github_poll_started.is_none());
-    assert!(!app.refresh_awaits_poll, "the waiting r never settled");
-    assert!(claim_github_poll(&mut app).is_some(), "no poll can start");
-}
-
-/// A reload that fell back to the cache supersedes the same way: its rows
-/// were rebuilt from the file, and a poll started before it is older.
-#[test]
-fn a_reload_fallback_also_supersedes_an_older_poll() {
-    let mut app = app_with_pending_repo();
-    let in_flight = claim_github_poll(&mut app).unwrap();
-    reload_lands(
-        &mut app,
-        app::DatasetSource::Fallback {
-            failure: github::Failure::new(github::FailureKind::Offline, "no route"),
-            written: None,
-        },
-    );
-    answer(&mut app, in_flight, stale_answer());
-    assert_eq!(app.repos[0].ci_status, model::CiStatus::Passed);
-    assert!(app.github_freshness.is_failing());
-    assert!(!app.github_poll_inflight);
-}
-
-/// A cache-served launch made no attempt and is older than any poll, so
-/// a poll in flight past it still lands.
-#[test]
-fn a_cache_served_load_does_not_supersede_a_poll() {
-    let mut app = app_with_pending_repo();
-    let in_flight = claim_github_poll(&mut app).unwrap();
-    reload_lands(&mut app, app::DatasetSource::Cache { written: None });
-    answer(
-        &mut app,
-        in_flight,
-        poll_says_passed().map_err(|_| unreachable!()),
-    );
-    assert_poll_fields(&app.repos[0]);
-    assert_eq!(app.github_freshness.outcome, app::Outcome::Success);
 }
 
 /// `R` exists to be current. One that could only rebuild from the cache
@@ -943,199 +401,20 @@ fn a_reload_that_fell_back_to_the_cache_does_not_claim_a_reload() {
     assert_eq!(status, "Reloaded");
 }
 
-/// Rows the sweep does not probe keep their current values: identity,
-/// groups and owner come from the load, not from the snapshot. The
-/// selection is the app's, and a sweep result must not move it.
-#[test]
-fn a_sweep_result_keeps_identity_groups_and_selection() {
-    let mut app = app_with_pending_repo();
-    let snapshot = sweep_targets(&app, None).remove(0).old;
-    let selected = app.selected;
-    let mut status = rebuilt_from(&snapshot);
-    // Whatever a stale snapshot carried for fields the sweep does not
-    // own, the row as it is now wins.
-    status.groups = vec![];
-    status.owner = None;
-    status.remote_url = None;
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        status,
-        git::FetchOutcome::NotAttempted,
-    );
-    let repo = &app.repos[0];
-    assert_eq!(repo.name, "r");
-    assert_eq!(repo.path.as_deref(), Some(SWEPT_PATH));
-    assert_eq!(repo.groups, vec!["work".to_string()]);
-    assert_eq!(repo.owner.as_deref(), Some("Gaurgle"));
-    assert_eq!(
-        repo.remote_url.as_deref(),
-        Some("git@github.com:Gaurgle/r.git")
-    );
-    assert_eq!(app.selected, selected);
-    assert_eq!(app.repos.len(), 1);
-}
-
-/// The single-repo sweep (`f`, a moved remote) reports `fetched: true`
-/// and the full watch sweep often does not; both land through the same
-/// merge, so the poll's fields survive either.
-#[test]
-fn single_and_full_sweep_results_merge_alike() {
-    for fetched in [false, true] {
-        let mut app = app_with_pending_repo();
-        let single = sweep_targets(&app, Some(0)).remove(0).old;
-        let full = sweep_targets(&app, None).remove(0).old;
-        poll(&mut app, poll_says_passed());
-        let snapshot = if fetched { single } else { full };
-        let fetch = if fetched {
-            git::FetchOutcome::Succeeded
-        } else {
-            git::FetchOutcome::NotAttempted
-        };
-        apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), fetch);
-        assert_poll_fields(&app.repos[0]);
-        assert_sweep_fields(&app.repos[0]);
-    }
-}
-
-/// A late result for a path that no longer has a row is dropped: it must
-/// not create a row, nor land on an unrelated one.
-#[test]
-fn a_late_result_for_a_removed_repo_adds_no_row() {
-    let mut app = app_with_pending_repo();
-    let snapshot = sweep_targets(&app, None).remove(0).old;
-    let mut other = test_repo();
-    other.name = "other".to_string();
-    other.path = Some("~/repos/other".to_string());
-    app.repos = vec![other];
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        rebuilt_from(&snapshot),
-        git::FetchOutcome::Succeeded,
-    );
-    assert_eq!(app.repos.len(), 1);
-    let repo = &app.repos[0];
-    assert_eq!(repo.name, "other");
-    assert_eq!(repo.dirty, 0);
-    assert!(repo.commits.is_empty());
-}
-
-/// S15 of the repository identity design (section 3.6): a sweep result
-/// lands by path, on whatever row a reload has put there since, even when
-/// that row stands for another remote. Every field a sweep writes is a
-/// probe of the directory, so it is right for the row at that path; the
-/// row's identity, GitHub fields and groups stay the reload's.
-#[test]
-fn a_late_result_lands_by_path_on_the_row_a_reload_put_there() {
-    let mut app = app_with_pending_repo();
-    let snapshot = sweep_targets(&app, None).remove(0).old;
-    let mut now_there = test_repo();
-    now_there.name = "y".to_string();
-    now_there.path = Some(SWEPT_PATH.to_string());
-    now_there.owner = Some("Gaurgle".to_string());
-    now_there.remote_url = Some("git@github.com:Gaurgle/y.git".to_string());
-    now_there.ci_status = model::CiStatus::Passed;
-    now_there.groups = vec!["side".to_string()];
-    app.repos = vec![now_there];
-
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        rebuilt_from(&snapshot),
-        git::FetchOutcome::NotAttempted,
-    );
-
-    assert_eq!(app.repos.len(), 1);
-    let repo = &app.repos[0];
-    assert_eq!(repo.name, "y");
-    assert_eq!(repo.owner.as_deref(), Some("Gaurgle"));
-    assert_eq!(
-        repo.remote_url.as_deref(),
-        Some("git@github.com:Gaurgle/y.git")
-    );
-    assert_eq!(repo.ci_status, model::CiStatus::Passed);
-    assert_eq!(repo.groups, vec!["side".to_string()]);
-    assert_sweep_fields(repo);
-}
-
 // --- FZ-04: fetch outcomes land as outcomes, not as "requested" ---
 
-fn fetch_failed(kind: git::FetchFailureKind) -> git::FetchOutcome {
+pub(crate) fn fetch_failed(kind: git::FetchFailureKind) -> git::FetchOutcome {
     git::FetchOutcome::Failed(git::FetchFailure {
         kind,
         detail: Some("fatal: '/gone' does not appear to be a git repository".to_string()),
     })
 }
 
-/// One fetch that worked: the row says so and has a success time.
-#[test]
-fn a_successful_fetch_lands_as_a_success() {
-    let mut app = app_with_pending_repo();
-    let snapshot = sweep_targets(&app, Some(0)).remove(0).old;
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        rebuilt_from(&snapshot),
-        git::FetchOutcome::Succeeded,
-    );
-    let facts = &app.repos[0].fetch;
-    assert_eq!(facts.outcome, git::FetchOutcome::Succeeded);
-    assert!(facts.last_success.is_some());
-}
-
-/// Rule 1 and rule 4: a fetch from a remote that is gone lands as a
-/// failure, not as a fetch. The rebuilt local state still lands, the
-/// last success stays where it was, and nothing claims the refs moved.
-#[test]
-fn a_failed_fetch_lands_as_a_failure_and_keeps_the_last_success() {
-    let mut app = app_with_pending_repo();
-    let earlier = chrono::Local::now() - chrono::Duration::hours(1);
-    app.repos[0].fetch = model::FetchFacts::from_disk(Some(earlier.into()));
-    let snapshot = sweep_targets(&app, Some(0)).remove(0).old;
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        rebuilt_from(&snapshot),
-        fetch_failed(git::FetchFailureKind::NoRemote),
-    );
-    let repo = &app.repos[0];
-    assert_sweep_fields(repo);
-    assert_eq!(
-        repo.fetch.failure().map(|f| f.kind),
-        Some(git::FetchFailureKind::NoRemote)
-    );
-    assert_eq!(repo.fetch.last_success, Some(earlier));
-    assert!(repo.fetch.last_attempt.is_some());
-}
-
-/// A timeout is a failure of its own kind, settled like any other.
-#[test]
-fn a_timed_out_fetch_lands_as_timed_out_and_settles() {
-    let mut app = app_with_pending_repo();
-    app.refresh_awaits_poll = true;
-    app.settle_refresh_poll([SWEPT_PATH.to_string()]);
-    let snapshot = sweep_targets(&app, Some(0)).remove(0).old;
-    let timed_out = git::FetchOutcome::Failed(git::FetchFailure {
-        kind: git::FetchFailureKind::TimedOut,
-        detail: None,
-    });
-    apply_repo_updated(&mut app, SWEPT_PATH, rebuilt_from(&snapshot), timed_out);
-    assert_eq!(
-        app.repos[0].fetch.failure().map(|f| f.kind),
-        Some(git::FetchFailureKind::TimedOut)
-    );
-    assert!(
-        !app.is_refreshing(),
-        "a timed-out fetch left the spinner running"
-    );
-}
-
 /// `r` pressed while the watch timer's sweep and poll are both in
 /// flight, which with a short `refresh_interval` is most of the time.
 /// Neither is started again, so nothing is spawned and no runtime is
 /// needed. Returns the poll's attempt, for its answer.
-fn r_during_a_watch_sweep(app: &mut App) -> u64 {
+pub(crate) fn r_during_a_watch_sweep(app: &mut App) -> u64 {
     app.watch_mode = true;
     app.sweep_started = Some(std::time::Instant::now());
     app.sweep_manual = false;
@@ -1153,118 +432,8 @@ fn r_during_a_watch_sweep(app: &mut App) -> u64 {
     attempt
 }
 
-/// FZ-85 (#142): the events of `r` pressed during a watch sweep, in the
-/// order they arrive. The sweep lock made `r`'s own sweep a no-op and
-/// left the running sweep unmarked, so the spinner keyed on the poll
-/// alone: `AppEvent::Github` landed in a second and stopped it, and the
-/// watch sweep's fetched `RepoUpdated` rows landed after it.
-#[test]
-fn r_during_a_watch_sweep_spins_until_that_sweeps_rows_land() {
-    let mut app = fleet_app(2);
-    let attempt = r_during_a_watch_sweep(&mut app);
-
-    answer(&mut app, attempt, ok_with(None));
-    assert!(
-        app.is_refreshing(),
-        "stopped at the poll, before the sweep's rows landed"
-    );
-    land(&mut app, 0, git::FetchOutcome::Succeeded);
-    assert!(app.is_refreshing(), "stopped before the last row landed");
-    land(&mut app, 1, git::FetchOutcome::Succeeded);
-    // `spawn_sweep` sends `SweepDone` once every row has been sent.
-    app.sweep_landed(chrono::Local::now());
-    assert!(!app.is_refreshing(), "spun on after the last row landed");
-}
-
-/// FZ-85 (#142): a fetch that fails still ends its part of the refresh,
-/// both the poll's fetch of a moved remote and the sweep's own.
-#[tokio::test]
-async fn r_during_a_watch_sweep_ends_when_a_fetch_fails() {
-    let mut app = missing_paths_app(2, "fz85");
-    app.dataset = vec![
-        gh("repo-0", "2026-11-05T10:00:00Z"),
-        gh("repo-1", "2026-11-05T10:00:00Z"),
-    ];
-    let attempt = r_during_a_watch_sweep(&mut app);
-    let (moved, swept) = (
-        app.repos[0].path.clone().unwrap(),
-        app.repos[1].path.clone().unwrap(),
-    );
-    let mut fetch = ok_with(None).unwrap();
-    fetch.repos = vec![
-        gh("repo-0", "2026-11-05T11:00:00Z"),
-        gh("repo-1", "2026-11-05T10:00:00Z"),
-    ];
-    answer(&mut app, attempt, Ok(fetch));
-    assert!(
-        app.refresh_fetches.contains(&moved),
-        "the push was not fetched"
-    );
-
-    let failed = fetch_failed(git::FetchFailureKind::Unreachable);
-    let status = app.repos[1].clone();
-    apply_repo_updated(&mut app, &swept, status, failed.clone());
-    app.sweep_landed(chrono::Local::now());
-    assert!(
-        app.is_refreshing(),
-        "stopped before the moved remote's fetch landed"
-    );
-    let status = app.repos[0].clone();
-    apply_repo_updated(&mut app, &moved, status, failed);
-    assert!(
-        !app.is_refreshing(),
-        "a failed fetch left the spinner running"
-    );
-}
-
-/// Rule 2: a watch sweep that did not fetch lands its local fields and
-/// leaves the failure, its time and the last success exactly as they were.
-#[test]
-fn a_sweep_that_did_not_fetch_leaves_the_fetch_facts_alone() {
-    let mut app = app_with_pending_repo();
-    let snapshot = sweep_targets(&app, Some(0)).remove(0).old;
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        rebuilt_from(&snapshot),
-        fetch_failed(git::FetchFailureKind::Auth),
-    );
-    let before = app.repos[0].fetch.clone();
-    // The snapshot predates the failure; its copy of the facts must not
-    // land either.
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        rebuilt_from(&snapshot),
-        git::FetchOutcome::NotAttempted,
-    );
-    assert_eq!(app.repos[0].fetch, before);
-}
-
-/// Recovery: the next fetch that works clears the failure.
-#[test]
-fn a_fetch_that_works_after_a_failure_recovers() {
-    let mut app = app_with_pending_repo();
-    let snapshot = sweep_targets(&app, Some(0)).remove(0).old;
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        rebuilt_from(&snapshot),
-        fetch_failed(git::FetchFailureKind::Unreachable),
-    );
-    apply_repo_updated(
-        &mut app,
-        SWEPT_PATH,
-        rebuilt_from(&snapshot),
-        git::FetchOutcome::Succeeded,
-    );
-    let facts = &app.repos[0].fetch;
-    assert_eq!(facts.failure(), None);
-    assert!(facts.last_success.is_some());
-}
-
 /// An app with `n` cloned repos at `~/repos/repo-<i>`.
-fn fleet_app(n: usize) -> App {
+pub(crate) fn fleet_app(n: usize) -> App {
     let repos = (0..n)
         .map(|i| {
             let mut r = test_repo();
@@ -1276,7 +445,7 @@ fn fleet_app(n: usize) -> App {
     App::new(repos, "h".to_string(), 120, 44)
 }
 
-fn land(app: &mut App, i: usize, fetch: git::FetchOutcome) {
+pub(crate) fn land(app: &mut App, i: usize, fetch: git::FetchOutcome) {
     let path = format!("~/repos/repo-{i}");
     let status = app.repos[i].clone();
     apply_repo_updated(app, &path, status, fetch);
@@ -1346,204 +515,16 @@ fn a_failed_fetch_schedules_nothing_new() {
     assert_eq!(app.last_refreshed, refreshed);
 }
 
-fn offline_outcome() -> app::Outcome {
+pub(crate) fn offline_outcome() -> app::Outcome {
     app::Outcome::Failed(github::Failure::new(
         github::FailureKind::Offline,
         "no route",
     ))
 }
 
-/// Rule 6, amended: only the step from an `Offline` poll to a success
-/// selects, and only the rows the outage failed (`Unreachable`,
-/// `TimedOut`), never one marked for another reason or a clean one.
-#[test]
-fn a_poll_recovering_from_offline_refetches_only_the_network_failures() {
-    let mut app = fleet_app(7);
-    land(
-        &mut app,
-        0,
-        fetch_failed(git::FetchFailureKind::Unreachable),
-    );
-    land(&mut app, 1, fetch_failed(git::FetchFailureKind::TimedOut));
-    land(&mut app, 2, fetch_failed(git::FetchFailureKind::Auth));
-    land(&mut app, 3, fetch_failed(git::FetchFailureKind::NoRemote));
-    land(&mut app, 4, fetch_failed(git::FetchFailureKind::Other));
-    land(&mut app, 5, git::FetchOutcome::Succeeded);
-    // Row 6 was never fetched.
-    let success = app::Outcome::Success;
-
-    assert_eq!(
-        recovery_refetch(&offline_outcome(), &success, &app.repos),
-        vec![0, 1]
-    );
-    assert!(recovery_refetch(&success, &success, &app.repos).is_empty());
-    assert!(recovery_refetch(&app::Outcome::NotAttempted, &success, &app.repos).is_empty());
-    let still_failing = app::Outcome::Failed(github::Failure::new(
-        github::FailureKind::Server,
-        "HTTP 502",
-    ));
-    assert!(recovery_refetch(&offline_outcome(), &still_failing, &app.repos).is_empty());
-    assert!(recovery_refetch(&offline_outcome(), &offline_outcome(), &app.repos).is_empty());
-    let other_failure = app::Outcome::Failed(github::Failure::new(
-        github::FailureKind::TimedOut,
-        "no answer",
-    ));
-    assert!(recovery_refetch(&other_failure, &success, &app.repos).is_empty());
-}
-
-/// Rule 6, amended, through the poll: a row the outage failed is in the
-/// fetch batch of the first successful poll after an `Offline` one, the
-/// way a moved remote is, and not in the next poll's when it failed
-/// again: the recovery refetch happens once.
-#[tokio::test]
-async fn a_row_the_outage_failed_is_fetched_once_when_the_poll_recovers() {
-    // A path that does not exist, so the spawned fetch touches nothing.
-    let path = std::env::temp_dir()
-        .join("fleetz-76-no-such-dir")
-        .join("repo")
-        .display()
-        .to_string();
-    let mut repo = test_repo();
-    repo.path = Some(path.clone());
-    let mut app = App::new(vec![repo], "h".to_string(), 120, 44);
-    let status = app.repos[0].clone();
-    let unreachable = || fetch_failed(git::FetchFailureKind::Unreachable);
-    apply_repo_updated(&mut app, &path, status.clone(), unreachable());
-    let ok = || {
-        Ok(Box::new(github::GithubFetch {
-            repos: Vec::new(),
-            calendar: None,
-            has_pr_counts: true,
-            origin: github::Origin::Network,
-            meta: Default::default(),
-        }))
-    };
-    let offline = || {
-        Err(github::FetchError {
-            failure: github::Failure::new(github::FailureKind::Offline, "no route"),
-            fallback: None,
-            meta: Default::default(),
-        })
-    };
-
-    app.refresh_awaits_poll = true;
-    poll_with(&mut app, offline());
-    assert!(app.refresh_fetches.is_empty(), "an offline poll fetched");
-
-    app.refresh_awaits_poll = true;
-    poll_with(&mut app, ok());
-    assert_eq!(
-        app.refresh_fetches.iter().collect::<Vec<_>>(),
-        vec![&path],
-        "the recovering poll did not refetch the failed row"
-    );
-
-    // Its refetch fails again; the next poll leaves it for the next
-    // trigger.
-    apply_repo_updated(&mut app, &path, status, unreachable());
-    assert!(app.refresh_fetches.is_empty());
-    app.refresh_awaits_poll = true;
-    poll_with(&mut app, ok());
-    assert!(
-        app.refresh_fetches.is_empty(),
-        "the recovery refetch repeated"
-    );
-    assert_eq!(
-        app.repos[0].fetch.failure().map(|f| f.kind),
-        Some(git::FetchFailureKind::Unreachable)
-    );
-}
-
-/// A reload replaces every row; the session's fetch facts go across by
-/// path, so a window apply cannot wipe a failure off a row.
-#[test]
-fn a_reload_carries_the_fetch_facts_by_path() {
-    let mut app = fleet_app(2);
-    land(&mut app, 1, fetch_failed(git::FetchFailureKind::Auth));
-    let reloaded = fleet_app(2).repos;
-    let carried = carry_fetch_facts(&app.repos, reloaded);
-    assert_eq!(carried[0].fetch, model::FetchFacts::default());
-    assert_eq!(carried[1].fetch, app.repos[1].fetch);
-}
-
-/// FZ-34 (#83), criterion 3: the watch sweep rebuilds a row held after
-/// a timeout without fetching it, and fetches it again once the hold
-/// (two intervals after the first timeout) has passed or a fetch
-/// succeeded. Other failure kinds hold nothing.
-#[test]
-fn the_watch_sweep_skips_the_fetch_of_a_row_that_timed_out() {
-    let mut app = fleet_app(3);
-    app.refresh_interval = 60;
-    land(&mut app, 0, fetch_failed(git::FetchFailureKind::TimedOut));
-    land(
-        &mut app,
-        1,
-        fetch_failed(git::FetchFailureKind::Unreachable),
-    );
-    let now = chrono::Local::now();
-    let targets = sweep_targets(&app, None);
-    assert_eq!(
-        held_fetch_paths(&app, &targets, now),
-        ["~/repos/repo-0".to_string()].into(),
-    );
-    assert!(
-        held_fetch_paths(&app, &targets, now + chrono::Duration::seconds(121)).is_empty(),
-        "still held after two intervals"
-    );
-    assert_eq!(
-        app.repos[0].fetch.failure().map(|f| f.kind),
-        Some(git::FetchFailureKind::TimedOut),
-        "the row stopped showing its timeout"
-    );
-    // The automatic selection skips the held row and claims no fetch for
-    // it; a manual one fetches it.
-    let automatic = fetch_skips(&mut app, &targets, true, true);
-    assert!(automatic.contains("~/repos/repo-0"), "{automatic:?}");
-    assert!(!app.fetches_in_flight.contains_key("~/repos/repo-0"));
-    assert!(app.fetches_in_flight.contains_key("~/repos/repo-1"));
-    app.fetches_in_flight.clear();
-    let manual = fetch_skips(&mut app, &targets, true, false);
-    assert!(!manual.contains("~/repos/repo-0"), "{manual:?}");
-    assert!(app.fetches_in_flight.contains_key("~/repos/repo-0"));
-    land(&mut app, 0, git::FetchOutcome::Succeeded);
-    assert!(held_fetch_paths(&app, &targets, now).is_empty());
-}
-
-/// FZ-34 (#83), R5: a fetching sweep claims each path it fetches, and
-/// the next selection, manual or automatic, sweeps a path whose fetch is
-/// still running without fetching it again. The landed outcome ends the
-/// claim; a sweep that did not fetch claims nothing.
-#[test]
-fn a_running_fetch_is_skipped_by_the_next_selection_until_it_lands() {
-    let mut app = fleet_app(2);
-    let targets = sweep_targets(&app, None);
-    assert!(fetch_skips(&mut app, &targets, false, true).is_empty());
-    assert!(
-        app.fetches_in_flight.is_empty(),
-        "a sweep without fetch claimed"
-    );
-    assert!(fetch_skips(&mut app, &targets, true, true).is_empty());
-    let both: std::collections::HashSet<String> =
-        ["~/repos/repo-0".to_string(), "~/repos/repo-1".to_string()].into();
-    assert_eq!(fetch_skips(&mut app, &targets, true, false), both, "manual");
-    assert_eq!(
-        fetch_skips(&mut app, &targets, true, true),
-        both,
-        "automatic"
-    );
-    // A sweep that only rebuilt repo-0 lands first; its fetch still runs.
-    land(&mut app, 0, git::FetchOutcome::NotAttempted);
-    assert_eq!(fetch_skips(&mut app, &targets, true, false), both);
-    land(&mut app, 0, git::FetchOutcome::Succeeded);
-    assert_eq!(
-        fetch_skips(&mut app, &targets, true, false),
-        ["~/repos/repo-1".to_string()].into()
-    );
-}
-
 /// An app whose rows sit at paths that do not exist, so a sweep spawned
 /// from a test touches nothing on disk.
-fn missing_paths_app(n: usize, tag: &str) -> App {
+pub(crate) fn missing_paths_app(n: usize, tag: &str) -> App {
     let repos = (0..n)
         .map(|i| {
             let mut r = test_repo();
@@ -1561,7 +542,7 @@ fn missing_paths_app(n: usize, tag: &str) -> App {
     App::new(repos, "h".to_string(), 120, 44)
 }
 
-fn timed_out_at(app: &mut App, i: usize) -> String {
+pub(crate) fn timed_out_at(app: &mut App, i: usize) -> String {
     let path = app.repos[i].path.clone().unwrap();
     let status = app.repos[i].clone();
     apply_repo_updated(
@@ -1573,149 +554,11 @@ fn timed_out_at(app: &mut App, i: usize) -> String {
     path
 }
 
-/// FZ-34 (#83), criterion 3 through `start_sweep`: the watch timer's
-/// sweep fetches every row but the one held after a timeout.
-#[tokio::test]
-async fn the_watch_timer_sweep_claims_no_fetch_for_a_held_row() {
-    let mut app = missing_paths_app(3, "watch");
-    let held = timed_out_at(&mut app, 1);
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    start_sweep(&mut app, &tx, true, None, false);
-    assert!(
-        !app.fetches_in_flight.contains_key(&held),
-        "held row fetched"
-    );
-    for i in [0, 2] {
-        let path = app.repos[i].path.clone().unwrap();
-        assert!(
-            app.fetches_in_flight.contains_key(&path),
-            "row {i} not fetched"
-        );
-    }
-}
-
-/// FZ-34 (#83): `f` is manual, so it fetches a row held after a timeout.
-#[tokio::test]
-async fn f_fetches_a_row_held_after_a_timeout() {
-    let mut app = missing_paths_app(1, "fkey");
-    let held = timed_out_at(&mut app, 0);
-    assert!(app.fetch_held(&held, chrono::Local::now()));
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    fetch_key(&mut app, &tx, None);
-    assert!(
-        app.fetches_in_flight.contains_key(&held),
-        "f skipped the held row"
-    );
-}
-
-/// FZ-35a (#84), criterion 4: a sweep's landing ends only the claim it
-/// held, and clears the row's progress.
-#[test]
-fn a_landing_from_an_expired_sweep_leaves_the_newer_claim() {
-    let mut app = fleet_app(1);
-    let path = app.repos[0].path.clone().unwrap();
-    let status = app.repos[0].clone();
-    let t0 = std::time::Instant::now();
-    assert!(app.claim_fetch(&path, t0));
-    let old = app.fetches_in_flight.token(&path);
-    app.expire_fetches_in_flight(SWEEP_STUCK_AFTER, t0 + SWEEP_STUCK_AFTER * 2);
-    assert!(app.claim_fetch(&path, t0 + SWEEP_STUCK_AFTER * 2));
-    let newer = app.fetches_in_flight.token(&path);
-    app.apply_fetch_progress(
-        &path,
-        git::FetchProgress {
-            phase: git::FetchPhase::Receiving,
-            objects_done: 1,
-            objects_total: 2,
-            bytes: 1,
-        },
-    );
-    land_repo_update(
-        &mut app,
-        &path,
-        status.clone(),
-        git::FetchOutcome::Succeeded,
-        old,
-    );
-    assert_eq!(app.fetches_in_flight.token(&path), newer);
-    assert_eq!(app.repos[0].fetch.progress, None, "landing kept progress");
-    land_repo_update(&mut app, &path, status, git::FetchOutcome::Succeeded, newer);
-    assert!(!app.fetches_in_flight.contains_key(&path));
-}
-
-/// FZ-35a (#84), criteria 3 and 4 through a real sweep: the fetch's
-/// progress reaches the app as `FetchProgress` events, throttled, all
-/// before the `RepoUpdated` that lands it with the claim's token. The
-/// clone's upload-pack hook prints the progress, standing in for git's.
-#[tokio::test]
-async fn a_sweep_streams_its_fetch_progress_before_it_lands() {
-    let scratch = wt_scratch("sweep_progress");
-    let upstream = scratch.join("up");
-    id_repo(&upstream, None, false);
-    let clone = scratch.join("down");
-    wt_sh(
-        &scratch,
-        &[
-            "git",
-            "clone",
-            "-q",
-            upstream.to_str().unwrap(),
-            clone.to_str().unwrap(),
-        ],
-    );
-    wt_sh(
-        &upstream,
-        &["git", "commit", "-q", "--allow-empty", "-m", "two"],
-    );
-    let hook = "i=1; while [ $i -le 5 ]; do \
-         printf 'Receiving objects: %d%% (%d/5), %d.00 MiB | 1.00 MiB/s\\r' \
-         $((i * 20)) $i $i >&2; sleep 0.3; i=$((i + 1)); done; git upload-pack";
-    wt_sh(&clone, &["git", "config", "remote.origin.uploadpack", hook]);
-    let mut row = test_repo();
-    row.path = Some(clone.display().to_string());
-    let mut app = App::new(vec![row], "h".to_string(), 120, 44);
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let start = std::time::Instant::now();
-    start_single_sweep(&mut app, &tx, 0, true, false, None);
-    let path = clone.display().to_string();
-    let token = app.fetches_in_flight.token(&path).expect("claimed");
-    let mut progress = Vec::new();
-    let (fetch, claim) = loop {
-        match tokio::time::timeout(std::time::Duration::from_secs(20), rx.recv()).await {
-            Ok(Some(AppEvent::FetchProgress {
-                path: p,
-                progress: update,
-            })) => {
-                assert_eq!(p, path);
-                progress.push(update);
-            }
-            Ok(Some(AppEvent::RepoUpdated { fetch, claim, .. })) => break (fetch, claim),
-            Ok(Some(_)) => {}
-            other => panic!("the sweep never landed: {}", other.is_ok()),
-        }
-    };
-    let took = start.elapsed();
-    assert_eq!(fetch, git::FetchOutcome::Succeeded);
-    assert_eq!(claim, Some(token));
-    assert!(
-        progress.iter().any(|p| p.bytes >= 1024 * 1024),
-        "{progress:?}"
-    );
-    // Five hook updates and git's own lines, at most two a second.
-    let allowed = 1 + (took.as_millis() / PROGRESS_EVENT_GAP.as_millis()) as usize;
-    assert!(
-        !progress.is_empty() && progress.len() <= allowed,
-        "{} events in {took:?}",
-        progress.len()
-    );
-    std::fs::remove_dir_all(&scratch).ok();
-}
-
-const MIB: u64 = 1024 * 1024;
+pub(crate) const MIB: u64 = 1024 * 1024;
 
 /// A row grown past the cap (the pre-check) and a row whose fetch was
 /// cut at the cap, as the poll and a landing leave them.
-fn hold_sizes(app: &mut App, grown: usize, cut: usize) {
+pub(crate) fn hold_sizes(app: &mut App, grown: usize, cut: usize) {
     app.repos[grown].fetch.disk_baseline = Some(1_000);
     app.repos[grown]
         .fetch
@@ -1728,118 +571,6 @@ fn hold_sizes(app: &mut App, grown: usize, cut: usize) {
         status,
         git::FetchOutcome::Failed(git::FetchFailure::too_big(201 * MIB)),
     );
-}
-
-/// FZ-35b (#85), criterion 4: `f` fetches a held row, uncapped; `F` and
-/// the automatic selections skip it and stay capped.
-#[test]
-fn f_fetches_a_held_row_uncapped_and_shift_f_and_automatic_do_not() {
-    let mut app = fleet_app(3);
-    hold_sizes(&mut app, 0, 1);
-    let targets = sweep_targets(&app, None);
-    let held: HashSet<String> = ["~/repos/repo-0".to_string(), "~/repos/repo-1".to_string()].into();
-    for ask in [FetchAsk::Automatic, FetchAsk::All] {
-        app.fetches_in_flight.clear();
-        assert_eq!(
-            fetch_skips_for(&mut app, &targets, true, ask),
-            held,
-            "{ask:?}"
-        );
-        assert!(app.fetches_in_flight.contains_key("~/repos/repo-2"));
-        assert_eq!(ask.cap(Some(200 * MIB)), Some(200 * MIB), "{ask:?}");
-    }
-    app.fetches_in_flight.clear();
-    assert!(fetch_skips_for(&mut app, &targets, true, FetchAsk::One).is_empty());
-    assert_eq!(FetchAsk::One.cap(Some(200 * MIB)), None);
-    // `fetch_max_mb = 0`: nothing is capped.
-    assert_eq!(FetchAsk::All.cap(None), None);
-}
-
-/// FZ-35b (#85), review F1: the cap each sweep entry point hands
-/// `spawn_sweep` (it takes the plan, so the plan's cap is the one the
-/// fetches run under): `f` uncapped, `F`, the watch timer and the poll's
-/// single sweeps at the configured cap, and nothing capped at `0`.
-#[test]
-fn each_sweep_entry_point_plans_its_fetch_cap() {
-    let mut app = fleet_app(1);
-    app.fetch_max_bytes = Some(7 * MIB);
-    let targets = sweep_targets(&app, None);
-    let mut cap_for = |ask: FetchAsk| {
-        app.fetches_in_flight.clear();
-        plan_sweep_fetch(&mut app, &targets, true, ask).max_bytes
-    };
-    assert_eq!(cap_for(FetchAsk::for_single_sweep(false)), None, "f");
-    assert_eq!(
-        cap_for(FetchAsk::for_single_sweep(true)),
-        Some(7 * MIB),
-        "moved remote"
-    );
-    assert_eq!(cap_for(FetchAsk::for_full_sweep(true)), Some(7 * MIB), "F");
-    assert_eq!(
-        cap_for(FetchAsk::for_full_sweep(false)),
-        Some(7 * MIB),
-        "watch"
-    );
-    app.fetch_max_bytes = None;
-    app.fetches_in_flight.clear();
-    let plan = plan_sweep_fetch(&mut app, &targets, true, FetchAsk::for_full_sweep(true));
-    assert_eq!(plan.max_bytes, None, "fetch_max_mb = 0");
-}
-
-/// The same through the keys' own entry points: `F` claims no fetch for
-/// a held row, `f` on it does.
-#[tokio::test]
-async fn shift_f_skips_a_held_row_and_f_on_it_fetches() {
-    let mut app = missing_paths_app(3, "sizehold");
-    hold_sizes(&mut app, 0, 1);
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    start_sweep(&mut app, &tx, true, None, true);
-    for i in [0, 1] {
-        let path = app.repos[i].path.clone().unwrap();
-        assert!(
-            !app.fetches_in_flight.contains_key(&path),
-            "F fetched held row {i}"
-        );
-    }
-    let free = app.repos[2].path.clone().unwrap();
-    assert!(app.fetches_in_flight.contains_key(&free));
-    for i in [0, 1] {
-        start_single_sweep(&mut app, &tx, i, true, false, None);
-        let path = app.repos[i].path.clone().unwrap();
-        assert!(
-            app.fetches_in_flight.contains_key(&path),
-            "f skipped held row {i}"
-        );
-    }
-}
-
-/// FZ-35b (#85), review B1: `F` reports over the fetches it ran. A row
-/// the fetch cap holds is only rebuilt and lands `NotAttempted`, so it
-/// must not be awaited, or the batch never completes and a failure among
-/// the others never reaches the status line (rule 9).
-#[tokio::test]
-async fn shift_f_reports_its_failures_with_a_size_held_row() {
-    let mut app = missing_paths_app(3, "ftally");
-    app.repos[0].fetch.disk_baseline = Some(1_000);
-    app.repos[0]
-        .fetch
-        .assess_growth(Some(1_000 + 300 * 1024), Some(200 * MIB));
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    start_sweep(&mut app, &tx, true, None, true);
-    for (i, fetch) in [
-        git::FetchOutcome::NotAttempted,
-        fetch_failed(git::FetchFailureKind::Unreachable),
-        git::FetchOutcome::Succeeded,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let path = app.repos[i].path.clone().unwrap();
-        let status = app.repos[i].clone();
-        apply_repo_updated(&mut app, &path, status, fetch);
-    }
-    let status = app.status_message.as_ref().map(|m| m.text.clone());
-    assert_eq!(status.as_deref(), Some("1 of 2 fetches failed: repo-1"));
 }
 
 /// FZ-35b (#85), criterion 2 for moved remotes: a poll that sees a remote
@@ -1895,183 +626,6 @@ async fn a_moved_remote_grown_past_the_cap_is_held_not_fetched() {
     );
 }
 
-/// FZ-35b (#85), criterion 4: a successful fetch records GitHub's current
-/// size as the baseline and lifts the hold.
-#[test]
-fn a_successful_fetch_records_the_baseline_and_lifts_the_hold() {
-    let mut app = fleet_app(1);
-    app.dataset = vec![github::GithubRepo {
-        disk_usage: Some(308_200),
-        ..gh("repo-0", "2026-10-20T11:00:00Z")
-    }];
-    hold_sizes(&mut app, 0, 0);
-    assert!(app.repos[0].fetch.size_hold().is_some());
-    land(&mut app, 0, git::FetchOutcome::Succeeded);
-    assert_eq!(app.repos[0].fetch.size_hold(), None);
-    assert_eq!(app.repos[0].fetch.disk_baseline, Some(308_200));
-    assess_size_holds(&mut app.repos, &app.dataset, app.fetch_max_bytes);
-    assert_eq!(
-        app.repos[0].fetch.size_hold(),
-        None,
-        "held again at its own size"
-    );
-}
-
-/// FZ-34 (#83): a timeout from a fetch a load ran (launch, `R`) holds the
-/// row like a sweep's.
-#[test]
-fn a_load_that_timed_out_holds_the_row() {
-    let mut app = fleet_app(1);
-    let path = app.repos[0].path.clone().unwrap();
-    let now = chrono::Local::now();
-    let mut repo = app.repos[0].clone();
-    repo.fetch
-        .record(&fetch_failed(git::FetchFailureKind::TimedOut), now);
-    apply_load_result(
-        &mut app,
-        &config::Config::default(),
-        Ok(Box::new(LoadResult {
-            kind: LoadKind::Reload,
-            repos: vec![repo],
-            header: "h".to_string(),
-            dataset: Some(Vec::new()),
-            github_calendar: None,
-            source: app::DatasetSource::Local,
-            ambiguity: None,
-            meta: None,
-        })),
-    );
-    assert!(
-        app.fetch_held(&path, now),
-        "the load's timeout held nothing"
-    );
-}
-
-/// FZ-34 (#83): the poll's batch (moved remotes and the recovery
-/// refetch) leaves out a row held after a timeout.
-#[tokio::test]
-async fn a_recovering_poll_skips_a_row_held_after_a_timeout() {
-    let path = std::env::temp_dir()
-        .join("fleetz-83-no-such-dir")
-        .join("repo")
-        .display()
-        .to_string();
-    let mut repo = test_repo();
-    repo.path = Some(path.clone());
-    let mut app = App::new(vec![repo], "h".to_string(), 120, 44);
-    let status = app.repos[0].clone();
-    apply_repo_updated(
-        &mut app,
-        &path,
-        status,
-        fetch_failed(git::FetchFailureKind::TimedOut),
-    );
-    poll_with(
-        &mut app,
-        Err(github::FetchError {
-            failure: github::Failure::new(github::FailureKind::Offline, "no route"),
-            fallback: None,
-            meta: Default::default(),
-        }),
-    );
-    app.refresh_awaits_poll = true;
-    poll_with(
-        &mut app,
-        Ok(Box::new(github::GithubFetch {
-            repos: Vec::new(),
-            calendar: None,
-            has_pr_counts: true,
-            origin: github::Origin::Network,
-            meta: Default::default(),
-        })),
-    );
-    assert!(
-        app.refresh_fetches.is_empty(),
-        "the recovery refetch fetched a held row"
-    );
-}
-
-/// FZ-34 (#83): a manual `r` or `R` lifts every timeout hold.
-#[test]
-fn r_and_shift_r_lift_the_timeout_holds() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
-    let budget = reading("A", 2, at(17, 23, 6), at(17, 0, 0));
-    land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
-    let timed_out = fetch_failed(git::FetchFailureKind::TimedOut);
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let args = Args::parse_from(["fleetz"]);
-
-    app.fetch_backoff.record("~/a", &timed_out, at(17, 9, 0));
-    assert!(app.fetch_held("~/a", at(17, 10, 0)));
-    // Under a known limit `r` sends nothing, so no runtime is needed.
-    refresh_key(&mut app, &tx, &args, &config, at(17, 10, 0));
-    assert!(!app.fetch_held("~/a", at(17, 10, 0)), "r kept the hold");
-
-    app.fetch_backoff.record("~/a", &timed_out, at(17, 9, 30));
-    assert!(app.fetch_held("~/a", at(17, 10, 0)));
-    // A load already running: `R` starts nothing new.
-    app.loading = true;
-    reload_key(
-        &mut app,
-        &tx,
-        &args,
-        &config,
-        Path::new("/nonexistent"),
-        at(17, 10, 0),
-    );
-    assert!(!app.fetch_held("~/a", at(17, 10, 0)), "R kept the hold");
-}
-
-#[test]
-fn a_commit_and_push_inside_one_sweep_is_still_detected() {
-    // The regression: `git push` does not move HEAD, so watching only for
-    // the unpushed count hitting zero misses the common case where you
-    // commit and push between two sweeps. HEAD moving is what catches it.
-    let mut before = test_repo();
-    before.work_key = Some(key("aaa"));
-    before.ahead = 0;
-
-    let mut after = test_repo();
-    after.work_key = Some(key("bbb"));
-    after.ahead = 0;
-
-    assert!(repo_moved(&before, &after));
-}
-
-#[test]
-fn pushing_previously_committed_work_is_detected() {
-    // HEAD is unchanged here, so only the unpushed count can catch it.
-    let mut before = test_repo();
-    before.work_key = Some(key("aaa"));
-    before.ahead = 3;
-
-    let mut after = test_repo();
-    after.work_key = Some(key("aaa"));
-    after.ahead = 0;
-
-    assert!(repo_moved(&before, &after));
-}
-
-#[test]
-fn an_unchanged_repo_does_not_trigger_a_poll() {
-    let mut before = test_repo();
-    before.work_key = Some(key("aaa"));
-    let mut after = test_repo();
-    after.work_key = Some(key("aaa"));
-    assert!(!repo_moved(&before, &after));
-}
-
-#[test]
-fn an_unknown_fingerprint_reads_as_no_information() {
-    // Treating a missing key as "changed" would poll on every single
-    // sweep for any repo whose fingerprint could not be taken.
-    let before = test_repo();
-    let mut after = test_repo();
-    after.work_key = Some(key("bbb"));
-    assert!(!repo_moved(&before, &after));
-    assert!(!repo_moved(&after, &test_repo()));
-}
-
 pub(crate) fn gh(name: &str, pushed: &str) -> github::GithubRepo {
     github::GithubRepo {
         name: name.to_string(),
@@ -2098,57 +652,6 @@ pub(crate) fn cloned(name: &str) -> RepoStatus {
 }
 
 #[test]
-fn a_remote_that_moved_is_the_only_one_fetched() {
-    // The whole point: one API call says which remotes have news, so the
-    // fetch goes only there instead of to all of them.
-    let previous = vec![
-        gh("alpha", "2026-08-06T10:00:00Z"),
-        gh("beta", "2026-08-06T10:00:00Z"),
-    ];
-    let current = vec![
-        gh("alpha", "2026-08-06T11:00:00Z"),
-        gh("beta", "2026-08-06T10:00:00Z"),
-    ];
-    let repos = vec![cloned("alpha"), cloned("beta")];
-
-    assert_eq!(remotes_that_moved(&previous, &current, &repos), vec![0]);
-}
-
-#[test]
-fn an_unchanged_fleet_fetches_nothing() {
-    let dataset = vec![gh("alpha", "2026-08-06T10:00:00Z")];
-    let repos = vec![cloned("alpha")];
-    assert!(remotes_that_moved(&dataset, &dataset, &repos).is_empty());
-}
-
-#[test]
-fn the_first_poll_of_a_session_fetches_nothing() {
-    // No baseline to compare against. Treating unknown as moved would
-    // fetch every remote at once, which is exactly what this avoids.
-    let current = vec![gh("alpha", "2026-08-06T11:00:00Z")];
-    let repos = vec![cloned("alpha")];
-    assert!(remotes_that_moved(&[], &current, &repos).is_empty());
-}
-
-#[test]
-fn a_repo_with_no_local_clone_is_skipped() {
-    // Nothing to fetch into.
-    let previous = vec![gh("alpha", "2026-08-06T10:00:00Z")];
-    let current = vec![gh("alpha", "2026-08-06T11:00:00Z")];
-    let repos = vec![test_repo()]; // name "r", and no path anyway
-    assert!(remotes_that_moved(&previous, &current, &repos).is_empty());
-}
-
-#[test]
-fn a_remote_going_backwards_is_not_treated_as_news() {
-    // Clock skew or a rewritten history should not trigger a fetch storm.
-    let previous = vec![gh("alpha", "2026-08-06T11:00:00Z")];
-    let current = vec![gh("alpha", "2026-08-06T10:00:00Z")];
-    let repos = vec![cloned("alpha")];
-    assert!(remotes_that_moved(&previous, &current, &repos).is_empty());
-}
-
-#[test]
 fn watch_flags_beat_the_config_both_ways() {
     // A default that silently fails to apply is invisible until someone
     // wonders why nothing ever refreshes.
@@ -2158,7 +661,7 @@ fn watch_flags_beat_the_config_both_ways() {
     assert!(!resolve_watch(false, true, true), "--no-watch overrides");
 }
 
-fn app_with(ci: &[model::CiStatus]) -> App {
+pub(crate) fn app_with(ci: &[model::CiStatus]) -> App {
     let mut app = App::new(Vec::new(), String::new(), 100, 40);
     app.repos = ci
         .iter()
@@ -2168,39 +671,6 @@ fn app_with(ci: &[model::CiStatus]) -> App {
         })
         .collect();
     app
-}
-
-#[test]
-fn poll_relaxes_when_nothing_is_pending() {
-    let config = config::Config {
-        github_poll_interval: 90,
-        ..config::Config::default()
-    };
-    let app = app_with(&[model::CiStatus::Passed, model::CiStatus::Unknown]);
-    assert_eq!(github_poll_secs(&app, &config), 90);
-}
-
-#[test]
-fn poll_tightens_while_a_run_is_in_flight() {
-    // Exactly when someone is watching the screen for it to finish.
-    let config = config::Config {
-        github_poll_interval: 90,
-        ..config::Config::default()
-    };
-    let app = app_with(&[model::CiStatus::Passed, model::CiStatus::Pending]);
-    assert_eq!(github_poll_secs(&app, &config), GITHUB_POLL_MIN as i64);
-}
-
-#[test]
-fn a_configured_interval_below_the_floor_is_raised() {
-    // The floor exists so a typo cannot turn the dashboard into a
-    // rate-limit incident.
-    let config = config::Config {
-        github_poll_interval: 1,
-        ..config::Config::default()
-    };
-    let app = app_with(&[model::CiStatus::Passed]);
-    assert_eq!(github_poll_secs(&app, &config), GITHUB_POLL_MIN as i64);
 }
 
 // --- FZ-05d: GitHub fields live on one carrier row per remote ---
@@ -2315,7 +785,7 @@ pub(crate) fn assert_carries_nothing(repo: &RepoStatus) {
 }
 
 /// Land a successful poll carrying `repos` on `app`.
-fn poll_entries(app: &mut App, repos: Vec<github::GithubRepo>) {
+pub(crate) fn poll_entries(app: &mut App, repos: Vec<github::GithubRepo>) {
     poll_with(
         app,
         Ok(Box::new(github::GithubFetch {
@@ -2326,82 +796,6 @@ fn poll_entries(app: &mut App, repos: Vec<github::GithubRepo>) {
             meta: Default::default(),
         })),
     );
-}
-
-/// S1, load and poll. Two clones of two same-named repos of different
-/// owners are two Primary rows, each with its own owner and CI, and a
-/// poll keeps each on its own repo. The name dedupe kept one row, and
-/// both rows would have taken the first `api` in the dataset. A push to
-/// one of them fetches that clone only.
-#[tokio::test]
-async fn two_same_named_repos_of_two_owners_each_keep_their_own_ci() {
-    let home = wt_scratch("id_s1");
-    let root = home.join("R");
-    id_repo(
-        &root.join("api"),
-        Some("git@github.com:company/api.git"),
-        false,
-    );
-    id_repo(
-        &root.join("alice-api"),
-        Some("https://github.com/alice/api"),
-        false,
-    );
-    let alice = id_entry(
-        Some("alice"),
-        "api",
-        0,
-        model::CiStatus::Passed,
-        0,
-        model::RepoKind::Public,
-    );
-    let company = id_entry(
-        Some("company"),
-        "api",
-        0,
-        model::CiStatus::Failed,
-        0,
-        model::RepoKind::Org,
-    );
-    let dataset = vec![alice.clone(), company.clone()];
-
-    let (repos, _) = id_assemble(&home, std::slice::from_ref(&root), &dataset, None).await;
-
-    assert_eq!(repos.len(), 2, "{repos:#?}");
-    let alices = row_at(&repos, &root.join("alice-api"));
-    assert_eq!(alices.location, RepoLocation::Primary);
-    assert_eq!(alices.owner.as_deref(), Some("alice"));
-    assert_eq!(alices.ci_status, model::CiStatus::Passed);
-    let companys = row_at(&repos, &root.join("api"));
-    assert_eq!(companys.location, RepoLocation::Primary);
-    assert_eq!(companys.owner.as_deref(), Some("company"));
-    assert_eq!(companys.ci_status, model::CiStatus::Failed);
-
-    let mut app = App::new(repos, "h".to_string(), 120, 44);
-    let mut alice_now = alice.clone();
-    alice_now.ci_status = model::CiStatus::Failed;
-    let mut company_now = company.clone();
-    company_now.ci_status = model::CiStatus::Passed;
-    company_now.pushed_at = company.pushed_at + chrono::Duration::hours(1);
-    poll_entries(&mut app, vec![alice_now.clone(), company_now.clone()]);
-
-    let alices = row_at(&app.repos, &root.join("alice-api"));
-    assert_eq!(alices.ci_status, model::CiStatus::Failed);
-    let companys = row_at(&app.repos, &root.join("api"));
-    assert_eq!(companys.ci_status, model::CiStatus::Passed);
-
-    let company_index = app
-        .repos
-        .iter()
-        .position(|r| r.owner.as_deref() == Some("company"))
-        .unwrap();
-    assert_eq!(
-        remotes_that_moved(&dataset, &[alice_now, company_now], &app.repos),
-        vec![company_index],
-        "the push to company/api fetched another clone"
-    );
-
-    std::fs::remove_dir_all(&home).ok();
 }
 
 /// S16, load and poll. Two same-named repos of different owners, neither
@@ -2569,106 +963,6 @@ fn the_ambiguity_line_wins_over_every_loads_own_message() {
     std::fs::remove_dir_all(&scratch).ok();
 }
 
-/// S5 load and poll twin (section 5, FZ-05d). Two clones of one remote:
-/// the Primary is the carrier, and the dirty copy is a LocalOnly row
-/// with local fields only, at load and after a poll. A push to the remote
-/// fetches the carrier only.
-#[tokio::test]
-async fn an_extra_checkout_carries_nothing_at_load_or_in_the_poll() {
-    let home = wt_scratch("id_s5");
-    let root = home.join("R");
-    let url = "git@github.com:Gaurgle/fleetz.git";
-    id_repo(&root.join("fleetz"), Some(url), false);
-    id_repo(&root.join("fleetz-copy"), Some(url), true);
-    let entry = id_entry(
-        Some("Gaurgle"),
-        "fleetz",
-        0,
-        model::CiStatus::Passed,
-        1,
-        model::RepoKind::Private,
-    );
-
-    let (repos, _) = id_assemble(
-        &home,
-        std::slice::from_ref(&root),
-        std::slice::from_ref(&entry),
-        None,
-    )
-    .await;
-
-    assert_eq!(repos.len(), 2, "{repos:#?}");
-    let primary = row_at(&repos, &root.join("fleetz"));
-    assert_eq!(primary.location, RepoLocation::Primary);
-    assert_eq!(primary.owner.as_deref(), Some("Gaurgle"));
-    assert_eq!(primary.ci_status, model::CiStatus::Passed);
-    assert_eq!(primary.pr_count, 1);
-    let copy = row_at(&repos, &root.join("fleetz-copy"));
-    assert_eq!(copy.location, RepoLocation::LocalOnly);
-    assert_carries_nothing(copy);
-
-    let mut app = App::new(repos, "h".to_string(), 120, 44);
-    let mut now = id_entry(
-        Some("Gaurgle"),
-        "fleetz",
-        0,
-        model::CiStatus::Failed,
-        2,
-        model::RepoKind::Private,
-    );
-    poll_entries(&mut app, vec![now.clone()]);
-    let primary = row_at(&app.repos, &root.join("fleetz"));
-    assert_eq!(primary.ci_status, model::CiStatus::Failed);
-    assert_eq!(primary.pr_count, 2);
-    assert_carries_nothing(row_at(&app.repos, &root.join("fleetz-copy")));
-
-    let primary_index = app
-        .repos
-        .iter()
-        .position(|r| r.location == RepoLocation::Primary)
-        .unwrap();
-    let before = app.dataset.clone();
-    now.pushed_at += chrono::Duration::hours(1);
-    assert_eq!(
-        remotes_that_moved(&before, &[now], &app.repos),
-        vec![primary_index]
-    );
-
-    std::fs::remove_dir_all(&home).ok();
-}
-
-/// S4's poll twin. The dirty copy at `old/fleetz` has the remote's own
-/// name, so the name match wrote the poll onto it as well. Its load half
-/// waits for FZ-05f: pass 3 hides it by name until then.
-#[test]
-fn an_extra_checkout_named_like_its_remote_takes_nothing_from_the_poll() {
-    let mut primary = cloned("fleetz");
-    primary.owner = Some("Gaurgle".to_string());
-    primary.remote_url = Some("git@github.com:Gaurgle/fleetz.git".to_string());
-    let mut copy = cloned("fleetz");
-    copy.path = Some("~/repos/old/fleetz".to_string());
-    copy.location = RepoLocation::LocalOnly;
-    copy.remote_url = primary.remote_url.clone();
-    let mut app = App::new(vec![primary, copy], "h".to_string(), 120, 44);
-
-    let mut now = id_entry(
-        Some("Gaurgle"),
-        "fleetz",
-        0,
-        model::CiStatus::Failed,
-        2,
-        model::RepoKind::Private,
-    );
-    poll_entries(&mut app, vec![now.clone()]);
-
-    assert_eq!(app.repos[0].ci_status, model::CiStatus::Failed);
-    assert_eq!(app.repos[0].pr_count, 2);
-    assert_carries_nothing(&app.repos[1]);
-    let before = app.dataset.clone();
-    now.pushed_at += chrono::Duration::hours(1);
-    assert_eq!(remotes_that_moved(&before, &[now], &app.repos), vec![0]);
-}
-
 /// S14, poll (section 5, FZ-05d): a LocalOnly row with no owner and no
 /// origin is never written by name, whether the entry has an owner or
 /// is a legacy one without. This is F4: a stranger's CI badge on a local
@@ -2804,65 +1098,6 @@ async fn an_out_of_window_dotfiles_clone_carries_its_repo_from_the_first_frame()
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// A push is judged against the same repo's previous push, not a
-/// same-named repo's. `company/api` moves from 09:00 to 10:00 while
-/// `alice/api` sits at 12:00: by name, 10:00 was checked against 12:00
-/// and company's clone was never fetched.
-#[test]
-fn a_push_is_judged_against_the_same_owners_previous_push() {
-    let entry = |owner: &str, pushed: &str| {
-        let mut repo = gh("api", pushed);
-        repo.owner = Some(owner.to_string());
-        repo
-    };
-    let mut alices = cloned("api");
-    alices.owner = Some("alice".to_string());
-    alices.path = Some("~/repos/alice-api".to_string());
-    let mut companys = cloned("api");
-    companys.owner = Some("company".to_string());
-    let repos = vec![alices, companys];
-
-    let previous = vec![
-        entry("alice", "2026-08-06T12:00:00Z"),
-        entry("company", "2026-08-06T09:00:00Z"),
-    ];
-    let current = vec![
-        entry("alice", "2026-08-06T12:00:00Z"),
-        entry("company", "2026-08-06T10:00:00Z"),
-    ];
-    assert_eq!(remotes_that_moved(&previous, &current, &repos), vec![1]);
-}
-
-/// A launch served from a payload without owners, then a first network
-/// poll that has them. The legacy previous entry is still the baseline:
-/// unmatched, the push would read as unknown, never be fetched, and the
-/// next poll would compare against the owned dataset and miss it too.
-#[test]
-fn a_push_since_a_legacy_payload_is_still_fetched() {
-    let previous = vec![gh("api", "2026-08-06T09:00:00Z")];
-    let mut current = gh("api", "2026-08-06T10:00:00Z");
-    current.owner = Some("company".to_string());
-    let repos = vec![cloned("api")];
-    assert_eq!(remotes_that_moved(&previous, &[current], &repos), vec![0]);
-}
-
-/// A launch from a payload without owners, then a poll holding both
-/// `alice/api` and `company/api` (FZ-05e keeps both), each newer than the
-/// legacy `api`. Both match that baseline and both resolve to the one
-/// owner-less row, which came back twice and got two single sweeps.
-#[test]
-fn a_row_two_moved_entries_resolve_to_is_fetched_once() {
-    let previous = vec![gh("api", "2026-08-06T09:00:00Z")];
-    let owned = |owner: &str| {
-        let mut repo = gh("api", "2026-08-06T10:00:00Z");
-        repo.owner = Some(owner.to_string());
-        repo
-    };
-    let current = vec![owned("alice"), owned("company")];
-    let repos = vec![cloned("api")];
-    assert_eq!(remotes_that_moved(&previous, &current, &repos), vec![0]);
-}
-
 /// A row with an owner is written only by an entry of that owner: a
 /// same-named entry without one is not its repo (3.5, D1).
 #[test]
@@ -2987,7 +1222,7 @@ async fn a_dirty_extra_checkout_named_like_its_remote_is_a_local_row() {
 /// once already.
 #[test]
 fn ctrl_c_is_matched_before_the_plain_c_arm() {
-    let source = include_str!("main.rs");
+    let source = include_str!("input.rs");
     let ctrl_c = source
         .find("KeyCode::Char('c') if key.modifiers")
         .expect("ctrl-c arm present");
@@ -3000,126 +1235,8 @@ fn ctrl_c_is_matched_before_the_plain_c_arm() {
     );
 }
 
-/// The local histogram is the most expensive probe in the sweep: a year
-/// of log per repo. It must not run for a strip showing GitHub's own
-/// numbers.
-#[test]
-fn the_daily_probe_is_skipped_unless_the_local_source_is_showing() {
-    let mut app = App::new(vec![test_repo()], "h".to_string(), 120, 44);
-    app.contributions = app::ContributionsMode::Github;
-    assert!(
-        contrib_probe(&app).is_none(),
-        "github source needs no local log"
-    );
-    app.contributions = app::ContributionsMode::Local;
-    let probe = contrib_probe(&app).expect("local source probes");
-    assert_eq!(
-        probe.start,
-        contributions::grid_start(chrono::Local::now().date_naive()),
-        "every repo in one sweep shares a grid"
-    );
-}
-
-#[test]
-fn the_probe_carries_the_configured_author_override() {
-    let mut app = App::new(vec![test_repo()], "h".to_string(), 120, 44);
-    app.contributions = app::ContributionsMode::Local;
-    app.contrib_author = Some(r"me@work.com\|me@home.com".to_string());
-    let probe = contrib_probe(&app).unwrap();
-    assert_eq!(probe.author.as_deref(), Some(r"me@work.com\|me@home.com"));
-}
-
-/// The startup fetch carries the calendar; dropping it here left the
-/// strip blank until the first background poll landed minutes later.
-#[test]
-fn a_load_result_stores_its_calendar_on_the_app() {
-    let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
-    assert!(app.github_calendar.is_none());
-    let today = chrono::Local::now().date_naive();
-    let mut cal = contributions::Calendar::new(today, contributions::Source::Github);
-    cal.add(today, 5);
-    apply_load_result(
-        &mut app,
-        &config::Config::default(),
-        Ok(Box::new(LoadResult {
-            kind: LoadKind::Initial,
-            repos: Vec::new(),
-            header: "h".to_string(),
-            dataset: Some(Vec::new()),
-            github_calendar: Some(Box::new(cal)),
-            source: app::DatasetSource::Network,
-            ambiguity: None,
-            meta: None,
-        })),
-    );
-    assert_eq!(
-        app.github_calendar.as_ref().map(|c| c.total()),
-        Some(5),
-        "the startup fetch must fill the strip"
-    );
-}
-
-/// A cache-served launch must leave the re-poll clock unset, so the first
-/// tick polls immediately.
-///
-/// Startup passes `CacheMode::AnyCached` and takes any payload however
-/// old, so "the load returned a dataset" never meant "GitHub was just
-/// asked". Starting the clock from it put the first real poll a whole
-/// `github_poll_interval` away, and the dashboard spent it showing what
-/// the previous session had left on disk. Seen for real: a launch at
-/// 15:38:11 painted a stale contribution count and did not correct it
-/// until 15:38:50.
-#[test]
-fn a_cache_served_launch_leaves_the_poll_due_immediately() {
-    let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
-    apply_load_result(
-        &mut app,
-        &config::Config::default(),
-        Ok(Box::new(LoadResult {
-            kind: LoadKind::Initial,
-            repos: Vec::new(),
-            header: "h".to_string(),
-            dataset: Some(Vec::new()),
-            github_calendar: None,
-            source: app::DatasetSource::Cache { written: None },
-            ambiguity: None,
-            meta: None,
-        })),
-    );
-    assert!(
-        app.github_freshness.last_attempt.is_none(),
-        "a cached payload started the re-poll clock, delaying the first \
-         real poll by a whole interval"
-    );
-}
-
-/// The other half: a load that did reach GitHub has just polled, so the
-/// clock starts here rather than firing again a tick later.
-#[test]
-fn a_network_served_launch_starts_the_poll_clock() {
-    let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
-    apply_load_result(
-        &mut app,
-        &config::Config::default(),
-        Ok(Box::new(LoadResult {
-            kind: LoadKind::Initial,
-            repos: Vec::new(),
-            header: "h".to_string(),
-            dataset: Some(Vec::new()),
-            github_calendar: None,
-            source: app::DatasetSource::Network,
-            ambiguity: None,
-            meta: None,
-        })),
-    );
-    assert!(
-        app.github_freshness.last_attempt.is_some(),
-        "fresh data should not re-poll at once"
-    );
-}
-
 /// The owner's viewer page (design 1.2): 50 of 95, cut off 237 days back.
-fn owners_coverage() -> github::Coverage {
+pub(crate) fn owners_coverage() -> github::Coverage {
     github::Coverage {
         viewer: github::PageCoverage {
             returned: 50,
@@ -3130,60 +1247,6 @@ fn owners_coverage() -> github::Coverage {
         org_list: None,
         org_pages: Vec::new(),
     }
-}
-
-/// CV19: a window apply fetches nothing, so it carries no `FetchMeta`;
-/// the app keeps the load's, and the apply draws its note from it.
-#[test]
-fn cv19_a_window_apply_keeps_the_loads_coverage_and_draws_its_note() {
-    let scratch = wt_scratch("cv19");
-    let store = window_state::WindowState::at(scratch.join("window.toml"));
-    let config = config::Config::default();
-    let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
-    let meta = github::FetchMeta {
-        coverage: Some(owners_coverage()),
-        ..Default::default()
-    };
-    apply_load_result_saving_to(
-        &mut app,
-        &config,
-        Ok(Box::new(LoadResult {
-            kind: LoadKind::Initial,
-            repos: Vec::new(),
-            header: "h".to_string(),
-            dataset: Some(Vec::new()),
-            github_calendar: None,
-            source: app::DatasetSource::Network,
-            ambiguity: None,
-            meta: Some(meta.clone()),
-        })),
-        &store,
-    );
-    assert_eq!(app.github_meta, meta);
-
-    // As `spawn_window_apply` builds it, from the app's coverage.
-    let w = time::TimeWindow::clamped(1, time::WindowUnit::Years);
-    let header = with_coverage_note(
-        w.label(config.work_start, config.work_end),
-        app.github_meta.coverage.as_ref(),
-        Some(w.cutoff(config.work_start, config.work_end)),
-        config.repo_limit,
-    );
-    let notes = ViewNotes {
-        header,
-        ambiguity: None,
-    };
-    let result = window_apply_result(w, Vec::new(), notes);
-    assert!(result.meta.is_none(), "a window apply fetched nothing");
-    apply_load_result_saving_to(&mut app, &config, Ok(Box::new(result)), &store);
-
-    assert_eq!(app.github_meta, meta, "the load's coverage was dropped");
-    assert!(
-        app.header.ends_with("(fetched 50 of 95 repos)"),
-        "no note at 365 days: {}",
-        app.header
-    );
-    std::fs::remove_dir_all(&scratch).ok();
 }
 
 /// A successful poll replaces the dataset and its coverage with it; a
@@ -3200,32 +1263,6 @@ fn a_poll_replaces_the_coverage_and_a_failed_one_keeps_it() {
     poll(&mut app, Err("boom".to_string()));
     assert!(app.github_freshness.is_failing(), "the failure landed");
     assert_eq!(app.github_meta.coverage.as_ref(), Some(&coverage));
-}
-
-/// A time-window apply re-filters what is already loaded and carries no
-/// calendar. It must not blank the one already on screen.
-#[test]
-fn a_window_apply_does_not_blank_the_calendar() {
-    let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
-    let today = chrono::Local::now().date_naive();
-    let mut cal = contributions::Calendar::new(today, contributions::Source::Github);
-    cal.add(today, 9);
-    app.github_calendar = Some(Box::new(cal));
-    apply_load_result(
-        &mut app,
-        &config::Config::default(),
-        Ok(Box::new(LoadResult {
-            kind: LoadKind::Initial,
-            repos: Vec::new(),
-            header: "h".to_string(),
-            dataset: None,
-            github_calendar: None,
-            source: app::DatasetSource::Network,
-            ambiguity: None,
-            meta: None,
-        })),
-    );
-    assert_eq!(app.github_calendar.as_ref().map(|c| c.total()), Some(9));
 }
 
 // --- FZ-06c: the worktree list is re-read on every sweep ---
@@ -3470,7 +1507,7 @@ fn hist_probe(start: &str, author: Option<&str>) -> ContribProbe {
 
 /// Commit an empty change at noon local time on `day`, as whatever
 /// identity the repo is configured with.
-fn hist_commit(dir: &Path, day: &str, message: &str) {
+pub(crate) fn hist_commit(dir: &Path, day: &str, message: &str) {
     let when = format!("{day}T12:00:00");
     let status = std::process::Command::new("git")
         .args(["commit", "-q", "--allow-empty", "-m", message])
@@ -3483,7 +1520,7 @@ fn hist_commit(dir: &Path, day: &str, message: &str) {
 }
 
 /// An empty repo at `<scratch>/<name>` with `email` as its local identity.
-fn hist_repo(scratch: &Path, name: &str, email: &str) -> PathBuf {
+pub(crate) fn hist_repo(scratch: &Path, name: &str, email: &str) -> PathBuf {
     let dir = scratch.join(name);
     std::fs::create_dir_all(&dir).unwrap();
     wt_sh(&dir, &["git", "init", "-q", "-b", "main"]);
@@ -3727,10 +1764,10 @@ async fn a_fetched_commit_of_yours_reaches_the_histogram() {
 // thread-local, and libtest gives each test its own thread; the guard
 // puts back whatever the thread held anyway, panics included.
 
-struct RestoreIcons(app::Icons);
+pub(crate) struct RestoreIcons(app::Icons);
 
 impl RestoreIcons {
-    fn capture() -> Self {
+    pub(crate) fn capture() -> Self {
         Self(ui::badges::active_icons())
     }
 }
@@ -3745,7 +1782,7 @@ const ICONS_PROBE: &str = "glyph-probe";
 
 /// One public repo in the detail view with watch on, so a list row and
 /// the header both draw a mark from the icon set.
-fn app_for_icons() -> App {
+pub(crate) fn app_for_icons() -> App {
     let mut repo = test_repo();
     repo.name = ICONS_PROBE.to_string();
     repo.repo_kind = model::RepoKind::Public;
@@ -3758,7 +1795,7 @@ fn app_for_icons() -> App {
 
 /// The kind glyph left of the repo's name in the list, and the header's
 /// watch mark, as the next frame draws them.
-fn drawn_icon_marks(app: &App) -> (String, String) {
+pub(crate) fn drawn_icon_marks(app: &App) -> (String, String) {
     use ratatui::backend::TestBackend;
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     term.draw(|f| ui::render(f, app)).unwrap();
@@ -3787,69 +1824,12 @@ fn drawn_icon_marks(app: &App) -> (String, String) {
     (buf[(x - 2, y)].symbol().to_string(), watch)
 }
 
-fn press(c: char) -> KeyEvent {
+pub(crate) fn press(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
 }
 
-/// `4` is the strip's key (back from `5`, FZ-30d). From another pane it
-/// focuses a folded strip and unfolds it; on the focused strip it folds
-/// it and keeps focus. Fails if the handler binds the strip to any other
-/// key.
-#[tokio::test]
-async fn the_4_key_reaches_and_folds_the_strip() {
-    let args = Args::parse_from(["fleetz"]);
-    let config = config::Config::default();
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let backend = CrosstermBackend::new(io::stdout());
-    let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
-    let mut terminal =
-        Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
-    let mut app = App::new(Vec::new(), String::new(), 120, 44);
-    app.view = app::View::Detail;
-    app.contributions = app::ContributionsMode::Github;
-    app.focused_panel = FocusedPanel::Detail;
-    app.contributions_folded = true;
-
-    let repo_dir = Path::new("/nonexistent");
-    handle_normal_input(
-        &mut app,
-        &mut terminal,
-        press('4'),
-        &tx,
-        &args,
-        &config,
-        repo_dir,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        app.focused_panel,
-        FocusedPanel::Contributions,
-        "not focused"
-    );
-    assert!(!app.contributions_folded, "a folded strip stayed folded");
-
-    handle_normal_input(
-        &mut app,
-        &mut terminal,
-        press('4'),
-        &tx,
-        &args,
-        &config,
-        repo_dir,
-    )
-    .await
-    .unwrap();
-    assert!(app.contributions_folded, "the focused strip did not fold");
-    assert_eq!(
-        app.focused_panel,
-        FocusedPanel::Contributions,
-        "folding moved focus"
-    );
-}
-
 /// Open the overlay as `,` does and walk to the icons row with `j`.
-fn open_settings_on_the_icons_row(app: &mut App) {
+pub(crate) fn open_settings_on_the_icons_row(app: &mut App) {
     app.overlay = Overlay::Settings(settings_overlay(app, &config::Config::default()));
     for _ in 0..app::SETTING_FIELDS.len() {
         if let Overlay::Settings(ref so) = app.overlay
@@ -3863,7 +1843,7 @@ fn open_settings_on_the_icons_row(app: &mut App) {
 }
 
 /// What Enter applies once the file is written.
-fn apply_open_settings(app: &mut App) {
+pub(crate) fn apply_open_settings(app: &mut App) {
     let Overlay::Settings(ref so) = app.overlay else {
         panic!("the settings overlay is not open");
     };
@@ -3871,42 +1851,8 @@ fn apply_open_settings(app: &mut App) {
     apply_live_settings(app, &saved);
 }
 
-/// Toggling the row and applying it changes the list row's kind glyph
-/// and the header's watch mark on the next frame, and toggling again
-/// brings the Nerd set back, with no restart. Fails if applying the
-/// overlay leaves the active set alone.
-#[test]
-fn toggling_the_icons_row_redraws_the_rows_and_the_header() {
-    let _restore = RestoreIcons::capture();
-    ui::badges::set_active_icons(app::Icons::Nerd);
-    let mut app = app_for_icons();
-    let nerd = drawn_icon_marks(&app);
-    assert_eq!(
-        nerd.0,
-        ui::badges::kind_glyph(model::RepoKind::Public).unwrap(),
-        "the control did not draw the Nerd set"
-    );
-
-    open_settings_on_the_icons_row(&mut app);
-    handle_settings_input(&mut app, press('l'));
-    app.needs_redraw = false;
-    apply_open_settings(&mut app);
-    assert!(app.needs_redraw, "applying did not ask for a frame");
-    assert_eq!(ui::badges::active_icons(), app::Icons::Plain);
-    assert_eq!(
-        drawn_icon_marks(&app),
-        ("+".to_string(), "o".to_string()),
-        "the next frame still draws the old set"
-    );
-
-    handle_settings_input(&mut app, press('l'));
-    apply_open_settings(&mut app);
-    assert_eq!(ui::badges::active_icons(), app::Icons::Nerd);
-    assert_eq!(drawn_icon_marks(&app), nerd);
-}
-
 /// The text of the settings row for icons, as the frame draws it.
-fn drawn_icons_row(app: &App) -> String {
+pub(crate) fn drawn_icons_row(app: &App) -> String {
     use ratatui::backend::TestBackend;
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     term.draw(|f| ui::render(f, app)).unwrap();
@@ -3919,81 +1865,6 @@ fn drawn_icons_row(app: &App) -> String {
         })
         .find(|line| line.contains("icons") && (line.contains("nerd") || line.contains("plain")))
         .expect("the settings overlay draws an icons row")
-}
-
-/// Stepping the icons row repaints the next frame at once, pane 1 and
-/// the row both, with no Enter, no save and no config read in between,
-/// and again the other way. Fails if the row only changes the overlay's
-/// own copy until it is saved.
-#[test]
-fn stepping_the_icons_row_repaints_the_next_frame_without_a_save() {
-    let _restore = RestoreIcons::capture();
-    ui::badges::set_active_icons(app::Icons::Nerd);
-    let mut app = app_for_icons();
-    let nerd = drawn_icon_marks(&app);
-
-    open_settings_on_the_icons_row(&mut app);
-    assert!(drawn_icons_row(&app).contains("nerd"));
-    handle_settings_input(&mut app, press('l'));
-    assert_eq!(
-        drawn_icon_marks(&app),
-        ("+".to_string(), "o".to_string()),
-        "pane 1 still draws the Nerd set after the step"
-    );
-    assert!(drawn_icons_row(&app).contains("plain"));
-
-    handle_settings_input(&mut app, press('h'));
-    assert_eq!(
-        drawn_icon_marks(&app),
-        nerd,
-        "the step back did not repaint"
-    );
-    assert!(drawn_icons_row(&app).contains("nerd"));
-}
-
-/// Esc after toggling the row discards it, as it discards every row:
-/// the row previews at once and Esc restores the set in force.
-#[test]
-fn cancelling_the_overlay_leaves_the_icon_set_as_it_was() {
-    let _restore = RestoreIcons::capture();
-    for before in [app::Icons::Nerd, app::Icons::Plain] {
-        ui::badges::set_active_icons(before);
-        let mut app = app_for_icons();
-        let drawn = drawn_icon_marks(&app);
-
-        open_settings_on_the_icons_row(&mut app);
-        handle_settings_input(&mut app, press('l'));
-        handle_settings_input(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-
-        assert!(matches!(app.overlay, Overlay::None), "Esc did not close");
-        assert_eq!(ui::badges::active_icons(), before);
-        assert_eq!(drawn_icon_marks(&app), drawn);
-    }
-}
-
-/// The overlay opens on the set the app is drawing with, not on a
-/// default, so saving another row writes back the set in force. Fails
-/// if a session switched to `plain` would save `nerd` the next time any
-/// setting is saved.
-#[test]
-fn the_overlay_opens_on_the_icon_set_in_force() {
-    let _restore = RestoreIcons::capture();
-    let app = app_for_icons();
-    for in_force in [app::Icons::Plain, app::Icons::Nerd] {
-        ui::badges::set_active_icons(in_force);
-        let so = settings_overlay(&app, &config::Config::default());
-        assert_eq!(so.icons, in_force);
-        let written = so
-            .config_updates()
-            .into_iter()
-            .find(|(key, _)| *key == "icons")
-            .map(|(_, value)| value);
-        let expected = match in_force {
-            app::Icons::Nerd => "nerd",
-            app::Icons::Plain => "plain",
-        };
-        assert_eq!(written, Some(config::SettingValue::Str(expected)));
-    }
 }
 
 // FZ-10b: the scenarios of `docs/api-budget-design.md` section 5, each
@@ -4015,7 +1886,7 @@ impl app::Jitter for Planted {
     }
 }
 
-fn at(h: u32, m: u32, s: u32) -> chrono::DateTime<chrono::Local> {
+pub(crate) fn at(h: u32, m: u32, s: u32) -> chrono::DateTime<chrono::Local> {
     use chrono::TimeZone;
     chrono::Local
         .with_ymd_and_hms(2026, 10, 1, h, m, s)
@@ -4023,13 +1894,13 @@ fn at(h: u32, m: u32, s: u32) -> chrono::DateTime<chrono::Local> {
         .expect("unambiguous local time")
 }
 
-fn secs(n: i64) -> chrono::Duration {
+pub(crate) fn secs(n: i64) -> chrono::Duration {
     chrono::Duration::seconds(n)
 }
 
 /// A reading of `remaining` of 5000 on `token`, resetting at `reset`, as
 /// stated by a server whose clock read `date`.
-fn reading(
+pub(crate) fn reading(
     token: &str,
     remaining: u32,
     reset: chrono::DateTime<chrono::Local>,
@@ -4046,7 +1917,7 @@ fn reading(
 }
 
 /// A successful poll that changes no row, carrying `budget`.
-fn ok_with(
+pub(crate) fn ok_with(
     budget: Option<github::BudgetReading>,
 ) -> Result<Box<github::GithubFetch>, github::FetchError> {
     Ok(Box::new(github::GithubFetch {
@@ -4063,7 +1934,7 @@ fn ok_with(
 
 /// A successful poll that returns `budget_app`'s row `r`, still
 /// `Pending`, so the row stays covered by the last poll (FZ-09d).
-fn ok_with_pending_r(
+pub(crate) fn ok_with_pending_r(
     budget: Option<github::BudgetReading>,
 ) -> Result<Box<github::GithubFetch>, github::FetchError> {
     let mut fetch = ok_with(budget)?;
@@ -4082,7 +1953,7 @@ fn ok_with_pending_r(
     Ok(fetch)
 }
 
-fn err_with(
+pub(crate) fn err_with(
     failure: github::Failure,
     budget: Option<github::BudgetReading>,
 ) -> Result<Box<github::GithubFetch>, github::FetchError> {
@@ -4096,7 +1967,7 @@ fn err_with(
     })
 }
 
-fn failure(kind: github::FailureKind) -> github::Failure {
+pub(crate) fn failure(kind: github::FailureKind) -> github::Failure {
     github::Failure::new(kind, format!("{kind:?}"))
 }
 
@@ -4112,7 +1983,7 @@ fn secondary(retry_after: Option<u64>) -> github::Failure {
 }
 
 /// Start a poll and land `result` as its answer at `now`.
-fn land_at(
+pub(crate) fn land_at(
     app: &mut App,
     result: Result<Box<github::GithubFetch>, github::FetchError>,
     now: chrono::DateTime<chrono::Local>,
@@ -4121,7 +1992,7 @@ fn land_at(
     answer_at(app, attempt, result, now);
 }
 
-fn answer_at(
+pub(crate) fn answer_at(
     app: &mut App,
     attempt: u64,
     result: Result<Box<github::GithubFetch>, github::FetchError>,
@@ -4133,7 +2004,7 @@ fn answer_at(
 
 /// A watching app with one row of `ci` (no path, so nothing is swept)
 /// and planted jitter.
-fn budget_app(ci: model::CiStatus, factor: f64, resume: i64) -> (App, config::Config) {
+pub(crate) fn budget_app(ci: model::CiStatus, factor: f64, resume: i64) -> (App, config::Config) {
     let mut app = App::new(
         vec![RepoStatus {
             ci_status: ci,
@@ -4149,13 +2020,17 @@ fn budget_app(ci: model::CiStatus, factor: f64, resume: i64) -> (App, config::Co
 }
 
 /// Seconds after `from` at which the next automatic attempt is first due.
-fn next_due(app: &App, config: &config::Config, from: chrono::DateTime<chrono::Local>) -> i64 {
+pub(crate) fn next_due(
+    app: &App,
+    config: &config::Config,
+    from: chrono::DateTime<chrono::Local>,
+) -> i64 {
     (0..=4000)
         .find(|s| github_poll_due(app, config, from + secs(*s)))
         .expect("never due again")
 }
 
-fn status_text(app: &App) -> String {
+pub(crate) fn status_text(app: &App) -> String {
     app.status_message
         .as_ref()
         .map(|m| m.text.clone())
@@ -4164,7 +2039,7 @@ fn status_text(app: &App) -> String {
 
 /// The rate limit of S6 and S15: a `RATE_LIMITED` body at 17:00:43 whose
 /// headers say 0 left until 17:23:06.
-fn land_primary_limit(app: &mut App) {
+pub(crate) fn land_primary_limit(app: &mut App) {
     let budget = reading("A", 0, at(17, 23, 6), at(17, 0, 43));
     land_at(
         app,
@@ -4173,94 +2048,6 @@ fn land_primary_limit(app: &mut App) {
             Some(budget),
         ),
         at(17, 0, 43),
-    );
-}
-
-#[test]
-fn s2b_only_502s_since_launch_back_off_from_the_interval_without_pacing() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
-    let mut now = at(17, 0, 0);
-    for expected in [30, 60, 120] {
-        land_at(
-            &mut app,
-            err_with(failure(github::FailureKind::Server), None),
-            now,
-        );
-        assert!(
-            app.api_budget.known(now).is_none(),
-            "a 502 made the budget known"
-        );
-        assert_eq!(github_poll_secs(&app, &config), 30, "paced on a guess");
-        assert_eq!(next_due(&app, &config, now), expected);
-        now += secs(expected);
-    }
-}
-
-#[test]
-fn s2c_a_known_budget_past_its_reset_is_unknown_and_the_floor_returns() {
-    let (mut app, config) = budget_app(model::CiStatus::Pending, 1.0, 0);
-    // 600 left with 23 minutes to go stretches the pace past 30 s.
-    let budget = reading("A", 600, at(17, 23, 6), at(17, 0, 0));
-    land_at(&mut app, ok_with_pending_r(Some(budget)), at(17, 0, 0));
-    assert!(app.api_budget.known(at(17, 0, 0)).is_some());
-    assert!(github_poll_secs(&app, &config) > 30);
-
-    assert!(app.api_budget.known(at(17, 23, 6)).is_none());
-    land_at(&mut app, ok_with_pending_r(None), at(17, 30, 0));
-    assert_eq!(github_poll_secs(&app, &config), GITHUB_POLL_MIN as i64);
-    assert_eq!(next_due(&app, &config, at(17, 30, 0)), 15);
-}
-
-#[test]
-fn s3_a_healthy_budget_keeps_the_pending_floor() {
-    let (mut app, config) = budget_app(model::CiStatus::Pending, 1.0, 0);
-    let budget = reading("A", 3564, at(17, 23, 6), at(17, 0, 43));
-    land_at(&mut app, ok_with_pending_r(Some(budget)), at(17, 0, 43));
-    assert_eq!(github_poll_secs(&app, &config), 15);
-    assert_eq!(next_due(&app, &config, at(17, 0, 43)), 15);
-}
-
-#[test]
-fn s4_600_left_with_40_minutes_paces_at_72_seconds() {
-    let (mut app, config) = budget_app(model::CiStatus::Pending, 1.0, 0);
-    let budget = reading("A", 600, at(17, 40, 0), at(17, 0, 0));
-    assert_eq!(
-        app.api_budget.pace(3, at(17, 0, 0)),
-        app::Pace::Unknown,
-        "known before any reading"
-    );
-    land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
-    assert_eq!(app.api_budget.pace(3, at(17, 0, 0)), app::Pace::Every(72));
-    // The Pending row would ask for 15 s: the floor is suspended.
-    assert_eq!(github_poll_secs(&app, &config), 72);
-    assert_eq!(next_due(&app, &config, at(17, 0, 0)), 72);
-    // And so is the push shortcut.
-    app.push_detected = true;
-    assert!(!github_poll_due(&app, &config, at(17, 0, 1)));
-    assert_eq!(next_due(&app, &config, at(17, 0, 0)), 72);
-}
-
-#[test]
-fn s5_below_the_reserve_pauses_until_the_reset_plus_jitter_and_r_still_sends() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
-    let budget = reading("A", 480, at(17, 23, 6), at(17, 0, 0));
-    land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
-    assert!(!github_poll_due(&app, &config, at(17, 23, 15)));
-    assert!(github_poll_due(&app, &config, at(17, 23, 16)));
-    assert_eq!(github_limit_until(&app, &config, at(17, 10, 0)), None);
-}
-
-#[test]
-fn s5a_a_push_while_paused_waits_for_the_first_poll_after_the_resume() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
-    let budget = reading("A", 480, at(17, 23, 6), at(17, 0, 0));
-    land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
-    app.push_detected = true;
-    assert!(!github_poll_due(&app, &config, at(17, 10, 0)));
-    assert_eq!(next_due(&app, &config, at(17, 10, 0)), 13 * 60 + 16);
-    assert!(
-        app.push_detected,
-        "the push was dropped before a poll served it"
     );
 }
 
@@ -4279,43 +2066,6 @@ fn s5b_fewer_points_than_one_poll_is_a_known_limit_and_r_sends_nothing() {
     refresh_key(&mut app, &tx, &args, &config, at(17, 10, 0));
     assert!(!app.github_poll_inflight, "a request was sent");
     assert_eq!(status_text(&app), "GitHub rate limited, resumes at 17:23");
-}
-
-#[test]
-fn s6_a_rate_limited_body_holds_until_the_reset_plus_jitter() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
-    land_primary_limit(&mut app);
-    assert!(matches!(
-        &app.github_freshness.outcome,
-        app::Outcome::Failed(f) if f.kind == github::FailureKind::Api && f.rate_limited
-    ));
-    assert_eq!(
-        app.github_backoff.not_before(30),
-        Some(at(17, 23, 16)),
-        "not-before"
-    );
-    assert!(!github_poll_due(&app, &config, at(17, 23, 15)));
-    assert!(github_poll_due(&app, &config, at(17, 23, 16)));
-}
-
-#[test]
-fn s6a_a_local_clock_ten_minutes_ahead_anchors_the_reset_on_arrival() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
-    // The server's clock says 17:00:00 and the reset 17:23:06; the local
-    // clock reads 17:10:00 when the answer arrives.
-    let budget = reading("A", 0, at(17, 23, 6), at(17, 0, 0));
-    land_at(
-        &mut app,
-        err_with(
-            github::Failure::rate_limit("API rate limit exceeded"),
-            Some(budget),
-        ),
-        at(17, 10, 0),
-    );
-    assert_eq!(app.api_budget.reset_at(), Some(at(17, 33, 6)));
-    assert_eq!(app.github_backoff.not_before(30), Some(at(17, 33, 16)));
-    assert!(!github_poll_due(&app, &config, at(17, 33, 15)));
-    assert!(github_poll_due(&app, &config, at(17, 33, 16)));
 }
 
 #[test]
@@ -4516,23 +2266,9 @@ fn s14_three_401s_back_off_and_a_success_returns_to_normal() {
     assert_eq!(next_due(&app, &config, now), 30);
 }
 
-#[test]
-fn s15_r_under_a_rate_limit_sweeps_and_sends_nothing() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
-    land_primary_limit(&mut app);
-    let before = app.github_freshness.clone();
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let args = Args::parse_from(["fleetz"]);
-    // Outside a runtime: a spawned request would panic here.
-    refresh_key(&mut app, &tx, &args, &config, at(17, 10, 0));
-    assert!(!app.github_poll_inflight, "a request was sent");
-    assert!(status_text(&app).contains("17:23"), "{}", status_text(&app));
-    assert_eq!(app.github_freshness, before);
-}
-
 /// A primary limit relative to the real clock, for the paths that read
 /// it (`apply_load_result`): 13 minutes left, jitter 10 s.
-fn limited_now(app: &mut App) -> chrono::DateTime<chrono::Local> {
+pub(crate) fn limited_now(app: &mut App) -> chrono::DateTime<chrono::Local> {
     let now = chrono::Local::now();
     let budget = reading("A", 0, now + secs(13 * 60), now);
     land_at(
@@ -4544,148 +2280,6 @@ fn limited_now(app: &mut App) -> chrono::DateTime<chrono::Local> {
         now,
     );
     now + secs(13 * 60 + 10)
-}
-
-#[test]
-fn s16_r_under_a_rate_limit_rebuilds_from_memory_and_names_the_resume() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
-    app.dataset = poll_says_passed().ok().unwrap().repos;
-    let resume = limited_now(&mut app);
-    assert_eq!(
-        reload_action(&app, &config, chrono::Local::now()),
-        ReloadAction::FromMemory
-    );
-    let before = app.github_freshness.clone();
-    let notes = ViewNotes {
-        header: "h".to_string(),
-        ambiguity: None,
-    };
-    apply_load_result(
-        &mut app,
-        &config,
-        Ok(Box::new(memory_rebuild_result(vec![test_repo()], notes))),
-    );
-    assert_eq!(app.github_freshness, before, "freshness moved");
-    let status = status_text(&app);
-    assert_ne!(status, "Reloaded");
-    assert!(
-        status.contains(&resume.format("%H:%M").to_string()),
-        "{status:?}"
-    );
-    assert!(!app.github_poll_inflight);
-    assert!(!app.loading);
-}
-
-#[test]
-fn s16a_r_under_a_rate_limit_with_nothing_in_memory_only_names_the_resume() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
-    land_primary_limit(&mut app);
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let args = Args::parse_from(["fleetz"]);
-    // Outside a runtime: a spawned load would panic here.
-    reload_key(
-        &mut app,
-        &tx,
-        &args,
-        &config,
-        Path::new("/nonexistent"),
-        at(17, 10, 0),
-    );
-    assert_eq!(status_text(&app), "GitHub rate limited, resumes at 17:23");
-    assert!(!app.loading);
-    assert!(!app.github_poll_inflight);
-}
-
-#[test]
-fn s16b_r_under_a_rate_limit_with_a_poll_in_flight_waits_for_it() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
-    app.dataset = poll_says_passed().ok().unwrap().repos;
-    land_primary_limit(&mut app);
-    let in_flight = claim_github_poll(&mut app).unwrap();
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let args = Args::parse_from(["fleetz"]);
-    reload_key(
-        &mut app,
-        &tx,
-        &args,
-        &config,
-        Path::new("/nonexistent"),
-        at(17, 10, 0),
-    );
-    assert_eq!(status_text(&app), REFRESH_RUNNING);
-    assert!(!app.loading, "a rebuild started");
-
-    let budget = reading("A", 0, at(17, 23, 6), at(17, 10, 5));
-    answer_at(
-        &mut app,
-        in_flight,
-        err_with(
-            github::Failure::rate_limit("API rate limit exceeded"),
-            Some(budget),
-        ),
-        at(17, 10, 5),
-    );
-    assert_eq!(
-        reload_action(&app, &config, at(17, 10, 6)),
-        ReloadAction::FromMemory
-    );
-}
-
-#[test]
-fn s17_r_during_backoff_sends_and_its_outcome_moves_the_ladder() {
-    for succeeds in [false, true] {
-        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
-        land_at(
-            &mut app,
-            err_with(failure(github::FailureKind::Server), None),
-            at(17, 0, 0),
-        );
-        land_at(
-            &mut app,
-            err_with(failure(github::FailureKind::Server), None),
-            at(17, 0, 30),
-        );
-        // Backing off, not limited: `r` goes to GitHub.
-        assert_eq!(github_limit_until(&app, &config, at(17, 0, 40)), None);
-        let result = match succeeds {
-            true => ok_with(None),
-            false => err_with(failure(github::FailureKind::Server), None),
-        };
-        land_at(&mut app, result, at(17, 0, 40));
-        let expected = if succeeds { 0 } else { 3 };
-        assert_eq!(app.github_backoff.failures(), expected);
-    }
-}
-
-#[test]
-fn s18_r_while_a_load_runs_is_ignored() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
-    app.loading = true;
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let args = Args::parse_from(["fleetz"]);
-    // Outside a runtime: a second load would panic here.
-    reload_key(
-        &mut app,
-        &tx,
-        &args,
-        &config,
-        Path::new("/nonexistent"),
-        at(17, 0, 0),
-    );
-    assert_eq!(status_text(&app), REFRESH_RUNNING);
-    assert!(!app.github_poll_inflight);
-}
-
-#[test]
-fn s19b_one_failure_after_a_suspend_waits_exactly_one_interval() {
-    for kind in [github::FailureKind::Offline, github::FailureKind::TimedOut] {
-        // A 0.8 draw would show if step 1 were jittered.
-        let (mut app, config) = budget_app(model::CiStatus::Passed, 0.8, 0);
-        land_at(&mut app, ok_with(None), at(17, 0, 0));
-        land_at(&mut app, err_with(failure(kind), None), at(17, 0, 30));
-        assert_eq!(next_due(&app, &config, at(17, 0, 30)), 30, "{kind:?}");
-        assert_eq!(github_limit_until(&app, &config, at(17, 0, 31)), None);
-    }
 }
 
 /// Any sequence of outcomes and readings: the next automatic attempt is
@@ -4761,64 +2355,6 @@ fn s20_no_automatic_attempt_sooner_than_the_interval_in_force() {
 }
 
 #[test]
-fn s21_a_late_reading_never_raises_remaining_in_the_same_window() {
-    let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
-    let first = claim_github_poll(&mut app).unwrap();
-    app.github_poll_started = std::time::Instant::now()
-        .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
-    expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, at(17, 1, 0));
-    let second = claim_github_poll(&mut app).unwrap();
-    let newer = reading("A", 2900, at(17, 23, 6), at(17, 1, 10));
-    answer_at(&mut app, second, ok_with(Some(newer)), at(17, 1, 10));
-    let applied = app.github_freshness.clone();
-
-    let late = reading("A", 3000, at(17, 23, 6), at(17, 0, 30));
-    answer_at(&mut app, first, ok_with(Some(late)), at(17, 1, 20));
-    assert_eq!(app.api_budget.reading().map(|r| r.remaining), Some(2900));
-    assert_eq!(app.github_freshness, applied, "the late outcome applied");
-}
-
-#[test]
-fn s21a_a_late_reading_of_a_newer_window_replaces() {
-    let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
-    let first = claim_github_poll(&mut app).unwrap();
-    app.github_poll_started = std::time::Instant::now()
-        .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
-    expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, at(17, 1, 0));
-    let second = claim_github_poll(&mut app).unwrap();
-    answer_at(
-        &mut app,
-        second,
-        ok_with(Some(reading("A", 100, at(17, 23, 6), at(17, 1, 10)))),
-        at(17, 1, 10),
-    );
-    let late = reading("A", 4990, at(18, 23, 6), at(17, 23, 30));
-    answer_at(&mut app, first, ok_with(Some(late.clone())), at(17, 23, 30));
-    assert_eq!(app.api_budget.reading(), Some(&late));
-}
-
-#[test]
-fn s22_an_applied_reading_on_another_token_replaces_and_drops_the_limit() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
-    land_primary_limit(&mut app);
-    assert_eq!(app.github_backoff.failures(), 1);
-    assert!(github_limit_until(&app, &config, at(17, 1, 0)).is_some());
-    // A body cut off mid-read is `Offline`, yet its headers came on the
-    // new token: transparent to the ladder, but the switch drops A's
-    // limit.
-    let other = reading("B", 4000, at(17, 23, 6), at(17, 1, 0));
-    land_at(
-        &mut app,
-        err_with(failure(github::FailureKind::Offline), Some(other.clone())),
-        at(17, 1, 0),
-    );
-    assert_eq!(app.api_budget.reading(), Some(&other));
-    assert_eq!(app.github_backoff.not_before(30), None, "A's limit kept");
-    assert_eq!(app.github_backoff.failures(), 1, "the count was reset");
-    assert_eq!(github_limit_until(&app, &config, at(17, 1, 1)), None);
-}
-
-#[test]
 fn s22a_a_discarded_answer_on_the_old_token_undoes_nothing() {
     let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
     let now = chrono::Local::now();
@@ -4864,36 +2400,6 @@ fn s22a_a_discarded_answer_on_the_old_token_undoes_nothing() {
 }
 
 #[test]
-fn s23_a_cache_served_launch_with_watch_off_polls_once_whatever_the_budget() {
-    for limited in [false, true] {
-        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
-        app.watch_mode = false;
-        launch(
-            &mut app,
-            LoadKind::Initial,
-            app::DatasetSource::Cache {
-                written: Some(at(8, 0, 0)),
-            },
-        );
-        assert!(github_poll_due(&app, &config, at(17, 0, 0)), "not at once");
-        let result = match limited {
-            false => ok_with(Some(reading("A", 600, at(17, 40, 0), at(17, 0, 0)))),
-            true => err_with(
-                github::Failure::rate_limit("API rate limit exceeded"),
-                Some(reading("A", 0, at(17, 23, 6), at(17, 0, 0))),
-            ),
-        };
-        land_at(&mut app, result, at(17, 0, 0));
-        for later in [at(17, 23, 30), at(23, 0, 0)] {
-            assert!(
-                !github_poll_due(&app, &config, later),
-                "watch off polled again (limited: {limited})"
-            );
-        }
-    }
-}
-
-#[test]
 fn s24_two_instances_paused_together_resume_apart() {
     for jitter in [3, 21] {
         let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, jitter);
@@ -4905,88 +2411,6 @@ fn s24_two_instances_paused_together_resume_apart() {
             "jitter {jitter}"
         );
     }
-}
-
-/// Design 4.1 rule 3: within one window `remaining` only falls, so the
-/// lower reading is the newer one, from an applied answer or a discarded
-/// one on the held token.
-#[test]
-fn a_lower_remaining_in_the_same_window_replaces_the_held_reading() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
-    let reset = at(17, 40, 0);
-    land_at(
-        &mut app,
-        ok_with(Some(reading("A", 4000, reset, at(17, 0, 0)))),
-        at(17, 0, 0),
-    );
-    assert_eq!(github_poll_secs(&app, &config), 30);
-    land_at(
-        &mut app,
-        ok_with(Some(reading("A", 600, reset, at(17, 0, 0)))),
-        at(17, 0, 0),
-    );
-    assert_eq!(app.api_budget.reading().map(|r| r.remaining), Some(600));
-    assert_eq!(app.api_budget.pace(3, at(17, 0, 0)), app::Pace::Every(72));
-    assert_eq!(github_poll_secs(&app, &config), 72);
-
-    // A given-up poll answers after a newer one: discarded, but its lower
-    // reading on the held token still applies.
-    let first = claim_github_poll(&mut app).unwrap();
-    app.github_poll_started = std::time::Instant::now()
-        .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
-    expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, at(17, 1, 0));
-    let second = claim_github_poll(&mut app).unwrap();
-    answer_at(&mut app, second, ok_with(None), at(17, 1, 10));
-    let applied = app.github_freshness.clone();
-    answer_at(
-        &mut app,
-        first,
-        ok_with(Some(reading("A", 550, reset, at(17, 0, 50)))),
-        at(17, 1, 20),
-    );
-    assert_eq!(app.api_budget.reading().map(|r| r.remaining), Some(550));
-    assert_eq!(
-        app.github_freshness, applied,
-        "the discarded outcome applied"
-    );
-}
-
-/// The pace never reaches past the resume: with one point above the
-/// reserve, an hour to the reset and a cost of 3, the uncapped spacing
-/// would be 10800 s.
-#[test]
-fn the_pace_is_capped_at_the_resume() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
-    land_at(
-        &mut app,
-        ok_with(Some(reading("A", 501, at(18, 0, 0), at(17, 0, 0)))),
-        at(17, 0, 0),
-    );
-    let to_resume = (app.api_budget.resume_at().unwrap() - at(17, 0, 0)).num_seconds();
-    assert_eq!(to_resume, 3600);
-    match app.api_budget.pace(3, at(17, 0, 0)) {
-        app::Pace::Every(secs) => assert!(secs <= to_resume, "paced {secs} s"),
-        other => panic!("expected a pace, got {other:?}"),
-    }
-    assert!(github_poll_due(&app, &config, at(18, 0, 0)));
-    assert_eq!(next_due(&app, &config, at(17, 0, 0)), 3600);
-}
-
-/// Transition 5: a give-up is a `TimedOut` failure and climbs the ladder.
-#[test]
-fn a_give_up_climbs_the_backoff_ladder() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
-    land_at(
-        &mut app,
-        err_with(failure(github::FailureKind::Server), None),
-        at(17, 0, 0),
-    );
-    claim_github_poll(&mut app).unwrap();
-    app.github_poll_started = std::time::Instant::now()
-        .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
-    expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, at(17, 0, 30));
-    assert_eq!(app.github_backoff.failures(), 2);
-    assert_eq!(next_due(&app, &config, at(17, 0, 30)), 60, "not step 2");
 }
 
 /// Transitions 3 and 6: an `R` that went to GitHub and succeeded clears
@@ -5040,7 +2464,7 @@ fn a_failed_load_carries_its_budget_reading() {
 // `docs/coverage-cache-design.md` 4.7 and scenarios CV9 to CV20.
 
 /// A Primary carrier row of `owner`/`name` with CI `ci` and two PRs.
-fn carrier_row(owner: &str, name: &str, ci: model::CiStatus) -> RepoStatus {
+pub(crate) fn carrier_row(owner: &str, name: &str, ci: model::CiStatus) -> RepoStatus {
     RepoStatus {
         name: name.to_string(),
         owner: Some(owner.to_string()),
@@ -5053,7 +2477,7 @@ fn carrier_row(owner: &str, name: &str, ci: model::CiStatus) -> RepoStatus {
 }
 
 /// The dataset entry for `owner`/`name`, with CI `ci` and no PRs.
-fn entry(owner: &str, name: &str, ci: model::CiStatus) -> github::GithubRepo {
+pub(crate) fn entry(owner: &str, name: &str, ci: model::CiStatus) -> github::GithubRepo {
     github::GithubRepo {
         name: name.to_string(),
         pushed_at: chrono::DateTime::UNIX_EPOCH,
@@ -5070,7 +2494,7 @@ fn entry(owner: &str, name: &str, ci: model::CiStatus) -> github::GithubRepo {
 
 /// A successful poll on `account` returning `repos` and, when given, a
 /// GitHub calendar whose year totals `calendar_total`.
-fn fetch_on(
+pub(crate) fn fetch_on(
     account: Option<&str>,
     repos: Vec<github::GithubRepo>,
     calendar_total: Option<u32>,
@@ -5094,12 +2518,12 @@ fn calendar_of(total: u32) -> Box<contributions::Calendar> {
     Box::new(calendar)
 }
 
-fn remote(owner: &str, name: &str) -> app::RemoteKey {
+pub(crate) fn remote(owner: &str, name: &str) -> app::RemoteKey {
     (Some(owner.to_string()), name.to_string())
 }
 
 /// Rows for `alice/a` and `alice/b`, both passing, as CV9 gives them.
-fn alice_app() -> App {
+pub(crate) fn alice_app() -> App {
     App::new(
         vec![
             carrier_row("alice", "a", model::CiStatus::Passed),
@@ -5111,13 +2535,13 @@ fn alice_app() -> App {
     )
 }
 
-fn row<'a>(app: &'a App, name: &str) -> &'a RepoStatus {
+pub(crate) fn row<'a>(app: &'a App, name: &str) -> &'a RepoStatus {
     app.repos.iter().find(|r| r.name == name).expect("row")
 }
 
 /// Land a fetched load of `kind` on `account` with `rows` and `dataset`,
 /// saving any window to `store`.
-fn land_fetched(
+pub(crate) fn land_fetched(
     app: &mut App,
     kind: LoadKind,
     account: Option<&str>,
@@ -5159,7 +2583,11 @@ async fn rows_from(scratch: &Path, dataset: &[github::GithubRepo]) -> Vec<RepoSt
 
 /// Land what the account rebuild delivers: a rebuild from memory over
 /// `app.dataset`, saving any window to `store`.
-async fn land_account_rebuild(app: &mut App, scratch: &Path, store: &window_state::WindowState) {
+pub(crate) async fn land_account_rebuild(
+    app: &mut App,
+    scratch: &Path,
+    store: &window_state::WindowState,
+) {
     let rows = rows_from(scratch, &app.dataset).await;
     let notes = ViewNotes {
         header: "h".to_string(),
@@ -5225,35 +2653,6 @@ fn cv10_a_failed_poll_leaves_the_not_covered_set_unchanged() {
     assert_eq!(app.not_in_last_poll, before);
 }
 
-#[test]
-fn cv11_a_pending_row_the_poll_did_not_cover_does_not_hold_the_floor() {
-    let config = config::Config {
-        github_poll_interval: 90,
-        ..config::Config::default()
-    };
-    let mut app = App::new(
-        vec![
-            carrier_row("alice", "a", model::CiStatus::Passed),
-            carrier_row("alice", "b", model::CiStatus::Pending),
-        ],
-        "h".to_string(),
-        120,
-        44,
-    );
-    app.watch_mode = true;
-    assert_eq!(github_poll_secs(&app, &config), GITHUB_POLL_MIN as i64);
-    poll_with(
-        &mut app,
-        fetch_on(
-            None,
-            vec![entry("alice", "a", model::CiStatus::Passed)],
-            None,
-        ),
-    );
-    assert_eq!(row(&app, "b").ci_status, model::CiStatus::Pending);
-    assert_eq!(github_poll_secs(&app, &config), 90);
-}
-
 #[tokio::test]
 async fn cv12_a_poll_on_another_account_rebuilds_the_rows_from_its_dataset() {
     let scratch = wt_scratch("cv12");
@@ -5317,182 +2716,6 @@ async fn cv12_a_poll_on_another_account_rebuilds_the_rows_from_its_dataset() {
     assert!(!scratch.join("window.toml").exists(), "window.toml written");
     let status = status_text(&app);
     assert!(!status.starts_with("Window:"), "{status}");
-    std::fs::remove_dir_all(&scratch).ok();
-}
-
-#[test]
-fn cv13_a_late_answer_on_the_old_account_triggers_no_rebuild() {
-    let scratch = wt_scratch("cv13");
-    let store = window_state::WindowState::at(scratch.join("window.toml"));
-    let mut app = alice_app();
-    land_fetched(
-        &mut app,
-        LoadKind::Initial,
-        Some("A"),
-        alice_app().repos,
-        vec![entry("alice", "a", model::CiStatus::Passed)],
-        None,
-        &store,
-    );
-    let first = claim_github_poll(&mut app).unwrap();
-    app.github_poll_started = std::time::Instant::now()
-        .checked_sub(GITHUB_POLL_STUCK_AFTER + std::time::Duration::from_secs(1));
-    expire_stuck_github_poll(&mut app, GITHUB_POLL_STUCK_AFTER, chrono::Local::now());
-    let second = claim_github_poll(&mut app).unwrap();
-    answer(
-        &mut app,
-        second,
-        fetch_on(
-            Some("B"),
-            vec![entry("bob", "x", model::CiStatus::Passed)],
-            None,
-        ),
-    );
-    assert!(app.account_rebuild_due);
-    // As `start_account_rebuild` takes the flag when it spawns.
-    app.account_rebuild_due = false;
-
-    answer(
-        &mut app,
-        first,
-        fetch_on(
-            Some("A"),
-            vec![entry("alice", "a", model::CiStatus::Failed)],
-            None,
-        ),
-    );
-    assert!(!app.account_rebuild_due, "the discarded answer rebuilt");
-    assert_eq!(app.github_meta.account.as_deref(), Some("B"));
-    std::fs::remove_dir_all(&scratch).ok();
-}
-
-#[tokio::test]
-async fn cv15_every_rebuild_from_one_dataset_clears_the_not_covered_set() {
-    let scratch = wt_scratch("cv15");
-    let store = window_state::WindowState::at(scratch.join("window.toml"));
-    let alice = || {
-        vec![
-            entry("alice", "a", model::CiStatus::Passed),
-            entry("alice", "b", model::CiStatus::Passed),
-        ]
-    };
-    let marked = || {
-        let mut app = alice_app();
-        app.dataset = alice();
-        poll_with(
-            &mut app,
-            fetch_on(
-                None,
-                vec![entry("alice", "a", model::CiStatus::Passed)],
-                None,
-            ),
-        );
-        assert!(app.not_in_last_poll.contains(&remote("alice", "b")));
-        app
-    };
-    let notes = || ViewNotes {
-        header: "h".to_string(),
-        ambiguity: None,
-    };
-    let config = config::Config::default();
-
-    let mut app = marked();
-    land_fetched(
-        &mut app,
-        LoadKind::Initial,
-        None,
-        alice_app().repos,
-        alice(),
-        None,
-        &store,
-    );
-    assert!(app.not_in_last_poll.is_empty(), "after a launch");
-
-    let mut app = marked();
-    land_fetched(
-        &mut app,
-        LoadKind::Reload,
-        None,
-        alice_app().repos,
-        alice(),
-        None,
-        &store,
-    );
-    assert!(app.not_in_last_poll.is_empty(), "after R");
-
-    let mut app = marked();
-    let w = time::TimeWindow::clamped(2, time::WindowUnit::Days);
-    let result = window_apply_result(w, alice_app().repos, notes());
-    apply_load_result_saving_to(&mut app, &config, Ok(Box::new(result)), &store);
-    assert!(app.not_in_last_poll.is_empty(), "after a window apply");
-
-    let mut app = marked();
-    let result = memory_rebuild_result(alice_app().repos, notes());
-    apply_load_result_saving_to(&mut app, &config, Ok(Box::new(result)), &store);
-    assert!(
-        app.not_in_last_poll.is_empty(),
-        "after a rebuild from memory"
-    );
-
-    let mut app = marked();
-    poll_with(
-        &mut app,
-        fetch_on(
-            Some("B"),
-            vec![entry("bob", "x", model::CiStatus::Passed)],
-            None,
-        ),
-    );
-    assert!(app.account_rebuild_due);
-    assert!(!app.not_in_last_poll.is_empty());
-    land_account_rebuild(&mut app, &scratch, &store).await;
-    assert!(app.not_in_last_poll.is_empty(), "after an account rebuild");
-    std::fs::remove_dir_all(&scratch).ok();
-}
-
-#[tokio::test]
-async fn cv16_a_launch_on_an_unknown_account_rebuilds_once_on_the_first_keyed_poll() {
-    let scratch = wt_scratch("cv16");
-    let store = window_state::WindowState::at(scratch.join("window.toml"));
-    let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
-    // Served from the legacy file, or under the signed-out rule: the
-    // load's account is unknown.
-    apply_load_result_saving_to(
-        &mut app,
-        &config::Config::default(),
-        Ok(Box::new(LoadResult {
-            kind: LoadKind::Initial,
-            repos: alice_app().repos,
-            header: "h".to_string(),
-            dataset: Some(vec![entry("alice", "a", model::CiStatus::Passed)]),
-            github_calendar: None,
-            source: app::DatasetSource::Cache { written: None },
-            ambiguity: None,
-            meta: Some(github::FetchMeta::default()),
-        })),
-        &store,
-    );
-    assert_eq!(app.github_meta.account, None);
-    let a_poll = || {
-        fetch_on(
-            Some("A"),
-            vec![entry("alice", "a", model::CiStatus::Failed)],
-            None,
-        )
-    };
-
-    poll_with(&mut app, a_poll());
-    assert!(
-        app.account_rebuild_due,
-        "the first keyed poll did not rebuild"
-    );
-    app.account_rebuild_due = false;
-    land_account_rebuild(&mut app, &scratch, &store).await;
-    let rows: Vec<_> = app.repos.iter().map(|r| r.name.clone()).collect();
-    assert_eq!(rows, vec!["a".to_string()], "not rebuilt from A's dataset");
-
-    poll_with(&mut app, a_poll());
-    assert!(!app.account_rebuild_due, "a second rebuild");
     std::fs::remove_dir_all(&scratch).ok();
 }
 
@@ -5584,66 +2807,6 @@ fn cv18_a_poll_with_no_account_key_never_rebuilds() {
     std::fs::remove_dir_all(&scratch).ok();
 }
 
-#[test]
-fn cv20_a_window_apply_keeps_the_account_so_a_poll_on_it_does_not_rebuild() {
-    let scratch = wt_scratch("cv20");
-    let store = window_state::WindowState::at(scratch.join("window.toml"));
-    let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
-    land_fetched(
-        &mut app,
-        LoadKind::Initial,
-        Some("A"),
-        alice_app().repos,
-        vec![entry("alice", "a", model::CiStatus::Passed)],
-        None,
-        &store,
-    );
-    let w = time::TimeWindow::clamped(2, time::WindowUnit::Days);
-    let notes = ViewNotes {
-        header: "h".to_string(),
-        ambiguity: None,
-    };
-    apply_load_result_saving_to(
-        &mut app,
-        &config::Config::default(),
-        Ok(Box::new(window_apply_result(w, alice_app().repos, notes))),
-        &store,
-    );
-    assert_eq!(app.github_meta.account.as_deref(), Some("A"));
-    poll_with(
-        &mut app,
-        fetch_on(
-            Some("A"),
-            vec![entry("alice", "a", model::CiStatus::Passed)],
-            None,
-        ),
-    );
-    assert!(
-        !app.account_rebuild_due,
-        "a poll on the same account rebuilt"
-    );
-    std::fs::remove_dir_all(&scratch).ok();
-}
-
-/// The rebuild waits while a load runs: outside a runtime a spawn would
-/// panic, so returning at all says nothing was spawned.
-#[test]
-fn an_account_rebuild_waits_for_a_running_load() {
-    let mut app = alice_app();
-    app.loading = true;
-    app.account_rebuild_due = true;
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let args = Args::parse_from(["fleetz"]);
-    start_account_rebuild(
-        &mut app,
-        &tx,
-        &args,
-        &config::Config::default(),
-        Path::new("/nonexistent"),
-    );
-    assert!(app.account_rebuild_due, "the waiting rebuild was dropped");
-}
-
 /// A load that fetched rebuilt the rows on its own account, so a pending
 /// account rebuild is dropped rather than repeated.
 #[test]
@@ -5665,22 +2828,13 @@ fn a_fetched_load_settles_a_pending_account_rebuild() {
     std::fs::remove_dir_all(&scratch).ok();
 }
 
-#[test]
-fn the_rebuild_rule_needs_a_known_poll_account() {
-    assert!(!account_rebuild_needed(None, None));
-    assert!(!account_rebuild_needed(Some("A"), None));
-    assert!(!account_rebuild_needed(Some("A"), Some("A")));
-    assert!(account_rebuild_needed(Some("A"), Some("B")));
-    assert!(account_rebuild_needed(None, Some("A")));
-}
-
 // FZ-37: `y` and a click in pane 2 copy a commit hash.
 
 const YANK_HASHES: [&str; 3] = ["aaa1111", "bbb2222", "ccc3333"];
 
 /// A repo whose every view lists the three `YANK_HASHES` commits, plus
 /// `extra` more, newest first.
-fn yank_repo(extra: usize) -> RepoStatus {
+pub(crate) fn yank_repo(extra: usize) -> RepoStatus {
     let mut repo = test_repo();
     repo.path = Some("/tmp/yank".to_string());
     let hashes: Vec<String> = YANK_HASHES
@@ -5721,7 +2875,7 @@ fn yank_repo(extra: usize) -> RepoStatus {
     repo
 }
 
-fn yank_app(view: app::HistoryView, extra: usize) -> App {
+pub(crate) fn yank_app(view: app::HistoryView, extra: usize) -> App {
     let mut app = App::new(vec![yank_repo(extra)], "h".to_string(), 120, 40);
     app.view = app::View::Detail;
     app.history_view = view;
@@ -5729,7 +2883,7 @@ fn yank_app(view: app::HistoryView, extra: usize) -> App {
 }
 
 /// Draw a frame, as the event loop does before any click can arrive.
-fn yank_frame(app: &App) -> ratatui::buffer::Buffer {
+pub(crate) fn yank_frame(app: &App) -> ratatui::buffer::Buffer {
     use ratatui::backend::TestBackend;
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     term.draw(|f| ui::render(f, app)).unwrap();
@@ -5738,7 +2892,7 @@ fn yank_frame(app: &App) -> ratatui::buffer::Buffer {
 
 /// The first cell of `needle` inside the detail pane, read off the
 /// screen rather than out of the hit map under test.
-fn on_screen(buf: &ratatui::buffer::Buffer, app: &App, needle: &str) -> (u16, u16) {
+pub(crate) fn on_screen(buf: &ratatui::buffer::Buffer, app: &App, needle: &str) -> (u16, u16) {
     let pane = ui::panel_rects(buf.area, app).detail.expect("detail pane");
     (pane.top()..pane.bottom())
         .find_map(|y| {
@@ -5751,7 +2905,7 @@ fn on_screen(buf: &ratatui::buffer::Buffer, app: &App, needle: &str) -> (u16, u1
         .unwrap_or_else(|| panic!("`{needle}` is not drawn in pane 2"))
 }
 
-fn yank_status(app: &App) -> Option<(String, bool)> {
+pub(crate) fn yank_status(app: &App) -> Option<(String, bool)> {
     app.status_message
         .as_ref()
         .map(|m| (m.text.clone(), m.is_error))
@@ -5815,7 +2969,7 @@ fn a_failed_copy_names_the_reason() {
 
 /// Press `keys` one by one through the yank chord with a stand-in
 /// clipboard, and return what was copied.
-fn chord(app: &mut App, keys: &str) -> Vec<String> {
+pub(crate) fn chord(app: &mut App, keys: &str) -> Vec<String> {
     let mut copied = Vec::new();
     for c in keys.chars() {
         app.press_yank_key(Some(c), |text| {
@@ -5827,7 +2981,7 @@ fn chord(app: &mut App, keys: &str) -> Vec<String> {
 }
 
 /// `yank_app`'s repo as GitHub's `Gaurgle/r`, focused on `panel`.
-fn yank_on(view: app::HistoryView, panel: FocusedPanel) -> App {
+pub(crate) fn yank_on(view: app::HistoryView, panel: FocusedPanel) -> App {
     let mut app = yank_app(view, 0);
     app.repos[0].owner = Some("Gaurgle".to_string());
     app.focused_panel = panel;
@@ -6245,49 +3399,6 @@ fn a_failed_copy_and_nothing_to_copy_start_no_flash() {
     assert!(!app.yank_flash.is_active(), "`nothing to copy` flashed");
 }
 
-#[test]
-fn a_key_press_a_click_or_a_scroll_ends_the_flash_and_motion_does_not() {
-    use crossterm::event::{KeyEventKind, KeyEventState};
-    let mouse = |kind| {
-        Event::Mouse(MouseEvent {
-            kind,
-            column: 3,
-            row: 3,
-            modifiers: KeyModifiers::NONE,
-        })
-    };
-    let release = Event::Key(KeyEvent {
-        code: KeyCode::Char('j'),
-        modifiers: KeyModifiers::NONE,
-        kind: KeyEventKind::Release,
-        state: KeyEventState::NONE,
-    });
-    let keeps = [
-        mouse(MouseEventKind::Moved),
-        Event::Resize(80, 24),
-        Event::FocusLost,
-        Event::FocusGained,
-        release,
-    ];
-    let ends = [
-        Event::Key(press('j')),
-        mouse(MouseEventKind::Down(MouseButton::Left)),
-        mouse(MouseEventKind::ScrollDown),
-        Event::Paste("x".to_string()),
-    ];
-    let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
-    for ev in &keeps {
-        chord(&mut app, "yy");
-        end_yank_flash_on(&mut app, ev);
-        assert!(app.yank_flash.is_active(), "{ev:?} ended the flash");
-    }
-    for ev in &ends {
-        chord(&mut app, "yy");
-        end_yank_flash_on(&mut app, ev);
-        assert!(!app.yank_flash.is_active(), "{ev:?} left the flash");
-    }
-}
-
 /// A screen cell, `(x, y)`.
 type Cell = (u16, u16);
 
@@ -6370,26 +3481,6 @@ fn the_flash_fades_on_a_notes_tree_row() {
     let (fading, band) = flash_frames(&mut app, |r| r.detail.unwrap(), true);
     assert!(!band.is_empty(), "no cursor band in the tree");
     assert_eq!(fading, band);
-}
-
-/// With a flash live and nothing queued, the loop wakes for a frame on
-/// its own; with none it waits on the channel alone, as before FZ-81.
-#[tokio::test]
-async fn the_loop_wakes_for_the_flash_frame_and_only_while_it_lasts() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
-    let bound = std::time::Duration::from_millis(80);
-    let idle = tokio::time::timeout(bound, next_event(&mut rx, &app.yank_flash)).await;
-    assert!(idle.is_err(), "woke with no flash and nothing queued");
-    chord(&mut app, "yy");
-    let frame = tokio::time::timeout(bound, next_event(&mut rx, &app.yank_flash)).await;
-    assert!(matches!(frame, Ok(Some(AppEvent::YankFrame))), "no frame");
-    tx.send(AppEvent::Tick).unwrap();
-    let queued = next_event(&mut rx, &app.yank_flash).await;
-    assert!(
-        matches!(queued, Some(AppEvent::Tick)),
-        "a queued event waits"
-    );
 }
 
 #[test]
@@ -6485,19 +3576,6 @@ fn a_live_flash_draws_at_every_terminal_size() {
     }
 }
 
-/// A live flash is an animation: its frames are painted through a burst
-/// of queued background events, not held behind it.
-#[test]
-fn a_live_flash_is_never_held_behind_queued_events() {
-    let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
-    assert!(!is_animating(&app));
-    chord(&mut app, "yy");
-    assert!(is_animating(&app), "the flash is not an animation");
-    assert!(should_paint(false, 0, is_animating(&app)));
-    app.yank_flash.clear();
-    assert!(!is_animating(&app));
-}
-
 /// The flash belongs to the row it was copied from: a cursor moved by
 /// anything other than input (which ends the flash first) leaves the
 /// new row unflashed.
@@ -6522,72 +3600,10 @@ fn a_flash_does_not_follow_the_cursor_to_another_row() {
 }
 
 /// A terminal for driving the input handlers, as the `4` key test has.
-fn yank_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
+pub(crate) fn yank_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
     let backend = CrosstermBackend::new(io::stdout());
     let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 40));
     Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap()
-}
-
-/// The key handler hands keys to the chord: `y` on the compact grid
-/// copies nothing and arms it, and the `j` after it ends it and still
-/// moves the cursor. Fails if the handler stops calling the chord.
-#[tokio::test]
-async fn the_key_handler_feeds_the_yank_chord() {
-    let args = Args::parse_from(["fleetz"]);
-    let config = config::Config::default();
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut terminal = yank_terminal();
-    let mut app = App::new(vec![yank_repo(0), yank_repo(0)], String::new(), 120, 40);
-    app.view = app::View::Compact;
-    app.focused_panel = FocusedPanel::RepoList;
-    let repo_dir = Path::new("/nonexistent");
-    handle_normal_input(
-        &mut app,
-        &mut terminal,
-        press('y'),
-        &tx,
-        &args,
-        &config,
-        repo_dir,
-    )
-    .await
-    .unwrap();
-    assert!(app.pending_yank, "`y` did not reach the chord");
-    assert_eq!(yank_status(&app), None, "`y` alone copied something");
-    handle_normal_input(
-        &mut app,
-        &mut terminal,
-        press('j'),
-        &tx,
-        &args,
-        &config,
-        repo_dir,
-    )
-    .await
-    .unwrap();
-    assert!(!app.pending_yank, "`j` left the chord armed");
-    assert_eq!(app.selected, 1, "`j` after `y` did not move the cursor");
-}
-
-/// A mouse press ends the chord: `y`, a click, then `p` copies nothing.
-#[test]
-fn a_click_ends_the_yank_chord() {
-    let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
-    let terminal = yank_terminal();
-    assert!(chord(&mut app, "y").is_empty());
-    assert!(app.pending_yank);
-    let click = MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: 0,
-        row: 0,
-        modifiers: KeyModifiers::NONE,
-    };
-    handle_mouse_input(&mut app, &terminal, click);
-    assert!(!app.pending_yank, "the click left the chord armed");
-    assert!(
-        chord(&mut app, "p").is_empty(),
-        "`p` after the click copied"
-    );
 }
 
 /// Click on `needle` in pane 2, offset `dx` columns from its first cell,
@@ -6654,27 +3670,6 @@ fn a_click_on_the_row_off_the_hash_only_moves_the_cursor() {
     assert_eq!(app.inspected_hash(), Some("ccc3333"));
 }
 
-#[test]
-fn a_click_outside_any_row_does_nothing() {
-    let mut app = yank_app(app::HistoryView::Commits, 0);
-    app.set_detail_selected(1);
-    let buf = yank_frame(&app);
-    let pane = ui::panel_rects(buf.area, &app).detail.unwrap();
-    let (_, last) = on_screen(&buf, &app, "ccc3333");
-    let (x, header) = on_screen(&buf, &app, "/tmp/yank");
-    let mut copied = Vec::new();
-    // Below the last row, in the pinned header, and on the border.
-    for (cx, cy) in [(x, last + 2), (x, header), (pane.left(), last)] {
-        click_detail(&mut app, cx, cy, |h| {
-            copied.push(h.to_string());
-            Ok(())
-        });
-    }
-    assert!(copied.is_empty(), "copied {copied:?}");
-    assert_eq!(app.inspected_hash(), Some("bbb2222"), "the cursor moved");
-    assert!(app.status_message.is_none());
-}
-
 /// The map is read in body rows, so a scrolled list resolves to the row
 /// drawn under the pointer, not to the row that many lines from the top.
 #[test]
@@ -6689,33 +3684,9 @@ fn a_click_on_a_scrolled_list_lands_on_the_drawn_row() {
     assert_eq!(app.inspected_hash(), Some(target.as_str()));
 }
 
-/// FZ-37 review: a click copies the hash that was on screen, even when
-/// the list changed between the paint and the click (a `RepoUpdated`
-/// landing in between).
-#[test]
-fn a_click_copies_the_painted_hash_after_the_list_changes() {
-    let mut app = yank_app(app::HistoryView::Commits, 0);
-    let buf = yank_frame(&app);
-    let (x, y) = on_screen(&buf, &app, "bbb2222");
-    // A new commit lands on top: index 1 now names `aaa1111`.
-    let mut newer = app.repos[0].graph[0].clone();
-    newer.hash = "fff0000".to_string();
-    app.repos[0].graph.insert(0, newer);
-    let mut copied = Vec::new();
-    click_detail(&mut app, x, y, |h| {
-        copied.push(h.to_string());
-        Ok(())
-    });
-    assert_eq!(copied, ["bbb2222"]);
-    assert_eq!(
-        yank_status(&app),
-        Some(("copied bbb2222".to_string(), false))
-    );
-}
-
 // FZ-30b: the `ci` view's data layer, its trigger and its answers.
 
-fn ci_app() -> App {
+pub(crate) fn ci_app() -> App {
     let mut app = App::new(Vec::new(), String::new(), 120, 40);
     app.repos = vec![RepoStatus {
         name: "fleetz".to_string(),
@@ -6729,342 +3700,9 @@ fn ci_app() -> App {
     app
 }
 
-/// `Enter` and `O` on an other context in the `ci` view (FZ-83) open its
-/// target url; on a run row, or without pane 2's focus, there is none,
-/// and both keep their other meanings.
-#[test]
-fn enter_and_o_open_an_other_contexts_target_url() {
-    let mut app = ci_app();
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Ci;
-    app.focused_panel = FocusedPanel::Detail;
-    let vercel = ci::Context {
-        name: "Vercel".to_string(),
-        state: model::CiStatus::Failed,
-        description: Some("Aliasing has failed".to_string()),
-        url: Some("https://vercel.com/x".to_string()),
-        actions: false,
-        source: "vercel".to_string(),
-        started: None,
-        completed: None,
-    };
-    app.ci.insert(
-        ci_key(),
-        app::CiState {
-            runs: ci_runs(),
-            tip: Some(app::CiTip {
-                sha: "cc524b4".to_string(),
-                statuses: vec![vercel],
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-    );
-    app.detail_selections[app::HistoryView::Ci.index()] = 0;
-    assert_eq!(context_url(&app).as_deref(), Some("https://vercel.com/x"));
-    app.detail_selections[app::HistoryView::Ci.index()] = 1;
-    assert_eq!(context_url(&app), None, "a run row");
-    app.detail_selections[app::HistoryView::Ci.index()] = 0;
-    app.focused_panel = FocusedPanel::RepoList;
-    assert_eq!(context_url(&app), None, "pane 2 not focused");
-}
-
-/// `Enter` opens the `notes` view's highlighted file while pane 2 or the
-/// inspector has focus, and lazygit everywhere else, a row with no file
-/// included. Fails while `Enter` only ever opens lazygit.
-#[test]
-fn enter_opens_the_highlighted_note_only_in_the_notes_view() {
-    let mut app = App::new(Vec::new(), String::new(), 120, 40);
-    app.repos = vec![RepoStatus {
-        path: Some("/repo".to_string()),
-        ..test_repo()
-    }];
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Notes;
-    app.focused_panel = FocusedPanel::Detail;
-    assert_eq!(note_to_open(&app), None, "nothing walked yet");
-
-    let walk = app::NotesWalk {
-        key: "/repo".to_string(),
-        root: "/repo".into(),
-        generation: 0,
-    };
-    let files = vec![notes::NoteFile {
-        rel: "notez/a.md".into(),
-        notez: Some("notez".into()),
-    }];
-    app.apply_notes_walk(walk, Ok(notes::Notes { files }));
-    let file = Some(std::path::PathBuf::from("/repo/notez/a.md"));
-    assert_eq!(note_to_open(&app), file);
-    app.focused_panel = FocusedPanel::Inspector;
-    assert_eq!(note_to_open(&app), file);
-
-    app.focused_panel = FocusedPanel::RepoList;
-    assert_eq!(note_to_open(&app), None, "the repo list opens lazygit");
-    app.focused_panel = FocusedPanel::Detail;
-    app.history_view = app::HistoryView::Info;
-    assert_eq!(note_to_open(&app), None, "another view opens lazygit");
-}
-
-/// FZ-60: `Enter` opens the highlighted changed file in `$EDITOR` while
-/// pane 2 or the inspector has focus in `changes`, and lazygit
-/// everywhere else, a repo with nothing read included.
-#[test]
-fn enter_opens_the_highlighted_changed_file_only_in_the_changes_view() {
-    let mut app = App::new(Vec::new(), String::new(), 120, 40);
-    app.repos = vec![RepoStatus {
-        path: Some("/repo".to_string()),
-        ..test_repo()
-    }];
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Changes;
-    app.focused_panel = FocusedPanel::Detail;
-    assert_eq!(change_to_open(&app), None, "nothing read yet");
-
-    let read = app::ChangesRead {
-        key: "/repo".to_string(),
-        root: "/repo".into(),
-        generation: 0,
-        base: git::ChangesBase::Upstream,
-    };
-    let changes = git::Changes {
-        uncommitted: vec![git::ChangedFile {
-            status: " M".to_string(),
-            path: "src/a b.rs".to_string(),
-            from: None,
-            churn: Some((1, 0)),
-        }],
-        outgoing: git::Outgoing::NoUpstream { branch: None },
-    };
-    app.apply_changes_read(read, Ok(changes));
-    let file = Some(std::path::PathBuf::from("/repo/src/a b.rs"));
-    assert_eq!(change_to_open(&app), file);
-    app.focused_panel = FocusedPanel::Inspector;
-    assert_eq!(change_to_open(&app), file);
-
-    app.focused_panel = FocusedPanel::RepoList;
-    assert_eq!(change_to_open(&app), None, "the repo list opens lazygit");
-    app.focused_panel = FocusedPanel::Detail;
-    app.history_view = app::HistoryView::Notes;
-    assert_eq!(change_to_open(&app), None, "another view opens lazygit");
-}
-
-/// `Enter`, `e` and `o` act in the highlighted worktree's directory
-/// while pane 2 has focus on the `worktrees` view (FZ-77), and in the
-/// repo's everywhere else. Fails while the arms take the repo path only.
-#[test]
-fn enter_opens_lazygit_in_the_highlighted_worktree() {
-    let mut app = App::new(Vec::new(), String::new(), 120, 40);
-    app.repos = vec![RepoStatus {
-        path: Some("/repo".to_string()),
-        worktrees: vec![model::Worktree {
-            path: "/repo-wt".to_string(),
-            branch: "side".to_string(),
-            ..Default::default()
-        }],
-        ..test_repo()
-    }];
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Worktrees;
-    app.focused_panel = FocusedPanel::Detail;
-    assert_eq!(note_to_open(&app), None, "Enter reaches the lazygit arm");
-    assert_eq!(app.action_dir().as_deref(), Some("/repo"), "main first");
-    app.detail_selections[app::HistoryView::Worktrees.index()] = 1;
-    assert_eq!(app.action_dir().as_deref(), Some("/repo-wt"));
-
-    app.focused_panel = FocusedPanel::RepoList;
-    assert_eq!(app.action_dir().as_deref(), Some("/repo"), "pane 1");
-    app.focused_panel = FocusedPanel::Detail;
-    app.history_view = app::HistoryView::Info;
-    assert_eq!(app.action_dir().as_deref(), Some("/repo"), "another view");
-}
-
-/// `Enter` on the focused reader opens the file it shows (FZ-62).
-#[test]
-fn enter_on_the_reader_opens_its_note() {
-    let mut app = App::new(Vec::new(), String::new(), 120, 40);
-    app.repos = vec![RepoStatus {
-        path: Some("/repo".to_string()),
-        ..test_repo()
-    }];
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Notes;
-    let walk = app::NotesWalk {
-        key: "/repo".to_string(),
-        root: "/repo".into(),
-        generation: 0,
-    };
-    let files = vec![notes::NoteFile {
-        rel: "notez/a.md".into(),
-        notez: Some("notez".into()),
-    }];
-    app.apply_notes_walk(walk, Ok(notes::Notes { files }));
-    app.focus_panel(FocusedPanel::Reader);
-    assert_eq!(app.focused_panel, FocusedPanel::Reader);
-    assert_eq!(
-        note_to_open(&app),
-        Some(std::path::PathBuf::from("/repo/notez/a.md"))
-    );
-}
-
-/// FZ-63, review finding 1: `todoz <text>` quick-adds, so `Enter` on a
-/// board runs `todoz` with no positional argument, in the repo root,
-/// with the scope flag notez resolves to that board: none for
-/// `notez/TODO.md`, `-l` for `.notez/TODO.md`, `-p` for the personal
-/// board. Any other board, any other note, and a todoz board without
-/// `todoz` on PATH (saying it fell back) go to `$EDITOR` on the file.
-#[test]
-fn enter_on_a_board_opens_todoz_and_falls_back_to_the_editor() {
-    let mut app = App::new(Vec::new(), String::new(), 120, 40);
-    app.repos = vec![RepoStatus {
-        path: Some("/repo".to_string()),
-        ..test_repo()
-    }];
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Notes;
-    app.focused_panel = FocusedPanel::Detail;
-    let walk = app::NotesWalk {
-        key: "/repo".to_string(),
-        root: "/repo".into(),
-        generation: 0,
-    };
-    let personal = "/home/u/notez/personal/repo/TODO.md";
-    let file = |rel: &str, notez: Option<&str>| notes::NoteFile {
-        rel: rel.into(),
-        notez: notez.map(Into::into),
-    };
-    let files = vec![
-        file("notez/TODO.md", Some("notez")),
-        file(".notez/TODO.md", Some(".notez")),
-        file("TODO.md", None),
-        file("crates/x/notez/TODO.md", Some("crates/x/notez")),
-        file("notez/a.md", Some("notez")),
-        file(personal, None),
-    ];
-    app.apply_notes_walk(walk, Ok(notes::Notes { files }));
-    let todoz = |args: &[&str]| NoteOpener {
-        program: "todoz".to_string(),
-        args: args.iter().map(|a| a.to_string()).collect(),
-        dir: Some("/repo".into()),
-        fell_back: false,
-    };
-    let editor = |path: &str, fell_back| NoteOpener {
-        program: "nvim".to_string(),
-        args: vec![path.to_string()],
-        dir: None,
-        fell_back,
-    };
-    // In drawing order: the boards by path, the personal one, then
-    // the `notez/` section.
-    let cases = [
-        (".notez/TODO.md", Some(todoz(&["-l"]))),
-        ("TODO.md", None),
-        ("crates/x/notez/TODO.md", None),
-        ("notez/TODO.md", Some(todoz(&[]))),
-        (personal, Some(todoz(&["-p"]))),
-        ("notez/a.md", None),
-    ];
-    for (i, (rel, with_todoz)) in cases.into_iter().enumerate() {
-        app.set_detail_selected(i);
-        let path = std::path::Path::new("/repo").join(rel);
-        let path = path.to_str().unwrap();
-        let board = with_todoz.is_some();
-        assert_eq!(
-            note_opener(&app, true, "nvim"),
-            Some(with_todoz.unwrap_or_else(|| editor(path, false))),
-            "{rel} with todoz on PATH"
-        );
-        assert_eq!(
-            note_opener(&app, false, "nvim"),
-            Some(editor(path, board)),
-            "{rel} without todoz"
-        );
-    }
-    app.focused_panel = FocusedPanel::RepoList;
-    assert_eq!(note_opener(&app, true, "nvim"), None);
-}
-
-#[test]
-fn on_path_finds_an_executable_only() {
-    let dir = std::env::temp_dir().join("fleetz_test_on_path");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("todoz"), "#!/bin/sh\n").unwrap();
-    std::fs::write(dir.join("plain"), "").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let exec = std::fs::Permissions::from_mode(0o755);
-        std::fs::set_permissions(dir.join("todoz"), exec).unwrap();
-        let plain = std::fs::Permissions::from_mode(0o644);
-        std::fs::set_permissions(dir.join("plain"), plain).unwrap();
-        assert!(!on_path("plain", dir.as_os_str()));
-    }
-    let path = std::env::join_paths(["/nonexistent".into(), dir.clone()]).unwrap();
-    assert!(on_path("todoz", &path));
-    assert!(!on_path("absent", &path));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// FZ-59 owner ruling: `p` flips the `notes` reader between rendered
-/// and source from the tree and from the reader, and `r` refreshes there
-/// as everywhere. Fails while `r` is the toggle or `p` is unbound.
-#[tokio::test]
-async fn p_flips_the_notes_reader_and_r_still_refreshes() {
-    let args = Args::parse_from(["fleetz"]);
-    let config = config::Config::default();
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let backend = CrosstermBackend::new(io::stdout());
-    let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
-    let mut terminal =
-        Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
-    let mut app = App::new(Vec::new(), String::new(), 120, 44);
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Notes;
-    // No poll leaves the process: `r` below only sets its status.
-    app.dirty_mode = true;
-    let repo_dir = Path::new("/nonexistent");
-
-    for (panel, raw) in [(FocusedPanel::Detail, true), (FocusedPanel::Reader, false)] {
-        app.focused_panel = panel;
-        handle_normal_input(
-            &mut app,
-            &mut terminal,
-            press('p'),
-            &tx,
-            &args,
-            &config,
-            repo_dir,
-        )
-        .await
-        .unwrap();
-        assert_eq!(app.reader_raw, raw, "p from {panel:?}");
-
-        app.status_message = None;
-        handle_normal_input(
-            &mut app,
-            &mut terminal,
-            press('r'),
-            &tx,
-            &args,
-            &config,
-            repo_dir,
-        )
-        .await
-        .unwrap();
-        assert_eq!(app.reader_raw, raw, "r flipped the reader from {panel:?}");
-        let status = app.status_message.as_ref().map(|m| m.text.as_str());
-        assert_eq!(
-            status,
-            Some("Refreshing…"),
-            "r did not refresh from {panel:?}"
-        );
-    }
-}
-
 /// An app in the `notes` layout on a `w` by `h` screen, its tree
 /// holding `n` files under `notez/`.
-fn notes_tree_app(w: u16, h: u16, n: usize) -> App {
+pub(crate) fn notes_tree_app(w: u16, h: u16, n: usize) -> App {
     let mut app = App::new(Vec::new(), String::new(), w, h);
     app.repos = vec![RepoStatus {
         path: Some("/repo".to_string()),
@@ -7090,7 +3728,12 @@ fn notes_tree_app(w: u16, h: u16, n: usize) -> App {
 
 /// Draw `app` on a `w` by `h` screen and return the row of `rect`, as a
 /// screen row, that carries the tree's cursor mark, if any is drawn.
-fn drawn_cursor_row(app: &App, w: u16, h: u16, rect: ratatui::layout::Rect) -> Option<u16> {
+pub(crate) fn drawn_cursor_row(
+    app: &App,
+    w: u16,
+    h: u16,
+    rect: ratatui::layout::Rect,
+) -> Option<u16> {
     use ratatui::backend::TestBackend;
     let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
     terminal.draw(|f| ui::render(f, app)).unwrap();
@@ -7103,87 +3746,11 @@ fn drawn_cursor_row(app: &App, w: u16, h: u16, rect: ratatui::layout::Rect) -> O
     })
 }
 
-/// FZ-65: the wheel over the `notes` tree keeps the highlighted file
-/// inside the rows the tree draws, at a narrow, short pane and with his
-/// terminal's two events per notch. Fails while the wheel only scrolls
-/// the tree's view and leaves the highlight behind, off the drawn rows
-/// within one notch.
-#[test]
-fn the_notes_tree_wheel_keeps_the_highlight_on_the_drawn_rows() {
-    const W: u16 = 64;
-    const H: u16 = 26;
-    let area = ratatui::layout::Rect::new(0, 0, W, H);
-    let mut app = notes_tree_app(W, H, 40);
-    let tree = ui::panel_rects(area, &app).detail.expect("the tree");
-    // Inside the border: the rows a file can be drawn on.
-    let body = ratatui::layout::Rect::new(tree.x + 1, tree.y + 1, tree.width - 2, tree.height - 2);
-    // The first frame measures the pane the wheel steps against.
-    drawn_cursor_row(&app, W, H, body);
-    let wheel = |kind| MouseEvent {
-        kind,
-        column: tree.x + tree.width / 2,
-        row: tree.y + tree.height / 2,
-        modifiers: KeyModifiers::NONE,
-    };
-
-    for (kind, notches) in [
-        (MouseEventKind::ScrollDown, 20),
-        (MouseEventKind::ScrollUp, 20),
-    ] {
-        for notch in 0..notches {
-            let before = app.detail_selected();
-            // Two events a notch, as his terminal sends them, and one
-            // frame after both.
-            handle_mouse_in(&mut app, area, wheel(kind));
-            handle_mouse_in(&mut app, area, wheel(kind));
-            let row = drawn_cursor_row(&app, W, H, body);
-            assert!(
-                row.is_some(),
-                "{kind:?} notch {notch}: the highlight (file {}) left the drawn rows",
-                app.detail_selected()
-            );
-            assert_ne!(
-                app.detail_selected(),
-                before,
-                "{kind:?} notch {notch} moved nothing"
-            );
-        }
-    }
-    assert_eq!(app.detail_selected(), 0, "the wheel walks back to the top");
-}
-
-/// FZ-65 keeps the rule the wheel had before it: on the commit list it
-/// scrolls the view and leaves the highlighted commit where it is.
-#[test]
-fn the_wheel_on_the_commit_list_still_leaves_its_highlight() {
-    const W: u16 = 64;
-    const H: u16 = 26;
-    let area = ratatui::layout::Rect::new(0, 0, W, H);
-    let mut app = notes_tree_app(W, H, 40);
-    app.history_view = app::HistoryView::Commits;
-    app.detail_max_scroll.set(50);
-    let pane = ui::panel_rects(area, &app).detail.expect("pane 2");
-    let wheel = MouseEvent {
-        kind: MouseEventKind::ScrollDown,
-        column: pane.x + pane.width / 2,
-        row: pane.y + pane.height / 2,
-        modifiers: KeyModifiers::NONE,
-    };
-    handle_mouse_in(&mut app, area, wheel);
-    handle_mouse_in(&mut app, area, wheel);
-    assert_eq!(app.detail_selected(), 0, "the highlight stayed");
-    assert_eq!(
-        app.detail_scroll(),
-        2 * DETAIL_WHEEL_ROWS as u16,
-        "the view scrolled"
-    );
-}
-
 /// A notes tree shaped like his: a `todos` section of three boards,
 /// `notez/` holding two directories of dated notes, and a second, deep
 /// notes directory, 36 files in all. Names, a directory and a section
 /// are long enough to wrap in the tree's column.
-fn his_notes() -> Vec<notes::NoteFile> {
+pub(crate) fn his_notes() -> Vec<notes::NoteFile> {
     const SLUGS: [&str; 6] = [
         "repository-identity-design",
         "cache-invalidation-signature",
@@ -7214,99 +3781,8 @@ fn his_notes() -> Vec<notes::NoteFile> {
     files
 }
 
-/// FZ-65 rework 1, his look on the branch build: at his window the
-/// highlight ran six wheel notches past the tree's last drawn row before
-/// the tree moved. Long names wrap in the tree's column, and the follow
-/// counted lines where the tree draws wrapped rows. Walks the tree down
-/// and back up a notch at a time at two real window sizes and asserts
-/// the highlight is drawn inside the tree's rows on every notch, and
-/// inside the `SCROLLOFF` margin while the tree has rows past it.
-#[test]
-fn the_notes_tree_wheel_follows_wrapped_rows_at_his_window() {
-    for (w, h) in [(200u16, 50u16), (120, 40), (64, 26), (80, 24), (100, 30)] {
-        let area = ratatui::layout::Rect::new(0, 0, w, h);
-        let mut app = notes_tree_app(w, h, 0);
-        let walk = app::NotesWalk {
-            key: "/repo".to_string(),
-            root: "/repo".into(),
-            generation: 1,
-        };
-        app.apply_notes_walk(walk, Ok(notes::Notes { files: his_notes() }));
-        let pane2 = ui::panel_rects(area, &app).detail.expect("pane 2");
-        let body = ui::detail::notes_pane_body(pane2, &app)
-            .expect("a tree")
-            .body;
-        drawn_cursor_row(&app, w, h, body);
-        let files = app.selected_commit_count();
-        assert_eq!(files, 36, "{w}x{h}: one stop per file");
-        // The rows the tree scrolls in: under the mode line where it is
-        // pinned, the whole body where it is not.
-        let rows = app.detail_view_height.get();
-        let (top, bottom) = (body.bottom() - rows, body.bottom() - 1);
-        let pad = app::scrolloff_for(rows);
-        let wheel = |kind| MouseEvent {
-            kind,
-            column: body.x + body.width / 2,
-            row: body.y + body.height / 2,
-            modifiers: KeyModifiers::NONE,
-        };
-        for kind in [MouseEventKind::ScrollDown, MouseEventKind::ScrollUp] {
-            let mut past = Vec::new();
-            let mut misplaced = Vec::new();
-            let mut in_margin = Vec::new();
-            for notch in 0..files {
-                let before = app.detail_selected();
-                handle_mouse_in(&mut app, area, wheel(kind));
-                handle_mouse_in(&mut app, area, wheel(kind));
-                let drawn = drawn_cursor_row(&app, w, h, body);
-                // Past either end the wheel scrolls the header or the
-                // tail in instead (round 1), which on a pane too short
-                // to pin the header takes the first file off the foot.
-                if app.detail_selected() == before {
-                    continue;
-                }
-                let Some(row) = drawn else {
-                    past.push(notch);
-                    continue;
-                };
-                // Where the follow counted it: its line less the offset.
-                let line = app.detail_row_tops.borrow()[app.detail_selected()];
-                if row != top + line - app.detail_scroll() {
-                    misplaced.push(notch);
-                }
-                let more_below = app.detail_scroll() < app.detail_max_scroll.get();
-                let more_above = app.detail_scroll() > 0;
-                let margin = match kind {
-                    MouseEventKind::ScrollDown => more_below && row > bottom - pad,
-                    _ => more_above && row < top + pad,
-                };
-                if margin {
-                    in_margin.push(notch);
-                }
-            }
-            assert!(
-                past.is_empty(),
-                "{w}x{h} {kind:?}: the highlight ran {} notches past the drawn rows \
-                 (notches {past:?})",
-                past.len()
-            );
-            assert!(
-                misplaced.is_empty(),
-                "{w}x{h} {kind:?}: the highlight was drawn off the row the follow \
-                 counted on notches {misplaced:?}"
-            );
-            assert!(
-                in_margin.is_empty(),
-                "{w}x{h} {kind:?}: the view did not follow at the margin on notches \
-                 {in_margin:?}"
-            );
-        }
-        assert_eq!(app.detail_selected(), 0, "{w}x{h}: back at the top");
-    }
-}
-
 /// The next answer `spawn_note_read` sent, split into its two kinds.
-async fn next_note_answer(
+pub(crate) async fn next_note_answer(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 ) -> Result<
     (app::NoteRead, Result<String, String>, notes::NoteFacts),
@@ -7324,221 +3800,15 @@ async fn next_note_answer(
     }
 }
 
-/// The file's facts are read off the UI thread (FZ-62): `spawn_note_read`
-/// returns before anything is sent. The body and its metadata come
-/// first and git's last commit after, so the reader never waits on git
-/// (review F4): a date for a committed file, "untracked" for one git
-/// never saw, and a name with glob characters read literally (review
-/// F5: `notez/*.md` would otherwise match the committed `plan.md`). A
-/// commit answer for a file no longer highlighted is dropped.
-#[tokio::test]
-async fn spawn_note_read_reads_the_body_and_facts_off_the_ui_thread() {
-    let scratch = std::env::temp_dir().join("fleetz_test_note_read_seam");
-    let _ = std::fs::remove_dir_all(&scratch);
-    let repo = hist_repo(&scratch, "repo", "n@example.com");
-    std::fs::create_dir_all(repo.join("notez")).unwrap();
-    std::fs::create_dir_all(repo.join(".notez")).unwrap();
-    std::fs::write(repo.join("notez/plan.md"), "# Plan\n").unwrap();
-    std::fs::write(repo.join("notez/*.md"), "star\n").unwrap();
-    std::fs::write(repo.join(".notez/scratch.md"), "scratch\n").unwrap();
-    wt_sh(&repo, &["git", "add", "notez/plan.md"]);
-    hist_commit(&repo, "2026-10-01", "plan");
-
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let answer = |rel: &str| app::NoteRead {
-        path: repo.join(rel),
-        root: repo.clone(),
-        generation: 0,
-        render_width: None,
-    };
-    spawn_note_read(&tx, answer("notez/plan.md"));
-    // A current-thread test runtime has not run the task yet: had the
-    // read run inline, its answer would already be here.
-    assert!(rx.try_recv().is_err(), "read on the calling thread");
-    let Ok((read, text, facts)) = next_note_answer(&mut rx).await else {
-        panic!("the body comes first");
-    };
-    assert_eq!(read.path, repo.join("notez/plan.md"));
-    assert_eq!(text, Ok("# Plan\n".to_string()));
-    assert_eq!(facts.size, Some(7));
-    assert!(facts.modified.is_some());
-    let Err((read, last)) = next_note_answer(&mut rx).await else {
-        panic!("then the commit");
-    };
-    assert_eq!(read.path, repo.join("notez/plan.md"));
-    let notes::LastCommit::At(date) = last else {
-        panic!("committed: {last:?}");
-    };
-    assert!(date.starts_with("2026-10-01T12:00:00"), "{date}");
-
-    for (rel, size) in [(".notez/scratch.md", 8), ("notez/*.md", 5)] {
-        spawn_note_read(&tx, answer(rel));
-        let Ok((_, _, facts)) = next_note_answer(&mut rx).await else {
-            panic!("{rel}: the body comes first");
-        };
-        assert_eq!(facts.size, Some(size), "{rel}");
-        let Err((_, last)) = next_note_answer(&mut rx).await else {
-            panic!("{rel}: then the commit");
-        };
-        assert_eq!(last, notes::LastCommit::Untracked, "{rel}");
-    }
-
-    // Landed in the app: the commit of a file the cursor has left is
-    // dropped, and the highlighted file's lands.
-    let key = repo.to_string_lossy().into_owned();
-    let mut app = App::new(Vec::new(), String::new(), 120, 40);
-    app.repos = vec![RepoStatus {
-        path: Some(key.clone()),
-        ..test_repo()
-    }];
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Notes;
-    let walk = app::NotesWalk {
-        key: key.clone(),
-        root: repo.clone(),
-        generation: 0,
-    };
-    let files = ["notez/plan.md", "notez/zz.md"]
-        .map(|rel| notes::NoteFile {
-            rel: rel.into(),
-            notez: Some("notez".into()),
-        })
-        .to_vec();
-    app.apply_notes_walk(walk, Ok(notes::Notes { files }));
-    let plan = app.claim_note_read().expect("plan");
-    spawn_note_read(&tx, plan.clone());
-    app.select_commit_down();
-    let other = app.claim_note_read().expect("the other file");
-    let Ok((read, text, facts)) = next_note_answer(&mut rx).await else {
-        panic!("body");
-    };
-    app.apply_note_facts(&read, facts);
-    app.apply_note_read(read, text);
-    let Err((read, last)) = next_note_answer(&mut rx).await else {
-        panic!("commit");
-    };
-    app.apply_note_commit(&read, last);
-    let held = app.note_body.as_ref().expect("held");
-    assert_eq!(held.path, other.path);
-    assert_eq!(
-        (&held.text, &held.facts, &held.last_commit),
-        (&None, &None, &None),
-        "nothing of the file the cursor left"
-    );
-    app.apply_note_commit(&other, notes::LastCommit::Untracked);
-    assert_eq!(
-        app.note_body.as_ref().and_then(|b| b.last_commit.clone()),
-        Some(notes::LastCommit::Untracked)
-    );
-    let _ = std::fs::remove_dir_all(&scratch);
-}
-
-/// FZ-59: a capped markdown file costs more to render than a keypress
-/// frame (`docs/performance-baseline.md`), so it is rendered off the UI
-/// thread: with the read, at the read's width, in the same answer as
-/// the body, and again at a new width by `spawn_note_render`. Neither
-/// call has sent anything when it returns.
-#[tokio::test]
-async fn markdown_renders_off_the_ui_thread_with_the_read_and_on_a_resize() {
-    let scratch = std::env::temp_dir().join("fleetz_test_note_render_seam");
-    let _ = std::fs::remove_dir_all(&scratch);
-    std::fs::create_dir_all(scratch.join("notez")).unwrap();
-    let path = scratch.join("notez/plan.md");
-    std::fs::write(&path, "# Plan\n\nship it\n").unwrap();
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let read = app::NoteRead {
-        path: path.clone(),
-        root: scratch.clone(),
-        generation: 3,
-        render_width: Some(30),
-    };
-    spawn_note_read(&tx, read);
-    assert!(rx.try_recv().is_err(), "rendered on the calling thread");
-    let Some(AppEvent::NoteRead { text, rendered, .. }) = rx.recv().await else {
-        panic!("the body comes first");
-    };
-    let body = text.expect("read");
-    let rendered = rendered.expect("rendered with the read");
-    assert_eq!(rendered, render_note(&body, 30));
-    let first: String = rendered.lines[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect();
-    assert_eq!(first, "Plan", "rendered, not the source");
-
-    let render = app::NoteRender {
-        path: path.clone(),
-        generation: 3,
-        width: 12,
-        text: body.clone(),
-    };
-    spawn_note_render(&tx, render.clone());
-    assert!(rx.try_recv().is_err(), "re-rendered on the calling thread");
-    loop {
-        match rx.recv().await {
-            Some(AppEvent::NoteRendered {
-                render: got,
-                rendered,
-            }) => {
-                assert_eq!(got, render);
-                assert_eq!(rendered, render_note(&body, 12));
-                break;
-            }
-            Some(AppEvent::NoteCommit { .. }) => continue,
-            _ => panic!("not a render"),
-        }
-    }
-    let _ = std::fs::remove_dir_all(&scratch);
-}
-
-/// FZ-59 review: a capped body's `… cut at 256 KiB` line, as
-/// `notes::read_body` really writes it, is not parsed as markdown. Cut
-/// inside an open fence or a table it stays its own last line, plain,
-/// rather than a code line or a table cell; the line above it is still
-/// the fence's or the table's.
-#[test]
-fn the_cut_marker_is_its_own_plain_line_after_a_fence_or_a_table() {
-    let scratch = std::env::temp_dir().join("fleetz_test_note_cut_marker");
-    let _ = std::fs::remove_dir_all(&scratch);
-    std::fs::create_dir_all(&scratch).unwrap();
-    let text_of = |line: &ratatui::text::Line<'_>| -> String {
-        line.spans.iter().map(|s| s.content.as_ref()).collect()
-    };
-    let fence = format!("```\n{}", "x\n".repeat(notes::BODY_CAP));
-    let table = format!("| a | b |\n|---|---|\n{}", "| 1 | 2 |\n".repeat(30_000));
-    for (name, source, above) in [("fence.md", fence, "  x"), ("table.md", table, "1 │")] {
-        let path = scratch.join(name);
-        std::fs::write(&path, source).unwrap();
-        let body = notes::read_body(&path).expect("read");
-        assert!(body.ends_with("\n… cut at 256 KiB"), "{name}: cut");
-        let lines = render_note(&body, 40).lines;
-        let last = lines.last().expect("lines");
-        assert_eq!(text_of(last), "… cut at 256 KiB", "{name}");
-        assert_eq!(last.spans.len(), 1, "{name}: one plain span");
-        assert_eq!(last.spans[0].style.fg, Some(ui::colors::TEXT), "{name}");
-        let marked = lines
-            .iter()
-            .filter(|l| text_of(l).contains("cut at"))
-            .count();
-        assert_eq!(marked, 1, "{name}: the marker is nowhere else");
-        let before = text_of(&lines[lines.len() - 2]);
-        assert!(before.starts_with(above), "{name}: {before:?}");
-    }
-    let short = render_note("# T\n\nbody", 40).lines;
-    assert!(!short.iter().any(|l| text_of(l).contains("cut at")));
-    let _ = std::fs::remove_dir_all(&scratch);
-}
-
-fn ci_key() -> app::RemoteKey {
+pub(crate) fn ci_key() -> app::RemoteKey {
     (Some("gaurgle".to_string()), "fleetz".to_string())
 }
 
-fn ci_runs() -> Vec<ci::WorkflowRun> {
+pub(crate) fn ci_runs() -> Vec<ci::WorkflowRun> {
     ci::parse_runs(include_str!("ci/fixtures/runs.json")).unwrap()
 }
 
-fn ci_answer(request: &ci::CiRequest) -> ci::CiAnswer {
+pub(crate) fn ci_answer(request: &ci::CiRequest) -> ci::CiAnswer {
     ci::CiAnswer {
         key: request.key.clone(),
         attempt: request.attempt,
@@ -7552,7 +3822,7 @@ fn ci_answer(request: &ci::CiRequest) -> ci::CiAnswer {
     }
 }
 
-fn fresh_runs(etag: &str) -> Option<ci::Fetched<Vec<ci::WorkflowRun>>> {
+pub(crate) fn fresh_runs(etag: &str) -> Option<ci::Fetched<Vec<ci::WorkflowRun>>> {
     Some(ci::Fetched::Fresh {
         data: ci_runs(),
         etag: Some(etag.to_string()),
@@ -7560,7 +3830,7 @@ fn fresh_runs(etag: &str) -> Option<ci::Fetched<Vec<ci::WorkflowRun>>> {
 }
 
 /// Claim and land one successful list poll at `now`.
-fn ci_landed(app: &mut App, now: chrono::DateTime<chrono::Local>) {
+pub(crate) fn ci_landed(app: &mut App, now: chrono::DateTime<chrono::Local>) {
     let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
     let answer = ci::CiAnswer {
         runs: fresh_runs("W/\"6b13\""),
@@ -7579,77 +3849,6 @@ fn a_ci_target_needs_an_owner() {
     let (key, owner, name) = ci::target(&ci_app().repos[0]).unwrap();
     assert_eq!(key, ci_key());
     assert_eq!((owner.as_str(), name.as_str()), ("gaurgle", "fleetz"));
-}
-
-#[test]
-fn the_ci_poll_waits_for_the_ci_view() {
-    let mut app = ci_app();
-    assert!(!app.ci_wanted(), "pane 2 opens on info");
-    let start = std::time::Instant::now();
-    for ms in [0, 300, 60_000] {
-        let instant = start + std::time::Duration::from_millis(ms);
-        assert_eq!(ci_poll_request(&mut app, at(12, 0, 0), instant), None);
-    }
-    assert!(app.ci.is_empty());
-}
-
-#[test]
-fn the_ci_view_polls_the_selected_repo_once_the_cursor_dwells() {
-    let mut app = ci_app();
-    app.history_view = app::HistoryView::Ci;
-    app.view = app::View::Detail;
-    let start = std::time::Instant::now();
-    let after = |ms| start + std::time::Duration::from_millis(ms);
-    assert_eq!(ci_poll_request(&mut app, at(12, 0, 0), after(0)), None);
-    assert_eq!(ci_poll_request(&mut app, at(12, 0, 0), after(299)), None);
-    let request = ci_poll_request(&mut app, at(12, 0, 0), after(300)).expect("settled");
-    assert_eq!(request.key, ci_key());
-    assert_eq!(request.runs_etag, None);
-    assert_eq!(
-        ci_poll_request(&mut app, at(12, 0, 1), after(1300)),
-        None,
-        "one poll out at a time"
-    );
-}
-
-#[test]
-fn a_row_without_a_github_identity_sends_no_ci_poll() {
-    let mut app = ci_app();
-    app.history_view = app::HistoryView::Ci;
-    app.view = app::View::Detail;
-    app.repos[0].owner = None;
-    let start = std::time::Instant::now();
-    ci_poll_request(&mut app, at(12, 0, 0), start);
-    let later = start + std::time::Duration::from_secs(5);
-    assert_eq!(ci_poll_request(&mut app, at(12, 0, 5), later), None);
-}
-
-#[test]
-fn the_ci_poll_follows_the_cadence_of_the_shown_runs() {
-    let mut app = ci_app();
-    app.history_view = app::HistoryView::Ci;
-    app.view = app::View::Detail;
-    ci_landed(&mut app, at(12, 0, 0));
-    let start = std::time::Instant::now();
-    let settled = start + std::time::Duration::from_secs(1);
-    ci_poll_request(&mut app, at(12, 0, 0), start);
-    // The fixture's newest run is in progress: 10 s.
-    assert_eq!(ci_poll_request(&mut app, at(12, 0, 9), settled), None);
-    let request = ci_poll_request(&mut app, at(12, 0, 10), settled).expect("10 s on");
-    assert_eq!(request.runs_etag.as_deref(), Some("W/\"6b13\""));
-    // Every shown run finished: 60 s.
-    let mut finished = ci_runs();
-    finished.retain(|r| !r.is_live());
-    let answer = ci::CiAnswer {
-        runs: Some(ci::Fetched::Fresh {
-            data: finished,
-            etag: None,
-        }),
-        ..ci_answer(&request)
-    };
-    app.apply_ci(answer, at(12, 0, 10));
-    assert_eq!(ci_poll_request(&mut app, at(12, 1, 9), settled), None);
-    assert!(ci_poll_request(&mut app, at(12, 1, 10), settled).is_some());
 }
 
 #[test]
@@ -7692,7 +3891,10 @@ fn fleet_snapshot(app: &App) -> String {
     )
 }
 
-fn ci_failure_lands(failure: github::Failure, budget: Option<github::BudgetReading>) -> App {
+pub(crate) fn ci_failure_lands(
+    failure: github::Failure,
+    budget: Option<github::BudgetReading>,
+) -> App {
     let mut app = ci_app();
     ci_landed(&mut app, at(12, 0, 0));
     let before = fleet_snapshot(&app);
@@ -7722,24 +3924,6 @@ fn an_offline_ci_poll_keeps_the_runs_and_leaves_the_fleet_alone() {
         None,
         "offline counts nothing"
     );
-}
-
-#[test]
-fn a_rate_limited_ci_poll_holds_until_the_reset_and_leaves_the_fleet_alone() {
-    let reset = at(12, 40, 0);
-    let budget = reading("tok", 0, reset, at(12, 0, 10));
-    let failure = github::Failure::rate_limit("API rate limit exceeded");
-    let mut app = ci_failure_lands(failure, Some(budget));
-    let resume = reset + secs(7);
-    assert_eq!(app.ci[&ci_key()].backoff.limit_until(60), Some(resume));
-    assert_eq!(app.ci_budget.known(at(12, 0, 10)).unwrap().remaining, 0);
-    app.history_view = app::HistoryView::Ci;
-    app.view = app::View::Detail;
-    let start = std::time::Instant::now();
-    let settled = start + std::time::Duration::from_secs(1);
-    ci_poll_request(&mut app, at(12, 0, 10), start);
-    assert_eq!(ci_poll_request(&mut app, at(12, 39, 0), settled), None);
-    assert!(ci_poll_request(&mut app, resume, settled).is_some());
 }
 
 #[test]
@@ -7827,44 +4011,6 @@ fn a_failed_log_is_read_once_per_job() {
     assert_eq!(expanded.logs_held, vec![jobs[0].id]);
 }
 
-// FZ-30c: the follow-ups to #90, kept by the `ci` view.
-
-/// One repo's failures climb that repo's ladder only: a second repo the
-/// cursor moves to polls as soon as it dwells. Fails while the backoff
-/// is one for the whole session.
-#[test]
-fn one_repos_ci_failure_does_not_hold_another_repos_first_poll() {
-    let mut app = ci_app();
-    app.repos.push(RepoStatus {
-        name: "repoz".to_string(),
-        owner: Some("Gaurgle".to_string()),
-        ..test_repo()
-    });
-    app.history_view = app::HistoryView::Ci;
-    app.view = app::View::Detail;
-    let server = github::Failure::new(github::FailureKind::Server, "502");
-    for n in 0..3 {
-        let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
-        let answer = ci::CiAnswer {
-            failure: Some(server.clone()),
-            ..ci_answer(&request)
-        };
-        app.apply_ci(answer, at(12, 0, n));
-    }
-    assert!(app.ci[&ci_key()].backoff.not_before(60).is_some());
-    let other = app
-        .visible_repos()
-        .iter()
-        .position(|(_, r)| r.name == "repoz")
-        .unwrap();
-    app.selected = other;
-    let start = std::time::Instant::now();
-    ci_poll_request(&mut app, at(12, 0, 3), start);
-    let settled = start + std::time::Duration::from_secs(1);
-    let request = ci_poll_request(&mut app, at(12, 0, 3), settled).expect("not held");
-    assert_eq!(request.name, "repoz");
-}
-
 /// A CI poll that never answers is given up on, as the fleet poll is:
 /// the lock is released and the attempt is a timed-out failure on that
 /// repo. Fails while `inflight` can stay set for the session.
@@ -7939,58 +4085,6 @@ fn a_ci_answer_asks_for_a_redraw() {
     assert!(app.needs_redraw);
 }
 
-// FZ-30d: the `ci` view in pane 2 is the only thing that polls.
-
-/// `]` from `branches` reaches `ci`, and there `j`/`k` walk its runs in
-/// the view's own selection slot, never the repo list. Fails while `ci`
-/// is not a pane 2 view.
-#[tokio::test]
-async fn j_and_k_walk_the_runs_in_the_ci_view() {
-    let args = Args::parse_from(["fleetz"]);
-    let config = config::Config::default();
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let backend = CrosstermBackend::new(io::stdout());
-    let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
-    let mut terminal =
-        Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
-    let mut app = ci_app();
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Branches;
-    ci_landed(&mut app, at(12, 0, 0));
-    app.focused_panel = FocusedPanel::Detail;
-    let repo_dir = Path::new("/nonexistent");
-    handle_normal_input(
-        &mut app,
-        &mut terminal,
-        press(']'),
-        &tx,
-        &args,
-        &config,
-        repo_dir,
-    )
-    .await
-    .unwrap();
-    assert_eq!(app.history_view, app::HistoryView::Ci);
-    assert!(app.ci_wanted());
-    let runs = app.ci[&ci_key()].runs.len();
-    assert!(runs >= 3, "fixture has {runs} runs");
-    for (key, cursor) in [('j', 1), ('j', 2), ('k', 1)] {
-        handle_normal_input(
-            &mut app,
-            &mut terminal,
-            press(key),
-            &tx,
-            &args,
-            &config,
-            repo_dir,
-        )
-        .await
-        .unwrap();
-        assert_eq!(app.detail_selected(), cursor, "after {key}");
-    }
-    assert_eq!(app.selected, 0, "the repo list did not move");
-}
-
 /// FZ-30f: on the focused inspector in `ci`, `]` steps the body and `j`
 /// moves the job mark; pane 2's view and the run cursor stay put.
 #[tokio::test]
@@ -8042,130 +4136,11 @@ async fn the_inspector_keys_step_the_bodies_and_the_job_mark() {
     assert_eq!(app.detail_selected(), 2, "not the run");
 }
 
-/// FZ-30f fix cycle 3: `]` from the focused inspector in `branches`
-/// enters `ci` with its runs held and the next `[` goes back to `branches`;
-/// back in `ci`, any other key ends the streak and `]` steps the bodies.
-/// Fails while the second `[` sticks on the bodies.
-#[tokio::test]
-async fn a_bracket_streak_cycles_views_through_ci_until_another_key() {
-    let args = Args::parse_from(["fleetz"]);
-    let config = config::Config::default();
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let backend = CrosstermBackend::new(io::stdout());
-    let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 120, 44));
-    let mut terminal =
-        Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
-    let mut app = ci_app();
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Ci;
-    ci_landed(&mut app, at(12, 0, 0));
-    app.history_view = app::HistoryView::Branches;
-    app.focused_panel = FocusedPanel::Inspector;
-    let repo_dir = Path::new("/nonexistent");
-    let mut views = Vec::new();
-    for key in [']', '[', ']', 'j', ']'] {
-        handle_normal_input(
-            &mut app,
-            &mut terminal,
-            press(key),
-            &tx,
-            &args,
-            &config,
-            repo_dir,
-        )
-        .await
-        .unwrap();
-        views.push((app.history_view, app.ci_body));
-    }
-    use app::{CiBody, HistoryView};
-    assert_eq!(
-        views,
-        vec![
-            (HistoryView::Ci, CiBody::Jobs),
-            (HistoryView::Branches, CiBody::Jobs),
-            (HistoryView::Ci, CiBody::Jobs),
-            (HistoryView::Ci, CiBody::Jobs),
-            (HistoryView::Ci, CiBody::Log),
-        ]
-    );
-}
-
-/// The tick polls only while pane 2 shows `ci`: never on `info` (whose
-/// `ci` section draws what is held), never in Compact, and switching the
-/// view away stops it. The held runs survive the switch. Fails while the
-/// trigger ignores the view.
-#[test]
-fn the_ci_tick_polls_only_while_pane_2_shows_ci() {
-    let mut app = ci_app();
-    app.view = app::View::Detail;
-    let start = std::time::Instant::now();
-    let after = |s| start + std::time::Duration::from_secs(s);
-    for view in app::HistoryView::ALL {
-        if view == app::HistoryView::Ci {
-            continue;
-        }
-        app.history_view = view;
-        ci_tick(&mut app, at(12, 0, 0), start);
-        assert_eq!(ci_tick(&mut app, at(12, 0, 1), after(1)), None, "{view:?}");
-    }
-    assert!(app.ci.is_empty(), "nothing was claimed outside `ci`");
-
-    app.history_view = app::HistoryView::Ci;
-    app.view = app::View::Compact;
-    assert_eq!(ci_tick(&mut app, at(12, 0, 2), after(2)), None, "compact");
-    app.view = app::View::Detail;
-    // The cursor's dwell starts on the first tick that wants CI.
-    assert_eq!(ci_tick(&mut app, at(12, 0, 3), after(3)), None, "dwell");
-    let request = ci_tick(&mut app, at(12, 0, 4), after(4)).expect("ci polls");
-    let answer = ci::CiAnswer {
-        runs: fresh_runs("W/\"6b13\""),
-        ..ci_answer(&request)
-    };
-    app.apply_ci(answer, at(12, 0, 5));
-
-    app.history_view = app::HistoryView::Info;
-    assert_eq!(
-        ci_tick(&mut app, at(12, 5, 0), after(300)),
-        None,
-        "info stops it"
-    );
-    assert_eq!(app.ci[&ci_key()].runs, ci_runs(), "held runs survive");
-    app.history_view = app::HistoryView::Ci;
-    assert!(
-        ci_tick(&mut app, at(12, 5, 0), after(300)).is_some(),
-        "back in `ci`, the overdue poll goes at once"
-    );
-}
-
-/// A stuck CI poll is given up on by the tick only while `ci` is on
-/// screen, like the trigger; back in the view the expiry runs first, so
-/// the lock never holds the view's next poll.
-#[test]
-fn the_ci_tick_expires_a_stuck_poll_only_in_the_ci_view() {
-    let mut app = ci_app();
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Info;
-    app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
-    let late = std::time::Instant::now() + CI_POLL_STUCK_AFTER * 2;
-    ci_tick(&mut app, at(12, 5, 0), late);
-    assert!(app.ci[&ci_key()].inflight, "info leaves the CI layer alone");
-    app.history_view = app::HistoryView::Ci;
-    ci_tick(&mut app, at(12, 5, 0), late);
-    assert!(
-        app.ci[&ci_key()].freshness.last_attempt.is_some(),
-        "expired as a failed attempt"
-    );
-    assert!(matches!(
-        &app.ci[&ci_key()].freshness.outcome,
-        app::Outcome::Failed(f) if f.kind == github::FailureKind::TimedOut
-    ));
-}
-
 // FZ-30e: the `ci` view's handoffs to `gh` and the browser.
 
 /// `ci_app` with its runs landed, pane 2 focused on `ci`, the cursor on
 /// run `index` of the fixture (in progress, success, failure).
-fn handoff_app(index: usize) -> App {
+pub(crate) fn handoff_app(index: usize) -> App {
     let mut app = ci_app();
     ci_landed(&mut app, at(12, 0, 0));
     app.view = app::View::Detail;
@@ -8175,7 +4150,7 @@ fn handoff_app(index: usize) -> App {
     app
 }
 
-fn argv(args: &[&str]) -> RunHandoff {
+pub(crate) fn argv(args: &[&str]) -> RunHandoff {
     RunHandoff::Gh(args.iter().map(|a| a.to_string()).collect())
 }
 
@@ -8190,20 +4165,6 @@ fn the_highlighted_run_is_the_one_the_ci_cursor_is_on() {
         "clamped onto the last run, as the view draws the cursor"
     );
     assert_eq!(ci_app().highlighted_ci_run(), None, "nothing held");
-}
-
-/// `l` stays in fleetz: a finished run, failed or not, is shown in the
-/// inspector, and no `gh run view --log` is built. Fails while `l`
-/// hands the terminal to `gh`.
-#[test]
-fn l_shows_a_finished_run_in_the_inspector_with_no_gh_command() {
-    for (index, conclusion) in [(1, "success"), (2, "failure")] {
-        let mut app = handoff_app(index);
-        let (handoff, target) = resolve_run_handoff(&mut app, RunKey::Log).unwrap();
-        assert_eq!(handoff, RunHandoff::Inspect, "{conclusion}");
-        assert_eq!(target, (ci_key(), "gaurgle".into(), "fleetz".into()));
-        assert_eq!(yank_status(&app), None, "{conclusion}");
-    }
 }
 
 /// The inspector opens if folded, takes focus and shows the `log`
@@ -8232,222 +4193,6 @@ fn l_focuses_the_inspector_on_the_runs_log_body() {
     assert!(app.needs_redraw);
 }
 
-#[test]
-fn a_reruns_a_finished_run_and_only_the_failed_jobs_of_a_failed_one() {
-    let runs = ci_runs();
-    assert_eq!(
-        run_handoff_for(&runs[1], RunKey::Rerun, "gaurgle", "fleetz"),
-        Ok(argv(&[
-            "run",
-            "rerun",
-            "39590683935",
-            "-R",
-            "gaurgle/fleetz"
-        ]))
-    );
-    assert_eq!(
-        run_handoff_for(&runs[2], RunKey::Rerun, "gaurgle", "fleetz"),
-        Ok(argv(&[
-            "run",
-            "rerun",
-            "37958308363",
-            "--failed",
-            "-R",
-            "gaurgle/fleetz"
-        ]))
-    );
-}
-
-/// Only `failure` means failed: a run that timed out or was cancelled
-/// gets a whole rerun.
-#[test]
-fn a_timed_out_or_cancelled_run_gets_a_whole_rerun() {
-    for conclusion in ["timed_out", "cancelled"] {
-        let run = ci::WorkflowRun {
-            conclusion: Some(conclusion.to_string()),
-            ..ci_runs()[1].clone()
-        };
-        assert_eq!(
-            run_handoff_for(&run, RunKey::Rerun, "gaurgle", "fleetz"),
-            Ok(argv(&[
-                "run",
-                "rerun",
-                "39590683935",
-                "-R",
-                "gaurgle/fleetz"
-            ])),
-            "{conclusion}"
-        );
-    }
-}
-
-#[test]
-fn x_cancels_only_a_run_in_progress_or_queued() {
-    let runs = ci_runs();
-    assert_eq!(
-        run_handoff_for(&runs[0], RunKey::Cancel, "gaurgle", "fleetz"),
-        Ok(argv(&[
-            "run",
-            "cancel",
-            "39590684061",
-            "-R",
-            "gaurgle/fleetz"
-        ]))
-    );
-    let queued = ci::WorkflowRun {
-        status: Some("queued".to_string()),
-        ..runs[0].clone()
-    };
-    assert_eq!(
-        run_handoff_for(&queued, RunKey::Cancel, "gaurgle", "fleetz"),
-        Ok(argv(&[
-            "run",
-            "cancel",
-            "39590684061",
-            "-R",
-            "gaurgle/fleetz"
-        ]))
-    );
-    for finished in [&runs[1], &runs[2]] {
-        assert_eq!(
-            run_handoff_for(finished, RunKey::Cancel, "gaurgle", "fleetz"),
-            Err("run is not in progress")
-        );
-    }
-}
-
-/// `gh` has no log for a run still going and will not rerun one, so
-/// fleetz says so rather than handing over a command that only fails.
-#[test]
-fn a_run_still_going_has_no_log_or_rerun_yet() {
-    let live = &ci_runs()[0];
-    for key in [RunKey::Log, RunKey::Rerun] {
-        assert_eq!(
-            run_handoff_for(live, key, "gaurgle", "fleetz"),
-            Err("run has not finished"),
-            "{key:?}"
-        );
-    }
-}
-
-#[test]
-fn capital_o_opens_the_run_page_whatever_its_state() {
-    for run in ci_runs() {
-        assert_eq!(
-            run_handoff_for(&run, RunKey::Open, "gaurgle", "fleetz"),
-            Ok(RunHandoff::Open(run.url.clone()))
-        );
-    }
-}
-
-#[test]
-fn the_handoff_keys_are_l_a_x_and_capital_o() {
-    let keys: Vec<Option<RunKey>> = ['l', 'a', 'x', 'O', 'o', 'L', 'X']
-        .into_iter()
-        .map(|c| RunKey::from_code(KeyCode::Char(c)))
-        .collect();
-    assert_eq!(
-        keys,
-        [
-            Some(RunKey::Log),
-            Some(RunKey::Rerun),
-            Some(RunKey::Cancel),
-            Some(RunKey::Open),
-            None,
-            None,
-            None
-        ]
-    );
-}
-
-/// Only pane 2, focused, showing `ci`: anywhere else the keys keep
-/// their old meaning (`O` the first PR, `l` the strip's day cursor).
-#[test]
-fn the_handoffs_apply_only_with_pane_2_focused_on_ci() {
-    assert!(ci_handoff_applies(&handoff_app(0)));
-    for view in app::HistoryView::ALL {
-        if view == app::HistoryView::Ci {
-            continue;
-        }
-        let mut app = handoff_app(0);
-        app.history_view = view;
-        assert!(!ci_handoff_applies(&app), "{view:?}");
-    }
-    for panel in [
-        FocusedPanel::RepoList,
-        FocusedPanel::Inspector,
-        FocusedPanel::Contributions,
-    ] {
-        let mut app = handoff_app(0);
-        app.focused_panel = panel;
-        assert!(!ci_handoff_applies(&app), "{panel:?}");
-    }
-    let mut compact = handoff_app(0);
-    compact.view = app::View::Compact;
-    assert!(!ci_handoff_applies(&compact), "compact draws no pane 2");
-}
-
-#[test]
-fn a_handoff_targets_the_rows_repo_and_the_highlighted_run() {
-    let mut app = handoff_app(2);
-    let (handoff, (key, owner, name)) = resolve_run_handoff(&mut app, RunKey::Rerun).unwrap();
-    assert_eq!(
-        handoff,
-        argv(&[
-            "run",
-            "rerun",
-            "37958308363",
-            "--failed",
-            "-R",
-            "gaurgle/fleetz"
-        ])
-    );
-    assert_eq!(
-        (key, owner.as_str(), name.as_str()),
-        (ci_key(), "gaurgle", "fleetz")
-    );
-    assert_eq!(yank_status(&app), None, "nothing to note");
-}
-
-#[test]
-fn an_empty_ci_view_does_nothing() {
-    let mut app = ci_app();
-    app.view = app::View::Detail;
-    app.history_view = app::HistoryView::Ci;
-    app.focused_panel = FocusedPanel::Detail;
-    for key in [RunKey::Log, RunKey::Rerun, RunKey::Cancel, RunKey::Open] {
-        assert_eq!(resolve_run_handoff(&mut app, key), None, "{key:?}");
-    }
-    assert_eq!(yank_status(&app), None);
-    let mut no_runs = handoff_app(0);
-    no_runs.ci.get_mut(&ci_key()).unwrap().runs.clear();
-    assert_eq!(resolve_run_handoff(&mut no_runs, RunKey::Open), None);
-}
-
-#[test]
-fn a_row_without_a_github_identity_hands_nothing_off() {
-    let mut app = handoff_app(0);
-    app.repos[0].owner = None;
-    assert_eq!(resolve_run_handoff(&mut app, RunKey::Open), None);
-    assert_eq!(yank_status(&app), None);
-}
-
-#[test]
-fn a_refused_handoff_says_why_on_the_status_line() {
-    let mut app = handoff_app(1);
-    assert_eq!(resolve_run_handoff(&mut app, RunKey::Cancel), None);
-    assert_eq!(
-        yank_status(&app),
-        Some(("run is not in progress".to_string(), false))
-    );
-    let mut live = handoff_app(0);
-    assert_eq!(resolve_run_handoff(&mut live, RunKey::Log), None);
-    assert_eq!(
-        yank_status(&live),
-        Some(("run has not finished".to_string(), false))
-    );
-}
-
 /// Back from `gh`, the repo polls at once rather than at its next 10 or
 /// 60 s slot, so a rerun or a cancel shows up without waiting.
 #[test]
@@ -8473,28 +4218,6 @@ fn back_from_gh_the_runs_repo_polls_at_once() {
     );
 }
 
-/// The immediate poll skips the interval, nothing else: a rate limit or
-/// `-d` still sends nothing.
-#[test]
-fn back_from_gh_a_rate_limited_or_dirty_mode_repo_does_not_poll() {
-    let failure = github::Failure::rate_limit("API rate limit exceeded");
-    let budget = reading("tok", 0, at(12, 40, 0), at(12, 0, 10));
-    let mut limited = ci_failure_lands(failure, Some(budget));
-    limited.view = app::View::Detail;
-    limited.history_view = app::HistoryView::Ci;
-    let target = ci::target(&limited.repos[0]).unwrap();
-    assert_eq!(
-        ci_poll_after_handoff(&mut limited, target.clone(), at(12, 1, 0)),
-        None
-    );
-    let mut dirty = handoff_app(1);
-    dirty.dirty_mode = true;
-    assert_eq!(
-        ci_poll_after_handoff(&mut dirty, target, at(12, 1, 0)),
-        None
-    );
-}
-
 // --- FZ-86: pane 1's order follows activity after a refresh ---
 
 /// A row of Gaurgle's at `location`, with no path, so no poll fetches it.
@@ -8509,7 +4232,7 @@ fn owned_row(name: &str, location: RepoLocation) -> RepoStatus {
 
 /// Land a successful poll whose dataset lists `names` newest push first,
 /// the order the GraphQL `orderBy` and `merge_sources` give it.
-fn poll_newest_first(app: &mut App, names: &[&str]) {
+pub(crate) fn poll_newest_first(app: &mut App, names: &[&str]) {
     let repos = names
         .iter()
         .map(|name| github::GithubRepo {
@@ -8529,14 +4252,14 @@ fn poll_newest_first(app: &mut App, names: &[&str]) {
     );
 }
 
-fn shown(app: &App) -> Vec<String> {
+pub(crate) fn shown(app: &App) -> Vec<String> {
     app.visible_repos()
         .iter()
         .map(|(_, r)| r.name.clone())
         .collect()
 }
 
-fn app_a_b_c_on_b() -> App {
+pub(crate) fn app_a_b_c_on_b() -> App {
     let rows = ["a", "b", "c"].map(|n| owned_row(n, RepoLocation::Primary));
     let mut app = App::new(rows.to_vec(), "h".to_string(), 120, 44);
     app.selected = 1;
@@ -8566,23 +4289,6 @@ fn a_poll_under_a_text_search_leaves_its_ranked_order_alone() {
     assert_eq!(before.len(), 3, "premise: the query matches every row");
     poll_newest_first(&mut app, &["c", "a", "b"]);
     assert_eq!(shown(&app), before);
-    assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("b"));
-}
-
-/// A sweep landing applies the order too: one a search held back lands
-/// on the next sweep after the search ends, with the cursor on its repo.
-#[test]
-fn a_sweep_landing_applies_an_order_a_search_held_back() {
-    let mut app = app_a_b_c_on_b();
-    app.search_query = "gaurgle".to_string();
-    poll_newest_first(&mut app, &["c", "a", "b"]);
-    app.clear_search();
-    assert_eq!(shown(&app), ["a", "b", "c"], "premise: held back");
-    app.selected = 1;
-    app.needs_redraw = false;
-
-    apply_sweep_done(&mut app, chrono::Local::now());
-    assert_eq!(shown(&app), ["c", "a", "b"]);
     assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("b"));
 }
 

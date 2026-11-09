@@ -62,27 +62,34 @@ reads are left out entirely: the sibling `tests.rs` files (FZ-104),
 470 lines). "Effects" is what the module does beyond computing: `proc`
 runs a program, `net` talks HTTP, `fs` touches the disk, `term` draws or
 reads the terminal. Every row below was measured on `270bd71` by one
-script over the whole tree; rows are in size order.
+script over the whole tree, but for the seven `main.rs` rows, measured
+after F1 (FZ-109) split it; rows are in size order.
 
 | Module | Lines | Owns | Effects |
 |---|---|---|---|
 | `ui/` (19 files) | 13,266 | Drawing every view from `&App`; `detail.rs` alone is 4,615, `mod.rs` 1,541, `markdown.rs` 1,245, `ci.rs` 1,072, `digest.rs` 699, the other 14 files 2,992 together | term |
 | `app.rs` | 6,184 | `App`: all TUI state (115 fields), the overlays, filters and query parsing, API budget and backoff, per-view caches for ci, notes, worktrees, changes and digest | none (holds ratatui types) |
-| `main.rs` | 3,813 | Startup, the event loop, every input handler, task spawning, the load, sweep and fetch planning, GitHub poll scheduling, editor and opener handoff | proc, term |
 | `git.rs` | 2,444 | Every git read and fetch, reading a fetch's outcome and progress and a checkout's `WorkKey` (the types live in `model`), the `changes` read (`changes`, `changed_file_diff`), the note body read | proc, fs |
 | `report/` (3 files) | 2,057 | Print mode: run (`mod.rs` 910), golden parity harness (`parity.rs` 765), render byte for byte as repoz (`render.rs` 382) | proc, fs |
 | `github.rs` | 1,567 | The GraphQL query and its cost, the HTTP client, token lookup, failure kinds; parsing the payload into `model::GithubRepo` | net, proc |
 | `engine/` (6 files) | 1,562 | `assembly.rs` 559: view assembly (discovery passes, carriers, activity order, the startup fetch baseline); `fetch.rs` 333: fetches under a claim (`FetchClaims`) and the types the sweep plans with (`SweepTarget`, `FetchAsk`, `FetchTally`, `FetchReport`, FZ-106); `status.rs` 313: a row's status probe; `load.rs` 191: the load (GitHub dataset or dirty mode); `carriers.rs` 126; `mod.rs` 40: `Sink`, which a front end's channel implements (FZ-105) | proc, fs, net |
 | `ci.rs` | 1,538 | Workflow runs, jobs and log tails over REST, with ETags; the default branch tip's `TipStatus`, `TipChecks` and `StatusEvent` history, and `tip_verdict` over them | net |
 | `model.rs` | 1,194 | `RepoStatus` and the row types the views draw; the types the sources fill (fetch outcome and progress, `FetchFacts`, `WorkKey`, `GithubRepo`); remote identity (`identity_key`, `RemoteRef`, `RemoteKey`, `carrier_key`) | none |
+| `input.rs` | 1,081 | Every input handler: keys, mouse, the overlays' keys, the settings overlay, `r`, `R` and `f` | proc, term |
+| `poll.rs` | 747 | GitHub poll scheduling and apply, the account rebuild, the CI tick, spawning the background reads (CI, worktree log, notes, changes, digest) | none |
+| `event.rs` | 634 | `AppEvent`, `LoadResult`, the input thread, the tick and loading tasks, the event loop (`run_event_loop`) | term |
 | `discovery.rs` | 611 | Finding clones under roots and `$HOME`, clone matching (`Wanted`, `CheckoutRank`) | fs |
 | `cache.rs` | 517 | The keyed on-disk API cache | fs |
+| `sweep.rs` | 511 | The local sweep: targets, fetch planning and claims, spawning it, landing a repo's result, the activity order | none |
 | `graph.rs` | 471 | Commit graph lanes and glyphs | none |
 | `notes.rs` | 443 | Walking a repo for notes and markdown, the capped body read | fs |
 | `contributions.rs` | 431 | The 53 by 7 contribution grid | none |
+| `load.rs` | 390 | Spawning the load, the window apply and the memory rebuild; applying a `LoadResult` | none |
 | `config.rs` | 349 | Config file, defaults, settings writes; the values its keys select (`View` and `initial_view`, `Icons`, the pane defaults) | fs |
+| `handoff.rs` | 347 | Editor, opener, `gh` and lazygit handoffs: suspending and reclaiming the terminal | proc, fs, term |
 | `digest.rs` | 333 | The slot digest model | none |
 | `time.rs` | 249 | Time windows and slots; the poll `Pace` | none |
+| `main.rs` | 217 | Startup and teardown (`main`), the `mod` lines | term |
 | `clipboard.rs` | 137 | Copying a hash to the system clipboard | proc |
 | `cli.rs` | 115 | Flags (`clap`) | none |
 | `fuzzy.rs` | 81 | Fuzzy match for search | none |
@@ -214,28 +221,29 @@ loop; restore the terminal; save pane sizes if `persist_pane_sizes` is set.
 
 **Events.** Every background result reaches state through one channel and
 one loop (`run_event_loop`), so state changes happen on one task in a
-defined order. Sent by functions in `main.rs` unless noted.
+defined order. Sent by functions in `event.rs`, `load.rs`, `sweep.rs` and
+`poll.rs` unless noted.
 
 | `AppEvent` | Sent by | Applied by |
 |---|---|---|
-| `Input` | `spawn_input_thread` | `handle_key`, `handle_mouse_input` and the handlers they call |
-| `Tick` | `spawn_tick_task` | the loop: `App::on_tick`, status expiry, the watch sweep and GitHub poll when due |
-| `YankFrame` | `next_event` (the loop's own wait) | the loop |
-| `LoadingFrame` | `spawn_loading_task` | `on_loading_frame` |
-| `Loaded` | `spawn_load`, `spawn_window_apply`, `spawn_memory_rebuild` | `apply_load_result` |
+| `Input` | `event::spawn_input_thread` | `handle_key`, `handle_mouse_input` and the handlers they call |
+| `Tick` | `event::spawn_tick_task` | the loop: `App::on_tick`, status expiry, the watch sweep and GitHub poll when due |
+| `YankFrame` | `event::next_event` (the loop's own wait) | the loop |
+| `LoadingFrame` | `event::spawn_loading_task` | `on_loading_frame` |
+| `Loaded` | `load::spawn_load`, `spawn_window_apply`, `spawn_memory_rebuild` | `apply_load_result` |
 | `Progress` | `engine::assemble_view_held`, through `engine::Sink` | the loop |
-| `RepoUpdated` | `spawn_sweep` | `apply_repo_updated` |
+| `RepoUpdated` | `sweep::spawn_sweep` | `apply_repo_updated` |
 | `FetchProgress` | `engine::fetch_under_claim_capped`, through `engine::Sink` | the loop |
-| `SweepDone` | `spawn_sweep` | `apply_sweep_done` |
-| `Github` | `spawn_github_poll` | `apply_github_poll` |
-| `Ci`, `CiDetail` | `spawn_ci_poll`, `spawn_ci_detail` | `App::apply_ci`, `App::apply_ci_detail` |
-| `WorktreeLogRead` | `spawn_worktree_log` | `App::apply_worktree_log` |
-| `NotesWalked` | `spawn_notes_walk` | `App::apply_notes_walk` |
-| `NoteRead`, `NoteCommit` | `spawn_note_read` | `App::apply_note_read`, `apply_note_facts`, `apply_note_rendered`, `apply_note_commit` |
-| `NoteRendered` | `spawn_note_render` | the loop |
-| `ChangesRead` | `spawn_changes_read` | `App::apply_changes_read` |
-| `ChangeDiff` | `spawn_change_diff` | `App::apply_change_diff` |
-| `DigestLog` | `spawn_digest_log` | `App::apply_digest_log` |
+| `SweepDone` | `sweep::spawn_sweep` | `apply_sweep_done` |
+| `Github` | `poll::spawn_github_poll` | `apply_github_poll` |
+| `Ci`, `CiDetail` | `poll::spawn_ci_poll`, `spawn_ci_detail` | `App::apply_ci`, `App::apply_ci_detail` |
+| `WorktreeLogRead` | `poll::spawn_worktree_log` | `App::apply_worktree_log` |
+| `NotesWalked` | `poll::spawn_notes_walk` | `App::apply_notes_walk` |
+| `NoteRead`, `NoteCommit` | `poll::spawn_note_read` | `App::apply_note_read`, `apply_note_facts`, `apply_note_rendered`, `apply_note_commit` |
+| `NoteRendered` | `poll::spawn_note_render` | the loop |
+| `ChangesRead` | `poll::spawn_changes_read` | `App::apply_changes_read` |
+| `ChangeDiff` | `poll::spawn_change_diff` | `App::apply_change_diff` |
+| `DigestLog` | `poll::spawn_digest_log` | `App::apply_digest_log` |
 
 **Stale answers.** A task's answer can land after a newer one. The guards:
 the poll's `attempt` id (`GithubFreshness::begin_attempt`), fetch claim
@@ -249,10 +257,10 @@ worktrees, changes and ci. Contracts: `docs/freshness-contract.md`,
 
 | Group | Examples | Changed by |
 |---|---|---|
-| Fleet data | `repos`, `dataset`, `github_meta`, `not_in_last_poll`, `window` | load, sweep and poll handlers in `main.rs` |
-| GitHub sync | `github_freshness`, `api_budget`, `github_backoff`, poll timing fields | poll scheduling and apply in `main.rs`, `App` methods |
-| Local fetch | `fetches_in_flight`, `fetch_backoff`, `manual_fetches`, refresh fields | sweep and fetch planning in `main.rs`, over the engine's fetch types (FZ-106) |
-| Navigation and view | `view`, `overlay`, `selected`, `focused_panel`, `history_view`, scrolls, pane percentages | input handlers in `main.rs`, `App` methods |
+| Fleet data | `repos`, `dataset`, `github_meta`, `not_in_last_poll`, `window` | load, sweep and poll handlers in `load.rs`, `sweep.rs` and `poll.rs` |
+| GitHub sync | `github_freshness`, `api_budget`, `github_backoff`, poll timing fields | poll scheduling and apply in `poll.rs`, `App` methods |
+| Local fetch | `fetches_in_flight`, `fetch_backoff`, `manual_fetches`, refresh fields | sweep and fetch planning in `sweep.rs`, over the engine's fetch types (FZ-106) |
+| Navigation and view | `view`, `overlay`, `selected`, `focused_panel`, `history_view`, scrolls, pane percentages | input handlers in `input.rs`, `App` methods |
 | Per-view caches | `ci` (each repo's `CiTip` with it), `notes`, `note_body`, `worktree_logs`, `digest_logs` | `App::apply_*` |
 | Render feedback | 18 `Cell` and `RefCell` fields such as `detail_hits`, `list_hits`, `reader_width` | `ui::render`, while drawing |
 

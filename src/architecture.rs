@@ -30,7 +30,12 @@ const LAYERS: [(&str, &[&str]); 4] = [
         ],
     ),
     ("engine", &["engine"]),
-    ("front ends", &["main", "app", "ui", "report"]),
+    (
+        "front ends",
+        &[
+            "main", "event", "input", "handoff", "load", "poll", "sweep", "app", "ui", "report",
+        ],
+    ),
 ];
 
 /// Today's violations. The list may only shrink: an entry that no longer
@@ -38,8 +43,10 @@ const LAYERS: [(&str, &[&str]); 4] = [
 const ALLOWED: [(&str, &str); 0] = [];
 
 const TERMINAL_CRATES: [&str; 2] = ["ratatui", "crossterm"];
-const TERMINAL_OWNERS: [&str; 3] = ["main", "app", "ui"];
-const TUI: [&str; 3] = ["main", "app", "ui"];
+const TERMINAL_OWNERS: [&str; 7] = ["main", "event", "input", "handoff", "poll", "app", "ui"];
+const TUI: [&str; 9] = [
+    "main", "event", "input", "handoff", "load", "poll", "sweep", "app", "ui",
+];
 
 fn layer(module: &str) -> Option<usize> {
     LAYERS

@@ -521,7 +521,7 @@ coordinator on 2026-10-01):
 
 - **Step 1** (`n = 1`): exactly the configured interval, no jitter. This is
   today's behaviour, which the existing test
-  `main.rs::no_attempt_sooner_than_one_interval_after_a_failure` pins: a 502
+  `poll/tests.rs::no_attempt_sooner_than_one_interval_after_a_failure` pins: a 502
   at interval 90 is due again at exactly +90 s, not before and not later.
 - **Step 2 on** (`n >= 2`): base = min(interval * 2^(n-1), 600 s), times a
   jitter factor in [0.8, 1.2] from an injected source, never less than the
@@ -913,7 +913,7 @@ coordinator's to add when it lands; no ticket edits `CLAUDE.md`.
   S10a, S11, S11a, S12, S12a, S12b, S13, S14, S15, S16, S16a, S16b, S17,
   S18, S19b, S20, S21, S21a, S22, S22a, S23, S24. Existing tests pass
   unchanged; none is edited. That includes
-  `main.rs::no_attempt_sooner_than_one_interval_after_a_failure`, which pins
+  `poll/tests.rs::no_attempt_sooner_than_one_interval_after_a_failure`, which pins
   step 1 at exactly one interval.
 - **Gate**: the owner's O4 (rules 6, 9 and 10, vocabulary) before it merges,
   and O2 before the `r` and `R` part merges.
@@ -947,7 +947,7 @@ Every later query change (FZ-05 series, FZ-07, FZ-08, FZ-09) follows
 
 | What | Where | Fix |
 |---|---|---|
-| `CLAUDE.md` says the tick is 250 ms; it is 100 ms | `CLAUDE.md` "Current state"; `main.rs::TICK_INTERVAL` 74 | Coordinator (`CLAUDE.md` text) |
+| `CLAUDE.md` says the tick is 250 ms; it is 100 ms | `CLAUDE.md` "Current state"; `event.rs::TICK_INTERVAL` | Coordinator (`CLAUDE.md` text) |
 | `CLAUDE.md` says "`r` rebuilds from cache"; `r` is a local sweep plus a poll that bypasses the cache | `CLAUDE.md` "Never widen the GitHub fetch"; key handler `main.rs` 1550 | Coordinator (`CLAUDE.md` text) |
 | `CLAUDE.md` names `last_github_poll` and `GithubFetch::from_cache`, neither of which exists since FZ-03; the rule is now `GithubFreshness::loaded` leaving `last_attempt` unset for `DatasetSource::Cache` | `CLAUDE.md` "Launch paints from the cache" | Coordinator (`CLAUDE.md` text) |
 | The load-error panel says "R retries against GitHub, r rebuilds from cache"; `r` does not rebuild from cache | `ui/mod.rs::render_load_error` 820 | FZ-10c |
