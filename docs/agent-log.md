@@ -299,6 +299,35 @@ feature tickets until then: FZ-100, FZ-102 and the build label wait."
 Filed FZ-103 to FZ-107 (#160 to #164) under M5 at P1; FZ-103 dispatched
 15:25. The 11-07 order's steps 4 and 5 (L1, the architect's Ready check,
 FZ-97) are superseded by this instruction: L1 is FZ-103, FZ-97 waits.
+About 16:00, on O3 (the design's gate table was stale: FZ-60, FZ-63,
+#81 and #45 were already closed, FZ-91 the one open tree): "1. a, merge
+it first", then "1 is ok, i trust the shading"; on the M5 milestone:
+"i think this is good"; on F1 and U1: "you choose" (U1 filed as FZ-108
+#165, F1 after D1). Away 16:05 to about 16:35 ("can you manage without
+me for a while?").
+
+- **#148 (FZ-91), the contributions strip shades by the median of its
+  active days.** Merged `8ac7ff1` at 16:33 CET on his word ("i trust the
+  shading"), reversing his 11-06 parking ("i prefer the old shading").
+  Ticket commit `e74fe67` (reviewed 11-06, diff `829c22f86265`), merge
+  of `main` `f242770` resolved by the lead (README's `c` row), diff
+  `7f3a8b9d3d36` reviewed and accepted, CI 42637471830 green, combined
+  1754 passed, gate holds, `main` CI 42644708451 green. Remembered, to
+  the design's Gate section: the gate is checked live on the issues, the
+  table is a snapshot.
+  FZ-91: review accepted first; fix cycles 0; owner decisions 4; worker 6 + 2; review 7 + 3; models opus:medium/opus:medium; usage worker 87978 tokens, reviewer 51987 + 26947 tokens
+
+- **#160 (FZ-103), L1: the layer test guards the four layers.** Merged
+  `62aeb8f` at 16:52 CET. Commit `c538c08` on base `ee0ba8b`: test-only
+  `src/architecture.rs` (476 lines) behind `#[cfg(test)] mod
+  architecture;` in `main.rs`, one sentence under A6. The test measured
+  exactly the design's six edges for its allowlist. Review accepted first
+  time on diff `b5ee536b305e`; CI 42637701613 green; combined on
+  `8ac7ff1` 1757 passed; gate holds. Reviewer's follow-ups (on #160): a
+  `super::X` path at the top of a top-level module escapes A1 (no site
+  today), field or arm `cfg(test)` and `cfg(all(test, ..))` unhandled
+  (none today). Remembered: nothing to keep.
+  FZ-103: review accepted first; fix cycles 0; owner decisions 0; worker 13; review 10; models opus:medium/opus:medium; usage worker 86960 tokens, reviewer 59847 tokens
 
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, about 10:45: "allright ooks good

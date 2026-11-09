@@ -37,7 +37,11 @@ and `app.rs`, then the backward edges are cut, then the front ends are split.
 ## Gate
 
 No split starts while an open ticket tree touches its files. Each tree is
-merged or explicitly dropped first. Where they live, checked 2026-11-07 on
+merged or explicitly dropped first. The lead checks the gate live (the
+issues' state, `git worktree list`, `origin` branches) before each split;
+the table below is the 2026-11-07 snapshot and was already stale on 11-09
+(four of its trees had closed; FZ-91 merged `8ac7ff1`). Where they lived,
+checked 2026-11-07 on
 RoosMacbookA (this repo's `git worktree list`, `origin` branches, the
 handoff and the issue records):
 

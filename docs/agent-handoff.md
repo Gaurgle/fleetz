@@ -27,12 +27,13 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 ## In flight
 
-- FZ-103 (#160, L1): In progress, record on the issue. Worktree
-  `.claude/worktrees/fz-103`, branch `test/fz-103-layer-test`, base
-  `ee0ba8b`, worker `fz-worker` standard, running since 15:25.
-- FZ-104 to FZ-107 (#161 to #164, T1, E1, E2, D1) filed Backlog P1 M5,
-  bodies carry gate and allowed files. T1 waits on O3 (below). An
-  `fz-architect` branch check runs before T1 starts (workflow trigger).
+- Done today, logged with metrics: FZ-91 (`8ac7ff1`), FZ-103
+  (`62aeb8f`, the layer test; its `super::` gap is a follow-up on #160,
+  to fold into E1's layer-table change or a later ticket).
+- FZ-104 (#161, T1) next: the gate is clear (O3 settled, no open tree),
+  the `fz-architect` branch check dispatched 16:55; T1 starts on `fits`.
+  Then FZ-105 to FZ-107 (E1, E2, D1), then FZ-108 (#165, U1) and F1
+  (filed after D1). No worker or reviewer running.
 - Open from the 11-09 reviews (in the log entries): FZ-83's branch-name
   and side-run follow-ups and `ci/tip.rs` split; FZ-95's held-fetch glyph
   (needs his yes on a `badges.rs` test rewrite), two-row header block,
@@ -41,11 +42,6 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 ## Open questions
 
-- O3 for T1: merge or drop each tree that touches the files it moves:
-  `issue-116` FZ-60, `issue-119` FZ-63, `issue-81` on RoosMacbookA;
-  `origin/feat/148-strip-median` FZ-91 (parked on his look).
-- Milestone for the batch: M5 was the lead's pick; a structure milestone
-  instead is his call. F1 and U1: file when D1 is Done, or now?
 - To file on his 11-05 13:50 answers (log): ssh README, `fleetz doctor`,
   `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2. Wall-clock tests
   flaky under load (#121, #152 review comments): a ticket? Help `y` row
@@ -53,6 +49,6 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 ## Next step
 
-FZ-103: scope check and review when the worker reports, then commit,
-CI, combined checks, gate, merge. Then the O3 ruling and the architect's
-branch check before FZ-104.
+Dispatch FZ-104 (T1) on the architect's verdict and green `main` CI
+(run 42646226766); it has his word. Suggest `cargo install` (FZ-91's
+shading is on `main`).
