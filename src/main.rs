@@ -1313,6 +1313,11 @@ fn handle_mouse_input(
     terminal: &Terminal<CrosstermBackend<io::Stdout>>,
     m: MouseEvent,
 ) {
+    // A press ends a pending yank chord (FZ-74), as a key does: a click can
+    // move the cursor, and a `p` after it must not copy from the new row.
+    if matches!(m.kind, MouseEventKind::Down(_)) {
+        app.pending_yank = false;
+    }
     let Ok(size) = terminal.size() else { return };
     let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
     handle_mouse_in(app, area, m);
@@ -1321,11 +1326,6 @@ fn handle_mouse_input(
 /// `handle_mouse_input` against a known screen `area`, so a test can drive
 /// the real mouse handling without a terminal.
 fn handle_mouse_in(app: &mut App, area: ratatui::layout::Rect, m: MouseEvent) {
-    // A press ends a pending yank chord (FZ-74), as a key does: a click can
-    // move the cursor, and a `p` after it must not copy from the new row.
-    if matches!(m.kind, MouseEventKind::Down(_)) {
-        app.pending_yank = false;
-    }
     if !matches!(app.overlay, Overlay::None) || app.search_active {
         return;
     }
