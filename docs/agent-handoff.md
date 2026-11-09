@@ -31,19 +31,17 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 
 ## In flight
 
-- `main` at `748b6de`, CI green. FZ-83 (#140): review 2 needs change
-  (6736163590), architect `fits with note` (6736078110), review 3 of
-  `72ee8ba1a63c` accepted, committed `85692a5`, pushed; CI 42591411009
-  red (test `now` helper is wall-clock Local, CI is UTC; 6736457700).
-  Merge of `main` `96385c3` and the UTC test fix `ae5b7ae` reviewed,
-  pushed, CI 42594223558 green, combined checks green (1732), gate holds.
-  **Ready to integrate, waiting for his look** (12:25). Record: #140.
-- FZ-95 (#152, no priority) and FZ-87 (#144) wait for FZ-83; FZ-65 (#121,
-  `9f4018d7160d`, his wheel decision) and FZ-38 (#88) sit on at-a.
+- `main` at the FZ-83 merge `985b682`, CI 42596419465 green; `issue-140`,
+  `issue-137` and `status-bar` swept. FZ-83 Done 12:45 on his look; its
+  record is in the log. Follow-ups named there: branch name from any held
+  run at the tip, side-run by sha, culprit flicker, `ci/tip.rs` split.
+- FZ-95 (#152, no priority) and FZ-87 (#144) were waiting for FZ-83 and
+  are free now; FZ-65 (#121, `9f4018d7160d`, his wheel decision) and
+  FZ-38 (#88) sit uncommitted on at-a.
 - Filed 11-07, after the SMBP merges: FZ-100 (#157, P1, Ready, `notes`
   header, ordered against FZ-95); FZ-101 (#158, P2, Backlog, moved rows
   flash). FZ-97 (#154, P1): docs-only, his word.
-- Ready: FZ-78, 79, 58, 84, 89, 90, 92 (84, 89, 92 wait for FZ-83).
+- Ready: FZ-78, 79, 58, 84, 89, 90, 92 (84, 89, 92 were waiting for FZ-83).
 
 ## Open questions
 
@@ -56,5 +54,5 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 
 ## Next step
 
-FZ-83 waits for his look; on his word merge `--no-ff` (`Closes #140`),
-sweep, log it. Then on his word FZ-97 and the L1 answer; `cargo install`.
+The 19:30 rule still holds until FZ-65 and FZ-38 merge. On his word: FZ-97, the L1 answer, which of
+the freed tickets (FZ-95, 87, 84, 89, 92) next. Suggest `cargo install`.

@@ -289,6 +289,47 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### 2026-11-09
+
+Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
+need to finish ticket fz-83". His look, 12:40: "allright ooks good to me".
+
+- **#140 (FZ-83), the CI lamp and the header agree with the `ci` view and
+  name their branch.** Merged `985b682` at 12:45 CET on his look; ticket
+  commits `85692a5` (the diff built 11-05, base `334e9a6`), `96385c3` (the
+  merge of `main` `748b6de`, 60 commits, reviewed) and `ae5b7ae` (test
+  times UTC-safe). Worker `fz-worker` 11-05 and today (rework 1, the merge
+  cycle), `fz-small` (rework 2), reviewer `fz-reviewer`, architect
+  `fz-architect` (branch check, `fits with note`, 71474 tokens), all
+  `claude-fable-5-1`. Built under option C (the default tip learned inside
+  the `ci` view from `commits/HEAD/status`, its check runs and status
+  history; the fleet query untouched; `CiTip` in memory only): `App::ci_shown`
+  for every CI word on screen, `CI ◉ main failed: Vercel`, status rows with
+  a `source` column, the `◦` side-run mark. Review 1 (11-05) had no verdict;
+  review 2 (`5f4c44d114ce`) needs change: the digest card still read the
+  fleet poll; the lead also took follow-up 1 (a refused tip read no longer
+  skips the jobs and log). Review 3 (`72ee8ba1a63c`) accepted. Branch CI
+  red in UTC: the `ui/ci.rs` tests' `local()` helper attaches the machine's
+  zone to wall-clock fields, invisible to everyone here in CET; fixed by
+  `instant()` at the FZ-83 sites, review 5 (`15e50b1431e8`) accepted; the
+  merge resolution review 4 (`fac250c6f9d7`) accepted. Gate held on
+  `18ca717`. Owner's words: 11-05 13:50 "sure, that could be nice!" (the
+  side-run mark), 14:40 the source column, 14:41 colours and rows, 15:32 "1.
+  yes ... 2. sounds good?". Open from the reviews, for a later ticket: the
+  branch name comes from the newest held run at the tip whatever its event
+  (a PR run at `main`'s tip could name the PR branch); `ci_side_run` matches
+  by sha, so an overtaken run on `main` shows the mark; the culprit drops
+  from the header between a fleet poll and the next `ci` poll; `no workflow
+  runs` above a Vercel row. `src/ci.rs` is 1537 production lines, over the
+  flag; seam `ci/tip.rs`, a refactor ticket now that the window opens.
+  `docs/architecture.md` sections 1, 2 and 5 updated in the merge; the
+  `ui/` and `detail.rs` figures want a whole-table re-measure (section 9).
+  Observed, out of scope: `docs/architecture.md:64` (`app.rs` figure not
+  re-measured), `docs/architecture.md:65` (`detail.rs` 3,984 already behind
+  `main`). Remembered (CLAUDE.md, tests): tests with fixed times hold under
+  `TZ=UTC`, where CI runs.
+  FZ-83: review changes 1; fix cycles 2; owner decisions 6; worker 114; review 17; models claude-fable-5-1:medium/claude-fable-5-1:default; usage worker 448129 + 52645 + 59823 + 25377 tokens, reviewer 127405 + 36860 + 38794 + 22347 tokens
+
 ### 2026-11-07
 
 Lead `4d31e22a` (`claude-fable-5-1`) on RoosMacbookA from 19:27 CET.

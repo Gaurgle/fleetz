@@ -122,6 +122,9 @@ everything else is unbuilt, and its line references drift.
   refactor tickets (`docs/agent-workflow.md`, `docs/module-split-design.md`).
 - Every behavior change lands with a test that would have caught the old
   behavior; many existing tests name the regression they guard. Match that.
+- A test with fixed times must hold under `TZ=UTC`, where CI runs: build
+  them from the instant (`with_timezone`), not from wall-clock fields with
+  the machine's zone attached (FZ-83 went red on CI alone).
 
 ## Build
 
