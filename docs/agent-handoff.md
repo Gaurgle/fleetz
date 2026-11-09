@@ -7,11 +7,11 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Baton released 2026-11-07 20:55 CET by session `4d31e22a`
-(`claude-fable-5-1`, RoosMacbookA, since 19:27); he stopped for the day
-after FZ-63 and FZ-60 merged. No worker or reviewer running. at-a holds
-FZ-83's, FZ-65's and FZ-38's uncommitted trees. No worktrees here: the
-stale `45` and `81` trees went on his word (21:05; both tickets closed).
+Session `6d8fd7f3` (`claude-fable-5-1`, at-a) took over 2026-11-09
+09:49 CET on his "we need to finish ticket fz-83"; the previous lead
+(`4d31e22a`, RoosMacbookA) released the baton 11-07 20:55. at-a holds the
+FZ-83 (`issue-140`), FZ-65 (`issue-121`), FZ-38 (`issue-88`) and FZ-95
+(`issue-152`) trees; `issue-137` and `status-bar` are merged, sweepable.
 
 ## Standing authority
 
@@ -31,30 +31,30 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 
 ## In flight
 
-- Nothing dispatched. `main` at the FZ-60 merge `3dd6112` plus the docs
-  commit after it (CI run 42408060136; `issue-116` swept once green).
-- FZ-83 (#140): uncommitted on at-a, diff `5f4c44d114ce` vs `334e9a6`;
-  next a fresh full review, commit, merge with `main`, his look.
-- FZ-95 (#152, `c3c6830`, no priority) and FZ-87 (#144) wait for FZ-83.
-  FZ-65 (#121, `9f4018d7160d`, his wheel decision) and FZ-38 (#88) on at-a.
-- Filed 11-07, both after the SMBP merges: FZ-100 (#157, P1, Ready, his
-  `notes` header bug, ordered against FZ-95); FZ-101 (#158, P2, Backlog,
-  moved rows flash on a reorder). FZ-97 (#154, P1): docs-only, his word.
+- `main` at `748b6de`, CI green. FZ-83 (#140): review 2 needs change
+  (6736163590), architect `fits with note` (6736078110), review 3 of
+  `72ee8ba1a63c` accepted, committed `85692a5`, pushed; CI 42591411009
+  red (test `now` helper is wall-clock Local, CI is UTC; 6736457700).
+  Merge of `main` `96385c3` and the UTC test fix `ae5b7ae` reviewed,
+  pushed, CI 42594223558 green, combined checks green (1732), gate holds.
+  **Ready to integrate, waiting for his look** (12:25). Record: #140.
+- FZ-95 (#152, no priority) and FZ-87 (#144) wait for FZ-83; FZ-65 (#121,
+  `9f4018d7160d`, his wheel decision) and FZ-38 (#88) sit on at-a.
+- Filed 11-07, after the SMBP merges: FZ-100 (#157, P1, Ready, `notes`
+  header, ordered against FZ-95); FZ-101 (#158, P2, Backlog, moved rows
+  flash). FZ-97 (#154, P1): docs-only, his word.
 - Ready: FZ-78, 79, 58, 84, 89, 90, 92 (84, 89, 92 wait for FZ-83).
 
 ## Open questions
 
 - L1 adds one line to `main.rs` (`mod architecture;`): allowed under the
-  19:30 rule, or after the SMBP merges? (a) one line ok, (b) wait, (c) a
-  `tests/` file against the repo convention. Lead recommends (a).
+  19:30 rule (a, lead's pick), after the SMBP merges (b), or a `tests/` file (c)?
 - To file on his 11-05 13:50 answers (log): ssh README paragraph,
   `fleetz doctor`, `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2.
 - #88 worktree: stays or goes; FZ-38 with font-checked glyphs? Flaky
-  `clipboard::tests`. The help `y` row on `main` still says "copy hash;
-  changes: path" (#116 follow-up).
+  `clipboard::tests`. Help `y` row still "copy hash; changes: path" (#116).
 
 ## Next step
 
-On his word: FZ-97 (docs-only investigation) is the only Ready ticket
-clear of the 19:30 rule; then the L1 answer. Suggest `cargo install`
-(`main` now has FZ-63 and FZ-60).
+FZ-83 waits for his look; on his word merge `--no-ff` (`Closes #140`),
+sweep, log it. Then on his word FZ-97 and the L1 answer; `cargo install`.
