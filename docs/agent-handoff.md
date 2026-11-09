@@ -21,7 +21,7 @@ FZ-83 (`issue-140`), FZ-65 (`issue-121`), FZ-38 (`issue-88`) and FZ-95
 | Choose and dispatch tickets from the board | 2026-10-27 11:05, "you, as the lead, have authority to decide what tickets to start on" | two workers plus one `fz-small`; look items stop for him; FZ-52 and the `0.7.0` bump need his explicit word; issues only on his yes | revoked by word |
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
-| No ticket touching `main.rs`, `app.rs` or `ui/detail.rs` | 2026-11-07 19:30 (log) | the refactor window opens after the SMBP trees (FZ-83, 65, 38) merge | those merges |
+| No ticket touching `main.rs`, `app.rs` or `ui/detail.rs` | 2026-11-07 19:30 (log) | ended 11-09 13:10 with FZ-65's merge (FZ-83 merged, FZ-38 closed): the refactor window is open; FZ-95 runs on his 11-09 word | ended, row to the log at the next edit |
 
 The 11-07 order (steps 1 to 3) is done; steps 4 and 5 (L1, the architect's
 Ready check, FZ-97) were not reached and need his word again: he stopped
@@ -31,28 +31,28 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 
 ## In flight
 
-- `main` at the FZ-83 merge `985b682`, CI 42596419465 green; `issue-140`,
-  `issue-137` and `status-bar` swept. FZ-83 Done 12:45 on his look; its
-  record is in the log. Follow-ups named there: branch name from any held
-  run at the tip, side-run by sha, culprit flicker, `ci/tip.rs` split.
-- FZ-95 (#152, no priority) and FZ-87 (#144) were waiting for FZ-83 and
-  are free now; FZ-65 (#121, `9f4018d7160d`, his wheel decision) and
-  FZ-38 (#88) sit uncommitted on at-a.
-- Filed 11-07, after the SMBP merges: FZ-100 (#157, P1, Ready, `notes`
-  header, ordered against FZ-95); FZ-101 (#158, P2, Backlog, moved rows
-  flash). FZ-97 (#154, P1): docs-only, his word.
-- Ready: FZ-78, 79, 58, 84, 89, 90, 92 (84, 89, 92 were waiting for FZ-83).
+- `main` at `cb9987f` (FZ-83 merged `985b682` 10:50, Done; FZ-38 #88
+  closed 11:25; both logged). Comment times before 12:30 drift ahead (log).
+- FZ-65 (#121): merged `e2fa215` 13:10 on his second look, `main` CI
+  green, `issue-121` swept, Done and logged with metrics.
+- FZ-95 (#152, P1): `c3c6830` + merge `5f12f3b` (reviewed), pushed. Fix
+  cycle reviewed, committed `cbff8e5` (both placements behind `W`), CI
+  42609778666 watched. **Asked him 12:20:** may the `badges.rs` hold-text
+  test be rewritten (glyph in pane 1, text in the banner)? Then his look
+  (pick the placement), remove the loser, re-review, gate. FZ-100 (#157,
+  P1) follows it, not started on his 12:40 word. Record: #152.
+- FZ-102 (#159, P2, wrapped rows in the other views); FZ-101 (#158, P2);
+  FZ-97 (#154, P1, docs-only, his word). Ready: 78, 79, 58, 84, 87, 89, 90, 92.
 
 ## Open questions
 
-- L1 adds one line to `main.rs` (`mod architecture;`): allowed under the
-  19:30 rule (a, lead's pick), after the SMBP merges (b), or a `tests/` file (c)?
-- To file on his 11-05 13:50 answers (log): ssh README paragraph,
-  `fleetz doctor`, `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2.
-- #88 worktree: stays or goes; FZ-38 with font-checked glyphs? Flaky
-  `clipboard::tests`. Help `y` row still "copy hash; changes: path" (#116).
+- L1's one line in `main.rs` (`mod architecture;`): now (a, lead's pick), after FZ-65 (b), or `tests/` (c)?
+- To file on his 11-05 13:50 answers (log): ssh README, `fleetz doctor`,
+  `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2.
+- Wall-clock tests flaky under load (11-09, three named in #121 and #152
+  review comments): a ticket? Help `y` row still "copy hash" (#116).
 
 ## Next step
 
-The 19:30 rule still holds until FZ-65 and FZ-38 merge. On his word: FZ-97, the L1 answer, which of
-the freed tickets (FZ-95, 87, 84, 89, 92) next. Suggest `cargo install`.
+His 12:40 word: finish FZ-65 and FZ-95 completely, start no new ticket
+(FZ-100 included), then a summary of fleetz's state. Then his word again.

@@ -390,7 +390,12 @@ Scratch builds are disposable and bounded. A scratch clone and its build output
 session scratchpad, are built with `CARGO_TARGET_DIR` set inside that
 scratchpad (never inside a worktree or the main checkout), and are removed by
 the same command that used them. Use one build dir per ticket,
-`<scratchpad>/target-<ticket>`, shared by every check on that ticket.
+`<scratchpad>/target-<ticket>`, shared by every check on that ticket's
+own tree; a mutation clone or a base export builds into its own dir
+(`target-<ticket>-mut`, `target-<ticket>-base`), never the ticket's: Cargo
+names the artifact the same for every copy of the repo and goes by file
+times, so a mutant built into the shared dir is what the next worktree
+run tests, with no `Compiling` line to show it (FZ-65, 2026-11-09).
 `scripts/relay-sweep` also prunes scratch builds (Cargo target dirs and
 clones) idle for 1 hour in a closed session or 3 in a running one, this
 session included. Per-check target dirs (1.3GB each) filled the disk on

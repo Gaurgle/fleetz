@@ -1243,7 +1243,10 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // The `notes` view: which tree is drawn, pinned with the header, then
     // the tree, one cursor stop per file.
     if view == HistoryView::Notes {
-        lines.push(notes_mode_line(app));
+        // One row, as the tree's are (`notes_rows`): on a pane too short to
+        // pin it, a wrapped mode line put the highlight a row below the
+        // follow's count (FZ-65).
+        lines.push(Line::from(clip_spans(notes_mode_line(app).spans, width)));
         pinned_rows = lines.len();
         let base = lines.len();
         let (rows, tops, selected) = notes_rows(app, repo, width);
@@ -2446,19 +2449,23 @@ fn notes_rows(
     let mut lines = Vec::with_capacity(rows.len());
     let mut tops = Vec::with_capacity(files);
     let mut selected = None;
+    // Every row is cut to one rendered row (`clip_spans`): the tops are
+    // counted in lines, and a long name the paragraph wrapped put the
+    // highlight that many rows below where the follow kept it (FZ-65).
     for row in rows {
         match row {
             crate::notes::Row::Section(label) => {
                 if !lines.is_empty() {
                     lines.push(Line::from(""));
                 }
-                lines.push(Line::from(section_label(&label)));
+                lines.push(Line::from(clip_spans(vec![section_label(&label)], width)));
             }
             crate::notes::Row::Dir { depth, name } => {
-                lines.push(Line::from(Span::styled(
+                let dir = Span::styled(
                     format!("  {}{name}/", "  ".repeat(depth)),
                     Style::default().fg(colors::OVERLAY),
-                )));
+                );
+                lines.push(Line::from(clip_spans(vec![dir], width)));
             }
             crate::notes::Row::File { depth, name, file } => {
                 let is_sel = tops.len() == cursor;
@@ -2487,6 +2494,7 @@ fn notes_rows(
                         Style::default().fg(colors::OVERLAY),
                     ));
                 }
+                spans = clip_spans(spans, width);
                 if is_sel {
                     spans = wash(pad_to(spans, width));
                 }
