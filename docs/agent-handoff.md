@@ -28,8 +28,7 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 ## In flight
 
 - Done today, logged: FZ-91, FZ-103 to FZ-109, FZ-112 (`bae1fca`
-  22:22; `main` CI 42701963780 was running at handback; sweep `fz-112`
-  when green). One lead ruling for his review: F1 changed an existing
+  22:22, `main` CI green, worktree swept). One lead ruling for his review: F1 changed an existing
   test's `include_str!("main.rs")` to `"input.rs"` (option A on #166).
 - FZ-111 (#168) Ready to integrate: accepted on `39a6c5d05a3d`, merge
   commit `cb85fde` on the branch (main `bae1fca` merged in), pushed, CI
