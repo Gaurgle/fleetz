@@ -51,10 +51,9 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## Open questions
 
-- O5: `cli` as a source (ruling on #162, reversible); O6: E2b as its
-  own ticket; `scripts/measure-modules` from the architect's scratch
-  script? Older: his 11-05 answers to file (log); wall-clock tests flaky
-  under load; help `y` row (#116).
+- O5 (`cli` a source, #162) and O6 (E2b its own ticket) are settled by
+  his design acceptance; `scripts/measure-modules`? the flaky fixed-dir
+  test in `poll/tests.rs:1282` (an existing test, his)? Older in the log.
 
 ## Next step
 
