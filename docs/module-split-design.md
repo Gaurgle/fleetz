@@ -27,7 +27,9 @@ and `app.rs`, then the backward edges are cut, then the front ends are split.
   and the L1 allowlist shrinks or stays, never grows. A moved body is
   compared with the base after whitespace and trailing-comma
   normalization: rustfmt reflows a body that changed indentation, and
-  may drop the braces of a single-expression closure (T1, FZ-104).
+  may drop the braces of a single-expression closure (T1, FZ-104). A
+  test that reads a source file by path (`include_str!`) follows the
+  code it reads: the path literal changes, nothing else (F1, FZ-109).
 - `.claude/rules/*.md` follow the code in the same ticket: their `paths:`
   frontmatter must name the new files, or the invariants stop loading, and
   references such as `main.rs::assemble_view` must point at the new home.

@@ -29,14 +29,11 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 - Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f`, FZ-104
   `e831dd1`, FZ-105 `8f3a57d`, FZ-106 `cc1ecf5`, FZ-107 `270bd71`.
-- FZ-108 (#165, U1) Done, merged `74d527d` 20:52, logged; `main` CI
-  42687467786 watched, worktree sweeps when green.
-- FZ-109 (#166, F1) worker done 20:50 (seven files, 160 tests moved);
-  one existing-test literal changed on the lead's ruling (option A on
-  the issue: `include_str!("main.rs")` to `"input.rs"`, flagged to him).
-  Next: scope check, review (hard), merge of `main` (U1 touched
-  `CLAUDE.md` and `docs/architecture.md` too), gate, merge. Worktree
-  `.claude/worktrees/fz-109`, branch `refactor/fz-109-main-split`.
+- FZ-108 (#165, U1) Done, merged `74d527d`; FZ-109 (#166, F1) Done,
+  merged `f56ea6a` 21:08, logged; `main` CI 42690023117 watched, the
+  `fz-109` worktree sweeps when green. Nothing running. One lead ruling
+  for his review: F1 changed an existing test's `include_str!("main.rs")`
+  to `"input.rs"` (the arm it reads moved; option A on #166).
 - `docs/app-split-design.md` (`a0b95ab`) is proposed for his reading:
   A1, E3, E2b as eight tickets, owner items O-A to O-D; the survey is
   on `main` (`565b974`).
@@ -53,8 +50,8 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 ## Next step
 
-Unattended from about 19:20 (dinner, then sleep): FZ-108 and FZ-109 to
-merge, one at a time (combined checks rerun after the first lands).
-Stop on a safe-merge failure, a stuck worker (two cycles) or the usage
-limit; report here at the end. Then nothing starts without his read of
-`docs/app-split-design.md`. Suggest `cargo install`.
+The unattended scope is complete: eight merges today, all green. Nothing
+starts without his read of `docs/app-split-design.md` (E3 first, per
+its order) and his word on O-A to O-D, O5, O6. Suggest `cargo install`
+(the shading is the one visible change; the refactors should show
+nothing). The lead stays up for his return or hands back on request.

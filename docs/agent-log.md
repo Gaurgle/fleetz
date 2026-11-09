@@ -445,6 +445,31 @@ comment timestamps are authoritative.
   gone. Remembered: nothing to keep.
   FZ-108: review accepted first; fix cycles 0; owner decisions 0; worker 20; review 6 + 1; models opus:high/opus:high; usage worker 232931 tokens, reviewer 81444 + 6844 tokens
 
+- **#166 (FZ-109), F1: `main.rs` by file.** Filed 20:18 from the survey's
+  function list, merged `f56ea6a` at 21:08 CET. Commit `fbf7c94` on base
+  `565b974` plus the clean merge of `main` `34fa960` (`c263e12`, with two
+  doc fixes from the review): `main.rs` 217 production lines (was 3,813),
+  `event.rs` 634, `input.rs` 1,081, `handoff.rs` 347, `load.rs` 390,
+  `poll.rs` 747, `sweep.rs` 511; 160 tests moved, stripped list
+  identical. The design's four files became seven because E2b and E3
+  have not emptied the sweep, load and poll code yet. One existing
+  test's `include_str!("main.rs")` became `"input.rs"` on the lead's
+  ruling (option A on the issue, the #161 ruling 2 precedent; flagged to
+  him, reversible). `pub use event::AppEvent;` keeps the base's
+  reachability so dead code in `contributions.rs:272` and `model.rs:707`
+  stays unlinted (follow-up). Review accepted first time on
+  `f52e35d482cc` (item-level comparison, 133 production and 393 test
+  items, four layer probes), the merge on `3a87547cf6a8`; CI 42689315699
+  green; combined on `34fa960` 1757 passed; gate holds. Observed, out of
+  scope: the dead code above; `sweep.rs:87-96` stacked doc comment;
+  section 4's `RepoUpdated` row names the test-only `apply_repo_updated`;
+  section 3's diagram shows only `main` for the root and its siblings;
+  `docs/ideas.md:169,174,181,864` cite moved `main.rs` lines;
+  `src/report/tests.rs:58` reads `../main.rs`. Remembered, to the method
+  (the design doc's "Rules for every split", added below): a test that
+  reads a source file by path follows the code it reads.
+  FZ-109: review accepted first; fix cycles 0; owner decisions 0; worker 32 + 2; review 7 + 2; models opus:high/opus:high; usage worker 292754 + 9300 tokens, reviewer 89694 + 12674 tokens
+
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, about 10:45: "allright ooks good
 to me". About 11:05: "lets look at fz-65 / look at fz-38, could/should it
