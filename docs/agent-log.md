@@ -347,6 +347,33 @@ me for a while?").
   reflows a dedented body.
   FZ-104: review accepted first; fix cycles 0; owner decisions 2; worker 10; review 5; models opus:medium/opus:medium; usage worker 101169 tokens, reviewer 69221 tokens
 
+- **#162 (FZ-105), E1: the engine, view assembly out of `main.rs`.**
+  Merged `8f3a57d` at 20:45 CET. Commit `a01b35b` on base `e831dd1`:
+  `src/engine/{mod,assembly,carriers,fetch,load,status,tests}.rs`, about
+  1,400 lines moved from `main.rs` and `app.rs` (`FetchClaims`,
+  `ApplyProgress`, `DatasetSource` with `app.rs` re-exports), 42 tests
+  into `engine::tests::`, `main.rs` at 3,861 production lines. Progress
+  goes through a `Sink<T>` trait (ruling 5, after the worker stopped on
+  the generic sender's bare `None`); `cli` reclassified to the sources
+  layer (ruling 4, O5 flagged); the allowlist lost `report -> main`.
+  Architect ticket check "fits with note" (four notes); review accepted
+  first time on `b2b59862cde1`, re-review of the F1 fix (`github.md`
+  `paths:` gains `src/engine/**`) accepted on `ae133e39b371`; CI
+  42664038464 green; combined on `4f5d705` 1757 passed; gate holds.
+  Method notes: the `fz-small` for F1 wrote through `sed` and Python,
+  citing the auto-mode instruction; the worker left a hung `mv -i`
+  shell job in the scratchpad. Observed, out of scope: `src/model.rs:699-700`
+  and `src/github/tests.rs:1451` doc comments still say `main.rs::remote_key`;
+  `src/engine/fetch.rs:8,32` moved doc comments name `AppEvent::FetchProgress`
+  and `app::FetchClaims`; `local_only_status`'s and `assemble_view`'s doc
+  comments sit above the wrong item (as at base); no test drives
+  `ApplyProgress` through the sender; `docs/architecture.md:248-249` A3
+  still reads in the future tense; `src/report/mod.rs:97` keeps
+  `crate::app::FetchClaims`. Remembered: nothing to keep (the rule that
+  rules follow the code was already written; the ticket body missed one
+  file).
+  FZ-105: review accepted first; fix cycles 0; owner decisions 0; worker 4 + 30 + 0.4; review 9 + 0.4; models opus:high, sonnet:low/opus:high; usage worker 70965 + 302216 + 18872 tokens, reviewer 88567 + 4095 tokens
+
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, about 10:45: "allright ooks good
 to me". About 11:05: "lets look at fz-65 / look at fz-38, could/should it

@@ -29,14 +29,15 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 - Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f` (layer test;
   `super::` gap on #160), FZ-104 `e831dd1` (tests in sibling files).
-- FZ-105 (#162, E1) Review since 19:55: diff `b2b59862cde1`, record
-  and five rulings on the issue (ruling 5: a `Sink` trait replaces the
-  generic sender; `cli` to the sources layer, O5 flagged). Worktree
-  `.claude/worktrees/fz-105`, branch `refactor/fz-105-engine-assembly`,
-  base `e831dd1`; worker done (hard tier), reviewer running (hard).
-- FZ-106 (#163) narrowed to E2a (pure fetch types), ruling on the
-  issue; E2b (planning functions under a fetch owner type) joins E3
-  and A1 in the consult queue, filed on his yes (O6).
+- FZ-105 (#162, E1) Done, merged `8f3a57d` 20:45, logged; `main` CI
+  42664646798 watched, worktree sweeps when green.
+- FZ-106 (#163, E2a) In progress since 20:55: the pure fetch types
+  (`FetchBackoff`, `FetchReport`, `FetchTally`, `SweepTarget`,
+  `FetchAsk`, `size_held_rows`) into the engine; architect verdict and
+  ruling on the issue. Worktree `.claude/worktrees/fz-106`, branch
+  `refactor/fz-106-engine-fetch-types`, base `8f3a57d`, worker standard.
+  E2b (planning functions under a fetch owner type) waits with E3 and
+  A1 for the consults, filed on his yes (O6).
   Then FZ-105 to FZ-107 (E1, E2, D1), then FZ-108 (#165, U1) and F1
   (filed after D1). No worker or reviewer running.
 - Open from the 11-09 reviews (in the log entries): FZ-83's branch-name
