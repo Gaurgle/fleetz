@@ -27,12 +27,9 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 ## In flight
 
-- Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f` (layer test;
-  `super::` gap on #160), FZ-104 `e831dd1` (tests in sibling files).
-- FZ-105 (#162, E1) Done, merged `8f3a57d` 18:26, logged; `main` CI
-  42664646798 watched, worktree sweeps when green.
-- FZ-106 (#163, E2a) Done, merged `cc1ecf5` 18:47, logged; `main` CI
-  42667992050 watched, worktree sweeps when green.
+- Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f`, FZ-104
+  `e831dd1`, FZ-105 `8f3a57d`, FZ-106 `cc1ecf5` (E2a; `main` CI
+  42667992050 watched, `fz-106` worktree sweeps when green).
 - FZ-107 (#164, D1) next: `fz-architect` ticket check dispatched 18:48
   (the three edges' move sets, where `Icons`, `View`, the shared git and
   github types land); the worker dispatches on `fits`. Nothing running
