@@ -329,6 +329,24 @@ me for a while?").
   (none today). Remembered: nothing to keep.
   FZ-103: review accepted first; fix cycles 0; owner decisions 0; worker 13; review 10; models opus:medium/opus:medium; usage worker 86960 tokens, reviewer 59847 tokens
 
+- **#161 (FZ-104), T1: tests of files over 1200 lines into sibling
+  files.** Merged `e831dd1` at 18:20 CET. Commit `d63221c` on base
+  `80a3493`: 24 test modules in 16 files to same-named sibling files,
+  test list identical (1760), eleven `include_str!` paths followed, the
+  rules' `paths:` cover the new directories. Architect branch check
+  "fits with note" (five notes, rulings 1 to 6 on the issue); his
+  ruling 7 (shell moves for this ticket, "ok, do it like a then");
+  rulings 8 and 9 (string lines keep bytes, `cargo fmt` after the
+  dedent, three brace-free closures). Review accepted first time on
+  `2c5f2d57446c`; CI 42654389802 green; combined on `45d2fd6` 1757
+  passed; gate holds. Observed, out of scope: `scripts/check-docs.sh:8`
+  resolves the repo from the caller's cwd, so run from the main checkout
+  it checks the main checkout, not a worktree. Remembered, to
+  `docs/module-split-design.md` "Rules for every split": a move's
+  acceptance is judged after whitespace normalization, since rustfmt
+  reflows a dedented body.
+  FZ-104: review accepted first; fix cycles 0; owner decisions 2; worker 10; review 5; models opus:medium/opus:medium; usage worker 101169 tokens, reviewer 69221 tokens
+
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, about 10:45: "allright ooks good
 to me". About 11:05: "lets look at fz-65 / look at fz-38, could/should it

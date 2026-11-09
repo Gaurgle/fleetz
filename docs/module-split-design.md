@@ -24,7 +24,10 @@ and `app.rs`, then the backward edges are cut, then the front ends are split.
 - Acceptance: the sorted `cargo test -- --list` output is identical before
   and after, `cargo fmt --check`, `cargo clippy --all-targets -- -D
   warnings` and `cargo test` are clean, `git diff -M --stat` shows moves,
-  and the L1 allowlist shrinks or stays, never grows.
+  and the L1 allowlist shrinks or stays, never grows. A moved body is
+  compared with the base after whitespace and trailing-comma
+  normalization: rustfmt reflows a body that changed indentation, and
+  may drop the braces of a single-expression closure (T1, FZ-104).
 - `.claude/rules/*.md` follow the code in the same ticket: their `paths:`
   frontmatter must name the new files, or the invariants stop loading, and
   references such as `main.rs::assemble_view` must point at the new home.

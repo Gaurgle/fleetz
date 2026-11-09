@@ -30,11 +30,13 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 - Done today, logged with metrics: FZ-91 (`8ac7ff1`), FZ-103
   (`62aeb8f`, the layer test; its `super::` gap is a follow-up on #160,
   to fold into E1's layer-table change or a later ticket).
-- FZ-104 (#161, T1) In progress since 17:22: architect "fits with
-  note", gate open, seven rulings on the issue (7 is his: shell moves
-  for this ticket only, "ok, do it like a then"). Worktree
-  `.claude/worktrees/fz-104`, branch `refactor/fz-104-sibling-tests`,
-  base `80a3493`, worker `fz-worker` standard. Record on the issue.
+- FZ-104 (#161, T1) Done, merged `e831dd1` 18:20, logged with metrics;
+  `main` CI 42655117838 watched; its worktree sweeps when green.
+- FZ-105 (#162, E1) next: worktree `.claude/worktrees/fz-105`, branch
+  `refactor/fz-105-engine-assembly`, base `e831dd1`; `fz-architect`
+  ticket check for E1 and E2 dispatched 18:25 (the move set, engine
+  layout, references); the worker dispatches on `fits` with that list
+  as its pointers. No worker or reviewer running.
   Then FZ-105 to FZ-107 (E1, E2, D1), then FZ-108 (#165, U1) and F1
   (filed after D1). No worker or reviewer running.
 - Open from the 11-09 reviews (in the log entries): FZ-83's branch-name
