@@ -617,7 +617,8 @@ fn pct_for(cells: u16, total: u16) -> u16 {
 pub struct FrameChunks {
     pub header: Rect,
     /// Only in the compact view (`uses_status_line`); the detail view puts
-    /// the same pieces in pane 2's header (`fleet_lines`).
+    /// the summary and the activity in pane 1's summary box and the window
+    /// in pane 2's header (`detail::summary_box_lines`, `detail::window_box`).
     pub status: Option<Rect>,
     pub main: Rect,
     pub footer: Rect,
@@ -1240,8 +1241,8 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Whether the fleet's state is drawn on a status line under the header
-/// rather than in pane 2's header: only the compact view, which has no
-/// pane 2.
+/// rather than in pane 1's summary box and pane 2's header: only the
+/// compact view, which has neither pane.
 pub fn uses_status_line(app: &App) -> bool {
     app.view == View::Compact
 }
@@ -2700,8 +2701,8 @@ mod tests {
 
     /// The header row is the name and the version, with GitHub, watch and
     /// the sweep time flush right outside the compact view, whose status
-    /// line carries those instead. The window and the summary are in pane
-    /// 2's fleet column or on that line, never here.
+    /// line carries those instead. The window and the summary are in the
+    /// panes (FZ-95) or on that line, never here.
     #[test]
     fn the_header_draws_the_name_and_version_with_github_watch_and_sweep() {
         use ratatui::Terminal;
@@ -2780,9 +2781,9 @@ mod tests {
         }
     }
 
-    /// Where pane 2 draws no fleet column (here no repo at all), the whole
-    /// frame still reports an action: the footer carries the message
-    /// (FZ-93 review, B1). Fails while the per-frame flag is left set from
+    /// Where pane 1 draws no summary box (here a pane 1 too short for it),
+    /// the whole frame still reports an action: the footer carries the
+    /// message (FZ-93 review, B1; FZ-95). Fails while the per-frame flag is left set from
     /// an earlier frame or the footer stops reading it.
     #[test]
     fn with_no_fleet_column_the_frame_shows_the_message_in_the_footer() {

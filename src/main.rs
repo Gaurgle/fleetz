@@ -2156,6 +2156,11 @@ async fn handle_normal_input(
                 app.set_status("Watch off".to_string(), false);
             }
         }
+        // FZ-95 temporary: placement toggle. The time window in pane 2's
+        // header or on pane 1's top border, for Andreas to compare.
+        KeyCode::Char('W') => {
+            app.window_in_list = !app.window_in_list;
+        }
         _ => {}
     }
     Ok(())

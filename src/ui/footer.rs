@@ -280,6 +280,15 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
         }
         hints.push(gap.clone());
     }
+    // FZ-95 temporary: placement toggle. Lit only while the window sits on
+    // pane 1's border, so the default footer is the one every test pins.
+    if app.view == View::Detail && app.window_in_list {
+        hints.push(Span::styled("[W]", lit(true)));
+        if with_desc {
+            hints.push(Span::styled(" window: pane 1", desc_style));
+        }
+        hints.push(gap.clone());
+    }
     hints.push(Span::styled("[v]", lit(app.view == View::Compact)));
     if with_desc {
         hints.push(Span::styled(format!(" {view_hint}"), desc_style));
@@ -1021,8 +1030,9 @@ mod tests {
         assert!(with_summary > 0 && without > 0);
     }
 
-    /// Where pane 2 drew the fleet's state (FZ-93), the footer is keys only:
-    /// no summary, and the full hints have the whole width.
+    /// Where pane 1 drew its summary box (FZ-95; pane 2's fleet column in
+    /// FZ-93), the footer is keys only: no summary, and the full hints have
+    /// the whole width.
     #[test]
     fn beside_a_drawn_fleet_column_the_footer_is_keys_only() {
         let app = app_with_glyph_summary();
@@ -1037,9 +1047,9 @@ mod tests {
         assert!(!tighter.contains(" lazygit"), "{tighter:?}");
     }
 
-    /// Where it did not (a section's digest, no repo, a narrow pane 2), the
-    /// footer carries the last action's message in the summary's place, so
-    /// an action never ends in silence (FZ-93 review, B1).
+    /// Where it did not (a pane 1 too short for the box), the footer
+    /// carries the last action's message in the summary's place, so an
+    /// action never ends in silence (FZ-93 review, B1).
     #[test]
     fn without_a_fleet_column_the_footer_carries_the_message() {
         let mut app = app_with_glyph_summary();
