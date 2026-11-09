@@ -293,6 +293,21 @@ first (from `git log --merges main`).
 
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, 12:40: "allright ooks good to me".
+13:05: "lets look at fz-65 / look at fz-38, could/should it be dropped? /
+then lets go for fz-95 and 100 ? / clean any worktrees?". 13:15, on the
+lead's recommendations: "ok sounds good. 1. i just want the scroll and
+highlight to not 'go past' the visual. i dont know what youre asking. 2.
+yes close and remove 3. allright". Rulings: FZ-65 reviewed as built (the
+wheel walks the cursor, the view follows); FZ-38 (#88) closed, its parked
+tree and branch removed; FZ-95 at P1 with FZ-100 after it; FZ-102 (#159,
+the wrapped-row follow defect the FZ-65 worker found) filed, Backlog P2.
+
+- **#88 (FZ-38), Nerd Font icons for the fetch markers and `WT`.** Closed
+  13:20 CET on his "yes close and remove", unmerged. Parked 10-20 when the
+  worktree glyphs drew as tofu (not in his fonts); the tree sat 277
+  commits behind `main`. The design notes and the font finding stay on
+  #88 for a fresh ticket if wanted. Remembered: nothing to keep.
+  FZ-38: review none; fix cycles 0; owner decisions 3; worker 40; review 0; models claude-opus-5-5:medium/none; usage not read
 
 - **#140 (FZ-83), the CI lamp and the header agree with the `ci` view and
   name their branch.** Merged `985b682` at 12:45 CET on his look; ticket
