@@ -20,6 +20,7 @@ use serde::Deserialize;
 
 use crate::app::{Pace, RemoteKey};
 use crate::github::{BudgetReading, Failure, FailureKind};
+use crate::model::CiStatus;
 
 /// Where the REST API lives.
 pub const API_ROOT: &str = "https://api.github.com";
@@ -302,6 +303,356 @@ pub struct ExpandedRequest {
     pub logs_held: Vec<u64>,
 }
 
+/// Check runs per `/check-runs` call: GitHub's cap, so one call lists every
+/// check of a commit and the verdict knows it saw them all.
+pub const CHECKS_PER_PAGE: u32 = 100;
+
+/// One context of the default branch's tip (FZ-83): a commit status (a
+/// deploy service such as Vercel) or a check run. What the fleet poll's
+/// `statusCheckRollup` is made of, read here because the rollup carries no
+/// names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Context {
+    pub name: String,
+    pub state: CiStatus,
+    /// A status's description, a check run's output title.
+    pub description: Option<String>,
+    /// Where `Enter` and `O` go: a status's target, a check run's details.
+    pub url: Option<String>,
+    /// A GitHub Actions check run, which the run list already shows.
+    pub actions: bool,
+    /// Where it ran, the `ci` view's `source` column (`source_of`).
+    pub source: String,
+    /// A check run's start and finish; `None` for a commit status, whose
+    /// times come from its history (`status_run`).
+    pub started: Option<DateTime<Utc>>,
+    pub completed: Option<DateTime<Utc>>,
+}
+
+/// The sources the `ci` view names and colours (FZ-83), matched in a
+/// status context's name or a check run's app slug.
+pub const KNOWN_SOURCES: [&str; 6] = [
+    "vercel",
+    "netlify",
+    "cloudflare",
+    "circleci",
+    "buildkite",
+    "codecov",
+];
+
+/// The `source` a context ran on: `actions` for GitHub Actions; a known
+/// source named in `name` (`Vercel`, `ci/circleci: build`); else `name`
+/// lowercased up to its first `/` or `:`.
+pub fn source_of(name: &str) -> String {
+    let lower = name.to_lowercase();
+    if lower == "github-actions" {
+        return "actions".to_string();
+    }
+    if let Some(known) = KNOWN_SOURCES.iter().find(|k| lower.contains(*k)) {
+        return known.to_string();
+    }
+    lower
+        .split(['/', ':'])
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// One state change of a commit status, as
+/// `GET /repos/{o}/{r}/commits/{sha}/statuses` lists them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusEvent {
+    pub context: String,
+    pub state: CiStatus,
+    pub description: Option<String>,
+    pub at: DateTime<Utc>,
+}
+
+/// A context drawn as a row of the `ci` list among the runs (FZ-83): a
+/// commit status, or a check run of an app other than GitHub Actions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextRun {
+    pub name: String,
+    pub source: String,
+    /// `status` for a commit status, `check` for a check run.
+    pub trigger: &'static str,
+    pub state: CiStatus,
+    pub title: String,
+    pub url: Option<String>,
+    /// When the attempt the row shows began, if known.
+    pub started: Option<DateTime<Utc>>,
+    /// When it reached its final state; `None` while pending.
+    pub finished: Option<DateTime<Utc>>,
+    /// The time the age column counts from, and the list sorts by.
+    pub at: Option<DateTime<Utc>>,
+}
+
+/// The row of the commit status `latest` from its `history` (any order,
+/// other contexts mixed in). Its duration is the latest job's own span: from
+/// the latest `pending` to the first state after it that is not `pending`,
+/// and to now while none has come; with no `pending` at all, no start is
+/// known. Its age is the final state's time, which may come later than
+/// that span (a Vercel alias failing half an hour after its deploy
+/// finished). Without a history the row has no times.
+pub fn status_run(latest: &Context, history: &[StatusEvent]) -> ContextRun {
+    let mut own: Vec<&StatusEvent> = history
+        .iter()
+        .filter(|e| e.context == latest.name)
+        .collect();
+    own.sort_by_key(|e| e.at);
+    let pending = own.iter().rposition(|e| e.state == CiStatus::Pending);
+    let finished = pending.and_then(|at| {
+        own[at + 1..]
+            .iter()
+            .find(|e| e.state != CiStatus::Pending)
+            .map(|e| e.at)
+    });
+    ContextRun {
+        name: latest.name.clone(),
+        source: latest.source.clone(),
+        trigger: "status",
+        state: latest.state.clone(),
+        title: latest.description.clone().unwrap_or_default(),
+        url: latest.url.clone(),
+        started: pending.map(|at| own[at].at),
+        finished,
+        at: own.last().map(|e| e.at),
+    }
+}
+
+/// The row of a check run of another app, from its own times.
+pub fn check_run(check: &Context) -> ContextRun {
+    ContextRun {
+        name: check.name.clone(),
+        source: check.source.clone(),
+        trigger: "check",
+        state: check.state.clone(),
+        title: check.description.clone().unwrap_or_default(),
+        url: check.url.clone(),
+        started: check.started,
+        finished: check.completed.filter(|_| check.state != CiStatus::Pending),
+        at: check.started.or(check.completed),
+    }
+}
+
+/// `GET /repos/{o}/{r}/commits/HEAD/status`: the default branch's tip and
+/// its commit statuses. `HEAD` resolves to the default branch, so neither
+/// its name nor its sha has to be known first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TipStatus {
+    pub sha: String,
+    pub statuses: Vec<Context>,
+    /// Every status is listed (none past the page).
+    pub complete: bool,
+}
+
+/// `GET /repos/{o}/{r}/commits/{sha}/check-runs`: the tip's check runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TipChecks {
+    pub runs: Vec<Context>,
+    /// Every check run is listed (none past the page).
+    pub complete: bool,
+}
+
+/// What is held for the tip, so both reads go out conditionally.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TipRequest {
+    pub sha: Option<String>,
+    pub status_etag: Option<String>,
+    /// Sent only while the tip is still `sha`: another commit is another URL.
+    pub checks_etag: Option<String>,
+    /// The held tip has commit statuses, so a 304 on the status still reads
+    /// their history.
+    pub has_statuses: bool,
+    /// Sent only while the tip is still `sha`, as `checks_etag`.
+    pub history_etag: Option<String>,
+}
+
+/// The tip reads' answer: the status, then the status history and the check
+/// runs of the sha it named, when those calls answered too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TipAnswer {
+    pub status: Fetched<TipStatus>,
+    pub history: Option<(String, Fetched<Vec<StatusEvent>>)>,
+    pub checks: Option<(String, Fetched<TipChecks>)>,
+}
+
+/// A context's verdict among all of `contexts`: failed when any failed,
+/// pending when any is pending, passed when any passed, else `Unknown`; and
+/// the culprit while it is not passed, the first context that is not
+/// (failures first), `+n` for the rest (`Vercel +2`).
+pub fn tip_verdict<'a>(contexts: impl Iterator<Item = &'a Context>) -> (CiStatus, Option<String>) {
+    let all: Vec<&Context> = contexts.collect();
+    let with = |state: CiStatus| all.iter().filter(move |c| c.state == state);
+    let status = if with(CiStatus::Failed).next().is_some() {
+        CiStatus::Failed
+    } else if with(CiStatus::Pending).next().is_some() {
+        CiStatus::Pending
+    } else if with(CiStatus::Passed).next().is_some() {
+        CiStatus::Passed
+    } else {
+        CiStatus::Unknown
+    };
+    let culprits: Vec<&&Context> = with(CiStatus::Failed)
+        .chain(with(CiStatus::Pending))
+        .collect();
+    let culprit = match culprits.split_first() {
+        Some((first, rest)) if status != CiStatus::Passed => Some(match rest.len() {
+            0 => first.name.clone(),
+            n => format!("{} +{n}", first.name),
+        }),
+        _ => None,
+    };
+    (status, culprit)
+}
+
+#[derive(Deserialize)]
+struct CombinedStatus {
+    sha: String,
+    #[serde(default)]
+    total_count: usize,
+    #[serde(default)]
+    statuses: Vec<RawStatus>,
+}
+
+#[derive(Deserialize)]
+struct RawStatus {
+    context: String,
+    state: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    target_url: Option<String>,
+    #[serde(default)]
+    created_at: Option<DateTime<Utc>>,
+}
+
+fn status_state(state: &str) -> CiStatus {
+    match state {
+        "success" => CiStatus::Passed,
+        "pending" => CiStatus::Pending,
+        "failure" | "error" => CiStatus::Failed,
+        _ => CiStatus::Unknown,
+    }
+}
+
+/// The state changes a `/statuses` body lists, newest first as GitHub
+/// sends them; an entry without a time is dropped.
+pub fn parse_status_history(body: &str) -> Result<Vec<StatusEvent>, Failure> {
+    let page: Vec<RawStatus> =
+        serde_json::from_str(body).map_err(|e| malformed("status history", &e))?;
+    Ok(page
+        .into_iter()
+        .filter_map(|s| {
+            Some(StatusEvent {
+                at: s.created_at?,
+                state: status_state(&s.state),
+                description: s.description.filter(|d| !d.is_empty()),
+                context: s.context,
+            })
+        })
+        .collect())
+}
+
+#[derive(Deserialize)]
+struct CheckRunsPage {
+    #[serde(default)]
+    total_count: usize,
+    check_runs: Vec<RawCheckRun>,
+}
+
+#[derive(Deserialize)]
+struct RawCheckRun {
+    name: String,
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    html_url: Option<String>,
+    #[serde(default)]
+    details_url: Option<String>,
+    #[serde(default)]
+    app: Option<RawApp>,
+    #[serde(default)]
+    output: Option<RawOutput>,
+    #[serde(default)]
+    started_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Deserialize)]
+struct RawApp {
+    #[serde(default)]
+    slug: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawOutput {
+    #[serde(default)]
+    title: Option<String>,
+}
+
+/// The tip and its statuses a combined-status body holds.
+pub fn parse_tip_status(body: &str) -> Result<TipStatus, Failure> {
+    let page: CombinedStatus =
+        serde_json::from_str(body).map_err(|e| malformed("commit status", &e))?;
+    let statuses: Vec<Context> = page
+        .statuses
+        .into_iter()
+        .map(|s| Context {
+            source: source_of(&s.context),
+            name: s.context,
+            state: status_state(&s.state),
+            description: s.description.filter(|d| !d.is_empty()),
+            url: s.target_url.filter(|u| !u.is_empty()),
+            actions: false,
+            started: None,
+            completed: None,
+        })
+        .collect();
+    Ok(TipStatus {
+        sha: page.sha,
+        complete: statuses.len() >= page.total_count,
+        statuses,
+    })
+}
+
+/// The check runs a `/check-runs` body holds. A run not yet completed is
+/// pending; `success`, `neutral` and `skipped` pass; any other conclusion
+/// fails, as the rollup counts it.
+pub fn parse_tip_checks(body: &str) -> Result<TipChecks, Failure> {
+    let page: CheckRunsPage =
+        serde_json::from_str(body).map_err(|e| malformed("check runs", &e))?;
+    let runs: Vec<Context> = page
+        .check_runs
+        .into_iter()
+        .map(|r| {
+            let slug = r.app.and_then(|a| a.slug).unwrap_or_default();
+            Context {
+                state: match (r.status.as_str(), r.conclusion.as_deref()) {
+                    (status, _) if status != "completed" => CiStatus::Pending,
+                    (_, Some("success" | "neutral" | "skipped")) => CiStatus::Passed,
+                    (_, Some(_)) => CiStatus::Failed,
+                    (_, None) => CiStatus::Unknown,
+                },
+                source: source_of(if slug.is_empty() { &r.name } else { &slug }),
+                name: r.name,
+                description: r.output.and_then(|o| o.title).filter(|t| !t.is_empty()),
+                url: r.details_url.or(r.html_url).filter(|u| !u.is_empty()),
+                actions: slug == "github-actions",
+                started: r.started_at,
+                completed: r.completed_at,
+            }
+        })
+        .collect();
+    Ok(TipChecks {
+        complete: runs.len() >= page.total_count,
+        runs,
+    })
+}
+
 /// One CI poll to run, built by `App::claim_ci_poll`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CiRequest {
@@ -312,6 +663,8 @@ pub struct CiRequest {
     pub attempt: u64,
     pub runs_etag: Option<String>,
     pub expanded: Option<ExpandedRequest>,
+    /// Read the default branch's tip too (FZ-83), with what is held for it.
+    pub tip: Option<TipRequest>,
 }
 
 /// One CI poll's answer, carried by `AppEvent::Ci`.
@@ -331,6 +684,9 @@ pub struct CiAnswer {
     pub failure: Option<Failure>,
     /// The newest `core` reading the answers' headers carried.
     pub budget: Option<BudgetReading>,
+    /// The default branch tip's reads (FZ-83); `None` when not asked, when
+    /// the repo has no commits, or when the status call failed.
+    pub tip: Option<TipAnswer>,
 }
 
 /// The repo a row's CI lives in: its remote key, and the owner and name for
@@ -479,8 +835,9 @@ pub async fn poll(request: CiRequest) -> CiAnswer {
 /// test drives every path on the loopback.
 ///
 /// The list first; then the expanded run's jobs; then, once per job id, the
-/// log of its first failed job. A failure stops the poll where it happened
-/// and is the attempt's outcome; what answered before it is kept.
+/// log of its first failed job; then the default branch tip's reads. A
+/// failure stops the poll where it happened and is the attempt's outcome;
+/// what answered before it is kept.
 async fn poll_with<S, F>(
     request: CiRequest,
     token_source: S,
@@ -500,6 +857,7 @@ where
         full_log: None,
         failure: None,
         budget: None,
+        tip: None,
     };
     let token = match token_within(token_source).await {
         Ok(token) => token,
@@ -535,12 +893,33 @@ where
         }
     };
 
-    let Some(expanded) = request.expanded else {
-        return answer;
-    };
+    if let Some(expanded) = request.expanded {
+        read_expanded(&mut answer, expanded, client, &token, &base).await;
+    }
+
+    // The tip last, so a token that cannot read statuses or checks still
+    // loads the expanded run's jobs and log (FZ-83 review).
+    if let (None, Some(held)) = (&answer.failure, &request.tip) {
+        let repo = format!("{root}/repos/{}/{}", request.owner, request.name);
+        if let Err(failure) = read_tip(&mut answer, held, client, &token, &repo).await {
+            answer.failure = Some(failure);
+        }
+    }
+    answer
+}
+
+/// The expanded run's jobs, then the log of its first failed job not held,
+/// into `answer`. A failure stops here and is the attempt's outcome.
+async fn read_expanded(
+    answer: &mut CiAnswer,
+    expanded: ExpandedRequest,
+    client: &reqwest::Client,
+    token: &str,
+    base: &str,
+) {
     let url = format!("{base}/runs/{}/jobs", expanded.run_id);
-    let (result, reading) = get(client, &url, &token, expanded.jobs_etag.as_deref()).await;
-    answer.budget = reading.or(answer.budget);
+    let (result, reading) = get(client, &url, token, expanded.jobs_etag.as_deref()).await;
+    answer.budget = reading.or(answer.budget.take());
     let jobs = match result {
         Ok(Answer::Fresh { body, etag }) => match parse_jobs(&body) {
             Ok(data) => {
@@ -555,7 +934,7 @@ where
             }
             Err(failure) => {
                 answer.failure = Some(failure);
-                return answer;
+                return;
             }
         },
         Ok(Answer::NotModified) => {
@@ -564,11 +943,11 @@ where
         }
         Ok(Answer::NotFound) => {
             answer.jobs = Some((expanded.run_id, JobsAnswer::Gone));
-            return answer;
+            return;
         }
         Err(failure) => {
             answer.failure = Some(failure);
-            return answer;
+            return;
         }
     };
 
@@ -578,13 +957,13 @@ where
         (failed && !expanded.logs_held.contains(&job.id)).then_some((job.id, step))
     });
     let Some((job_id, step)) = owed else {
-        return answer;
+        return;
     };
     // A redirect to a download, which the client follows; it drops the
     // `Authorization` header on the way to the other host.
     let url = format!("{base}/jobs/{job_id}/logs");
-    let (result, reading) = get(client, &url, &token, None).await;
-    answer.budget = reading.or(answer.budget);
+    let (result, reading) = get(client, &url, token, None).await;
+    answer.budget = reading.or(answer.budget.take());
     match result {
         Ok(Answer::Fresh { body, .. }) => {
             answer.log = Some((job_id, LogTail::Lines(log_tail(&body, step))));
@@ -602,7 +981,76 @@ where
         }
         Err(failure) => answer.failure = Some(failure),
     }
-    answer
+}
+
+/// The default branch tip's conditional reads (FZ-83) into `answer`: its
+/// combined status, then the check runs of the sha that named, then, when
+/// the tip has commit statuses, their history (`/statuses`), last so the
+/// lamp's facts never wait on it. A 404 (a repo with no commits) reads
+/// nothing more and fails nothing; any other refusal is the poll's failure,
+/// with what answered before it kept.
+async fn read_tip(
+    answer: &mut CiAnswer,
+    held: &TipRequest,
+    client: &reqwest::Client,
+    token: &str,
+    repo: &str,
+) -> Result<(), Failure> {
+    let url = format!("{repo}/commits/HEAD/status");
+    let (result, reading) = get(client, &url, token, held.status_etag.as_deref()).await;
+    answer.budget = reading.or(answer.budget.take());
+    let (sha, status, has_statuses) = match result? {
+        Answer::Fresh { body, etag } => {
+            let data = parse_tip_status(&body)?;
+            let has = !data.statuses.is_empty();
+            (data.sha.clone(), Fetched::Fresh { data, etag }, has)
+        }
+        Answer::NotModified => match &held.sha {
+            Some(sha) => (sha.clone(), Fetched::NotModified, held.has_statuses),
+            None => return Ok(()),
+        },
+        Answer::NotFound => return Ok(()),
+    };
+    answer.tip = Some(TipAnswer {
+        status,
+        history: None,
+        checks: None,
+    });
+    let same_tip = held.sha.as_deref() == Some(sha.as_str());
+    let etag = held.checks_etag.as_deref().filter(|_| same_tip);
+    let url = format!("{repo}/commits/{sha}/check-runs?per_page={CHECKS_PER_PAGE}");
+    let (result, reading) = get(client, &url, token, etag).await;
+    answer.budget = reading.or(answer.budget.take());
+    let checks = match result? {
+        Answer::Fresh { body, etag } => Fetched::Fresh {
+            data: parse_tip_checks(&body)?,
+            etag,
+        },
+        Answer::NotModified => Fetched::NotModified,
+        Answer::NotFound => return Ok(()),
+    };
+    if let Some(tip) = answer.tip.as_mut() {
+        tip.checks = Some((sha.clone(), checks));
+    }
+    if !has_statuses {
+        return Ok(());
+    }
+    let etag = held.history_etag.as_deref().filter(|_| same_tip);
+    let url = format!("{repo}/commits/{sha}/statuses?per_page={CHECKS_PER_PAGE}");
+    let (result, reading) = get(client, &url, token, etag).await;
+    answer.budget = reading.or(answer.budget.take());
+    let history = match result? {
+        Answer::Fresh { body, etag } => Fetched::Fresh {
+            data: parse_status_history(&body)?,
+            etag,
+        },
+        Answer::NotModified => Fetched::NotModified,
+        Answer::NotFound => return Ok(()),
+    };
+    if let Some(tip) = answer.tip.as_mut() {
+        tip.history = Some((sha, history));
+    }
+    Ok(())
 }
 
 /// The token from `source`, bounded by `TOKEN_BOUND`; an `Auth` failure when
@@ -1477,6 +1925,7 @@ mod tests {
             attempt: 1,
             runs_etag: etag.map(str::to_string),
             expanded,
+            tip: None,
         }
     }
 
@@ -1682,6 +2131,7 @@ mod tests {
             full_log: None,
             failure: None,
             budget: None,
+            tip: None,
         }
     }
 
@@ -2025,5 +2475,494 @@ mod tests {
         )
         .await;
         assert_eq!(answer.failure.unwrap().kind, FailureKind::Auth);
+    }
+
+    // --- The default branch's tip (FZ-83) ---
+
+    /// `commits/HEAD/status` for `Gaurgle/portfolio-site` on 2026-11-05,
+    /// trimmed: the rollup's red came from this status alone.
+    const TIP_STATUS: &str = r#"{
+      "state": "failure",
+      "sha": "cc524b4717d724cfe74fdde29c5f5ae3853e5cdf",
+      "total_count": 1,
+      "statuses": [{
+        "context": "Vercel",
+        "state": "failure",
+        "description": "Aliasing has failed",
+        "target_url": "https://vercel.com/gaurgles-projects/portfolio/DJX3"
+      }]
+    }"#;
+
+    /// The same commit's `check-runs`: one green Actions job.
+    const TIP_CHECKS: &str = r#"{
+      "total_count": 1,
+      "check_runs": [{
+        "name": "build",
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/Gaurgle/portfolio-site/actions/runs/1/job/2",
+        "details_url": "https://github.com/Gaurgle/portfolio-site/actions/runs/1/job/2",
+        "app": { "slug": "github-actions" },
+        "output": { "title": null }
+      }]
+    }"#;
+
+    const TIP_SHA: &str = "cc524b4717d724cfe74fdde29c5f5ae3853e5cdf";
+
+    fn context(name: &str, state: CiStatus) -> Context {
+        Context {
+            name: name.to_string(),
+            state,
+            description: None,
+            url: None,
+            actions: false,
+            source: source_of(name),
+            started: None,
+            completed: None,
+        }
+    }
+
+    /// The Vercel case parses into a failing status context and a passing
+    /// Actions check run, each with what its row draws and opens.
+    #[test]
+    fn the_tips_status_and_check_runs_parse_into_contexts() {
+        let status = parse_tip_status(TIP_STATUS).unwrap();
+        assert_eq!(status.sha, TIP_SHA);
+        assert!(status.complete);
+        assert_eq!(
+            status.statuses,
+            vec![Context {
+                name: "Vercel".to_string(),
+                state: CiStatus::Failed,
+                description: Some("Aliasing has failed".to_string()),
+                url: Some("https://vercel.com/gaurgles-projects/portfolio/DJX3".to_string()),
+                actions: false,
+                source: "vercel".to_string(),
+                started: None,
+                completed: None,
+            }]
+        );
+        let checks = parse_tip_checks(TIP_CHECKS).unwrap();
+        assert!(checks.complete);
+        assert_eq!(checks.runs.len(), 1);
+        assert_eq!(checks.runs[0].name, "build");
+        assert_eq!(checks.runs[0].state, CiStatus::Passed);
+        assert!(checks.runs[0].actions, "an Actions check run");
+        assert_eq!(checks.runs[0].source, "actions");
+    }
+
+    /// Where a context ran: `actions` for GitHub Actions, a known source
+    /// wherever its name says so, else the name up to its first `/` or `:`.
+    #[test]
+    fn a_contexts_source_is_actions_a_known_name_or_its_own() {
+        assert_eq!(source_of("github-actions"), "actions");
+        assert_eq!(source_of("Vercel"), "vercel");
+        assert_eq!(source_of("ci/circleci: build"), "circleci");
+        assert_eq!(source_of("netlify/site/deploy-preview"), "netlify");
+        assert_eq!(source_of("codecov/patch"), "codecov");
+        assert_eq!(
+            source_of("continuous-integration/jenkins"),
+            "continuous-integration"
+        );
+    }
+
+    /// `commits/cc524b4/statuses` for `Gaurgle/portfolio-site` on
+    /// 2026-11-05, newest first as GitHub sends it, trimmed to the fields
+    /// read: three Vercel deployments of one commit.
+    const STATUS_HISTORY: &str = r#"[
+      {"context": "Vercel", "state": "failure", "description": "Aliasing has failed",
+       "target_url": "https://vercel.com/p/DJX3", "created_at": "2026-11-05T12:25:38Z"},
+      {"context": "Vercel", "state": "success", "description": "Deployment has completed",
+       "target_url": "https://vercel.com/p/FfkJ", "created_at": "2026-11-05T11:52:43Z"},
+      {"context": "Vercel", "state": "pending", "description": "Vercel is deploying your app",
+       "target_url": "https://vercel.com/p/FfkJ", "created_at": "2026-11-05T11:52:18Z"},
+      {"context": "Vercel", "state": "pending", "description": "Vercel is deploying your app",
+       "target_url": "https://vercel.com/p/DJX3", "created_at": "2026-11-05T11:24:27Z"},
+      {"context": "Vercel", "state": "success", "description": "Deployment has completed",
+       "target_url": "https://vercel.com/p/4U5y", "created_at": "2026-11-05T11:24:09Z"},
+      {"context": "Vercel", "state": "pending", "description": "Vercel is deploying your app",
+       "target_url": "https://vercel.com/p/4U5y", "created_at": "2026-11-05T11:23:52Z"}
+    ]"#;
+
+    fn vercel_failed() -> Context {
+        Context {
+            description: Some("Aliasing has failed".to_string()),
+            url: Some("https://vercel.com/p/DJX3".to_string()),
+            ..context("Vercel", CiStatus::Failed)
+        }
+    }
+
+    /// The rule: a status's duration is its latest job's own span, from the
+    /// latest `pending` to the first state after it that is not `pending`;
+    /// the age counts from the final state. On the recorded history the
+    /// latest `pending` is 11:52:18 and the deploy finished at 11:52:43
+    /// (25 s); the failure at 12:25:38, "Aliasing has failed", came half an
+    /// hour later and is the row's state and age, not part of its duration.
+    /// The issue's 3-state excerpt (pending 11:52:18, success 11:52:43,
+    /// failure 12:25:38) gives the same span. With no `pending` at all, no
+    /// start is known.
+    #[test]
+    fn a_status_row_spans_its_latest_attempt() {
+        let history = parse_status_history(STATUS_HISTORY).unwrap();
+        assert_eq!(history.len(), 6);
+        let row = status_run(&vercel_failed(), &history);
+        assert_eq!(row.name, "Vercel");
+        assert_eq!(row.source, "vercel");
+        assert_eq!(row.trigger, "status");
+        assert_eq!(row.state, CiStatus::Failed);
+        assert_eq!(row.title, "Aliasing has failed");
+        assert_eq!(row.url.as_deref(), Some("https://vercel.com/p/DJX3"));
+        assert_eq!(row.started, Some(utc("2026-11-05T11:52:18Z")));
+        assert_eq!(row.finished, Some(utc("2026-11-05T11:52:43Z")));
+        assert_eq!(row.at, Some(utc("2026-11-05T12:25:38Z")));
+
+        let excerpt: Vec<StatusEvent> = history
+            .iter()
+            .filter(|e| e.at >= utc("2026-11-05T11:52:18Z"))
+            .cloned()
+            .collect();
+        let row = status_run(&vercel_failed(), &excerpt);
+        assert_eq!(row.started, Some(utc("2026-11-05T11:52:18Z")));
+        assert_eq!(row.finished, Some(utc("2026-11-05T11:52:43Z")));
+
+        let no_pending: Vec<StatusEvent> = history
+            .iter()
+            .filter(|e| e.state != CiStatus::Pending)
+            .cloned()
+            .collect();
+        let row = status_run(&vercel_failed(), &no_pending);
+        assert_eq!((row.started, row.finished), (None, None));
+        assert_eq!(row.at, Some(utc("2026-11-05T12:25:38Z")));
+    }
+
+    /// While the final state is itself `pending`, the job is still running:
+    /// it started at the latest `pending` and has no finish yet. With no
+    /// history, the row has no times at all.
+    #[test]
+    fn a_pending_status_row_has_no_finish_and_no_history_no_times() {
+        let history = parse_status_history(STATUS_HISTORY).unwrap();
+        let running: Vec<StatusEvent> = history
+            .iter()
+            .filter(|e| e.at <= utc("2026-11-05T11:52:18Z"))
+            .cloned()
+            .collect();
+        let pending = Context {
+            state: CiStatus::Pending,
+            ..vercel_failed()
+        };
+        let row = status_run(&pending, &running);
+        assert_eq!(row.started, Some(utc("2026-11-05T11:52:18Z")));
+        assert_eq!(row.finished, None);
+        assert_eq!(row.at, Some(utc("2026-11-05T11:52:18Z")));
+        let bare = status_run(&vercel_failed(), &[]);
+        assert_eq!((bare.started, bare.finished, bare.at), (None, None, None));
+    }
+
+    /// A check run of another app keeps its own name, app, title and times.
+    #[test]
+    fn a_check_run_row_keeps_its_own_times() {
+        let body = TIP_CHECKS.replace("github-actions", "netlify").replace(
+            "\"output\": { \"title\": null }",
+            "\"output\": { \"title\": \"Deploy preview ready\" }, \
+                 \"started_at\": \"2026-11-05T11:00:00Z\", \
+                 \"completed_at\": \"2026-11-05T11:01:30Z\"",
+        );
+        let check = parse_tip_checks(&body).unwrap().runs.remove(0);
+        assert!(!check.actions);
+        let row = check_run(&check);
+        assert_eq!((row.source.as_str(), row.trigger), ("netlify", "check"));
+        assert_eq!(row.title, "Deploy preview ready");
+        assert_eq!(row.started, Some(utc("2026-11-05T11:00:00Z")));
+        assert_eq!(row.finished, Some(utc("2026-11-05T11:01:30Z")));
+        assert_eq!(row.at, Some(utc("2026-11-05T11:00:00Z")));
+    }
+
+    /// A page short of `total_count` is not every context, so the verdict
+    /// cannot be trusted over the fleet poll's.
+    #[test]
+    fn a_short_page_is_not_complete() {
+        let body = TIP_CHECKS.replace("\"total_count\": 1", "\"total_count\": 101");
+        assert!(!parse_tip_checks(&body).unwrap().complete);
+        let body = TIP_STATUS.replace("\"total_count\": 1", "\"total_count\": 2");
+        assert!(!parse_tip_status(&body).unwrap().complete);
+    }
+
+    /// A check run still going is pending; neutral and skipped pass as the
+    /// rollup counts them; anything else that concluded fails.
+    #[test]
+    fn a_check_runs_state_follows_the_rollup() {
+        let with = |status: &str, conclusion: &str| {
+            let body = TIP_CHECKS
+                .replace(
+                    "\"status\": \"completed\"",
+                    &format!("\"status\": \"{status}\""),
+                )
+                .replace(
+                    "\"conclusion\": \"success\"",
+                    &format!("\"conclusion\": {conclusion}"),
+                );
+            parse_tip_checks(&body).unwrap().runs[0].state.clone()
+        };
+        assert_eq!(with("in_progress", "null"), CiStatus::Pending);
+        assert_eq!(with("completed", "\"neutral\""), CiStatus::Passed);
+        assert_eq!(with("completed", "\"skipped\""), CiStatus::Passed);
+        assert_eq!(with("completed", "\"cancelled\""), CiStatus::Failed);
+        assert_eq!(with("completed", "\"failure\""), CiStatus::Failed);
+    }
+
+    /// Any failure fails the tip, then any pending holds it; the culprit is
+    /// the first context that is not green, failures first, `+n` for the
+    /// rest; a green tip blames nothing and an empty one is unknown.
+    #[test]
+    fn the_tips_verdict_names_its_culprit() {
+        let build = context("build", CiStatus::Passed);
+        let vercel = context("Vercel", CiStatus::Failed);
+        let deploy = context("deploy", CiStatus::Pending);
+        let lint = context("lint", CiStatus::Failed);
+        assert_eq!(
+            tip_verdict([&build, &vercel].into_iter()),
+            (CiStatus::Failed, Some("Vercel".to_string()))
+        );
+        assert_eq!(
+            tip_verdict([&deploy, &build, &vercel, &lint].into_iter()),
+            (CiStatus::Failed, Some("Vercel +2".to_string()))
+        );
+        assert_eq!(
+            tip_verdict([&build, &deploy].into_iter()),
+            (CiStatus::Pending, Some("deploy".to_string()))
+        );
+        assert_eq!(tip_verdict([&build].into_iter()), (CiStatus::Passed, None));
+        assert_eq!(tip_verdict(std::iter::empty()), (CiStatus::Unknown, None));
+    }
+
+    fn tip_request(held: TipRequest) -> CiRequest {
+        CiRequest {
+            tip: Some(held),
+            ..request(None, None)
+        }
+    }
+
+    /// Asked for the tip, the poll reads the list, then `commits/HEAD/status`,
+    /// the check runs of the sha it named and, since the tip has a commit
+    /// status, that status's history, each answer with its `ETag`.
+    #[tokio::test]
+    async fn the_poll_reads_the_tips_status_and_its_check_runs() {
+        let (root, mut seen) = serve(vec![
+            response("200 OK", &BUDGET, RUNS),
+            response("200 OK", &["etag: W/\"st\""], TIP_STATUS),
+            response("200 OK", &["etag: W/\"cr\""], TIP_CHECKS),
+            response("200 OK", &["etag: W/\"hi\""], STATUS_HISTORY),
+        ])
+        .await;
+        let answer = run(tip_request(TipRequest::default()), &root).await;
+        let _list = seen.recv().await.unwrap();
+        let status = seen.recv().await.unwrap();
+        let checks = seen.recv().await.unwrap();
+        let history = seen.recv().await.unwrap();
+        assert!(
+            history.starts_with(&format!(
+                "GET /repos/gaurgle/fleetz/commits/{TIP_SHA}/statuses?per_page=100 HTTP/1.1"
+            )),
+            "{history}"
+        );
+        assert!(
+            status.starts_with("GET /repos/gaurgle/fleetz/commits/HEAD/status HTTP/1.1"),
+            "{status}"
+        );
+        assert!(
+            checks.starts_with(&format!(
+                "GET /repos/gaurgle/fleetz/commits/{TIP_SHA}/check-runs?per_page=100 HTTP/1.1"
+            )),
+            "{checks}"
+        );
+        assert!(!status.to_lowercase().contains("if-none-match"));
+        assert_eq!(answer.failure, None);
+        assert_eq!(
+            answer.tip,
+            Some(TipAnswer {
+                status: Fetched::Fresh {
+                    data: parse_tip_status(TIP_STATUS).unwrap(),
+                    etag: Some("W/\"st\"".to_string()),
+                },
+                history: Some((
+                    TIP_SHA.to_string(),
+                    Fetched::Fresh {
+                        data: parse_status_history(STATUS_HISTORY).unwrap(),
+                        etag: Some("W/\"hi\"".to_string()),
+                    }
+                )),
+                checks: Some((
+                    TIP_SHA.to_string(),
+                    Fetched::Fresh {
+                        data: parse_tip_checks(TIP_CHECKS).unwrap(),
+                        etag: Some("W/\"cr\"".to_string()),
+                    }
+                )),
+            })
+        );
+    }
+
+    /// A tip with no commit statuses has no history to read: two calls.
+    #[tokio::test]
+    async fn a_tip_without_statuses_skips_the_history() {
+        let bare = format!(
+            r#"{{"state": "pending", "sha": "{TIP_SHA}", "total_count": 0, "statuses": []}}"#
+        );
+        let (root, _seen) = serve(vec![
+            response("200 OK", &BUDGET, RUNS),
+            response("200 OK", &[], &bare),
+            response("200 OK", &[], TIP_CHECKS),
+        ])
+        .await;
+        let answer = run(tip_request(TipRequest::default()), &root).await;
+        assert_eq!(answer.failure, None, "no fourth call was made");
+        let tip = answer.tip.expect("the tip");
+        assert_eq!(tip.history, None);
+        assert!(tip.checks.is_some());
+    }
+
+    /// Both reads are conditional: a 304 on the status keeps the held sha,
+    /// whose check runs are asked with their own `ETag`.
+    #[tokio::test]
+    async fn the_tip_reads_send_their_etags_and_a_304_keeps_the_held_sha() {
+        let (root, mut seen) = serve(vec![
+            response("304 Not Modified", &BUDGET, ""),
+            response("304 Not Modified", &[], ""),
+            response("304 Not Modified", &[], ""),
+            response("304 Not Modified", &[], ""),
+        ])
+        .await;
+        let held = TipRequest {
+            sha: Some(TIP_SHA.to_string()),
+            status_etag: Some("W/\"st\"".to_string()),
+            checks_etag: Some("W/\"cr\"".to_string()),
+            has_statuses: true,
+            history_etag: Some("W/\"hi\"".to_string()),
+        };
+        let answer = run(
+            CiRequest {
+                runs_etag: Some("W/\"6b13\"".to_string()),
+                ..tip_request(held)
+            },
+            &root,
+        )
+        .await;
+        let _list = seen.recv().await.unwrap();
+        let status = seen.recv().await.unwrap().to_lowercase();
+        let checks = seen.recv().await.unwrap().to_lowercase();
+        assert!(status.contains("if-none-match: w/\"st\""), "{status}");
+        assert!(
+            checks.contains(&format!("/commits/{TIP_SHA}/check-runs")),
+            "{checks}"
+        );
+        assert!(checks.contains("if-none-match: w/\"cr\""), "{checks}");
+        let history = seen.recv().await.unwrap().to_lowercase();
+        assert!(
+            history.contains(&format!("/commits/{TIP_SHA}/statuses")),
+            "{history}"
+        );
+        assert!(history.contains("if-none-match: w/\"hi\""), "{history}");
+        assert_eq!(answer.failure, None);
+        assert_eq!(
+            answer.tip,
+            Some(TipAnswer {
+                status: Fetched::NotModified,
+                history: Some((TIP_SHA.to_string(), Fetched::NotModified)),
+                checks: Some((TIP_SHA.to_string(), Fetched::NotModified)),
+            })
+        );
+    }
+
+    /// A new tip is another commit: its check runs are asked without the
+    /// old commit's `ETag`.
+    #[tokio::test]
+    async fn a_moved_tip_asks_its_check_runs_afresh() {
+        let (root, mut seen) = serve(vec![
+            response("200 OK", &BUDGET, RUNS),
+            response("200 OK", &[], TIP_STATUS),
+            response("200 OK", &[], TIP_CHECKS),
+            response("200 OK", &[], STATUS_HISTORY),
+        ])
+        .await;
+        let held = TipRequest {
+            sha: Some("0ld".to_string()),
+            status_etag: Some("W/\"st\"".to_string()),
+            checks_etag: Some("W/\"cr\"".to_string()),
+            has_statuses: true,
+            history_etag: Some("W/\"hi\"".to_string()),
+        };
+        let answer = run(tip_request(held), &root).await;
+        let _list = seen.recv().await.unwrap();
+        let _status = seen.recv().await.unwrap();
+        let checks = seen.recv().await.unwrap().to_lowercase();
+        assert!(!checks.contains("if-none-match"), "{checks}");
+        let history = seen.recv().await.unwrap().to_lowercase();
+        assert!(!history.contains("if-none-match"), "{history}");
+        assert_eq!(answer.failure, None);
+    }
+
+    /// A token that cannot read the tip's statuses still loads the expanded
+    /// run: the jobs and the failed job's log are read before the tip, whose
+    /// 403 is the attempt's outcome with all of them kept.
+    #[tokio::test]
+    async fn a_refused_tip_still_reads_the_expanded_runs_jobs_and_log() {
+        let (root, mut seen) = serve(vec![
+            response("200 OK", &BUDGET, RUNS),
+            response("200 OK", &["etag: W/\"jobs\""], JOBS_FAILED),
+            response("200 OK", &[], LOG_FAILED),
+            response(
+                "403 Forbidden",
+                &[],
+                r#"{"message":"Resource not accessible by integration"}"#,
+            ),
+        ])
+        .await;
+        let answer = run(
+            CiRequest {
+                expanded: Some(expanded(37958308363)),
+                ..tip_request(TipRequest::default())
+            },
+            &root,
+        )
+        .await;
+        let _list = seen.recv().await.unwrap();
+        let jobs = seen.recv().await.unwrap();
+        assert!(
+            jobs.starts_with("GET /repos/gaurgle/fleetz/actions/runs/37958308363/jobs "),
+            "{jobs}"
+        );
+        let _log = seen.recv().await.unwrap();
+        let status = seen.recv().await.unwrap();
+        assert!(
+            status.starts_with("GET /repos/gaurgle/fleetz/commits/HEAD/status HTTP/1.1"),
+            "{status}"
+        );
+        assert!(answer.runs.is_some());
+        assert!(
+            matches!(
+                answer.jobs,
+                Some((37958308363, JobsAnswer::Fetched(Fetched::Fresh { .. })))
+            ),
+            "{:?}",
+            answer.jobs
+        );
+        assert_eq!(answer.log.map(|(id, _)| id), Some(113914377501));
+        assert_eq!(answer.tip, None);
+        assert!(answer.failure.is_some(), "the 403 is the outcome");
+    }
+
+    /// A repo with no commits has no tip: a 404 reads nothing more and
+    /// fails nothing.
+    #[tokio::test]
+    async fn a_repo_without_a_tip_is_not_a_failure() {
+        let (root, _seen) = serve(vec![
+            response("200 OK", &BUDGET, RUNS),
+            response("404 Not Found", &[], "{}"),
+        ])
+        .await;
+        let answer = run(tip_request(TipRequest::default()), &root).await;
+        assert_eq!(answer.failure, None);
+        assert_eq!(answer.tip, None);
+        assert!(answer.runs.is_some());
     }
 }

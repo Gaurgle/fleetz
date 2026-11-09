@@ -233,14 +233,20 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
             ListRow::Header(section) => section_header_item(section.label()),
             ListRow::Repo(pos) => {
                 let repo = visible[pos].1;
-                repo_list_item(
+                let shown = app.ci_shown(repo);
+                let ci = badges::RowCi {
+                    status: &shown.status,
+                    side_run: app.ci_side_run(repo),
+                };
+                ListItem::new(Line::from(repo_row_spans_ci(
                     repo,
+                    ci,
                     on_cursor,
                     col_width,
                     dim_pending,
                     app.is_not_in_last_poll(repo),
                     app.search_match_field(repo).and_then(|f| f.mark()),
-                )
+                )))
             }
         });
     }
@@ -252,12 +258,18 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         colors::SURFACE
     };
+    let mut title = crate::ui::panel_title(1, "repos", focused);
+    // The time window on this border, between the title and the count
+    // (FZ-95, Andreas 2026-11-09).
+    let count_w = format!(" {total} ").chars().count();
+    let budget = (area.width as usize).saturating_sub(2 + span_width(&title.spans) + count_w + 2);
+    title.spans.extend(list_title_window(app, budget));
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
         .padding(Padding::horizontal(1))
-        .title_top(crate::ui::panel_title(1, "repos", focused))
+        .title_top(title)
         .title_top(
             Line::from(Span::styled(
                 format!(" {total} "),
@@ -268,7 +280,17 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Filter strip + divider, then the repo list below.
+    // Filter strip + divider, then the repo list, then the fleet's summary
+    // box at the foot (FZ-95).
+    let summary = summary_box_lines(app, inner.width as usize);
+    let (inner, summary_area) = split_summary_box(inner, summary.len());
+    if let Some(box_area) = summary_area {
+        let mut lines = vec![crate::ui::divider_line(box_area.width as usize)];
+        lines.extend(summary);
+        frame.render_widget(Paragraph::new(lines), box_area);
+        // The footer, drawn after, leaves the summary and the message out.
+        app.fleet_drawn.set(true);
+    }
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -295,6 +317,158 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         area: rows[2],
         offset: state.offset(),
     });
+}
+
+/// The rows the repo list keeps above pane 1's summary box before the box
+/// gives way: a list that cannot show a handful of repos is worse than no
+/// box, and the cursor's scroll margin needs the rows.
+const MIN_LIST_ROWS_BESIDE_SUMMARY: u16 = 8;
+
+/// Pane 1's inner area split into the filter strip and list above, and the
+/// summary box at the foot: a divider row and `lines` rows. `None` for the
+/// box where the list would be left too short; the footer then carries the
+/// fleet's state. The list's clicks resolve against where it is drawn
+/// (`ListHits`), so this split needs no copy in `panel_rects`.
+fn split_summary_box(inner: Rect, lines: usize) -> (Rect, Option<Rect>) {
+    let box_h = u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(1);
+    // The filter strip and its divider sit above the list.
+    if inner.height < 2 + MIN_LIST_ROWS_BESIDE_SUMMARY + box_h {
+        return (inner, None);
+    }
+    let v = Layout::vertical([Constraint::Min(1), Constraint::Length(box_h)]).split(inner);
+    (v[0], Some(v[1]))
+}
+
+/// The time window on pane 1's top border (FZ-95), `· ◷ since 1 week [t] `,
+/// in the short form (`· ◷ 1w [t] `) where `budget` columns cannot hold
+/// it, and nothing where they cannot hold that either. Before a load names
+/// the window, `· ◷ [t] `. Pane 2's sections never read this width.
+fn list_title_window(app: &App, budget: usize) -> Vec<Span<'static>> {
+    let key = Style::default()
+        .fg(colors::TEXT)
+        .add_modifier(Modifier::BOLD);
+    let label = Style::default()
+        .fg(colors::TEAL)
+        .add_modifier(Modifier::BOLD);
+    [window_label(app), window_short_label(&app.header)]
+        .into_iter()
+        .map(|text| {
+            vec![
+                Span::styled("· ", Style::default().fg(colors::SURFACE)),
+                Span::styled(
+                    match text.is_empty() {
+                        true => WINDOW_MARK.to_string(),
+                        false => format!("{WINDOW_MARK} {text}"),
+                    },
+                    label,
+                ),
+                Span::raw(" "),
+                Span::styled("[t]", key),
+                Span::raw(" "),
+            ]
+        })
+        .find(|spans| span_width(spans) <= budget)
+        .unwrap_or_default()
+}
+
+/// The most rows the summary takes in words before it switches to glyphs
+/// and counts (Andreas, 2026-11-06: "when wide screen: write it out ...
+/// but when narrow: 2!, 2PRs").
+const SUMMARY_WORD_ROWS: usize = 2;
+
+/// Pane 1's summary box (FZ-95), under its divider: the active group
+/// (`[work]`) and the fleet's counters, wrapped at the pane's width between
+/// counters, in words (`3↓ · 1! · 17 synced · 2 not cloned · 8 PRs`) while
+/// they fit `SUMMARY_WORD_ROWS` rows and as glyphs and counts
+/// (`3↓ 1! 17✓ 2- 8 PRs`) where they do not. Then the activity row: a
+/// manual refresh's spinner and the last action's message, blank when
+/// there is none. The activity row is always there, so a message moves
+/// nothing.
+fn summary_box_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let p = crate::ui::fleet_pieces(app, chrono::Local::now());
+    let group: Vec<Vec<Span<'static>>> = p.group.into_iter().map(|g| vec![g]).collect();
+    let mut words: Vec<Span<'static>> = Vec::new();
+    for g in group.iter().flatten() {
+        words.push(g.clone());
+        words.push(Span::raw(" · "));
+    }
+    words.extend(p.summary);
+    let mut lines = wrap_counters(words, width);
+    if lines.len() > SUMMARY_WORD_ROWS {
+        let mut glyphs = group;
+        glyphs.extend(glyph_counters(&app.summary()));
+        lines = wrap_groups(glyphs, Span::raw(" "), width);
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(""));
+    }
+    let mut activity: Vec<Span<'static>> = Vec::new();
+    if let Some(spinner) = p.refreshing {
+        activity.extend(
+            spinner
+                .into_iter()
+                .map(|s| Span::styled(s.content.trim().to_string(), s.style)),
+        );
+        activity.push(Span::raw("  "));
+    }
+    if let Some(message) = p.message {
+        activity.push(message);
+    }
+    lines.push(Line::from(fit_spans(activity, width)));
+    lines
+}
+
+/// The summary's counters wrapped at `width`, breaking only at the ` · `
+/// between two counters, so a counter is never split.
+fn wrap_counters(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
+    let dot = Span::styled(" · ", Style::default().fg(colors::SURFACE));
+    wrap_groups(counter_groups(spans), dot, width)
+}
+
+/// The summary's spans split into its counters at the ` · ` between them.
+fn counter_groups(spans: Vec<Span<'static>>) -> Vec<Vec<Span<'static>>> {
+    let mut groups: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+    for span in spans {
+        if span.content.trim() == "·" {
+            groups.push(Vec::new());
+        } else if let Some(group) = groups.last_mut() {
+            group.push(span);
+        }
+    }
+    groups.retain(|g| !g.is_empty());
+    groups
+}
+
+/// `groups` laid out at `width`, `sep` between two on a row, a new row
+/// where the next does not fit; a group wider than a row is cut with `…`.
+fn wrap_groups(
+    groups: Vec<Vec<Span<'static>>>,
+    sep: Span<'static>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let sep_w = sep.content.chars().count();
+    let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
+    for group in groups {
+        match lines.last_mut() {
+            Some(line) if span_width(line) + sep_w + span_width(&group) <= width => {
+                line.push(sep.clone());
+                line.extend(group);
+            }
+            _ => lines.push(fit_spans(group, width)),
+        }
+    }
+    lines.into_iter().map(Line::from).collect()
+}
+
+/// The summary's narrow form (Andreas, 2026-11-06): every counter a count
+/// and a glyph, the count first as the list's counters write it (`3↓ 1!`),
+/// synced a green `✓`, not cloned a grey `-`, the PRs kept in words. From
+/// the one table the words form reads (`footer::summary_counters`).
+fn glyph_counters(s: &crate::model::Summary) -> Vec<Vec<Span<'static>>> {
+    crate::ui::footer::summary_counters(s)
+        .into_iter()
+        .map(|c| vec![Span::styled(c.glyphs, Style::default().fg(c.color))])
+        .collect()
 }
 
 /// A section header the list cursor stands on (FZ-45): the marker repo rows
@@ -375,24 +549,6 @@ fn section_header_item(label: &str) -> ListItem<'static> {
     ]))
 }
 
-fn repo_list_item(
-    repo: &RepoStatus,
-    is_selected: bool,
-    col_width: usize,
-    dim_pending: bool,
-    not_in_last_poll: bool,
-    match_mark: Option<&'static str>,
-) -> ListItem<'static> {
-    ListItem::new(Line::from(repo_row_spans(
-        repo,
-        is_selected,
-        col_width,
-        dim_pending,
-        not_in_last_poll,
-        match_mark,
-    )))
-}
-
 /// Widest a repo row is drawn: the repo list's column cap less its two
 /// borders and two padding columns. The slot digest (FZ-45) draws its rows'
 /// shared columns at this width, as pane 1 does at its default size.
@@ -401,9 +557,38 @@ pub const REPO_ROW_MAX_W: usize = REPO_LIST_MAX_COLS as usize - 4;
 /// A repo row's spans, `col_width` wide: marker, kind glyph, name, dot fill
 /// and the badge group flush right. The one grammar a repo row has: the repo
 /// list draws it, and so do the slot digest's lines (FZ-45), so every
-/// indicator keeps its place and its colour in both.
+/// indicator keeps its place and its colour in both. Drawn with the fleet
+/// poll's lamp; the screens draw `repo_row_spans_ci` (FZ-83), so this one
+/// is kept for the tests.
+#[cfg(test)]
 pub fn repo_row_spans(
     repo: &RepoStatus,
+    is_selected: bool,
+    col_width: usize,
+    dim_pending: bool,
+    not_in_last_poll: bool,
+    match_mark: Option<&'static str>,
+) -> Vec<Span<'static>> {
+    let ci = badges::RowCi {
+        status: &repo.ci_status,
+        side_run: false,
+    };
+    repo_row_spans_ci(
+        repo,
+        ci,
+        is_selected,
+        col_width,
+        dim_pending,
+        not_in_last_poll,
+        match_mark,
+    )
+}
+
+/// `repo_row_spans` with the CI part as `ci` says (FZ-83): the repo list
+/// passes `App::ci_shown` and `App::ci_side_run`.
+pub fn repo_row_spans_ci(
+    repo: &RepoStatus,
+    ci: badges::RowCi,
     is_selected: bool,
     col_width: usize,
     dim_pending: bool,
@@ -425,7 +610,7 @@ pub fn repo_row_spans(
     // badges land at the same right edge whether or not the row is selected;
     // only differing badge sets between rows shift a status token, exactly
     // as in repoz. Truncate the name rather than let it overflow when narrow.
-    let (badge_spans, badge_w) = badges::badge_spans_marked(repo, dim_pending, not_in_last_poll);
+    let (badge_spans, badge_w) = badges::badge_spans_ci(repo, ci, dim_pending, not_in_last_poll);
     let right_len = badge_w + 1; // +1 for space after dots
     // A search hit on the owner or an author says so after the name (FZ-56),
     // in the filter strip's dim, so it does not read as a name match.
@@ -715,7 +900,6 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     let width = area.width as usize;
 
     let mut lines: Vec<Line> = header_lines(app, repo, width);
-    let header_width = width;
     let (area, width) = match notes_split {
         Some(notes) => {
             // Pinned, or on a short pane scrolling with the tree; laid out
@@ -749,6 +933,12 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // Branches. Info lists worktrees in a section of their own; the branches
     // view still draws each inline under the branch it has checked out.
     let view = app.history_view;
+
+    // The long notes whole, where the sectioned header could only cut them
+    // on its banner (FZ-95).
+    if view == HistoryView::Info && header_sections(app, width).is_some() {
+        lines.extend(long_note_lines(&long_notes(app, repo)));
+    }
 
     // How old the local work is. Only local-only repos carry this: they are
     // the ones with no `pushedAt` to be dated by, which is what put them in
@@ -1053,7 +1243,10 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // The `notes` view: which tree is drawn, pinned with the header, then
     // the tree, one cursor stop per file.
     if view == HistoryView::Notes {
-        lines.push(notes_mode_line(app));
+        // One row, as the tree's are (`notes_rows`): on a pane too short to
+        // pin it, a wrapped mode line put the highlight a row below the
+        // follow's count (FZ-65).
+        lines.push(Line::from(clip_spans(notes_mode_line(app).spans, width)));
         pinned_rows = lines.len();
         let base = lines.len();
         let (rows, tops, selected) = notes_rows(app, repo, width);
@@ -1073,6 +1266,20 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             selected_block = Some((base + row, base + row));
             block_tops.extend(base..base + app.worktrees_listed().len());
         }
+        lines.extend(rows);
+    }
+
+    // The `changes` view (FZ-60): which base the second section uses,
+    // pinned with the header, then both sections, one cursor stop per file.
+    if view == HistoryView::Changes {
+        lines.push(changes_mode_line(app));
+        pinned_rows = lines.len();
+        let base = lines.len();
+        let (rows, tops, selected) = changes_rows(app, repo, width);
+        if let Some(row) = selected {
+            selected_block = Some((base + row, base + row));
+        }
+        block_tops.extend(tops.into_iter().map(|t| base + t));
         lines.extend(rows);
     }
 
@@ -1183,9 +1390,16 @@ fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
             let body = lines.split_off(pinned);
             let header_area = header_area.expect("split");
             frame.render_widget(Paragraph::new(lines), header_area);
-            // The footer carries the fleet's state when this did not.
-            if draws_fleet_column(app, header_width) {
-                app.fleet_drawn.set(true);
+            // The sections' subtitles on the pane's top padding, over the
+            // block they name (FZ-95). Only while pinned: over a scrolled
+            // body they would name whatever rows had moved under them.
+            if let Some(sections) = header_sections(app, header_area.width as usize)
+                && header_area.y > pane.y + 1
+            {
+                frame.render_widget(
+                    Paragraph::new(subtitle_row(sections)),
+                    Rect::new(header_area.x, header_area.y - 1, header_area.width, 1),
+                );
             }
             // The counter flush right on the view's title row, the first of
             // the headliner's two (his look, 2026-11-05). Only while that row
@@ -1312,9 +1526,10 @@ pub struct NotesPane {
     /// The divider's screen column, from under the top border to the bottom
     /// one.
     pub divider: u16,
-    /// Right of the divider on the header's rows above the rule: the
-    /// fleet's state (FZ-93), `notes preview` on the last of them, level
-    /// with `NOTES`. `None` when the header is not pinned.
+    /// Right of the divider on the header's rows above the rule: blank but
+    /// for `notes preview` on the last of them, level with `NOTES`; the
+    /// window sits on pane 1's border (FZ-95). `None` when the header is
+    /// not pinned.
     pub facts: Option<Rect>,
     /// The tree column's last row: a divider carrying the highlighted
     /// file's facts (FZ-93). `None` when the tree has no row to spare.
@@ -1472,17 +1687,8 @@ fn render_notes_heads(frame: &mut Frame, pane: Rect, notes: &NotesPane, app: &Ap
     if facts.height == 0 {
         return;
     }
+    // Only `notes preview` here: the window sits on pane 1's border (FZ-95).
     let label_row = facts.bottom() - 1;
-    let mut lines = crate::ui::fleet_lines(app, chrono::Local::now());
-    app.fleet_drawn.set(true);
-    lines.truncate(usize::from(facts.height - 1));
-    frame.render_widget(
-        Paragraph::new(lines),
-        Rect {
-            height: facts.height - 1,
-            ..facts
-        },
-    );
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             READER_LABEL,
@@ -1516,18 +1722,28 @@ fn pane2_block(border_color: ratatui::style::Color) -> Block<'static> {
         .padding(Padding::new(1, 1, 1, 0))
 }
 
-/// Pane 2's identity header, pinned above every repo view: how the repo is
-/// doing, where it lives, what is out, then the view's headliner.
+/// The header's CI word (FZ-83): `CI ◉ passed` while the default branch's
+/// name is not known, `CI ◉ main passed` once it is, and the culprit after a
+/// state that is not green, `CI ◉ main failed: Vercel`.
+fn ci_header_text(sym: &str, label: &str, shown: &crate::app::CiShown) -> String {
+    let mut text = match &shown.branch {
+        Some(branch) => format!("CI {sym} {branch} {label}"),
+        None => format!("CI {sym} {label}"),
+    };
+    if let Some(culprit) = &shown.culprit {
+        text.push_str(": ");
+        text.push_str(culprit);
+    }
+    text
+}
+
 /// Columns of the divider between two sections of pane 2's header.
 const SECTION_DIVIDER: &str = " │ ";
 
 /// The narrowest the local section of pane 2's header may be before the
-/// fleet column gives way to the plain two-sided rows.
-const MIN_LOCAL_SECTION: usize = 24;
-
-/// The narrowest the remote section may be before it is dropped, leaving
-/// local and fleet.
-const MIN_REMOTE_SECTION: usize = 12;
+/// header gives way to its plain two-sided rows. The remote section, the
+/// other half, is at most a column narrower.
+const MIN_LOCAL_SECTION: usize = 20;
 
 /// `spans` cut to `width` columns with `…`, or as they are when they fit.
 fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
@@ -1547,107 +1763,214 @@ fn pad_spans(mut spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> 
     spans
 }
 
-/// Whether pane 2's header at `width` carries the fleet column: the same
-/// decision `header_lines` makes, asked again so the footer knows whether
-/// to carry the fleet's state itself.
-fn draws_fleet_column(app: &App, width: usize) -> bool {
-    !app.notes_layout()
-        && fleet_column_width(&crate::ui::fleet_lines(app, chrono::Local::now()), width).is_some()
+/// `spans` cut to `width` and pushed flush right in it.
+fn right_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let spans = fit_spans(spans, width);
+    let mut out = vec![Span::raw(
+        " ".repeat(width.saturating_sub(span_width(&spans))),
+    )];
+    out.extend(spans);
+    out
 }
 
-/// The fleet column's width in a header of `width`, or `None` when there
-/// is no fleet column (the `notes` layout) or the local section would be
-/// left narrower than `MIN_LOCAL_SECTION` beside it, so the header keeps
-/// its two-sided rows. Sized to the window and summary rows within
-/// `FLEET_COLUMN_MIN` and `FLEET_COLUMN_MAX`, never to the activity row:
-/// a message or a spinner appearing must not move the dividers.
-fn fleet_column_width(fleet: &[Line<'static>], width: usize) -> Option<usize> {
-    if fleet.is_empty() {
+/// The time window's mark on pane 1's border.
+const WINDOW_MARK: &str = "◷";
+
+/// The window's label as pane 1's border draws it: the header's own words,
+/// empty before a load names it.
+fn window_label(app: &App) -> String {
+    app.header.clone()
+}
+
+/// The window's short form for a narrow border (FZ-95): `since 4 weeks` as
+/// `4w`, `since 2 hours` as `2h`; a slot window by its slot (`Work`);
+/// anything else cut to `SHORT_WINDOW_MAX` columns with `…`. A coverage
+/// note after the label is dropped with the rest.
+fn window_short_label(header: &str) -> String {
+    let words: Vec<&str> = header.split_whitespace().collect();
+    if let ["since", n, unit, ..] = words.as_slice()
+        && n.parse::<u32>().is_ok()
+    {
+        let short = match unit.trim_end_matches('s') {
+            "hour" => Some("h"),
+            "day" => Some("d"),
+            "week" => Some("w"),
+            "month" => Some("mo"),
+            "year" => Some("y"),
+            _ => None,
+        };
+        if let Some(short) = short {
+            return format!("{n}{short}");
+        }
+    }
+    if let Some(slot) = words
+        .iter()
+        .find(|w| matches!(**w, "Work" | "Evening" | "Night"))
+    {
+        return (*slot).to_string();
+    }
+    let spans = fit_spans(vec![Span::raw(header.to_string())], SHORT_WINDOW_MAX);
+    spans.iter().map(|s| s.content.as_ref()).collect()
+}
+
+/// The widest a short window label is drawn.
+const SHORT_WINDOW_MAX: usize = 8;
+
+/// Pane 2's header sections at one width (FZ-95).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Sections {
+    local: usize,
+    remote: usize,
+}
+
+/// The widths of pane 2's header sections at `width`, from the pane's
+/// width alone, never from what a repo puts in them or from the window's
+/// label on pane 1's border, so the divider stands in the same column for
+/// every repo and every window (FZ-95). The divider splits the row in the
+/// middle. `None` where the local half would fall under its floor; the
+/// header then draws its plain two-sided rows.
+fn section_widths(width: usize) -> Option<Sections> {
+    let both = width.saturating_sub(SECTION_DIVIDER.chars().count());
+    let (local, remote) = (both.div_ceil(2), both / 2);
+    (local >= MIN_LOCAL_SECTION).then_some(Sections { local, remote })
+}
+
+/// The sections pane 2's header is drawn in for this frame, or `None` for
+/// its plain two-sided rows: the `notes` layout, whose header sits left of
+/// its divider, and a pane too narrow for them.
+fn header_sections(app: &App, width: usize) -> Option<Sections> {
+    (!app.notes_layout())
+        .then(|| section_widths(width))
+        .flatten()
+}
+
+fn section_divider() -> Span<'static> {
+    Span::styled(SECTION_DIVIDER, Style::default().fg(colors::SURFACE))
+}
+
+/// Pane 2's header in fixed sections (FZ-95): the repo's local facts
+/// leaning left, its remote ones right-aligned against the pane's edge.
+/// Every row draws the divider.
+fn sectioned_rows(
+    rows: Vec<(Vec<Span<'static>>, Vec<Span<'static>>)>,
+    sections: Sections,
+) -> Vec<Line<'static>> {
+    rows.into_iter()
+        .map(|(left, right)| {
+            let mut line = pad_spans(fit_spans(left, sections.local), sections.local);
+            line.push(section_divider());
+            line.extend(right_spans(right, sections.remote));
+            Line::from(line)
+        })
+        .collect()
+}
+
+/// The row above pane 2's sectioned header, on the pane's top padding: a
+/// small subtitle over each section, `local` and `remote` (Andreas,
+/// 2026-11-06), with the divider through it.
+fn subtitle_row(sections: Sections) -> Line<'static> {
+    let style = Style::default().fg(colors::OVERLAY);
+    let mut line = pad_spans(
+        vec![Span::styled(HEADER_SUBTITLES[0], style)],
+        sections.local,
+    );
+    line.push(section_divider());
+    line.extend(right_spans(
+        vec![Span::styled(HEADER_SUBTITLES[1], style)],
+        sections.remote,
+    ));
+    Line::from(line)
+}
+
+/// The local and remote sections' subtitles.
+const HEADER_SUBTITLES: [&str; 2] = ["local", "remote"];
+
+/// The long notes a repo can carry (FZ-95): a failed fetch, git's reason
+/// for it, the earlier-refresh note. Too long for a section, so the
+/// sectioned header draws them on one banner row under its block
+/// (`banner_line`) and `info` spells them out whole (`long_note_lines`).
+fn long_notes(app: &App, repo: &RepoStatus) -> Vec<String> {
+    let mut notes = Vec::new();
+    if let Some(text) = crate::ui::fetch_failure_line(&repo.fetch, chrono::Local::now()) {
+        notes.push(text);
+        if let Some(detail) = repo.fetch.failure().and_then(|f| f.detail.as_deref()) {
+            notes.push(detail.to_string());
+        }
+    }
+    if app.is_not_in_last_poll(repo) {
+        notes.push(EARLIER_REFRESH_NOTE.to_string());
+    }
+    notes
+}
+
+/// The long notes on one orange row under the header's block (Andreas,
+/// 2026-11-06: "a banner of sorts to put longer information like this"),
+/// joined by ` · ` and cut with `…` at the pane's edge. No divider crosses
+/// it. `None` when there are none.
+fn banner_line(notes: &[String], width: usize) -> Option<Line<'static>> {
+    if notes.is_empty() {
         return None;
     }
-    let fleet_w = fleet
-        .iter()
-        .take(2)
-        .map(|l| span_width(&l.spans))
-        .max()
-        .unwrap_or(0)
-        .clamp(crate::ui::FLEET_COLUMN_MIN, crate::ui::FLEET_COLUMN_MAX);
-    let inner = width.checked_sub(SECTION_DIVIDER.chars().count() + fleet_w)?;
-    (inner >= MIN_LOCAL_SECTION).then_some(fleet_w)
+    let text = format!("  {}", notes.join(" · "));
+    Some(Line::from(fit_spans(
+        vec![Span::styled(text, Style::default().fg(colors::PEACH))],
+        width,
+    )))
 }
 
-/// One row of pane 2's header block before it is laid out in sections.
-enum HeaderRow {
-    /// A local half and a remote half, each kept in its own section.
-    Sides(Vec<Span<'static>>, Vec<Span<'static>>),
-    /// One run across the local and remote sections: the fetch failure and
-    /// the earlier-refresh note, which have no remote half.
-    Wide(Vec<Span<'static>>),
-}
-
-/// Pane 2's header in three sections (FZ-93): the repo's local facts on
-/// the left, its remote ones from the first divider, the fleet's state
-/// after the second. The fleet's rows are fixed from the block's top,
-/// so its pieces keep their places; the block is as tall as the taller of
-/// the two. On a narrow pane the remote section goes first.
-fn sectioned_rows(
-    rows: Vec<HeaderRow>,
-    fleet: Vec<Line<'static>>,
-    fleet_w: usize,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let divider_w = SECTION_DIVIDER.chars().count();
-    let inner = width.saturating_sub(divider_w + fleet_w);
-    let sides = || {
-        rows.iter().filter_map(|row| match row {
-            HeaderRow::Sides(left, right) => Some((left, right)),
-            HeaderRow::Wide(_) => None,
-        })
-    };
-    let local_w = sides()
-        .map(|(left, _)| span_width(left))
-        .max()
-        .unwrap_or(0)
-        .min(inner);
-    let remote_w = inner.saturating_sub(local_w + divider_w);
-    let with_remote = remote_w >= MIN_REMOTE_SECTION && sides().any(|(_, right)| !right.is_empty());
-    let divider = || Span::styled(SECTION_DIVIDER, Style::default().fg(colors::SURFACE));
-
-    let height = rows.len().max(fleet.len());
-    let mut rows = rows.into_iter();
-    let mut fleet = fleet.into_iter();
-    let mut out = Vec::with_capacity(height);
-    for _ in 0..height {
-        let mut line = match rows.next() {
-            Some(HeaderRow::Sides(left, right)) if with_remote => {
-                // The remote half leans left, against the first divider
-                // (his look, 2026-11-05), so the three sections read as
-                // three columns rather than two halves pushed apart.
-                let mut line = pad_spans(fit_spans(left, local_w), local_w);
-                line.push(divider());
-                if span_width(&right) <= remote_w {
-                    line.extend(right);
-                }
-                pad_spans(line, inner)
-            }
-            Some(HeaderRow::Sides(left, _)) | Some(HeaderRow::Wide(left)) => {
-                pad_spans(fit_spans(left, inner), inner)
-            }
-            None if with_remote => {
-                let mut line = pad_spans(Vec::new(), local_w);
-                line.push(divider());
-                pad_spans(line, inner)
-            }
-            None => pad_spans(Vec::new(), inner),
-        };
-        line.push(divider());
-        line.extend(fit_spans(
-            fleet.next().map(|l| l.spans).unwrap_or_default(),
-            fleet_w,
-        ));
-        out.push(Line::from(line));
+/// The long notes whole, each on its own row, at the top of `info`'s body
+/// while the header draws them cut on its banner: the full text stays on
+/// screen somewhere.
+fn long_note_lines(notes: &[String]) -> Vec<Line<'static>> {
+    if notes.is_empty() {
+        return Vec::new();
     }
-    out
+    let mut lines: Vec<Line<'static>> = notes
+        .iter()
+        .map(|note| {
+            Line::from(Span::styled(
+                note.clone(),
+                Style::default().fg(colors::PEACH),
+            ))
+        })
+        .collect();
+    lines.push(Line::from(""));
+    lines
+}
+
+/// A remote as the header names it (FZ-95): `owner/name` for GitHub, the
+/// host before it for any other, never userinfo. Anything that is not a
+/// host and exactly `owner/name` (a local path, a GitLab subgroup, an ssh
+/// host alias) keeps its redacted URL (review 1, N2). Display only:
+/// matching and `owner_display` read the stored URL.
+fn remote_display(url: &str) -> String {
+    let shown = crate::git::redact_userinfo(url);
+    let Some(remote) = crate::model::RemoteRef::parse(&shown) else {
+        return shown;
+    };
+    let host = remote.host.to_ascii_lowercase();
+    // `RemoteRef::parse` reads the first two path segments and ignores the
+    // rest, so a deeper path ends in something else; a host with no dot is
+    // an ssh alias, not a place.
+    let tail = shown.trim().trim_end_matches('/');
+    let tail = tail.strip_suffix(".git").unwrap_or(tail);
+    let pair = format!("{}/{}", remote.owner, remote.name);
+    // What is left before `/owner/name` must be the host itself, with at
+    // most a scheme, a user and a port around it.
+    let authority = tail
+        .strip_suffix(pair.as_str())
+        .and_then(|before| before.strip_suffix(['/', ':']))
+        .map(|before| before.rsplit_once("://").map_or(before, |(_, a)| a))
+        .map(|a| a.rsplit_once('@').map_or(a, |(_, h)| h))
+        .map(|a| a.split_once(':').map_or(a, |(h, _)| h));
+    if host.is_empty() || !host.contains('.') || authority != Some(remote.host.as_str()) {
+        return shown;
+    }
+    if host == "github.com" || host == "www.github.com" {
+        format!("{}/{}", remote.owner, remote.name)
+    } else {
+        format!("{}/{}/{}", remote.host, remote.owner, remote.name)
+    }
 }
 
 fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>> {
@@ -1661,7 +1984,7 @@ fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>
     //
     //   ○ 3 behind, 1 ahead                               ● Gaurgle
     //   ~/repos/fleetz              git@github.com:Gaurgle/fleetz.git
-    //   * main · 1 stash               2 open PRs #13 · CI ◉ passed
+    //   * main · 1 stash          2 open PRs #13 · CI ◉ main passed
     //
     // Each row right-aligns its own remote half independently and drops it
     // when it will not fit. Owner and name used to be placed together or not
@@ -1783,9 +2106,10 @@ fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>
         };
         row3_right.push(Span::styled(text, Style::default().fg(pr_color)));
     }
-    if repo.ci_status != CiStatus::Unknown {
+    let shown = app.ci_shown(repo);
+    if shown.status != CiStatus::Unknown {
         let (ci_sym, ci_color, ci_label) =
-            badges::ci_display(&repo.ci_status, app.watch_mode && !app.blink_on);
+            badges::ci_display(&shown.status, app.watch_mode && !app.blink_on);
         let ci_color = if not_in_last_poll {
             badges::EARLIER_REFRESH
         } else {
@@ -1795,7 +2119,7 @@ fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>
             row3_right.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
         }
         row3_right.push(Span::styled(
-            format!("CI {ci_sym} {ci_label}"),
+            ci_header_text(ci_sym, ci_label, &shown),
             Style::default().fg(ci_color),
         ));
     }
@@ -1808,7 +2132,7 @@ fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>
     // the stored URL.
     let (remote_loc, remote_loc_w) = match repo.remote_url.as_deref() {
         Some(url) => {
-            let shown = crate::git::redact_userinfo(url);
+            let shown = remote_display(url);
             let shown_w = shown.chars().count();
             (
                 vec![Span::styled(shown, Style::default().fg(colors::OVERLAY))],
@@ -1819,43 +2143,26 @@ fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>
     };
     let row3_right_w = span_width(&row3_right);
 
-    // Outside the `notes` layout, whose fleet status sits right of its
-    // divider, the fleet's state takes a column of its own at the right
-    // (FZ-93): local, remote and fleet, two dividers between them.
-    let fleet = if app.notes_layout() {
-        Vec::new()
-    } else {
-        crate::ui::fleet_lines(app, chrono::Local::now())
-    };
     let note = not_in_last_poll.then(|| {
         vec![Span::styled(
             format!("  {EARLIER_REFRESH_NOTE}"),
             Style::default().fg(badges::EARLIER_REFRESH),
         )]
     });
-    if let Some(fleet_w) = fleet_column_width(&fleet, width) {
-        // The rows in their old order: the fetch failure under the counts
-        // and the earlier-refresh note under the facts, each across the
-        // local and remote sections, since neither has a remote half.
-        let mut rows = vec![HeaderRow::Sides(row1_left, owner_group)];
-        rows.extend(
-            fetch_rows
-                .into_iter()
-                .map(|line| HeaderRow::Wide(line.spans)),
-        );
-        rows.push(HeaderRow::Sides(row2_left, remote_loc));
+    // Outside the `notes` layout, whose header sits left of its divider,
+    // fixed sections (FZ-95): local and remote.
+    if let Some(sections) = header_sections(app, width) {
+        let mut rows = vec![(row1_left, owner_group), (row2_left, remote_loc)];
         if !row3_left.is_empty() || !row3_right.is_empty() {
-            rows.push(HeaderRow::Sides(row3_left, row3_right));
+            rows.push((row3_left, row3_right));
         }
-        rows.extend(note.map(HeaderRow::Wide));
-        // The fleet's last row lands on the blank row the header ends with
-        // when the repo's rows leave it free, so the header is no taller
-        // than before; otherwise the blank row follows as it always did.
-        let spare = rows.len() < fleet.len();
-        lines.extend(sectioned_rows(rows, fleet, fleet_w, width));
-        if !spare {
-            lines.push(Line::from(""));
-        }
+        lines.extend(sectioned_rows(rows, sections));
+        // The fetch failure, its git detail and the earlier-refresh note do
+        // not fit a section: one banner row under the block, cut at the
+        // pane's edge, no divider on it; `info` has them whole (Andreas,
+        // 2026-11-06, replacing "whole, under the block").
+        lines.extend(banner_line(&long_notes(app, repo), width));
+        lines.push(Line::from(""));
     } else {
         let mut row1 = row1_left;
         let mut row2 = row2_left;
@@ -2142,19 +2449,23 @@ fn notes_rows(
     let mut lines = Vec::with_capacity(rows.len());
     let mut tops = Vec::with_capacity(files);
     let mut selected = None;
+    // Every row is cut to one rendered row (`clip_spans`): the tops are
+    // counted in lines, and a long name the paragraph wrapped put the
+    // highlight that many rows below where the follow kept it (FZ-65).
     for row in rows {
         match row {
             crate::notes::Row::Section(label) => {
                 if !lines.is_empty() {
                     lines.push(Line::from(""));
                 }
-                lines.push(Line::from(section_label(&label)));
+                lines.push(Line::from(clip_spans(vec![section_label(&label)], width)));
             }
             crate::notes::Row::Dir { depth, name } => {
-                lines.push(Line::from(Span::styled(
+                let dir = Span::styled(
                     format!("  {}{name}/", "  ".repeat(depth)),
                     Style::default().fg(colors::OVERLAY),
-                )));
+                );
+                lines.push(Line::from(clip_spans(vec![dir], width)));
             }
             crate::notes::Row::File { depth, name, file } => {
                 let is_sel = tops.len() == cursor;
@@ -2164,10 +2475,8 @@ fn notes_rows(
                 tops.push(lines.len());
                 // The kind's glyph before the name (FZ-62), dim so the name
                 // stays what the eye reads.
-                let glyph = notes
-                    .files
-                    .get(file)
-                    .map_or("", |f| badges::note_kind_icon(f.kind()));
+                let entry = notes.files.get(file);
+                let glyph = entry.map_or("", |f| badges::note_kind_icon(f.kind()));
                 let mut spans = vec![
                     Span::styled(
                         if is_sel { "▸ " } else { "  " },
@@ -2177,6 +2486,15 @@ fn notes_rows(
                     Span::styled(format!("{glyph} "), Style::default().fg(NOTE_GLYPH_COLOR)),
                     Span::styled(name, Style::default().fg(NOTE_NAME_COLOR)),
                 ];
+                // Every board is named `TODO.md` under `todos` (FZ-63); its
+                // place, dim, tells them apart.
+                if let Some(f) = entry.filter(|f| f.kind() == crate::notes::NoteKind::Todo) {
+                    spans.push(Span::styled(
+                        format!("  {}", f.place()),
+                        Style::default().fg(colors::OVERLAY),
+                    ));
+                }
+                spans = clip_spans(spans, width);
                 if is_sel {
                     spans = wash(pad_to(spans, width));
                 }
@@ -2248,10 +2566,15 @@ fn notes_fact_pieces(app: &App) -> Vec<(u8, Vec<Span<'static>>)> {
             )],
         ),
     ];
+    // A board counts what is open, unchecked and half done (FZ-63).
+    if let Some(board) = held_board(app) {
+        pieces.push((4, vec![dim(format!("{} open", board.open()))]));
+    }
     if let Some(size) = facts.and_then(|f| f.size) {
         pieces.push((1, vec![dim(crate::notes::size_label(size))]));
     }
-    if file.kind().is_markdown() {
+    // A board is drawn as one whatever `p` says, so it names no mode.
+    if file.kind().is_markdown() && file.kind() != crate::notes::NoteKind::Todo {
         let mode = match app.reader_raw {
             true => "raw",
             false => "rendered",
@@ -2260,6 +2583,7 @@ fn notes_fact_pieces(app: &App) -> Vec<(u8, Vec<Span<'static>>)> {
     }
     let lives = match &file.notez {
         Some(dir) => format!("{}/", dir.display()),
+        None if file.is_personal() => "the personal store".to_string(),
         None => "the repo".to_string(),
     };
     pieces.push((
@@ -2356,13 +2680,37 @@ fn render_rows(
 /// (FZ-68 round 2): the preview is a page of the `notes` view.
 const READER_LABEL: &str = "notes preview";
 
+/// Where `render_notes_heads` draws the reader's `notes preview` title in
+/// pane 2, for the copy flash (FZ-81). `None` when the header is not pinned
+/// and the title is not drawn.
+pub fn reader_label_rect(pane: Rect, app: &App) -> Option<Rect> {
+    let facts = notes_pane_body(pane, app)?.facts?;
+    (facts.height > 0).then(|| Rect {
+        y: facts.bottom() - 1,
+        width: (READER_LABEL.len() as u16).min(facts.width),
+        height: 1,
+        ..facts
+    })
+}
+
+/// The highlighted file's todoz board, parsed from the body already read,
+/// here on the UI thread: measured cheap for a capped file (FZ-63). `None`
+/// for any other kind, and until the read lands.
+fn held_board(app: &App) -> Option<crate::ui::todo::Board> {
+    app.notes_highlighted_file()
+        .filter(|f| f.kind() == crate::notes::NoteKind::Todo)?;
+    let text = held_note_body(app)?.text.as_ref()?.as_ref().ok()?;
+    Some(crate::ui::todo::Board::parse(text))
+}
+
 /// The held body's markdown render, when the reader draws one: a markdown
 /// file, `p` not on raw, and a render landed (FZ-59). Until one lands the
-/// reader shows the source.
+/// reader shows the source. A `TODO.md` draws as a board instead
+/// (`held_board`, FZ-63).
 fn reader_render(app: &App) -> Option<&crate::app::RenderedNote> {
     let markdown = app
         .notes_highlighted_file()
-        .is_some_and(|f| f.kind().is_markdown());
+        .is_some_and(|f| f.kind().is_markdown() && f.kind() != crate::notes::NoteKind::Todo);
     if !markdown || app.reader_raw {
         return None;
     }
@@ -2384,6 +2732,7 @@ fn render_reader(frame: &mut Frame, inner: Rect, app: &App) {
     // carry its titles (`render_notes_frame`, FZ-68).
     // One `H`/`L` page and the render width, which only this pass can
     // measure.
+    let board = held_board(app);
     app.reader_view_height.set(inner.height);
     app.reader_width.set(inner.width);
     if let Some(rendered) = reader_render(app) {
@@ -2411,6 +2760,9 @@ fn render_reader(frame: &mut Frame, inner: Rect, app: &App) {
     let dim = |text: String| Line::from(Span::styled(text, Style::default().fg(colors::OVERLAY)));
     let lines: Vec<Line<'static>> = match app.notes_highlighted_file() {
         None => vec![dim("no file selected".to_string())],
+        Some(_) if board.is_some() => board
+            .as_ref()
+            .map_or_else(Vec::new, |b| b.lines(inner.width as usize)),
         Some(_) => match held_note_body(app).and_then(|b| b.text.as_ref()) {
             None => vec![dim("reading…".to_string())],
             Some(Err(e)) => vec![Line::from(Span::styled(
@@ -2488,6 +2840,10 @@ fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
     }
     if app.worktrees_wanted() {
         render_worktree_inspector(frame, area, app);
+        return;
+    }
+    if app.changes_wanted() {
+        render_changes_inspector(frame, area, app);
         return;
     }
     let focused = app.focused_panel == FocusedPanel::Inspector;
@@ -2873,6 +3229,296 @@ fn render_ci_inspector(frame: &mut Frame, area: Rect, app: &App) {
         .skip(scroll as usize)
         .take(inner.height as usize)
         .cloned()
+        .collect();
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(visible), inner);
+}
+
+/// The `changes` view's two bases, in the mode line's and the help row's
+/// words (FZ-60).
+const CHANGES_BASES: [&str; 2] = ["upstream", "default"];
+
+/// The `changes` view's first line: both bases as a two-state switch, drawn
+/// as the `notes` mode line draws its modes: `vs: [upstream] default  (u)`.
+fn changes_mode_line(app: &App) -> Line<'static> {
+    let on = colors::history_view_color(HistoryView::Changes);
+    let active = usize::from(app.changes_base == crate::git::ChangesBase::DefaultBranch);
+    let mut spans = vec![Span::styled("vs: ", Style::default().fg(colors::OVERLAY))];
+    for (i, base) in CHANGES_BASES.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(match i == active {
+            true => Span::styled(
+                format!("[{base}]"),
+                Style::default().fg(on).add_modifier(Modifier::BOLD),
+            ),
+            false => Span::styled(base.to_string(), Style::default().fg(colors::SUBTEXT)),
+        });
+    }
+    spans.push(Span::styled("  (", Style::default().fg(colors::OVERLAY)));
+    spans.push(Span::styled(
+        "u",
+        Style::default()
+            .fg(colors::TEXT)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(")", Style::default().fg(colors::OVERLAY)));
+    Line::from(spans)
+}
+
+/// A file's status columns: porcelain's staged column in green and its
+/// unstaged one in the dirty counter's yellow, `??` dim; the other
+/// section's one letter in the churn colors when it adds or deletes.
+fn change_status_spans(status: &str) -> Vec<Span<'static>> {
+    let styled = |text: String, color| Span::styled(text, Style::default().fg(color));
+    if status == "??" {
+        return vec![styled("??".to_string(), colors::OVERLAY)];
+    }
+    let mut chars = status.chars();
+    let (x, y) = (chars.next().unwrap_or(' '), chars.next());
+    match y {
+        Some(y) => vec![
+            styled(x.to_string(), colors::GREEN),
+            styled(y.to_string(), colors::YELLOW),
+        ],
+        None => {
+            let color = match x {
+                'A' => colors::DIFF_ADD,
+                'D' => colors::DIFF_DEL,
+                _ => colors::TEXT,
+            };
+            vec![styled(format!("{x} "), color)]
+        }
+    }
+}
+
+/// The churn column of one changed file, in the widths its section uses.
+fn churn_spans(churn: Option<(u32, u32)>, add_w: usize, del_w: usize) -> Vec<Span<'static>> {
+    let (added, removed) = churn.unwrap_or((0, 0));
+    let token = |n: u32, sign: char, w: usize| match n {
+        0 => " ".repeat(w),
+        n => format!("{:>w$}", format!("{sign}{n}")),
+    };
+    let mut spans = Vec::new();
+    if add_w > 0 {
+        spans.push(Span::styled(
+            token(added, '+', add_w),
+            Style::default().fg(colors::DIFF_ADD),
+        ));
+    }
+    if del_w > 0 {
+        if add_w > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(
+            token(removed, '-', del_w),
+            Style::default().fg(colors::DIFF_DEL),
+        ));
+    }
+    spans
+}
+
+/// The `changes` view's lists for `repo` (FZ-60): its lines, the line each
+/// file is on, in cursor order, and the line the cursor's file is on. A row
+/// with nothing to list says why in one line.
+fn changes_rows(
+    app: &App,
+    repo: &RepoStatus,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<usize>, Option<usize>) {
+    use crate::git::Outgoing;
+    let dim = |text: String| Line::from(Span::styled(text, Style::default().fg(colors::OVERLAY)));
+    let say = |text: String| (vec![dim(text)], Vec::new(), None);
+    if repo.path.is_none() {
+        return say("not cloned: nothing to read".to_string());
+    }
+    let changes = match app.selected_changes().and_then(|(_, s)| s?.held.as_ref()) {
+        None => return say("reading changes…".to_string()),
+        Some(Err(e)) => return say(format!("could not read the repo: {e}")),
+        Some(Ok(changes)) => changes,
+    };
+    if let Outgoing::Unpushed {
+        upstream, ahead: 0, ..
+    } = &changes.outgoing
+        && changes.uncommitted.is_empty()
+    {
+        return say(format!("clean and pushed to {upstream}"));
+    }
+    let total = changes.uncommitted.len() + changes.outgoing.files().len();
+    let cursor = app.detail_selected().min(total.saturating_sub(1));
+    let mut lines = Vec::new();
+    let mut tops = Vec::with_capacity(total);
+    let mut selected = None;
+    let mut list = |lines: &mut Vec<Line<'static>>, files: &[crate::git::ChangedFile]| {
+        let add_w = files
+            .iter()
+            .map(|f| stat_part_width(f.churn.map_or(0, |c| c.0)))
+            .max()
+            .unwrap_or(0);
+        let del_w = files
+            .iter()
+            .map(|f| stat_part_width(f.churn.map_or(0, |c| c.1)))
+            .max()
+            .unwrap_or(0);
+        let tail = stat_tail_width(add_w, del_w);
+        let path_w = width.saturating_sub(2 + 2 + 2 + tail + usize::from(tail > 0) * 2);
+        for file in files {
+            let is_sel = tops.len() == cursor;
+            if is_sel {
+                selected = Some(lines.len());
+            }
+            tops.push(lines.len());
+            let path = crate::ui::truncate(&file.path, path_w);
+            let pad = path_w.saturating_sub(path.chars().count());
+            let mut spans = vec![Span::styled(
+                if is_sel { "▸ " } else { "  " },
+                Style::default().fg(colors::SAPPHIRE),
+            )];
+            spans.extend(change_status_spans(&file.status));
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(path, Style::default().fg(colors::TEXT)));
+            if tail > 0 {
+                spans.push(Span::raw(" ".repeat(pad + 2)));
+                spans.extend(churn_spans(file.churn, add_w, del_w));
+            }
+            if is_sel {
+                spans = wash(pad_to(spans, width));
+            }
+            lines.push(Line::from(spans));
+        }
+    };
+    match changes.uncommitted.len() {
+        0 => lines.push(dim("nothing uncommitted".to_string())),
+        n => {
+            lines.push(Line::from(section_label(&format!("uncommitted ({n})"))));
+            list(&mut lines, &changes.uncommitted);
+        }
+    }
+    lines.push(Line::from(""));
+    match &changes.outgoing {
+        Outgoing::Unpushed {
+            upstream, ahead: 0, ..
+        } => lines.push(dim(format!("nothing unpushed to {upstream}"))),
+        Outgoing::Unpushed {
+            upstream,
+            ahead,
+            files,
+        } => {
+            let heading = format!("unpushed ({ahead} ahead of {upstream})");
+            lines.push(Line::from(section_label(&heading)));
+            list(&mut lines, files);
+        }
+        Outgoing::VsDefault { base, files } => {
+            let heading = format!("on branch vs {base} ({})", files.len());
+            lines.push(Line::from(section_label(&heading)));
+            list(&mut lines, files);
+        }
+        Outgoing::NoUpstream { branch: Some(b) } => {
+            lines.push(dim(format!("no upstream: {b} tracks no remote branch")))
+        }
+        Outgoing::NoUpstream { branch: None } => {
+            lines.push(dim("no upstream: HEAD is detached".to_string()))
+        }
+        Outgoing::NoDefault => lines.push(dim("no default branch to compare with".to_string())),
+    }
+    (lines, tops, selected)
+}
+
+/// One line of a changed file's diff, in the churn column's green and red;
+/// hunk heads in the section labels' mauve, file headers dim. Tabs widened
+/// so the terminal draws them.
+fn diff_line(line: &str) -> Line<'static> {
+    let color = if line.starts_with("+++") || line.starts_with("---") {
+        colors::OVERLAY
+    } else if line.starts_with('+') {
+        colors::DIFF_ADD
+    } else if line.starts_with('-') {
+        colors::DIFF_DEL
+    } else if line.starts_with("@@") {
+        colors::MAUVE
+    } else if line.starts_with(' ') || line.is_empty() {
+        colors::TEXT
+    } else {
+        colors::OVERLAY
+    };
+    Line::from(Span::styled(
+        line.replace('\t', "    "),
+        Style::default().fg(color),
+    ))
+}
+
+/// The inspector's lines in the `changes` view: the highlighted file's
+/// path, then its diff (an untracked file's text plain), or why there is
+/// none.
+fn changes_inspector_lines(app: &App) -> Vec<Line<'static>> {
+    let dim = |text: &str| {
+        Line::from(Span::styled(
+            text.to_string(),
+            Style::default().fg(colors::OVERLAY),
+        ))
+    };
+    let Some((_, file)) = app.changes_highlighted() else {
+        return vec![dim("no file selected")];
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            file.path.clone(),
+            Style::default()
+                .fg(colors::TEXT)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+    match app.highlighted_change_diff().and_then(|d| d.text.as_ref()) {
+        None => lines.push(dim("reading…")),
+        Some(Err(e)) => lines.push(Line::from(Span::styled(
+            format!("could not read: {e}"),
+            Style::default().fg(colors::RED),
+        ))),
+        Some(Ok(text)) if file.status == "??" => lines.extend(text.lines().map(|l| {
+            Line::from(Span::styled(
+                l.replace('\t', "    "),
+                Style::default().fg(colors::TEXT),
+            ))
+        })),
+        Some(Ok(text)) => lines.extend(text.lines().map(diff_line)),
+    }
+    lines
+}
+
+/// The inspector while pane 2 shows `changes` (FZ-60). Lines are clipped,
+/// not wrapped, as a diff reads, so one line is one row and only the rows
+/// on screen are handed to the paragraph; scrolled by the inspector's
+/// offset, clamped to what this frame measured.
+fn render_changes_inspector(frame: &mut Frame, area: Rect, app: &App) {
+    let focused = app.focused_panel == FocusedPanel::Inspector;
+    let border_color = if focused {
+        colors::LAVENDER
+    } else {
+        colors::SURFACE
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .padding(Padding::new(2, 2, 1, 0))
+        .title_top(crate::ui::panel_title(
+            crate::ui::INSPECTOR_NUM,
+            "inspector",
+            focused,
+        ));
+    let inner = block.inner(area);
+    let lines = changes_inspector_lines(app);
+    let max_scroll = u16::try_from(lines.len())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(inner.height);
+    app.inspector_max_scroll.set(max_scroll);
+    let scroll = app.inspector_scroll.min(max_scroll);
+    let visible: Vec<Line> = lines
+        .into_iter()
+        .skip(scroll as usize)
+        .take(inner.height as usize)
         .collect();
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(visible), inner);
@@ -3641,22 +4287,44 @@ fn view_name(view: HistoryView) -> String {
 /// either side of a dimmed `/`, so the pair reads as "either bracket" rather
 /// than as the single `/` key -- which is bound to search.
 ///
-/// `budget` is the border width left over after the pane's own title. Too
-/// tight for all four and it shows the active one alone, which is the half
-/// that cannot be dropped.
+/// `budget` is the border width left over after the pane's own title, and
+/// the strip takes the widest of three forms that fits it: every tab with
+/// its full name; every tab cut to its first three letters (`INF · COM`),
+/// same separators, colours and keys; and, when even that does not fit,
+/// `[X/N]` alone, the active view's place in the cycle, its digits in the
+/// view's colour and no key hint beside it.
 fn view_switcher(active: HistoryView, focused: bool, budget: usize) -> Line<'static> {
-    let labels: Vec<String> = HistoryView::ALL.iter().map(|v| view_name(*v)).collect();
-    let index = HistoryView::ALL
-        .iter()
-        .position(|v| *v == active)
-        .unwrap_or(0);
-    tab_switcher(
-        &labels,
-        index,
-        colors::history_view_color(active),
-        focused,
-        budget,
-    )
+    // " [/] " + every label + " · " between each + a trailing space, as
+    // `tab_switcher` measures it.
+    let strip_width = |labels: &[String]| -> usize {
+        let cells: usize = labels.iter().map(|l| l.chars().count()).sum();
+        5 + cells + 3 * (labels.len() - 1) + 1
+    };
+    let on = colors::history_view_color(active);
+    let full: Vec<String> = HistoryView::ALL.iter().map(|v| view_name(*v)).collect();
+    let short: Vec<String> = full.iter().map(|l| l.chars().take(3).collect()).collect();
+    let labels = if strip_width(&full) <= budget {
+        full
+    } else if strip_width(&short) <= budget {
+        short
+    } else {
+        let key = if focused {
+            colors::TEXT
+        } else {
+            colors::OVERLAY
+        };
+        let bold = |c| Style::default().fg(c).add_modifier(Modifier::BOLD);
+        let position = format!("{}/{}", active.index() + 1, HistoryView::COUNT);
+        return Line::from(vec![
+            Span::raw(" "),
+            Span::styled("[", bold(key)),
+            Span::styled(position, bold(on)),
+            Span::styled("]", bold(key)),
+            Span::raw(" "),
+        ])
+        .right_aligned();
+    };
+    tab_switcher(&labels, active.index(), on, focused, budget)
 }
 
 /// A border's `[/]` tab line: pane 2's views (`view_switcher`) and the CI
@@ -4212,6 +4880,7 @@ mod tests {
                 full_log: None,
                 failure: None,
                 budget: None,
+                tip: None,
             },
             chrono::Local::now(),
         );
@@ -5838,7 +6507,7 @@ mod tests {
     #[test]
     fn the_header_and_tab_strip_are_in_every_view() {
         for view in HistoryView::ALL {
-            let text = pane_text(view, 92);
+            let text = pane_text(view, 104);
             assert!(text.contains("~/repos/fleetz"), "{}", view.label());
             assert!(text.contains("synced"), "{}", view.label());
             for tab in HistoryView::ALL {
@@ -5859,7 +6528,7 @@ mod tests {
     #[test]
     fn the_view_switcher_is_in_the_border_and_says_which_keys_move_it() {
         for view in HistoryView::ALL {
-            let border = pane_text(view, 92)
+            let border = pane_text(view, 104)
                 .lines()
                 .next()
                 .unwrap_or_default()
@@ -5907,14 +6576,14 @@ mod tests {
             .collect();
 
         for view in HistoryView::ALL {
-            let mut app = crate::app::App::new(vec![r.clone()], "t".to_string(), 92, 30);
+            let mut app = crate::app::App::new(vec![r.clone()], "t".to_string(), 104, 30);
             app.history_view = view;
             app.set_detail_scroll(150);
-            let mut term = Terminal::new(TestBackend::new(92, 30)).unwrap();
+            let mut term = Terminal::new(TestBackend::new(104, 30)).unwrap();
             term.draw(|f| render_detail_pane(f, f.area(), &app))
                 .unwrap();
             let buf = term.backend().buffer().clone();
-            let border: String = (0..92u16).map(|x| buf[(x, 0)].symbol()).collect();
+            let border: String = (0..104u16).map(|x| buf[(x, 0)].symbol()).collect();
             assert!(
                 border.contains(&view_name(view)),
                 "{} view: scrolled away: {border:?}",
@@ -5936,6 +6605,7 @@ mod tests {
                 HistoryView::Notes => {
                     notes_pane_text(&notes_view_app(&[("notez/a.md", Some("notez"))]))
                 }
+                HistoryView::Changes => notes_pane_text(&changes_view_app(held_changes())),
                 _ => pane_text(view, 92),
             };
             assert!(
@@ -6114,6 +6784,134 @@ mod tests {
                     view.label()
                 );
             }
+        }
+    }
+
+    /// A view's label cut to the first three letters, as the shortened
+    /// strip draws it.
+    fn short_name(view: HistoryView) -> String {
+        view_name(view).chars().take(3).collect()
+    }
+
+    /// The cells a strip of these labels takes, key hint and spacing included.
+    fn switcher_width(labels: &[String]) -> usize {
+        let cells: usize = labels.iter().map(|l| l.chars().count()).sum();
+        5 + cells + 3 * (labels.len() - 1) + 1
+    }
+
+    fn full_width() -> usize {
+        switcher_width(&HistoryView::ALL.map(view_name))
+    }
+
+    fn short_width() -> usize {
+        switcher_width(&HistoryView::ALL.map(short_name))
+    }
+
+    /// A budget of exactly the full width still draws every full name: the
+    /// threshold is inclusive, so the strip never shortens a tab it had room for.
+    #[test]
+    fn a_budget_of_exactly_the_full_width_draws_every_full_name() {
+        let names = HistoryView::ALL.map(view_name);
+        for view in HistoryView::ALL {
+            let line = view_switcher(view, true, full_width());
+            let tabs: Vec<String> = line
+                .spans
+                .iter()
+                .filter(|s| names.contains(&s.content.to_string()))
+                .map(|s| s.content.to_string())
+                .collect();
+            assert_eq!(tabs, names.to_vec(), "{}", view.label());
+            assert!(
+                line.spans.iter().any(|s| s.content == "/"),
+                "{} dropped the [/] hint",
+                view.label()
+            );
+        }
+    }
+
+    /// FZ-60 regression: adding `CHANGES` widened the full strip by ten
+    /// columns, and in that gap the switcher dropped to the active name
+    /// alone. There it now keeps every tab, each cut to three letters, in
+    /// ALL's order, the active one lit and the key hint kept.
+    #[test]
+    fn a_strip_too_narrow_for_full_names_shows_every_tab_shortened() {
+        assert!(short_width() < full_width());
+        for budget in [short_width(), full_width() - 1] {
+            for view in HistoryView::ALL {
+                let line = view_switcher(view, true, budget);
+                let shorts = HistoryView::ALL.map(short_name);
+                let tabs: Vec<_> = line
+                    .spans
+                    .iter()
+                    .filter(|s| shorts.contains(&s.content.to_string()))
+                    .map(|s| (s.content.to_string(), s.style.fg))
+                    .collect();
+                let want: Vec<_> = HistoryView::ALL
+                    .iter()
+                    .map(|v| {
+                        let colour = match *v == view {
+                            true => colors::history_view_color(view),
+                            false => colors::SUBTEXT,
+                        };
+                        (short_name(*v), Some(colour))
+                    })
+                    .collect();
+                assert_eq!(tabs, want, "{} at budget {budget}", view.label());
+                assert!(
+                    line.spans.iter().any(|s| s.content == "/"),
+                    "the key hint was dropped at budget {budget}"
+                );
+            }
+        }
+    }
+
+    /// Too narrow even for the short labels, the strip is `[X/N]`: the active
+    /// view's place in the cycle, digits in its colour, no label text.
+    #[test]
+    fn a_strip_too_narrow_for_short_names_shows_the_position_alone() {
+        let budget = short_width() - 1;
+        let n = HistoryView::COUNT;
+        for (i, view) in [(1, HistoryView::ALL[0]), (n, HistoryView::ALL[n - 1])] {
+            let line = view_switcher(view, true, budget);
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert_eq!(text, format!(" [{i}/{n}] "), "{}", view.label());
+            let digits = line
+                .spans
+                .iter()
+                .find(|s| s.content == format!("{i}/{n}"))
+                .expect("the position is one span");
+            assert_eq!(digits.style.fg, Some(colors::history_view_color(view)));
+            for bracket in ["[", "]"] {
+                let span = line.spans.iter().find(|s| s.content == bracket).unwrap();
+                assert_eq!(span.style.fg, Some(colors::TEXT), "{bracket} is not a key");
+            }
+            for other in HistoryView::ALL {
+                assert!(
+                    !text.contains(&short_name(other)),
+                    "{} label drawn",
+                    other.label()
+                );
+            }
+        }
+    }
+
+    /// The position form drops the `[/]` hint: its own brackets already
+    /// stand there, and a second pair beside them reads as noise.
+    #[test]
+    fn the_position_form_has_no_key_hint() {
+        for view in HistoryView::ALL {
+            let line = view_switcher(view, true, short_width() - 1);
+            assert!(
+                !line.spans.iter().any(|s| s.content == "/"),
+                "{} kept the [/] hint",
+                view.label()
+            );
+            let brackets = line
+                .spans
+                .iter()
+                .filter(|s| s.content == "[" || s.content == "]")
+                .count();
+            assert_eq!(brackets, 2, "{}", view.label());
         }
     }
 
@@ -6304,7 +7102,7 @@ mod tests {
             app.history_view = view;
             // A run is not a commit; FZ-30f details runs.
             let expected = match view {
-                HistoryView::Ci | HistoryView::Notes => None,
+                HistoryView::Ci | HistoryView::Notes | HistoryView::Changes => None,
                 _ => Some("a1b2c3d"),
             };
             assert_eq!(
@@ -6860,14 +7658,15 @@ mod tests {
         let text = header_text(r, 100);
         assert!(!text.contains("secret"), "credential on screen:\n{text}");
         assert!(!text.contains("user"), "userinfo on screen:\n{text}");
-        assert!(
-            text.contains("https://github.com/Gaurgle/fleetz.git"),
-            "{text}"
-        );
+        // Named as `owner/name` since FZ-95, the URL's prefix dropped.
+        assert!(text.contains("Gaurgle/fleetz"), "{text}");
+        assert!(!text.contains("https://"), "{text}");
     }
 
     /// Rule 5 and rule 8 in the pane: under the counts, that the fetch
     /// failed, why and since when, then git's line with no credential in it.
+    /// Since FZ-95's fix cycle (Andreas, 2026-11-06) on one orange banner
+    /// row under the block, cut with `…`, and whole in `info`'s body.
     #[test]
     fn a_failed_fetch_is_spelled_out_under_the_counts() {
         let mut r = cloned_repo();
@@ -6882,16 +7681,27 @@ mod tests {
             .record(&crate::git::FetchOutcome::Failed(failure), at);
         let text = header_text(r, 100);
         let rows: Vec<&str> = text.lines().collect();
-        // One row higher since FZ-93 took the readout's row away.
+        // The counts on the block's first row; the failure and git's reason
+        // on one banner row under the block's two rows (this repo has no
+        // third; three while the window box stood beside them), cut at the
+        // pane's edge, with no divider crossed: the row holds the frame's
+        // two borders and nothing else.
         assert!(rows[2].contains("2 behind"), "{text}");
-        assert!(
-            rows[3].contains(&format!(
-                "⚠ fetch failed: remote unreachable, as of {}",
-                at.format("%H:%M")
-            )),
-            "{text}"
+        let failure = format!(
+            "⚠ fetch failed: remote unreachable, as of {}",
+            at.format("%H:%M")
         );
-        assert!(rows[4].contains("fatal: unable to access"), "{text}");
+        let reason = "fatal: unable to access 'https://host.invalid/o/r.git/'";
+        let banner = rows[4];
+        assert!(banner.contains(&format!("{failure} · fatal")), "{text}");
+        assert!(!banner.contains(reason), "not cut: {banner:?}");
+        assert!(banner.trim_end_matches('│').trim_end().ends_with('…'));
+        assert_eq!(banner.matches('│').count(), 2, "a divider on {banner:?}");
+        assert!(rows[5].trim_matches('│').trim().is_empty(), "{text}");
+        // Whole, each on its own row, in `info`'s body below the headliner.
+        let body = rows[6..].join("\n");
+        assert!(body.contains(&failure), "{text}");
+        assert!(body.contains(reason), "{text}");
     }
 
     /// Nothing extra in the pane while fetches work.
@@ -6912,10 +7722,8 @@ mod tests {
         r.remote_url = Some("\u{2018}https://u:secret@github.com/o/r.git\u{2019}".to_string());
         let text = header_text(r, 100);
         assert!(!text.contains("secret"), "credential on screen:\n{text}");
-        assert!(
-            text.contains("\u{2018}https://github.com/o/r.git\u{2019}"),
-            "{text}"
-        );
+        // Named as `owner/name` since FZ-95; the quotes are the URL's own.
+        assert!(text.contains("o/r"), "{text}");
     }
 
     /// The readout: what the view's pinned title row (`INFO`, the headliner's
@@ -6995,27 +7803,28 @@ mod tests {
         assert!(row.contains("3abc123"), "hash missing: {row:?}");
     }
 
-    /// The fleet column takes its summary's width, so a fleet with every
-    /// counter reads whole (his look, 2026-11-05: `2 not clone…`), and a
-    /// message on the activity row neither widens it nor moves a divider.
+    /// FZ-95: the header's two sections depend on the pane's width alone,
+    /// so the divider stands still between repos and windows: the row is
+    /// split in the middle at every width, and below the local floor there
+    /// are no sections at all (his look, 2026-11-05: "static in size, only
+    /// depending on window width"; the window moved to pane 1's border on
+    /// 2026-11-09, so no label length enters them).
     #[test]
-    fn the_fleet_column_fits_its_summary_and_holds_still() {
-        let summary = "3↓ · 1! · 17 synced · 2 not cloned · 5 PRs";
-        let fleet = |activity: &str| {
-            vec![
-                Line::from("since 1 week [t]"),
-                Line::from(summary),
-                Line::from(activity.to_string()),
-            ]
-        };
-        let width = summary.chars().count();
-        assert_eq!(fleet_column_width(&fleet(""), 160), Some(width));
-        let loud = "x".repeat(80);
-        assert_eq!(fleet_column_width(&fleet(&loud), 160), Some(width));
-        assert_eq!(
-            fleet_column_width(&[Line::from("a")], 160),
-            Some(crate::ui::FLEET_COLUMN_MIN)
-        );
+    fn the_sections_depend_on_the_pane_width_alone() {
+        let mut last = 0;
+        for width in [42, 44, 60, 81, 120, 140, 160] {
+            let s = section_widths(width).unwrap_or_else(|| panic!("sections at {width}"));
+            assert_eq!(s.local + 3 + s.remote, width, "rows fill the pane: {s:?}");
+            assert!(
+                s.local >= s.remote && s.local - s.remote <= 1,
+                "the divider in the middle at {width}: {s:?}"
+            );
+            assert!(s.local > last, "they grow with the pane: {s:?}");
+            last = s.local;
+        }
+        // The local half one column under its floor: plain rows.
+        assert_eq!(section_widths(2 * (MIN_LOCAL_SECTION - 1) + 3), None);
+        assert!(section_widths(2 * MIN_LOCAL_SECTION - 1 + 3).is_some());
     }
 
     #[test]
@@ -7143,39 +7952,36 @@ mod tests {
     }
 
     #[test]
-    /// Local on the left of every header row, remote in its own section from
-    /// the first divider (FZ-93, leaning left on his look of 2026-11-05;
-    /// flush right before). The path used to share row one with the sync
-    /// status, which read as "how it is doing" and "where it lives" run
-    /// together.
-    fn owner_and_url_lean_left_in_the_remote_section() {
-        // 120, not 80: at 80 the fleet column leaves the remote section too
-        // narrow for the URL, which then drops as
-        // `identity_is_dropped_whole_on_a_narrow_pane` requires.
+    /// Local on the left of every header row, remote in its own section,
+    /// right-aligned against the pane's edge (FZ-95, on his look of
+    /// 2026-11-05, two sections since 2026-11-09; from the first divider
+    /// in FZ-93, flush right before). The path used to share row one with
+    /// the sync status, which read as "how it is doing" and "where it
+    /// lives" run together.
+    fn owner_and_url_lean_right_in_the_remote_section() {
         let (state, location, _) = header_rows(cloned_repo(), 120);
+        // `header_rows` trims the rows' ends: a row ending at the pane's
+        // last column before its padding is this long.
+        let edge = 120 - 3;
 
-        // Row one is state only, the owner starting the remote section.
+        // Row one is state only, the owner ending the remote section.
         let (local, remote) = sections(&state);
         assert!(!local.contains("~/repos"), "path left row one: {state:?}");
         assert!(
-            remote.starts_with(' ') && remote.trim_start().ends_with("Gaurgle"),
-            "owner not at the start of the remote section: {state:?}"
-        );
-        assert_eq!(
-            remote.chars().nth(1).map(|c| c != ' '),
-            Some(true),
-            "{state:?}"
+            remote.ends_with(" Gaurgle") && state.chars().count() == edge,
+            "owner not against the pane's edge: {state:?}"
         );
 
-        // Row two is location: local path left, remote URL from the divider.
+        // Row two is location: local path left, `owner/name` against the
+        // edge, the URL's prefix dropped.
         let (local, remote) = sections(&location);
         assert!(
             local.trim_start().starts_with("~/repos/fleetz"),
             "local path not on the left: {location:?}"
         );
         assert!(
-            remote.starts_with(" git@github.com:Gaurgle/fleetz.git"),
-            "remote URL not against the divider: {location:?}"
+            remote.ends_with(" Gaurgle/fleetz") && location.chars().count() == edge,
+            "`owner/name` not against the pane's edge: {location:?}"
         );
     }
 
@@ -7207,54 +8013,105 @@ mod tests {
             .collect()
     }
 
-    /// FZ-93: the header is three sections in order, local, remote and the
-    /// fleet, with two dividers in the same columns on every row.
+    /// FZ-95: the header is two sections, local and remote, with one
+    /// divider in the same column on every row, in the middle of the pane;
+    /// the window is on pane 1's border (2026-11-09), not here.
     #[test]
-    fn the_header_draws_local_remote_and_fleet_with_two_dividers() {
+    fn the_header_draws_local_and_remote_with_one_divider() {
         let rows = header_block(140, |_| {});
         let dividers = divider_columns(&rows[0]);
-        assert_eq!(dividers.len(), 2, "two dividers: {:?}", rows[0]);
-        for row in &rows {
+        assert_eq!(dividers.len(), 1, "one divider: {:?}", rows[0]);
+        // This repo's block is two rows: state and location.
+        for row in &rows[..2] {
             assert_eq!(divider_columns(row), dividers, "row {row:?}");
         }
-        let at = |needle: &str| {
-            rows[0]
-                .chars()
-                .collect::<String>()
-                .find(needle)
-                .map(|byte| rows[0][..byte].chars().count())
-                .unwrap_or_else(|| panic!("{needle} not on {:?}", rows[0]))
+        for row in &rows {
+            assert!(!row.contains('◷') && !row.contains("[t]"), "{row:?}");
+        }
+        let at = |row: &str, needle: &str| {
+            row.find(needle)
+                .map(|byte| row[..byte].chars().count())
+                .unwrap_or_else(|| panic!("{needle} not on {row:?}"))
         };
-        assert!(at("synced") < dividers[0], "{:?}", rows[0]);
-        assert!(dividers[0] < at("Gaurgle") && at("Gaurgle") < dividers[1]);
-        assert!(dividers[1] < at("since 2 weeks [t]"), "{:?}", rows[0]);
+        assert!(at(&rows[0], "synced") < dividers[0], "{:?}", rows[0]);
+        assert!(dividers[0] < at(&rows[0], "Gaurgle"), "{:?}", rows[0]);
         assert!(rows[1].contains("~/repos/fleetz"), "{:?}", rows[1]);
-        assert!(rows[1].contains("git@github.com"), "{:?}", rows[1]);
+        assert!(rows[1].contains("Gaurgle/fleetz"), "{:?}", rows[1]);
+        // The divider halves the space between the frame's padding columns.
+        let inner_right = rows[0].chars().count() - 3;
+        assert!(
+            (dividers[0] - 2).abs_diff(inner_right - dividers[0]) <= 2,
+            "not in the middle: {dividers:?} in {:?}",
+            rows[0]
+        );
     }
 
-    /// FZ-93: the fleet's pieces keep their rows. A message or a manual
-    /// refresh lands on the activity row and moves neither the window, the
-    /// summary nor a divider (his look, 2026-11-05: "keep their places
-    /// static").
+    /// FZ-95: the summary and the activity live in pane 1's box. A message
+    /// or a manual refresh lands on the activity row and moves neither the
+    /// summary rows nor anything in pane 2's header (his look, 2026-11-05:
+    /// "keep their places static").
     #[test]
-    fn a_message_or_a_refresh_moves_no_fleet_row() {
-        let idle = header_block(140, |_| {});
-        let message = header_block(140, |app| {
-            app.set_status("copied 1abc123".to_string(), false)
-        });
-        let refreshing = header_block(140, |app| {
+    fn a_message_or_a_refresh_moves_nothing() {
+        let box_rows = |setup: &dyn Fn(&mut crate::app::App)| {
+            let mut app =
+                crate::app::App::new(vec![cloned_repo()], "since 2 weeks".to_string(), 140, 40);
+            setup(&mut app);
+            summary_box_lines(&app, 40)
+                .iter()
+                .map(|l| l.to_string())
+                .collect::<Vec<_>>()
+        };
+        let quiet = |_: &mut crate::app::App| {};
+        let message =
+            |app: &mut crate::app::App| app.set_status("copied 1abc123".to_string(), false);
+        let refresh = |app: &mut crate::app::App| {
             app.sweep_started = Some(std::time::Instant::now());
             app.sweep_manual = true;
             app.refresh_awaits_poll = true;
-        });
-        assert!(message[2].contains("copied 1abc123"), "{:?}", message[2]);
-        assert!(refreshing[2].contains("checking"), "{:?}", refreshing[2]);
-        assert!(!idle[2].contains("copied") && !idle[2].contains("checking"));
-        for busy in [&message, &refreshing] {
-            assert_eq!(busy[0], idle[0], "the window row moved");
-            assert_eq!(busy[1], idle[1], "the summary row moved");
-            assert_eq!(divider_columns(&busy[2]), divider_columns(&idle[2]));
+        };
+        let idle = box_rows(&quiet);
+        let busy_message = box_rows(&message);
+        let busy_refresh = box_rows(&refresh);
+        let last = idle.len() - 1;
+        assert!(
+            idle[last].trim().is_empty(),
+            "activity row not blank: {idle:?}"
+        );
+        assert!(
+            busy_message[last].contains("copied 1abc123"),
+            "{busy_message:?}"
+        );
+        assert!(busy_refresh[last].contains("checking"), "{busy_refresh:?}");
+        for busy in [&busy_message, &busy_refresh] {
+            assert_eq!(busy.len(), idle.len(), "the box grew");
+            assert_eq!(busy[..last], idle[..last], "a summary row moved");
         }
+        assert_eq!(header_block(140, message), header_block(140, |_| {}));
+        assert_eq!(header_block(140, refresh), header_block(140, |_| {}));
+    }
+
+    /// FZ-95: the summary wraps between counters at pane 1's width, never
+    /// inside one, and the box keeps its activity row.
+    #[test]
+    fn the_summary_wraps_between_counters() {
+        let spans = |text: &str| -> Vec<Span<'static>> {
+            let mut out = Vec::new();
+            for (i, piece) in text.split(" · ").enumerate() {
+                if i > 0 {
+                    out.push(Span::raw(" · "));
+                }
+                out.push(Span::raw(piece.to_string()));
+            }
+            out
+        };
+        let summary = "3↓ · 1! · 17 synced · 2 not cloned · 8 PRs";
+        let one = wrap_counters(spans(summary), 60);
+        assert_eq!(one.len(), 1);
+        let two: Vec<String> = wrap_counters(spans(summary), 24)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert_eq!(two, vec!["3↓ · 1! · 17 synced", "2 not cloned · 8 PRs"]);
     }
 
     /// The whole frame at `w` by `h`: every row as drawn, and the footer's
@@ -7273,12 +8130,12 @@ mod tests {
             .collect()
     }
 
-    /// Where pane 2's header carries the fleet column, the footer is keys
-    /// only: the message and the summary are drawn once, in pane 2 (FZ-93
-    /// review, round 2). Fails while `render_detail_pane` stops marking the
-    /// frame as having drawn the fleet's state.
+    /// Where pane 1 draws its summary box, the footer is keys only: the
+    /// message and the summary are drawn once, in pane 1 (FZ-95; pane 2's
+    /// fleet column in FZ-93, review round 2). Fails while the box stops
+    /// marking the frame as having drawn them.
     #[test]
-    fn beside_the_fleet_column_the_frame_draws_the_message_once() {
+    fn beside_the_summary_box_the_frame_draws_the_message_once() {
         let mut app =
             crate::app::App::new(vec![cloned_repo()], "since 2 weeks".to_string(), 160, 30);
         app.view = crate::app::View::Detail;
@@ -7289,18 +8146,17 @@ mod tests {
         assert!(!summary.is_empty());
         assert!(
             rows.iter().any(|r| r.contains("copied 1abc123")),
-            "pane 2 drew no message:\n{}",
+            "pane 1 drew no message:\n{}",
             rows.join("\n")
         );
         assert!(!last.contains("copied"), "the footer repeats it: {last:?}");
         assert!(!last.contains(&summary), "the footer repeats it: {last:?}");
     }
 
-    /// The same in the `notes` layout, whose fleet status sits right of the
-    /// divider once the header is pinned. Fails while `render_notes_heads`
-    /// stops marking the frame.
+    /// The same in the `notes` layout, whose pane 1 carries the summary box
+    /// as every detail layout's does (FZ-95).
     #[test]
-    fn beside_the_notes_fleet_slot_the_frame_draws_the_message_once() {
+    fn in_the_notes_layout_the_frame_draws_the_message_once() {
         let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
         app.contributions_folded = true;
         app.set_status("copied 1abc123".to_string(), false);
@@ -7313,7 +8169,7 @@ mod tests {
         let (rows, last) = frame_rows(&app, w, h);
         assert!(
             rows.iter().any(|r| r.contains("copied 1abc123")),
-            "the notes slot drew no message:\n{}",
+            "pane 1 drew no message:\n{}",
             rows.join("\n")
         );
         assert!(!last.contains("copied"), "the footer repeats it: {last:?}");
@@ -7325,81 +8181,502 @@ mod tests {
     }
 
     /// A header row's local and remote sections: the text before its first
-    /// divider, and between the first and the fleet column's (FZ-93).
+    /// divider, and between the first and the second (FZ-95).
     fn sections(row: &str) -> (String, String) {
         let mut parts = row.split('│');
         let local = parts.next().unwrap_or_default().to_string();
-        let remote = parts.next().unwrap_or_default().trim_end().to_string();
+        let remote = parts.next().unwrap_or_default().to_string();
         (local, remote)
     }
 
-    /// A header row up to the fleet column's divider (FZ-93), its trailing
-    /// blanks trimmed; the whole row, trimmed, where there is no fleet column.
-    fn before_fleet(row: &str) -> String {
-        row.rsplit_once(" │ ")
-            .map_or(row, |(before, _)| before)
-            .trim_end()
-            .to_string()
-    }
-
     #[test]
-    fn stacked_identity_shares_its_divider_on_both_rows() {
-        // Both rows put the first divider in the same column and start the
-        // remote half right after it, which is the whole point of stacking
-        // them (FZ-93; both rows ended in one column when they were flush
-        // right). The local halves differ in length, so this only holds if
-        // each row is padded to the section independently.
+    fn stacked_identity_shares_its_dividers_on_both_rows() {
+        // Both rows put the divider in the same column and end the remote
+        // half at the pane's edge, which is the whole point of stacking
+        // them (FZ-95, two sections since 2026-11-09; from the first
+        // divider in FZ-93, at the pane's edge before). The halves differ in
+        // length, so this only holds if each row is padded to its sections
+        // independently.
         let (status, url) = pane_rows(cloned_repo(), 120);
-        let divider = |row: &str| row.chars().position(|c| c == '│');
-        assert!(divider(&status).is_some(), "no divider: {status:?}");
+        let columns = |row: &str| -> Vec<usize> {
+            row.chars()
+                .enumerate()
+                .filter(|(_, c)| *c == '│')
+                .map(|(x, _)| x)
+                .collect()
+        };
+        assert_eq!(columns(&status).len(), 1, "one divider: {status:?}");
         assert_eq!(
-            divider(&status),
-            divider(&url),
+            columns(&status),
+            columns(&url),
             "rows divide at different columns: {status:?} vs {url:?}"
         );
-        for row in [&status, &url] {
-            let remote = sections(row).1;
-            assert!(
-                remote.starts_with(' ') && remote.chars().nth(1).is_some_and(|c| c != ' '),
-                "the remote half does not start at the divider: {row:?}"
-            );
-        }
+        // The rows are trimmed at the end, so equal lengths mean both remote
+        // halves end in the same column, the pane's last before its padding.
+        assert_eq!(
+            status.chars().count(),
+            url.chars().count(),
+            "the remote halves end in different columns: {status:?} vs {url:?}"
+        );
+        assert_eq!(status.chars().count(), 120 - 3, "{status:?}");
     }
 
     #[test]
-    /// On a narrow pane each row sheds its own remote half rather than
-    /// truncating it. The local half always survives: it is the half you
-    /// cannot look up anywhere else.
+    /// On a narrow pane the local half always survives: it is the half you
+    /// cannot look up anywhere else. Since FZ-95 the remote section has a
+    /// fixed width, so a remote longer than it is cut with `…` at the
+    /// pane's edge, never run past it (review 1, N1); where the sections
+    /// give way and the plain rows have no room, it is dropped whole.
     fn identity_is_dropped_whole_on_a_narrow_pane() {
-        for width in [24u16, 30, 34, 48, 80] {
-            let (state, location, _) = header_rows(cloned_repo(), width);
-            // The remote section ends at the fleet column where there is one
-            // (FZ-93).
-            let (state, location) = (before_fleet(&state), before_fleet(&location));
-            // The local half always survives: it is the half you cannot look
-            // up anywhere else.
+        let full = "Gaurgle/a-much-longer-repository-name";
+        let long = || {
+            let mut r = cloned_repo();
+            r.remote_url = Some(format!("git@github.com:{full}.git"));
+            r
+        };
+        let mut cut_seen = false;
+        for width in [24u16, 30, 34, 48, 60, 80, 120] {
+            let (_, location, _) = header_rows(long(), width);
             assert!(
                 location.contains("~/repos/fleetz"),
                 "w{width}: local path lost: {location:?}"
             );
-            // A remote half is either complete and flush right, or absent.
-            // Never a truncated fragment.
-            assert!(
-                !state.contains("Gaurgle") || state.ends_with("Gaurgle"),
-                "w{width}: owner truncated: {state:?}"
+            let app = crate::app::App::new(Vec::new(), "test".to_string(), width, 40);
+            let sections = header_sections(&app, usize::from(width - 4)).filter(|s| s.remote > 0);
+            let Some(s) = sections else {
+                assert!(
+                    !location.contains("Gaurgle/"),
+                    "w{width}: remote should have been dropped: {location:?}"
+                );
+                continue;
+            };
+            // The row as drawn starts at the pane's padding column.
+            let chars: Vec<char> = location.chars().collect();
+            let start = 1 + s.local + SECTION_DIVIDER.chars().count();
+            let remote: String = chars[start..start + s.remote].iter().collect();
+            // `header_rows` trims the row's end, so the remote section's
+            // last column is the row's last.
+            assert_eq!(
+                chars.len(),
+                start + s.remote,
+                "w{width}: the remote section moved: {location:?}"
             );
+            let shown = remote.trim_start();
+            if shown != full {
+                let kept = shown.strip_suffix('…').expect("cut with …");
+                assert!(full.starts_with(kept), "w{width}: {shown:?}");
+                cut_seen = true;
+            }
+        }
+        assert!(cut_seen, "no width cut the remote");
+        // And at a width with no room for it, it really is gone.
+        let (_, location, _) = header_rows(long(), 34);
+        assert!(
+            !location.contains("Gaurgle/"),
+            "remote should have been dropped: {location:?}"
+        );
+    }
+
+    /// FZ-95 review 1, B3 and N2: every GitHub form reads `owner/name`, any
+    /// other host keeps its host, a credential never shows, and a remote
+    /// that is not a host and exactly `owner/name` keeps its redacted URL.
+    #[test]
+    fn remote_display_names_owner_and_name_in_every_form() {
+        for (url, want) in [
+            ("https://github.com/o/r.git", "o/r"),
+            ("https://www.github.com/o/r", "o/r"),
+            ("git@github.com:o/r.git", "o/r"),
+            ("ssh://git@github.com/o/r", "o/r"),
+            ("ssh://git@github.com:22/o/r.git", "o/r"),
+            ("https://gitlab.com/o/r", "gitlab.com/o/r"),
+            ("git@gitlab.com:o/r.git", "gitlab.com/o/r"),
+            ("https://user:tok3n@github.com/o/r.git", "o/r"),
+            ("https://tok3n@www.github.com/o/r", "o/r"),
+            ("ssh://git:tok3n@github.com/o/r", "o/r"),
+            ("https://user:tok3n@gitlab.com/o/r.git", "gitlab.com/o/r"),
+        ] {
+            assert_eq!(remote_display(url), want, "{url}");
+        }
+        for (url, want) in [
+            ("file:///srv/git/o/r.git", "file:///srv/git/o/r.git"),
+            (
+                "https://gitlab.com/group/sub/r.git",
+                "https://gitlab.com/group/sub/r.git",
+            ),
+            ("myalias:o/r.git", "myalias:o/r.git"),
+            (
+                "https://user:tok3n@gitlab.com/group/sub/r",
+                "https://gitlab.com/group/sub/r",
+            ),
+            (
+                "https://user:tok3n@github.com/o/r/tree/main",
+                "https://github.com/o/r/tree/main",
+            ),
+        ] {
+            assert_eq!(remote_display(url), want, "{url}");
+            assert!(!remote_display(url).contains("tok3n"), "{url}");
+        }
+    }
+
+    /// Pane 2's rows from the top padding (row 1) down, as drawn at
+    /// `width`, for `repo`.
+    fn pane2_rows(
+        repo: RepoStatus,
+        width: u16,
+        setup: impl FnOnce(&mut crate::app::App),
+    ) -> Vec<String> {
+        let mut app = crate::app::App::new(vec![repo], "since 2 weeks".to_string(), width, 40);
+        setup(&mut app);
+        drawn_rows(width, 20, |f| render_detail_pane(f, f.area(), &app))
+            .into_iter()
+            .skip(1)
+            .collect()
+    }
+
+    fn failing(mut r: RepoStatus) -> RepoStatus {
+        let at = chrono::Local::now();
+        let failure = crate::git::FetchFailure {
+            kind: crate::git::FetchFailureKind::Unreachable,
+            detail: Some("fatal: unable to access 'https://host.invalid/o/r.git/'".to_string()),
+        };
+        r.fetch
+            .record(&crate::git::FetchOutcome::Failed(failure), at);
+        r
+    }
+
+    /// FZ-95 review 1, B3: at one width the dividers stand in the same
+    /// columns for two repos of different path lengths, with and without a
+    /// failed fetch; every row of the block, the subtitles' included, draws
+    /// it; the banner under it draws none.
+    #[test]
+    fn the_dividers_stand_still_across_repos_and_failures() {
+        let short = cloned_repo();
+        let mut deep = cloned_repo();
+        deep.name = "project".to_string();
+        // Longer than the local section at 140, so only the cut keeps it in.
+        deep.path = Some(
+            "~/repos/some/very/deep/path/to/the/project/checkout/that/runs/past/its/section"
+                .to_string(),
+        );
+        deep.remote_url = Some("git@github.com:Gaurgle/project.git".to_string());
+        let mut columns: Vec<Vec<usize>> = Vec::new();
+        for repo in [short.clone(), deep.clone(), failing(short), failing(deep)] {
+            let failed = repo.fetch.failure().is_some();
+            let rows = pane2_rows(repo, 140, |_| {});
+            // The subtitles' row and the block's two (three while the window
+            // box stood beside them).
+            for row in &rows[..3] {
+                columns.push(divider_columns(row));
+            }
+            let banner = &rows[3];
+            if failed {
+                assert!(banner.contains("fetch failed"), "{rows:#?}");
+            }
             assert!(
-                !location.contains("github.com")
-                    || location.ends_with("git@github.com:Gaurgle/fleetz.git"),
-                "w{width}: URL truncated: {location:?}"
+                divider_columns(banner).is_empty(),
+                "a divider on {banner:?}"
             );
         }
-        // And at a width that cannot hold it, it really is gone.
-        let (_, location, _) = header_rows(cloned_repo(), 34);
+        assert_eq!(columns[0].len(), 1, "{columns:?}");
+        assert!(columns.iter().all(|c| *c == columns[0]), "{columns:?}");
+    }
+
+    /// FZ-95, Andreas 2026-11-06: a small subtitle over each section,
+    /// `local` and `remote` on the pane's top padding; no `window`, which
+    /// is on pane 1's border since 2026-11-09.
+    #[test]
+    fn each_header_section_carries_its_subtitle() {
+        let rows = pane2_rows(cloned_repo(), 140, |_| {});
+        let dividers = divider_columns(&rows[0]);
+        assert_eq!(dividers.len(), 1, "{:?}", rows[0]);
+        let cols: Vec<char> = rows[0].chars().collect();
+        let between = |a: usize, b: usize| cols[a..b].iter().collect::<String>();
+        assert_eq!(between(1, dividers[0]).trim(), "local", "{:?}", rows[0]);
+        let remote = between(dividers[0] + 1, cols.len() - 1);
+        assert_eq!(remote.trim(), "remote");
+        assert!(remote.ends_with("remote "), "not flush right: {remote:?}");
+        assert!(!rows[1].contains("window"), "{:?}", rows[1]);
+        // Not while the header scrolls with a short pane's body.
+        let short = drawn_rows(140, 9, |f| {
+            let app =
+                crate::app::App::new(vec![cloned_repo()], "since 2 weeks".to_string(), 140, 40);
+            render_detail_pane(f, f.area(), &app)
+        });
+        assert!(!short[1].contains("local"), "{short:#?}");
+    }
+
+    /// FZ-95: the window's short form on a narrow pane 1 border, and
+    /// nothing where the border cannot hold that either.
+    #[test]
+    fn the_border_window_has_a_short_form() {
+        for (header, want) in [
+            ("since 4 weeks", "4w"),
+            ("since 1 week", "1w"),
+            ("since 2 hours (50 of 95 repos)", "2h"),
+            ("since 3 days", "3d"),
+            ("since 1 month", "1mo"),
+            ("since 2 years", "2y"),
+            ("since 2026-11-09  Work (09-17)", "Work"),
+        ] {
+            assert_eq!(window_short_label(header), want, "{header}");
+        }
+        let odd = window_short_label("something else entirely");
+        assert_eq!(odd.chars().count(), SHORT_WINDOW_MAX, "{odd}");
+        assert!(odd.ends_with('…'), "{odd}");
+
+        let app = crate::app::App::new(Vec::new(), "since 4 weeks".to_string(), 80, 40);
+        let drawn = |budget: usize| Line::from(list_title_window(&app, budget)).to_string();
+        assert_eq!(drawn(80), "· ◷ since 4 weeks [t] ");
+        assert_eq!(drawn(21), "· ◷ 4w [t] ");
+        assert_eq!(drawn(10), "");
+    }
+
+    /// FZ-95 review 3: before a load names the window, the border draws
+    /// `◷ [t]` with one space between them, not two.
+    #[test]
+    fn before_a_load_the_border_window_has_one_space() {
+        let app = crate::app::App::new(Vec::new(), String::new(), 80, 40);
+        let drawn = Line::from(list_title_window(&app, 80)).to_string();
+        assert_eq!(drawn, "· ◷ [t] ");
+    }
+
+    /// FZ-95: on a narrow pane the header keeps local and remote, and the
+    /// window stays off it (it is on pane 1's border).
+    #[test]
+    fn a_narrow_header_keeps_its_sections() {
+        let s = section_widths(60).expect("sections at 60");
+        assert!(s.remote >= MIN_LOCAL_SECTION - 1, "{s:?}");
+        let rows = pane2_rows(cloned_repo(), 64, |_| {});
+        assert!(rows[2].contains("~/repos/fleetz"), "{rows:#?}");
+        assert!(rows[2].contains("Gaurgle/fleetz"), "{rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains('◷')), "{rows:#?}");
+    }
+
+    /// FZ-95: the long notes join on one banner row, cut at the pane's
+    /// width.
+    #[test]
+    fn the_banner_is_one_row_cut_with_an_ellipsis() {
+        assert_eq!(banner_line(&[], 40), None);
+        let notes = vec!["⚠ fetch failed: timed out".to_string(), "x".repeat(60)];
+        let line = banner_line(&notes, 40).expect("a banner");
+        let text = line.to_string();
+        assert_eq!(text.chars().count(), 40, "{text:?}");
         assert!(
-            !location.contains("github.com"),
-            "URL should have been dropped: {location:?}"
+            text.starts_with("  ⚠ fetch failed: timed out · x"),
+            "{text:?}"
         );
+        assert!(text.ends_with('…'), "{text:?}");
+        assert!(line.spans.iter().all(|s| s.style.fg == Some(colors::PEACH)));
+    }
+
+    /// FZ-95 (Andreas, 2026-11-09): the window on pane 1's top border,
+    /// `[1] repos · ◷ since 2 weeks [t]`, and pane 2's header two sections
+    /// split in the middle, one divider.
+    #[test]
+    fn the_window_is_on_pane_ones_border_and_pane_two_has_two_sections() {
+        let mut app =
+            crate::app::App::new(vec![cloned_repo()], "since 2 weeks".to_string(), 160, 30);
+        app.view = crate::app::View::Detail;
+        let (rows, _) = frame_rows(&app, 160, 30);
+        assert!(
+            rows[1].contains("[1] repos · ◷ since 2 weeks [t]"),
+            "{:?}",
+            rows[1]
+        );
+        let pane2 = rows
+            .iter()
+            .position(|r| r.contains("Gaurgle/fleetz"))
+            .expect("pane 2's location row");
+        // Pane 2's own section divider, once, in the middle of its row.
+        let detail = crate::ui::panel_rects(Rect::new(0, 0, 160, 30), &app)
+            .detail
+            .expect("pane 2");
+        let s2 = section_widths(usize::from(detail.width - 4)).expect("sections");
+        assert!(s2.local.abs_diff(s2.remote) <= 1, "{s2:?}");
+        assert_eq!(
+            pane_two_dividers(&rows[pane2], detail),
+            vec![usize::from(detail.x) + 2 + s2.local + 1],
+            "{:?}",
+            rows[pane2]
+        );
+    }
+
+    /// The columns of the `│` inside pane 2's frame on a drawn frame row.
+    fn pane_two_dividers(row: &str, detail: Rect) -> Vec<usize> {
+        let row: Vec<char> = row.chars().collect();
+        (usize::from(detail.x) + 1..usize::from(detail.right()) - 1)
+            .filter(|x| row[*x] == '│')
+            .collect()
+    }
+
+    /// FZ-95: the window box pane 2's header carried during the look is
+    /// gone at every width: the frame draws the window once, on pane 1's
+    /// top border, and never a framed box.
+    #[test]
+    fn pane_two_draws_no_window_box_at_any_width() {
+        for width in [60u16, 80, 100, 120, 140, 160, 200] {
+            let mut app =
+                crate::app::App::new(vec![cloned_repo()], "since 2 weeks".to_string(), width, 30);
+            app.view = crate::app::View::Detail;
+            let (rows, _) = frame_rows(&app, width, 30);
+            let detail = crate::ui::panel_rects(Rect::new(0, 0, width, 30), &app)
+                .detail
+                .expect("pane 2");
+            let pane_rows = usize::from(detail.y)..usize::from(detail.bottom());
+            for (y, row) in rows
+                .iter()
+                .enumerate()
+                .filter(|(y, _)| pane_rows.contains(y))
+            {
+                let pane2: String = row
+                    .chars()
+                    .skip(usize::from(detail.x))
+                    .take(usize::from(detail.width))
+                    .collect();
+                assert!(!pane2.contains("window"), "w{width} row {y}: {pane2:?}");
+                assert!(!pane2.contains('◷'), "w{width} row {y}: {pane2:?}");
+                assert!(!pane2.contains("[t]"), "w{width} row {y}: {pane2:?}");
+            }
+        }
+    }
+
+    /// FZ-95 review 3: the window's label, however long, and its shedding
+    /// on a narrow pane 1 border never move pane 2's divider.
+    #[test]
+    fn the_window_label_never_moves_pane_twos_divider() {
+        for width in [100u16, 160] {
+            let dividers = |header: &str| {
+                let mut app =
+                    crate::app::App::new(vec![cloned_repo()], header.to_string(), width, 30);
+                app.view = crate::app::View::Detail;
+                let (rows, _) = frame_rows(&app, width, 30);
+                let detail = crate::ui::panel_rects(Rect::new(0, 0, width, 30), &app)
+                    .detail
+                    .expect("pane 2");
+                let at = rows
+                    .iter()
+                    .position(|r| r.contains("Gaurgle/fleetz"))
+                    .expect("pane 2's location row");
+                (rows[1].clone(), pane_two_dividers(&rows[at], detail))
+            };
+            let (_, plain) = dividers("since 2 weeks");
+            assert_eq!(plain.len(), 1, "w{width}: {plain:?}");
+            for header in [
+                "",
+                "since 2026-11-09  Work (09-17) (50 of 95 repos)",
+                "since 2 weeks (50 of 95 repos and a long coverage note)",
+            ] {
+                let (border, cols) = dividers(header);
+                assert_eq!(cols, plain, "w{width} {header:?}: {border:?}");
+            }
+        }
+    }
+
+    /// FZ-95 review 3: the glyph form draws every counter in the colour the
+    /// words form draws it in, in the same order, from one table.
+    #[test]
+    fn the_glyph_and_word_summaries_share_one_colour_table() {
+        let summary = crate::model::Summary {
+            behind_count: 3,
+            ahead_count: 2,
+            dirty_count: 1,
+            synced_count: 17,
+            not_cloned_count: 4,
+            pr_count: 8,
+        };
+        let words: Vec<_> = crate::ui::footer::summary_spans(&summary)
+            .into_iter()
+            .filter(|s| s.content.trim() != "·")
+            .map(|s| s.style.fg)
+            .collect();
+        let glyphs: Vec<_> = glyph_counters(&summary)
+            .into_iter()
+            .flatten()
+            .map(|s| s.style.fg)
+            .collect();
+        assert_eq!(words.len(), 6, "{words:?}");
+        assert_eq!(glyphs, words);
+    }
+
+    /// FZ-95: the summary in words where they fit two rows, as glyphs and
+    /// counts where they do not (Andreas, 2026-11-06), and the active group
+    /// first (review 1, B2).
+    #[test]
+    fn the_summary_is_words_when_wide_and_glyphs_when_narrow() {
+        let mut behind = cloned_repo();
+        behind.name = "behind".to_string();
+        behind.behind = 3;
+        let mut dirty = cloned_repo();
+        dirty.name = "dirty".to_string();
+        dirty.dirty = 2;
+        let mut absent = repo("absent", RepoKind::Public, Some("Gaurgle"));
+        absent.path = None;
+        absent.location = RepoLocation::NotCloned;
+        let mut app = crate::app::App::new(
+            vec![cloned_repo(), behind, dirty, absent],
+            "since 2 weeks".to_string(),
+            160,
+            40,
+        );
+        let text = |app: &crate::app::App, w: usize| -> Vec<String> {
+            let mut lines: Vec<String> = summary_box_lines(app, w)
+                .iter()
+                .map(|l| l.to_string())
+                .collect();
+            lines.pop(); // the activity row
+            lines
+        };
+        let wide = text(&app, 60).join(" ");
+        assert!(wide.contains("1 synced"), "{wide}");
+        assert!(wide.contains("1 not cloned"), "{wide}");
+        let narrow = text(&app, 8);
+        let joined = narrow.join(" ");
+        assert!(!joined.contains("synced"), "{narrow:?}");
+        // Repos behind and dirty, counted as the words form counts them.
+        assert!(joined.contains("1↓") && joined.contains("1!"), "{narrow:?}");
+        assert!(joined.contains("1✓") && joined.contains("1-"), "{narrow:?}");
+        let spans: Vec<Span> = summary_box_lines(&app, 8)
+            .into_iter()
+            .flat_map(|l| l.spans)
+            .collect();
+        let fg = |text: &str| {
+            spans
+                .iter()
+                .find(|s| s.content == text)
+                .and_then(|s| s.style.fg)
+        };
+        assert_eq!(fg("1✓"), Some(colors::GREEN));
+        assert_eq!(fg("1-"), Some(colors::OVERLAY));
+
+        app.group_names = vec!["work".to_string()];
+        app.active_group = Some(0);
+        // No repo is in the group, so its summary is empty: the group alone.
+        let grouped = text(&app, 60);
+        assert_eq!(grouped, vec!["[work]".to_string()]);
+    }
+
+    /// FZ-95 review 1, B3: the summary box takes exactly its own rows off
+    /// the list, under a divider, and a click on it lands on no list row.
+    #[test]
+    fn the_summary_box_takes_exactly_its_rows_off_the_list() {
+        let mut app =
+            crate::app::App::new(vec![cloned_repo()], "since 2 weeks".to_string(), 120, 50);
+        app.view = crate::app::View::Detail;
+        let (rows, _) = frame_rows(&app, 120, 50);
+        let pane1 = crate::ui::panel_rects(Rect::new(0, 0, 120, 50), &app).repo_list;
+        let inner = Rect::new(pane1.x + 2, pane1.y + 1, pane1.width - 4, pane1.height - 2);
+        let box_h = summary_box_lines(&app, inner.width as usize).len() as u16 + 1;
+        let list = app.list_hits.get();
+        assert_eq!(list.area.y, inner.y + 2, "under the strip and its divider");
+        assert_eq!(list.area.bottom() + box_h, inner.bottom(), "{list:?}");
+        let divider: String = rows[usize::from(list.area.bottom())]
+            .chars()
+            .skip(usize::from(inner.x))
+            .take(usize::from(inner.width))
+            .collect();
+        assert!(divider.chars().all(|c| c == '─'), "{divider:?}");
+        assert_eq!(list.at(inner.x, list.area.bottom()), None);
+        assert!(list.at(inner.x, list.area.bottom() - 1).is_some());
     }
 
     /// Regression class this pane has been bitten by once already: a row that
@@ -7897,8 +9174,32 @@ mod tests {
         );
     }
 
-    fn inspector_screen(w: u16, h: u16) -> Vec<String> {
-        inspector_screen_at(w, h, crate::app::DEFAULT_INSPECTOR_PCT)
+    #[test]
+    fn fresh_app_inspector_opens_at_its_default_with_a_row_floor() {
+        use ratatui::layout::Rect;
+        let rects = |h: u16| {
+            let mut app = crate::app::App::new(vec![list_repo(3)], "h".to_string(), 120, h);
+            app.view = crate::app::View::Detail;
+            app.contributions_folded = true;
+            assert_eq!(app.inspector_pct, 25);
+            crate::ui::panel_rects(Rect::new(0, 0, 120, h), &app)
+        };
+        // Tall terminal: 25 percent of the body, above the floor.
+        let r = rects(80);
+        let tall = r
+            .inspector
+            .expect("tall terminal docks an inspector")
+            .height;
+        assert!(tall > INSPECTOR_MIN_HEIGHT, "not above the floor: {tall}");
+        assert_eq!(tall, r.body.height * 25 / 100, "not 25 percent: {tall}");
+        // Short terminal: 25 percent is under the floor, so the floor holds.
+        let r = rects(22);
+        assert!(r.body.height * 25 / 100 < INSPECTOR_MIN_HEIGHT);
+        let short = r
+            .inspector
+            .expect("short terminal keeps an inspector")
+            .height;
+        assert_eq!(short, INSPECTOR_MIN_HEIGHT, "floor lost: {short}");
     }
 
     fn inspector_screen_at(w: u16, h: u16, inspector_pct: u16) -> Vec<String> {
@@ -7939,7 +9240,7 @@ mod tests {
     /// is the one line only the inspector draws that fixes where that is.
     #[test]
     fn a_wide_inspector_lays_the_files_beside_the_message() {
-        let screen = inspector_screen(160, 40);
+        let screen = inspector_screen_at(160, 40, 30);
         let files_row = row_of(&screen, "changed files");
         assert_eq!(
             files_row,
@@ -9024,6 +10325,168 @@ mod tests {
             .join("\n")
     }
 
+    fn changed(status: &str, path: &str, churn: Option<(u32, u32)>) -> crate::git::ChangedFile {
+        crate::git::ChangedFile {
+            status: status.to_string(),
+            path: path.to_string(),
+            from: None,
+            churn,
+        }
+    }
+
+    /// The design's example (FZ-60): three uncommitted kinds, two files
+    /// unpushed.
+    fn held_changes() -> crate::git::Changes {
+        crate::git::Changes {
+            uncommitted: vec![
+                changed(" M", "src/app.rs", Some((12, 3))),
+                changed("A ", "docs/foo.md", Some((40, 0))),
+                changed("??", "scratch/", None),
+            ],
+            outgoing: crate::git::Outgoing::Unpushed {
+                upstream: "origin/main".to_string(),
+                ahead: 2,
+                files: vec![
+                    changed("M", "src/ui/detail.rs", Some((88, 12))),
+                    changed("D", "src/old.rs", Some((0, 5))),
+                ],
+            },
+        }
+    }
+
+    /// The `changes` view on the busy repo with `changes` held for it.
+    fn changes_view_app(changes: crate::git::Changes) -> crate::app::App {
+        let mut app = crate::app::App::new(vec![busy_repo()], "t".to_string(), 100, 44);
+        app.view = crate::app::View::Detail;
+        app.history_view = HistoryView::Changes;
+        app.inspector_folded = false;
+        let key = app.repos[0].path.clone().expect("cloned");
+        let read = crate::app::ChangesRead {
+            root: key.clone().into(),
+            key,
+            generation: 0,
+            base: app.changes_base,
+        };
+        app.apply_changes_read(read, Ok(changes));
+        app
+    }
+
+    /// FZ-60: both sections under their headings, porcelain's two status
+    /// columns, the churn column, the caret on the cursor's file, and the
+    /// base switch pinned on top.
+    #[test]
+    fn the_changes_view_draws_both_sections_with_status_and_churn() {
+        let mut app = changes_view_app(held_changes());
+        let text = notes_pane_text(&app);
+        for want in [
+            "vs: [upstream] default  (u)",
+            "uncommitted (3)",
+            "▸  M  src/app.rs",
+            "A   docs/foo.md",
+            "??  scratch/",
+            "unpushed (2 ahead of origin/main)",
+            "M   src/ui/detail.rs",
+            "D   src/old.rs",
+            "+88 -12",
+        ] {
+            assert!(text.contains(want), "{want:?} missing:\n{text}");
+        }
+        app.set_detail_selected(4);
+        let text = notes_pane_text(&app);
+        assert!(text.contains("▸ D   src/old.rs"), "{text}");
+    }
+
+    /// The one-line states: no upstream, detached, clean and pushed, the
+    /// default-branch section, and a not-cloned row.
+    #[test]
+    fn the_changes_view_says_why_a_section_is_missing() {
+        use crate::git::{Changes, Outgoing};
+        let with = |outgoing| Changes {
+            uncommitted: Vec::new(),
+            outgoing,
+        };
+        let cases = [
+            (
+                with(Outgoing::NoUpstream {
+                    branch: Some("feat".to_string()),
+                }),
+                "no upstream: feat tracks no remote branch",
+            ),
+            (
+                with(Outgoing::NoUpstream { branch: None }),
+                "no upstream: HEAD is detached",
+            ),
+            (
+                with(Outgoing::Unpushed {
+                    upstream: "origin/main".to_string(),
+                    ahead: 0,
+                    files: Vec::new(),
+                }),
+                "clean and pushed to origin/main",
+            ),
+            (
+                with(Outgoing::VsDefault {
+                    base: "origin/main".to_string(),
+                    files: vec![changed("A", "f.txt", Some((1, 0)))],
+                }),
+                "on branch vs origin/main (1)",
+            ),
+        ];
+        for (changes, want) in cases {
+            let text = notes_pane_text(&changes_view_app(changes));
+            assert!(text.contains(want), "{want:?} missing:\n{text}");
+            assert!(!text.contains("unpushed ("), "{text}");
+        }
+        let mut app = changes_view_app(held_changes());
+        app.repos[0].path = None;
+        let text = notes_pane_text(&app);
+        assert!(text.contains("not cloned: nothing to read"), "{text}");
+    }
+
+    /// The inspector draws the highlighted file's diff with added and
+    /// removed lines in the churn column's green and red, a failed read's
+    /// error in place, and scrolls with j/k when focused.
+    #[test]
+    fn the_changes_inspector_draws_the_diff_in_churn_colors_and_scrolls() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let draw = |app: &crate::app::App| {
+            let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
+            term.draw(|f| render_inspector(f, f.area(), app)).unwrap();
+            term.backend().buffer().clone()
+        };
+        let row_of = |buf: &ratatui::buffer::Buffer, needle: &str| {
+            (0..12u16).find_map(|y| {
+                let row: String = (0..80u16).map(|x| buf[(x, y)].symbol()).collect();
+                row.find(needle)
+                    .map(|x| (row[..x].chars().count() as u16, y))
+            })
+        };
+        let mut app = changes_view_app(held_changes());
+        let read = app.claim_change_diff().expect("the highlighted file");
+        let diff: String = "@@ -1 +1 @@\n-old line\n+new line\n"
+            .chars()
+            .chain((0..30).flat_map(|i| format!(" context {i}\n").chars().collect::<Vec<_>>()))
+            .collect();
+        app.apply_change_diff(read.clone(), Ok(diff));
+        let buf = draw(&app);
+        let (x, y) = row_of(&buf, "+new line").expect("added line drawn");
+        assert_eq!(buf[(x, y)].fg, colors::DIFF_ADD);
+        let (x, y) = row_of(&buf, "-old line").expect("removed line drawn");
+        assert_eq!(buf[(x, y)].fg, colors::DIFF_DEL);
+
+        app.focused_panel = FocusedPanel::Inspector;
+        app.inspector_nav(5);
+        let buf = draw(&app);
+        assert!(row_of(&buf, "+new line").is_none(), "scrolled past it");
+
+        app.change_diff = None;
+        let read = app.claim_change_diff().expect("again");
+        app.apply_change_diff(read, Err("boom".to_string()));
+        let buf = draw(&app);
+        assert!(row_of(&buf, "could not read: boom").is_some());
+    }
+
     /// The tree draws each notes directory as a section, nested directories
     /// indented, and the caret on the cursor's file; the cursor walks files
     /// only, so its second stop is the nested file, not the directory.
@@ -9189,6 +10652,83 @@ mod tests {
             }
         }
         assert!(notes_pane_text(&notes_view_app(&walk)).contains("T TODO.md"));
+    }
+
+    /// FZ-63: a `TODO.md` draws in the reader as a todoz board, sections,
+    /// states, subtasks, tag dots and due dates, and the facts row counts
+    /// its unchecked and half tasks (FZ-68 moved the count there from the
+    /// reader's border).
+    #[test]
+    fn the_reader_draws_a_board_and_counts_what_is_open() {
+        let mut app = notes_view_app(&[("TODO.md", None)]);
+        let read = app.claim_note_read().expect("a read");
+        let draw = |app: &crate::app::App| drawn_rows(60, 12, |f| render_reader(f, f.area(), app));
+        let facts = |app: &crate::app::App| {
+            notes_pane_text(app)
+                .lines()
+                .find(|l| l.contains("─ TODO.md · todo"))
+                .map(str::to_string)
+                .expect("a facts row")
+        };
+        assert!(draw(&app)[0].contains("reading…"), "before the read");
+        assert!(!facts(&app).contains("open"), "before the read");
+
+        app.apply_note_read(read, Ok(crate::ui::todo::FIXTURE.to_string()));
+        let facts = facts(&app);
+        assert!(facts.contains("─ TODO.md · todo · 4 open ·"), "{facts}");
+        // A `TODO.md` is markdown, so a render lands for it too; the board
+        // still draws over it.
+        draw(&app);
+        let render = app.claim_note_render().expect("a render of the board");
+        let lines = crate::ui::markdown::render_markdown(&render.text, render.width);
+        let rendered = crate::app::RenderedNote {
+            width: render.width,
+            lines,
+        };
+        app.apply_note_rendered(&render.path, render.generation, rendered);
+        let body: Vec<String> = draw(&app)[..10]
+            .iter()
+            .map(|r| r.trim_end().to_string())
+            .collect();
+        assert_eq!(
+            body,
+            [
+                "       ▼ Board",
+                "Loose prose line.",
+                "       ▼ Now",
+                " ·●··· ├─▾ [ ] ship the reader @2026-11-01",
+                " ●···· │ ├─▾ [/] parse it",
+                " ···●· │ │ └─  [x] split lines @2026-10-30",
+                " ··●·● │ └─  [ ] draw it",
+                " ····· └─  [x] done thing",
+                "       ▼ Later",
+                " ····· └─  [/] half way",
+            ]
+        );
+    }
+
+    /// FZ-63: the tree opens on `todos`, each board under its own name and
+    /// its place, and a board is not listed again in its directory. The
+    /// facts row at the tree's foot names the highlighted file too, so the
+    /// count leaves it out.
+    #[test]
+    fn the_tree_pins_the_boards_first() {
+        let app = notes_view_app(&[
+            ("TODO.md", None),
+            ("notez/TODO.md", Some("notez")),
+            ("notez/plan.md", Some("notez")),
+        ]);
+        let text = notes_pane_text(&app);
+        let todos = text.find("todos").expect("a todos section");
+        assert!(todos < text.find("plan.md").unwrap(), "{text}");
+        assert!(text.contains("TODO.md  ./"), "{text}");
+        assert!(text.contains("TODO.md  notez/"), "{text}");
+        let tree_rows = text
+            .lines()
+            .filter(|l| !l.contains("─ TODO.md ·"))
+            .map(|l| l.matches("TODO.md").count())
+            .sum::<usize>();
+        assert_eq!(tree_rows, 2, "{text}");
     }
 
     /// The facts beside the header name the file, its kind and size (FZ-68
@@ -9527,7 +11067,7 @@ mod tests {
     /// inside pane 2.
     #[test]
     fn the_notes_preview_is_a_divided_column_of_pane_2() {
-        let (w, h) = (140u16, 44u16);
+        let (w, h) = (160u16, 44u16);
         let mut app = notes_view_app(&[("notez/a.md", Some("notez"))]);
         app.contributions_folded = true;
         let read = app.claim_note_read().expect("a read");
@@ -9595,15 +11135,12 @@ mod tests {
             "{}",
             rows.join("\n")
         );
-        // Right of the divider on those rows only the fleet's state, row for
-        // row (FZ-93), then `notes preview` on the row above the rule.
+        // Right of the divider on those rows nothing, row for row: the
+        // window sits on pane 1's border (FZ-95, 2026-11-09). Then `notes
+        // preview` on the row above the rule.
         let facts = notes.facts.expect("pinned at 44 rows");
         assert_eq!((facts.y, facts.bottom()), (header.y, rule));
-        let mut want: Vec<String> = crate::ui::fleet_lines(&app, chrono::Local::now())
-            .iter()
-            .map(|l| l.to_string().trim().to_string())
-            .collect();
-        want.resize(usize::from(facts.height - 1), String::new());
+        let mut want: Vec<String> = vec![String::new(); usize::from(facts.height - 1)];
         want.push(READER_LABEL.to_string());
         for (i, y) in (header.y..rule).enumerate() {
             let right = span(y, divider + 1, pane2.right() - 1);

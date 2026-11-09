@@ -39,8 +39,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // further left, hard against the terminal edge.
     let width = area.width.saturating_sub(2 * crate::ui::PANE_CONTENT_INSET) as usize;
 
-    // The fleet's state lives in pane 2's header (FZ-93) and on the compact
-    // view's status line. Where this frame drew neither, the footer carries
+    // The fleet's summary and activity live in pane 1's summary box (FZ-95)
+    // and on the compact view's status line. Where this frame drew neither
+    // (a pane 1 too short for the box), the footer carries
     // it, as it always did: a manual refresh's spinner, then the last
     // action's message or the summary. Otherwise the keys have the row.
     let left = if crate::ui::uses_status_line(app) || app.fleet_drawn.get() {
@@ -100,7 +101,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-/// The footer's left side where no fleet column was drawn: a manual
+/// The footer's left side where no summary box was drawn: a manual
 /// refresh's spinner, then the last action's message, or the summary when
 /// there is none.
 fn fallback_spans(app: &App) -> Vec<Span<'static>> {
@@ -127,48 +128,10 @@ pub(crate) fn summary_spans(summary: &Summary) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let dot = || Span::styled(" · ", Style::default().fg(colors::SURFACE));
 
-    if summary.behind_count > 0 {
+    for counter in summary_counters(summary) {
         spans.push(Span::styled(
-            format!("{}↓", summary.behind_count),
-            Style::default().fg(colors::PEACH),
-        ));
-        spans.push(dot());
-    }
-    if summary.ahead_count > 0 {
-        spans.push(Span::styled(
-            format!("{}↑", summary.ahead_count),
-            Style::default().fg(colors::PEACH),
-        ));
-        spans.push(dot());
-    }
-    if summary.dirty_count > 0 {
-        spans.push(Span::styled(
-            format!("{}!", summary.dirty_count),
-            Style::default().fg(colors::YELLOW),
-        ));
-        spans.push(dot());
-    }
-    if summary.synced_count > 0 {
-        spans.push(Span::styled(
-            format!("{} synced", summary.synced_count),
-            Style::default().fg(colors::GREEN),
-        ));
-        spans.push(dot());
-    }
-    if summary.not_cloned_count > 0 {
-        spans.push(Span::styled(
-            format!("{} {NOT_CLONED}", summary.not_cloned_count),
-            Style::default().fg(colors::OVERLAY),
-        ));
-        spans.push(dot());
-    }
-    // Not gated on the `-p` flag: the count rides every poll for free, and a
-    // footer that stays silent about three open PRs because the detail list
-    // was not asked for is the failure this whole summary exists to prevent.
-    if summary.pr_count > 0 {
-        spans.push(Span::styled(
-            format!("{} PRs", summary.pr_count),
-            Style::default().fg(colors::PR_CLR),
+            counter.words,
+            Style::default().fg(counter.color),
         ));
         spans.push(dot());
     }
@@ -183,6 +146,41 @@ pub(crate) fn summary_spans(summary: &Summary) -> Vec<Span<'static>> {
     }
 
     spans
+}
+
+/// One of the fleet's counters as both summary forms draw it: in words
+/// (`17 synced`, `summary_spans`), as a glyph (`17✓`,
+/// `detail::glyph_counters`), and the colour both share.
+pub(crate) struct SummaryCounter {
+    pub words: String,
+    pub glyphs: String,
+    pub color: ratatui::style::Color,
+}
+
+/// The fleet's non-zero counters in the order every summary draws them:
+/// the one colour table for the words and the glyph forms (FZ-95).
+pub(crate) fn summary_counters(summary: &Summary) -> Vec<SummaryCounter> {
+    // The PR count is not gated on the `-p` flag: it rides every poll for
+    // free, and a footer that stays silent about three open PRs because the
+    // detail list was not asked for is the failure this whole summary
+    // exists to prevent.
+    let not_cloned = format!(" {NOT_CLONED}");
+    [
+        (summary.behind_count, "↓", "↓", colors::PEACH),
+        (summary.ahead_count, "↑", "↑", colors::PEACH),
+        (summary.dirty_count, "!", "!", colors::YELLOW),
+        (summary.synced_count, " synced", "✓", colors::GREEN),
+        (summary.not_cloned_count, &not_cloned, "-", colors::OVERLAY),
+        (summary.pr_count, " PRs", " PRs", colors::PR_CLR),
+    ]
+    .into_iter()
+    .filter(|(count, ..)| *count > 0)
+    .map(|(count, word, glyph, color)| SummaryCounter {
+        words: format!("{count}{word}"),
+        glyphs: format!("{count}{glyph}"),
+        color,
+    })
+    .collect()
 }
 
 /// Keybind hints. `with_desc` shows the trailing word ("lazygit", "pull", ...);
@@ -1020,8 +1018,9 @@ mod tests {
         assert!(with_summary > 0 && without > 0);
     }
 
-    /// Where pane 2 drew the fleet's state (FZ-93), the footer is keys only:
-    /// no summary, and the full hints have the whole width.
+    /// Where pane 1 drew its summary box (FZ-95; pane 2's fleet column in
+    /// FZ-93), the footer is keys only: no summary, and the full hints have
+    /// the whole width.
     #[test]
     fn beside_a_drawn_fleet_column_the_footer_is_keys_only() {
         let app = app_with_glyph_summary();
@@ -1036,9 +1035,9 @@ mod tests {
         assert!(!tighter.contains(" lazygit"), "{tighter:?}");
     }
 
-    /// Where it did not (a section's digest, no repo, a narrow pane 2), the
-    /// footer carries the last action's message in the summary's place, so
-    /// an action never ends in silence (FZ-93 review, B1).
+    /// Where it did not (a pane 1 too short for the box), the footer
+    /// carries the last action's message in the summary's place, so an
+    /// action never ends in silence (FZ-93 review, B1).
     #[test]
     fn without_a_fleet_column_the_footer_carries_the_message() {
         let mut app = app_with_glyph_summary();

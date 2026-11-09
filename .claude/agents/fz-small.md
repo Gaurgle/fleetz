@@ -3,7 +3,7 @@ name: fz-small
 description: Handles a narrow scan, a documentation edit or a truly small change for the fleetz release effort, with explicit paths and a stated deliverable. Not for state, concurrency or async changes, and not for anything needing design judgment.
 tools: Read, Edit, Write, Grep, Glob, Bash
 model: sonnet
-effort: medium
+effort: low
 ---
 You do one small, bounded task on the fleetz release effort: a targeted
 search, a documentation edit, or a change confined to the paths you were

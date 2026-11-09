@@ -15,6 +15,7 @@ pub mod markdown;
 pub mod scroll;
 pub mod settings;
 pub mod timewindow;
+pub mod todo;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
@@ -616,7 +617,9 @@ fn pct_for(cells: u16, total: u16) -> u16 {
 pub struct FrameChunks {
     pub header: Rect,
     /// Only in the compact view (`uses_status_line`); the detail view puts
-    /// the same pieces in pane 2's header (`fleet_lines`).
+    /// the summary and the activity in pane 1's summary box and the window
+    /// on pane 1's top border (`detail::summary_box_lines`,
+    /// `detail::list_title_window`).
     pub status: Option<Rect>,
     pub main: Rect,
     pub footer: Rect,
@@ -966,10 +969,16 @@ pub fn panel_title(num: u8, label: &str, focused: bool) -> Line<'static> {
 /// strip (see `filter_strip_line`), the way todoz folds its filter input
 /// into the list header.
 pub fn render(frame: &mut Frame, app: &App) {
+    render_at(frame, app, std::time::Instant::now());
+}
+
+/// `render` with the copy flash (FZ-81) drawn as it stands at `now`, so a
+/// test can pick the moment.
+pub fn render_at(frame: &mut Frame, app: &App, now: std::time::Instant) {
     let area = frame.area();
 
-    // Pane 2 sets it when it draws the fleet's state; the footer, drawn
-    // after it, reads it.
+    // Pane 1's summary box sets it when drawn; the footer, drawn after it,
+    // reads it.
     app.fleet_drawn.set(false);
     let chunks = frame_chunks(area, app);
     render_header(frame, chunks.header, app);
@@ -1020,6 +1029,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     // load error, which has no panes to divide: the grip landed mid-sentence.
     if !app.shows_load_error() {
         grips::render(frame, &rects, app);
+        paint_yank_flash(frame.buffer_mut(), &rects, app, now);
     }
 
     // Footer
@@ -1033,6 +1043,78 @@ pub fn render(frame: &mut Frame, app: &App) {
         Overlay::Settings(so) => settings::render(frame, area, so),
         Overlay::None => {}
     }
+}
+
+/// Paint the copy flash (FZ-81) at `now` over the frame just drawn.
+///
+/// A list pane's flash is its cursor row: the cells wearing the band
+/// (`SELECTED_BG`), which every list draws its cursor with, so the sweep
+/// crosses exactly what the band covers. The inspector and the reader have
+/// no cursor row, so theirs is their title: the inspector's label on its top
+/// border, the reader's `notes preview` above the rule in pane 2. Nothing once
+/// the app no longer points at the row the copy came from.
+fn paint_yank_flash(
+    buf: &mut ratatui::buffer::Buffer,
+    rects: &PanelRects,
+    app: &App,
+    now: std::time::Instant,
+) {
+    let Some(source) = app.yank_flash.source() else {
+        return;
+    };
+    if app.view != View::Detail || source != app.flash_source() {
+        return;
+    }
+    let cells = match source.pane {
+        FocusedPanel::RepoList => band_cells(buf, rects.repo_list),
+        FocusedPanel::Detail => rects.detail.and_then(|r| band_cells(buf, r)),
+        FocusedPanel::Inspector => rects.inspector.and_then(|r| border_label_cells(buf, r)),
+        FocusedPanel::Reader => rects
+            .detail
+            .and_then(|pane| detail::reader_label_rect(pane, app))
+            .and_then(|label| text_cells(buf, label)),
+        FocusedPanel::Contributions => None,
+    };
+    let Some((y, xs)) = cells else { return };
+    let width = xs.len() as u16;
+    for (col, x) in xs.into_iter().enumerate() {
+        buf[(x, y)].bg = app.yank_flash.cell_bg(now, col as u16, width);
+    }
+}
+
+/// The first row inside `pane`'s border that wears the band, and its band
+/// cells' columns. Only the part of `pane` inside the buffer is read: on a
+/// terminal too small for the layout a pane can lie past its edge.
+fn band_cells(buf: &ratatui::buffer::Buffer, pane: Rect) -> Option<(u16, Vec<u16>)> {
+    let inner = pane
+        .inner(ratatui::layout::Margin::new(1, 1))
+        .intersection(buf.area);
+    (inner.top()..inner.bottom()).find_map(|y| {
+        let xs: Vec<u16> = (inner.left()..inner.right())
+            .filter(|&x| buf[(x, y)].bg == colors::SELECTED_BG)
+            .collect();
+        (!xs.is_empty()).then_some((y, xs))
+    })
+}
+
+/// The label on `pane`'s top border: from the corner to the first rule
+/// cell after it. `None` when that border is not inside the buffer.
+fn border_label_cells(buf: &ratatui::buffer::Buffer, pane: Rect) -> Option<(u16, Vec<u16>)> {
+    let border = Rect::new(pane.x, pane.y, pane.width, pane.height.min(1)).intersection(buf.area);
+    if border.is_empty() {
+        return None;
+    }
+    let y = border.top();
+    let xs = (pane.left() + 1..pane.right().saturating_sub(1))
+        .take_while(|&x| border.contains(Position { x, y }) && buf[(x, y)].symbol() != "─")
+        .collect();
+    Some((y, xs))
+}
+
+/// The cells of the one-row `label` that lie inside the buffer.
+fn text_cells(buf: &ratatui::buffer::Buffer, label: Rect) -> Option<(u16, Vec<u16>)> {
+    let label = label.intersection(buf.area);
+    (!label.is_empty()).then(|| (label.y, (label.left()..label.right()).collect()))
 }
 
 /// Draw why there is nothing to show, in the space the repos would have
@@ -1082,10 +1164,10 @@ fn render_load_error(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Render the header: the name and the version on the left; outside the
-/// compact view, loading, GitHub, watch and the sweep time on the right. Everything else
-/// that reports state sits in the fleet column of pane 2's header
-/// (`fleet_lines`), or in the compact view on the status line under this
-/// row.
+/// compact view, loading, GitHub, watch and the sweep time on the right.
+/// The summary and the activity sit in pane 1's summary box, the window in
+/// its box at the right of pane 2's header (FZ-95), and in the compact view
+/// all of it on the status line under this row.
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let name = Span::styled(
         " fleetz",
@@ -1160,8 +1242,8 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Whether the fleet's state is drawn on a status line under the header
-/// rather than in pane 2's header: only the compact view, which has no
-/// pane 2.
+/// rather than in pane 1's summary box and pane 2's header: only the
+/// compact view, which has neither pane.
 pub fn uses_status_line(app: &App) -> bool {
     app.view == View::Compact
 }
@@ -1252,8 +1334,10 @@ fn window_chip(label: &str) -> Span<'static> {
     )
 }
 
-/// The fleet's state as spans, built once and laid out two ways: on one
-/// row by `render_status_line`, one piece per row by `fleet_lines`.
+/// The fleet's state as spans, built once and laid out where each view
+/// shows it: on one row by `render_status_line` (compact), in pane 1's
+/// summary box (`detail::summary_box_lines`), and on the footer where
+/// neither was drawn (`footer::fallback_spans`).
 pub struct FleetPieces {
     pub window: Option<Span<'static>>,
     /// The one key hint off the footer, and only because it sits on the
@@ -1362,62 +1446,6 @@ pub fn fleet_pieces(app: &App, now: chrono::DateTime<chrono::Local>) -> FleetPie
         github_short,
         watch,
     }
-}
-
-/// The narrowest and widest the fleet column of pane 2's header is drawn.
-/// Between them it takes the width of its window and summary rows, so a
-/// fleet with every counter reads whole (his look, 2026-11-05: `2 not
-/// clone…`). Never the activity row's: a message must not move the
-/// dividers.
-pub const FLEET_COLUMN_MIN: usize = 24;
-pub const FLEET_COLUMN_MAX: usize = 56;
-
-/// Trim each span's outer spaces: the status line pads its pieces, a
-/// column lays them out itself.
-fn trimmed(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
-    spans
-        .into_iter()
-        .map(|s| Span::styled(s.content.trim().to_string(), s.style))
-        .collect()
-}
-
-/// The fleet's state in three fixed rows, every piece always in its own
-/// place whether or not it has anything to say, so nothing moves to make
-/// room (his look, 2026-11-05):
-///
-/// 0. the window and its `[t]`, the group after it
-/// 1. the summary
-/// 2. activity: a manual refresh, the last action's message; blank when
-///    there is none
-///
-/// Loading, GitHub, watch and the sweep time sit on the header's divider.
-pub fn fleet_lines(app: &App, now: chrono::DateTime<chrono::Local>) -> Vec<Line<'static>> {
-    let p = fleet_pieces(app, now);
-
-    let mut window: Vec<Span> = Vec::new();
-    if let Some(w) = p.window {
-        window.push(w);
-        window.push(p.window_key);
-    }
-    if let Some(g) = p.group {
-        window.push(Span::raw("  "));
-        window.push(g);
-    }
-
-    let mut activity: Vec<Span> = Vec::new();
-    if let Some(spinner) = p.refreshing {
-        activity.extend(trimmed(spinner));
-        activity.push(Span::raw("  "));
-    }
-    if let Some(message) = p.message {
-        activity.push(message);
-    }
-
-    vec![
-        Line::from(window),
-        Line::from(p.summary),
-        Line::from(activity),
-    ]
 }
 
 /// Render the compact view's status line: the time window, the group and
@@ -2030,11 +2058,11 @@ mod tests {
         crate::app::App::new(Vec::new(), "test".to_string(), 120, 44)
     }
 
-    /// FZ-88: the inspector launches at 30% of the right column, and `=`
+    /// FZ-88: the inspector launches at its default share of the right column, and `=`
     /// (`reset_pane_sizes`) returns to it after a resize. Measured through
     /// `panel_rects`, the geometry clicks are tested against.
     #[test]
-    fn the_inspector_starts_at_thirty_percent_and_equals_returns_to_it() {
+    fn the_inspector_starts_at_its_default_and_equals_returns_to_it() {
         let area = Rect::new(0, 0, 200, 60);
         let mut app = layout_app();
         app.view = crate::app::View::Detail;
@@ -2048,8 +2076,12 @@ mod tests {
         };
 
         let launch = drawn_pct(&app);
-        assert_eq!(app.inspector_pct, 30);
-        assert!((29..=30).contains(&launch), "launch share was {launch}%");
+        assert_eq!(app.inspector_pct, crate::app::DEFAULT_INSPECTOR_PCT);
+        let want = crate::app::DEFAULT_INSPECTOR_PCT;
+        assert!(
+            (want - 2..=want).contains(&launch),
+            "launch share was {launch}%"
+        );
 
         app.resize_inspector(1);
         app.resize_inspector(1);
@@ -2670,8 +2702,8 @@ mod tests {
 
     /// The header row is the name and the version, with GitHub, watch and
     /// the sweep time flush right outside the compact view, whose status
-    /// line carries those instead. The window and the summary are in pane
-    /// 2's fleet column or on that line, never here.
+    /// line carries those instead. The window and the summary are in the
+    /// panes (FZ-95) or on that line, never here.
     #[test]
     fn the_header_draws_the_name_and_version_with_github_watch_and_sweep() {
         use ratatui::Terminal;
@@ -2750,9 +2782,9 @@ mod tests {
         }
     }
 
-    /// Where pane 2 draws no fleet column (here no repo at all), the whole
-    /// frame still reports an action: the footer carries the message
-    /// (FZ-93 review, B1). Fails while the per-frame flag is left set from
+    /// Where pane 1 draws no summary box (here a pane 1 too short for it),
+    /// the whole frame still reports an action: the footer carries the
+    /// message (FZ-93 review, B1; FZ-95). Fails while the per-frame flag is left set from
     /// an earlier frame or the footer stops reading it.
     #[test]
     fn with_no_fleet_column_the_frame_shows_the_message_in_the_footer() {
