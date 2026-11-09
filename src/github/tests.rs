@@ -2026,13 +2026,6 @@ fn the_token_fingerprint_is_pinned() {
     assert_eq!(token_fingerprint(""), "5fccb9a3d0a45785");
 }
 
-/// The published FNV-1a 64 values, for the hash under the fingerprint.
-#[test]
-fn fnv1a_64_matches_the_published_vectors() {
-    assert_eq!(fnv1a_64(*b""), 0xcbf2_9ce4_8422_2325);
-    assert_eq!(fnv1a_64(*b"a"), 0xaf63_dc4c_8601_ec8c);
-}
-
 // --- FZ-09c: one lookup per attempt, the keyed file, migration ---
 //
 // Every test injects its token source and points the request at the

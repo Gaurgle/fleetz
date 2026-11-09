@@ -317,7 +317,9 @@ not continue refactoring tonight then? 2-3 additional hours I can go
 on". 21:25: "I can read the design later, if you get me an artifact.
 Go on as you see fit." Design artifact published; the pure moves (A1b,
 the `model.rs` seam, the `cache`/`github` hash) run on architect checks;
-E3 and E2b wait for his acceptance of D1 to D7.
+E3 and E2b wait for his acceptance of D1 to D7. 21:56: "I accept all
+changes in the design plan" (`docs/app-split-design.md`, D1 to D7 and
+O-A to O-D as recommended); E3 is next, after FZ-110 frees `app.rs`.
 Lead's failure, the same as the morning lead's: from about 16:30 the
 lead wrote estimated times into comments, the log and the handoff
 without reading the clock, up to 3h20 ahead by 18:48; corrected here
