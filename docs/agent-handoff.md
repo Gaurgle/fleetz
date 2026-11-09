@@ -27,10 +27,8 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 ## In flight
 
-- Done today, logged with metrics: FZ-91 (`8ac7ff1`), FZ-103
-  (`62aeb8f`, the layer test; its `super::` gap is a follow-up on #160,
-  to fold into E1's layer-table change or a later ticket).
-- FZ-104 (#161, T1) Done, merged `e831dd1`, logged, swept.
+- Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f` (layer test;
+  `super::` gap on #160), FZ-104 `e831dd1` (tests in sibling files).
 - FZ-105 (#162, E1) In progress since 18:50: architect "fits with
   note", four rulings on the issue (generic progress sender; three
   `app.rs` types move with re-exports; `cli` to the sources layer, O5
