@@ -29,13 +29,14 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 - Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f`, FZ-104
   `e831dd1`, FZ-105 `8f3a57d`, FZ-106 `cc1ecf5`, FZ-107 `270bd71`.
-- FZ-108 (#165, U1) In progress since 20:20: ten files, rulings on
-  the issue; worktree `.claude/worktrees/fz-108`, branch
-  `refactor/fz-108-detail-by-pane`, base `270bd71`, worker hard.
-- FZ-109 (#166, F1) filed and In progress since 20:20: seven files;
-  worktree `.claude/worktrees/fz-109`, branch
-  `refactor/fz-109-main-split`, base `565b974`, worker hard. The two
-  share no file; merges one at a time.
+- FZ-108 (#165, U1) Done, merged `74d527d` 20:52, logged; `main` CI
+  42687467786 watched, worktree sweeps when green.
+- FZ-109 (#166, F1) worker done 20:50 (seven files, 160 tests moved);
+  one existing-test literal changed on the lead's ruling (option A on
+  the issue: `include_str!("main.rs")` to `"input.rs"`, flagged to him).
+  Next: scope check, review (hard), merge of `main` (U1 touched
+  `CLAUDE.md` and `docs/architecture.md` too), gate, merge. Worktree
+  `.claude/worktrees/fz-109`, branch `refactor/fz-109-main-split`.
 - `docs/app-split-design.md` (`a0b95ab`) is proposed for his reading:
   A1, E3, E2b as eight tickets, owner items O-A to O-D; the survey is
   on `main` (`565b974`).
