@@ -29,13 +29,14 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 - Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f` (layer test;
   `super::` gap on #160), FZ-104 `e831dd1` (tests in sibling files).
-- FZ-105 (#162, E1) Done, merged `8f3a57d` 20:45, logged; `main` CI
+- FZ-105 (#162, E1) Done, merged `8f3a57d` 18:26, logged; `main` CI
   42664646798 watched, worktree sweeps when green.
-- FZ-106 (#163, E2a) Review since 21:40: diff `e81875de2fcb`; five
-  items moved, `FetchBackoff` stays in `app.rs` (it calls the GitHub
-  backoff ladder, E3's; ruling on the issue). Worktree
-  `.claude/worktrees/fz-106`, branch `refactor/fz-106-engine-fetch-types`,
-  base `8f3a57d`; worker done (91k tokens), reviewer running (standard).
+- FZ-106 (#163, E2a) Done, merged `cc1ecf5` 18:47, logged; `main` CI
+  42667992050 watched, worktree sweeps when green.
+- FZ-107 (#164, D1) next: `fz-architect` ticket check dispatched 18:48
+  (the three edges' move sets, where `Icons`, `View`, the shared git and
+  github types land); the worker dispatches on `fits`. Nothing running
+  but the architect.
   E2b (planning functions under a fetch owner type) waits with E3 and
   A1 for the consults, filed on his yes (O6).
   Then FZ-105 to FZ-107 (E1, E2, D1), then FZ-108 (#165, U1) and F1
@@ -55,6 +56,6 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 ## Next step
 
 Run FZ-104 to merge, then FZ-105 (E1) in the same way; he is away
-(17:25, "no prompts until completed"): stop only on a safe-merge
+(about 17:05, "no prompts until completed"): stop only on a safe-merge
 failure, a stuck worker or the usage limit. Suggest `cargo install`
 (FZ-91's shading is on `main`).

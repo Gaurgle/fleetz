@@ -303,11 +303,16 @@ About 16:00, on O3 (the design's gate table was stale: FZ-60, FZ-63,
 #81 and #45 were already closed, FZ-91 the one open tree): "1. a, merge
 it first", then "1 is ok, i trust the shading"; on the M5 milestone:
 "i think this is good"; on F1 and U1: "you choose" (U1 filed as FZ-108
-#165, F1 after D1). Away 16:05 to about 16:35 ("can you manage without
-me for a while?").
+#165, F1 after D1). Away about 16:00 to 16:30 ("can you manage without
+me for a while?"), then from about 17:05 ("no prompts until completed").
+Lead's failure, the same as the morning lead's: from about 16:30 the
+lead wrote estimated times into comments, the log and the handoff
+without reading the clock, up to 3h20 ahead by 18:48; corrected here
+from the commit timestamps, and noted on #161 to #163. Commit and
+comment timestamps are authoritative.
 
 - **#148 (FZ-91), the contributions strip shades by the median of its
-  active days.** Merged `8ac7ff1` at 16:33 CET on his word ("i trust the
+  active days.** Merged `8ac7ff1` at 16:26 CET on his word ("i trust the
   shading"), reversing his 11-06 parking ("i prefer the old shading").
   Ticket commit `e74fe67` (reviewed 11-06, diff `829c22f86265`), merge
   of `main` `f242770` resolved by the lead (README's `c` row), diff
@@ -318,7 +323,7 @@ me for a while?").
   FZ-91: review accepted first; fix cycles 0; owner decisions 4; worker 6 + 2; review 7 + 3; models opus:medium/opus:medium; usage worker 87978 tokens, reviewer 51987 + 26947 tokens
 
 - **#160 (FZ-103), L1: the layer test guards the four layers.** Merged
-  `62aeb8f` at 16:52 CET. Commit `c538c08` on base `ee0ba8b`: test-only
+  `62aeb8f` at 16:35 CET. Commit `c538c08` on base `ee0ba8b`: test-only
   `src/architecture.rs` (476 lines) behind `#[cfg(test)] mod
   architecture;` in `main.rs`, one sentence under A6. The test measured
   exactly the design's six edges for its allowlist. Review accepted first
@@ -330,7 +335,7 @@ me for a while?").
   FZ-103: review accepted first; fix cycles 0; owner decisions 0; worker 13; review 10; models opus:medium/opus:medium; usage worker 86960 tokens, reviewer 59847 tokens
 
 - **#161 (FZ-104), T1: tests of files over 1200 lines into sibling
-  files.** Merged `e831dd1` at 18:20 CET. Commit `d63221c` on base
+  files.** Merged `e831dd1` at 17:28 CET. Commit `d63221c` on base
   `80a3493`: 24 test modules in 16 files to same-named sibling files,
   test list identical (1760), eleven `include_str!` paths followed, the
   rules' `paths:` cover the new directories. Architect branch check
@@ -348,7 +353,7 @@ me for a while?").
   FZ-104: review accepted first; fix cycles 0; owner decisions 2; worker 10; review 5; models opus:medium/opus:medium; usage worker 101169 tokens, reviewer 69221 tokens
 
 - **#162 (FZ-105), E1: the engine, view assembly out of `main.rs`.**
-  Merged `8f3a57d` at 20:45 CET. Commit `a01b35b` on base `e831dd1`:
+  Merged `8f3a57d` at 18:26 CET. Commit `a01b35b` on base `e831dd1`:
   `src/engine/{mod,assembly,carriers,fetch,load,status,tests}.rs`, about
   1,400 lines moved from `main.rs` and `app.rs` (`FetchClaims`,
   `ApplyProgress`, `DatasetSource` with `app.rs` re-exports), 42 tests
@@ -373,6 +378,27 @@ me for a while?").
   rules follow the code was already written; the ticket body missed one
   file).
   FZ-105: review accepted first; fix cycles 0; owner decisions 0; worker 4 + 30 + 0.4; review 9 + 0.4; models opus:high, sonnet:low/opus:high; usage worker 70965 + 302216 + 18872 tokens, reviewer 88567 + 4095 tokens
+
+- **#163 (FZ-106), E2a: the pure fetch types into the engine.** Merged
+  `cc1ecf5` at 18:47 CET. Commit `1e5e2a9` on base `8f3a57d`:
+  `FetchReport`, `FetchTally`, `SweepTarget`, `FetchAsk`,
+  `size_held_rows` into `engine/fetch.rs`, three tally tests moved,
+  `report` takes `FetchClaims` from the engine (`Icons` alone holds
+  `report -> app`). Narrowed from E2 on the architect's "needs design"
+  for the planning functions (all take `App`; E2b waits for the fetch
+  owner type with E3 and A1, O6). `FetchBackoff` stayed: it calls the
+  GitHub backoff ladder (ruled for E3). Review accepted first time on
+  `e81875de2fcb`; CI 42667231323 green; combined on `3a14ee8` 1757
+  passed; gate held, then `main` moved by one docs-only commit
+  (`b0ca43d`, the design clause) before the merge; not revalidated, no
+  code changed. Observed, out of scope: `app.rs:1551` `backoff_secs`
+  and `BACKOFF_CAP_SECS` tie the local fetch hold to the GitHub ladder;
+  `docs/module-split-design.md` E2 still says `report -> app` leaves the
+  allowlist (it does with D1's `Icons`); `engine/fetch.rs:209-210`
+  `FetchTally` doc names `SWEEP_STUCK_AFTER` and `GithubFreshness`;
+  the engine tests import `crate::app::tests::fetch_failed`. Remembered:
+  nothing to keep.
+  FZ-106: review accepted first; fix cycles 0; owner decisions 0; worker 9; review 4; models opus:medium/opus:medium; usage worker 91331 tokens, reviewer 47003 tokens
 
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, about 10:45: "allright ooks good
