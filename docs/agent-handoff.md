@@ -55,6 +55,6 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## Next step
 
-21:25, "Go on as you see fit" (2 to 3 more hours): the three pure moves
-above run to merge; E3 and E2b wait for his acceptance of D1 to D7.
-Stop conditions as before; report here at the end.
+22:25, "We can start rounding off so that we are finished around
+23:00": FZ-111 and FZ-110 (both accepted) merge, nothing new starts;
+FZ-113 (E3, #170) is Ready for the next session. Then hand back.

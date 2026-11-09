@@ -479,6 +479,20 @@ comment timestamps are authoritative.
   reads a source file by path follows the code it reads.
   FZ-109: review accepted first; fix cycles 0; owner decisions 0; worker 32 + 2; review 7 + 2; models opus:high/opus:high; usage worker 292754 + 9300 tokens, reviewer 89694 + 12674 tokens
 
+- **#169 (FZ-112), `fnv1a_64` to `cache.rs`; the `cache`/`github` cycle
+  ends.** Filed 21:35 on his "Go on as you see fit", merged `bae1fca` at
+  22:22 CET. Commit `0d3c770` on base `b870f69`: the function moved
+  unchanged with its vectors test, two call sites, the fingerprint test
+  pins the result. `fz-small` (light) built it; review: changes 1 (a
+  stale "two cycles" sentence in section 3, fixed by the lead), accepted
+  on `4ecdf28e2259`; CI 42697867754 green; combined on `9671d6c` 1757
+  passed; gate holds. Method note: the small agent edited through Python
+  and Bash instead of Edit, citing the auto-mode instruction (second
+  time today). Observed, out of scope: nothing guards the cycle from
+  returning (a narrow assertion on `src/cache.rs` would; not required).
+  Remembered: nothing to keep.
+  FZ-112: review changes 1; fix cycles 0; owner decisions 0; worker 11; review 5 + 0.3; models sonnet:low/opus:medium; usage worker 29617 tokens, reviewer 33235 + 4167 tokens
+
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, about 10:45: "allright ooks good
 to me". About 11:05: "lets look at fz-65 / look at fz-38, could/should it
