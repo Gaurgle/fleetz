@@ -1296,15 +1296,7 @@ fn header_number<T: std::str::FromStr>(
 pub fn token_fingerprint(token: &str) -> String {
     const DOMAIN: &str = "fleetz-account-v1:";
     let bytes = DOMAIN.bytes().chain(token.trim().bytes());
-    format!("{:016x}", fnv1a_64(bytes))
-}
-
-/// FNV-1a, 64 bits: offset basis `0xcbf29ce484222325`, prime
-/// `0x100000001b3`, wrapping multiplication.
-pub(crate) fn fnv1a_64(bytes: impl IntoIterator<Item = u8>) -> u64 {
-    bytes.into_iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
-    })
+    format!("{:016x}", crate::cache::fnv1a_64(bytes))
 }
 
 /// Parse a fresh response body, and cache it only if it carried data.

@@ -153,6 +153,14 @@ fn keyed_name(version: u32, host: &str, account: &str, repo_limit: u32) -> Strin
     format!("github-v{version}-{host}-{account}-{repo_limit}.json")
 }
 
+/// FNV-1a, 64 bits: offset basis `0xcbf29ce484222325`, prime
+/// `0x100000001b3`, wrapping multiplication.
+pub(crate) fn fnv1a_64(bytes: impl IntoIterator<Item = u8>) -> u64 {
+    bytes.into_iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
 /// The host as a cache file name spells it: `model::host_key`, the same
 /// function `model::RemoteRef::key` compares remotes by (`github.com`). A host that
 /// is not plain `[a-z0-9.-]` is written as `h_` and a hash of the lowercased
@@ -164,7 +172,7 @@ pub fn host_part(host: &str) -> String {
     if is_plain_host(&lower) {
         return lower;
     }
-    format!("h_{:016x}", crate::github::fnv1a_64(lower.bytes()))
+    format!("h_{:016x}", fnv1a_64(lower.bytes()))
 }
 
 fn is_plain_host(host: &str) -> bool {

@@ -761,3 +761,10 @@ fn the_temporary_names_writes_use_are_the_ones_cleanup_matches() {
         &temp_path_for(Path::new("/x/github-50.json")).unwrap()
     )));
 }
+
+/// The published FNV-1a 64 values, for the hash under the fingerprint.
+#[test]
+fn fnv1a_64_matches_the_published_vectors() {
+    assert_eq!(fnv1a_64(*b""), 0xcbf2_9ce4_8422_2325);
+    assert_eq!(fnv1a_64(*b"a"), 0xaf63_dc4c_8601_ec8c);
+}
