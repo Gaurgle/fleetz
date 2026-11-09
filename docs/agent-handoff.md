@@ -30,8 +30,11 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 - Done today, logged with metrics: FZ-91 (`8ac7ff1`), FZ-103
   (`62aeb8f`, the layer test; its `super::` gap is a follow-up on #160,
   to fold into E1's layer-table change or a later ticket).
-- FZ-104 (#161, T1) next: the gate is clear (O3 settled, no open tree),
-  the `fz-architect` branch check dispatched 16:55; T1 starts on `fits`.
+- FZ-104 (#161, T1) In progress since 17:22: architect "fits with
+  note", gate open, seven rulings on the issue (7 is his: shell moves
+  for this ticket only, "ok, do it like a then"). Worktree
+  `.claude/worktrees/fz-104`, branch `refactor/fz-104-sibling-tests`,
+  base `80a3493`, worker `fz-worker` standard. Record on the issue.
   Then FZ-105 to FZ-107 (E1, E2, D1), then FZ-108 (#165, U1) and F1
   (filed after D1). No worker or reviewer running.
 - Open from the 11-09 reviews (in the log entries): FZ-83's branch-name
@@ -49,6 +52,7 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 ## Next step
 
-Dispatch FZ-104 (T1) on the architect's verdict and green `main` CI
-(run 42646226766); it has his word. Suggest `cargo install` (FZ-91's
-shading is on `main`).
+Run FZ-104 to merge, then FZ-105 (E1) in the same way; he is away
+(17:25, "no prompts until completed"): stop only on a safe-merge
+failure, a stuck worker or the usage limit. Suggest `cargo install`
+(FZ-91's shading is on `main`).
