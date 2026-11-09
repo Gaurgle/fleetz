@@ -30,11 +30,17 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 - Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f`, FZ-104
   `e831dd1`, FZ-105 `8f3a57d`, FZ-106 `cc1ecf5`, FZ-107 `270bd71`
   (20:00; `main` CI 42679265479 watched, worktree sweeps when green).
-- FZ-108 (#165, U1) next: worktree `.claude/worktrees/fz-108`, branch
-  `refactor/fz-108-detail-by-pane`, base `270bd71`; the architect's
-  survey plus U1 ticket check (writes the map) and the A1 and E3
-  consults (report) dispatched 20:05; U1's worker on `fits`, F1 filed
-  from the survey's function list.
+- FZ-108 (#165, U1) In progress since 20:20: ten files, rulings on
+  the issue; worktree `.claude/worktrees/fz-108`, branch
+  `refactor/fz-108-detail-by-pane`, base `270bd71`, worker hard.
+- FZ-109 (#166, F1) filed and In progress since 20:20: seven files;
+  worktree `.claude/worktrees/fz-109`, branch
+  `refactor/fz-109-main-split`, base `565b974`, worker hard. The two
+  share no file; merges one at a time.
+- The survey is on `main` (`565b974`); `docs/app-split-design.md`
+  (`a0b95ab`) is proposed for his reading: A1, E3, E2b as eight tickets,
+  owner items O-A to O-D. The architect's module-measuring script is
+  only in the scratchpad: adding `scripts/measure-modules` is his call.
   E2b (planning functions under a fetch owner type) waits with E3 and
   A1 for the consults, filed on his yes (O6).
   Then FZ-105 to FZ-107 (E1, E2, D1), then FZ-108 (#165, U1) and F1
@@ -53,7 +59,8 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 ## Next step
 
-Unattended from about 19:20 (dinner, then sleep): FZ-107 to merge, then
-FZ-108 (U1) and F1 (file, check, run), the survey and the A1 and E3
-consults. Stop on a safe-merge failure, a stuck worker (two cycles) or
-the usage limit; report here at the end. Suggest `cargo install`.
+Unattended from about 19:20 (dinner, then sleep): FZ-108 and FZ-109 to
+merge, one at a time (combined checks rerun after the first lands).
+Stop on a safe-merge failure, a stuck worker (two cycles) or the usage
+limit; report here at the end. Then nothing starts without his read of
+`docs/app-split-design.md`. Suggest `cargo install`.
