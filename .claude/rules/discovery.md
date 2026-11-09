@@ -1,8 +1,12 @@
 ---
 paths:
   - "src/discovery.rs"
+  - "src/discovery/**"
   - "src/main.rs"
+  - "src/tests.rs"
+  - "src/digest_handler_tests.rs"
   - "src/model.rs"
+  - "src/model/**"
 ---
 
 # Discovery and assembly invariants

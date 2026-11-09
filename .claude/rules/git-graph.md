@@ -1,8 +1,10 @@
 ---
 paths:
   - "src/git.rs"
+  - "src/git/**"
   - "src/graph.rs"
   - "src/ui/detail.rs"
+  - "src/ui/detail/**"
 ---
 
 # Git log and history graph invariants
