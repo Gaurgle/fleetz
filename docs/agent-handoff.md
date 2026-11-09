@@ -30,11 +30,10 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 - Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f`, FZ-104
   `e831dd1`, FZ-105 `8f3a57d`, FZ-106 `cc1ecf5` (E2a; `main` CI
   42667992050 watched, `fz-106` worktree sweeps when green).
-- FZ-107 (#164, D1) In progress since 19:05: architect "fits with
+- FZ-107 (#164, D1) In progress since 18:55: architect "fits with
   note" on all three edges, rulings on the issue (three rounds on one
-  branch, re-exports, `initial_view` moves, one `RemoteKey`, new
-  `engine/budget.rs`, `model.rs` lands at the limit, not split).
-  Worktree `.claude/worktrees/fz-107`, branch
+  branch, re-exports, new `engine/budget.rs`, `model.rs` at the limit,
+  not split). Worktree `.claude/worktrees/fz-107`, branch
   `refactor/fz-107-cut-backward-edges`, base `cc1ecf5`, worker hard.
   E2b (planning functions under a fetch owner type) waits with E3 and
   A1 for the consults, filed on his yes (O6).
