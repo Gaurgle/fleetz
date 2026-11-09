@@ -55,9 +55,10 @@ the saved time window (`window_state.rs`) and the notes walk (`notes.rs`).
 
 ## 2. Module map
 
-Production lines exclude `#[cfg(test)]` code. "Effects" is what the module
-does beyond computing: `proc` runs a program, `net` talks HTTP, `fs`
-touches the disk, `term` draws or reads the terminal.
+Production lines exclude `#[cfg(test)]` code, and file counts exclude the
+sibling test files a `#[cfg(test)] mod tests;` reads (FZ-104). "Effects" is
+what the module does beyond computing: `proc` runs a program, `net` talks
+HTTP, `fs` touches the disk, `term` draws or reads the terminal.
 
 | Module | Lines | Owns | Effects |
 |---|---|---|---|

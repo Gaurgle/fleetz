@@ -2,8 +2,10 @@
 paths:
   - "src/ui/**/*"
   - "src/app.rs"
+  - "src/app/**"
   - "src/contributions.rs"
   - "src/model.rs"
+  - "src/model/**"
 ---
 
 # Terminal UI invariants

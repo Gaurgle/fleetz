@@ -1,10 +1,15 @@
 ---
 paths:
   - "src/github.rs"
+  - "src/github/**"
   - "src/cache.rs"
+  - "src/cache/**"
   - "src/contributions.rs"
   - "src/app.rs"
+  - "src/app/**"
   - "src/main.rs"
+  - "src/tests.rs"
+  - "src/digest_handler_tests.rs"
 ---
 
 # GitHub fetch, budget and cache invariants
