@@ -3,7 +3,6 @@ paths:
   - "src/git.rs"
   - "src/git/**"
   - "src/graph.rs"
-  - "src/ui/detail.rs"
   - "src/ui/detail/**"
 ---
 

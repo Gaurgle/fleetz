@@ -68,7 +68,7 @@ are applied the same way to every row they touch.
 |---|---|---|---|
 | `main.rs` | 3,798 | Startup, the event loop, every input handler, task spawning, sweep and fetch planning, GitHub poll scheduling, editor and opener handoff | proc, term |
 | `app.rs` | 6,172 | `App`: all TUI state (109 fields), the overlays, filters and query parsing, API budget and backoff, per-view caches for ci, notes, worktrees and digest | none (holds ratatui types) |
-| `ui/` (18 files) | 12,318 | Drawing every view from `&App`; `detail.rs` alone is 3,984 | term |
+| `ui/` (28 files) | 13,402 | Drawing every view from `&App`; `detail/` is ten files by pane since FZ-108, 4,751 together: `pane.rs` 1,030, `notes.rs` 612, `mod.rs` 530 (the entry `render` and the helpers the panes share), `commits.rs` 501, `header.rs` 482, `list.rs` 403, `inspector.rs` 377, `worktrees.rs` 355, `changes.rs` 301, `layout.rs` 160 | term |
 | `git.rs` | 2,113 | Every git read and fetch, reading a fetch's outcome and progress and a checkout's `WorkKey` (the types live in `model`), the `changes` read (`changes`, `changed_file_diff`) | proc, fs |
 | `report/` | 2,065 | Print mode: run, render byte for byte as repoz, golden parity harness | proc, fs |
 | `github.rs` | 1,564 | The GraphQL query and its cost, the HTTP client, token lookup, failure kinds; parsing the payload into `model::GithubRepo` | net, proc |
@@ -211,8 +211,10 @@ worktrees, changes and ci. Contracts: `docs/freshness-contract.md`,
 | Render feedback | 18 `Cell` and `RefCell` fields such as `detail_hits`, `list_hits`, `reader_width` | `ui::render`, while drawing |
 
 As it is, any code holding `&mut App` may change any field, and `ui`
-changes some through `Cell` while it holds only `&App` (22 writes, 18 of
-them in `ui/detail.rs`). What keeps the
+changes some through `Cell` while it holds only `&App` (22 writes, 19 of
+them in `ui/detail/`: 8 in `pane.rs`, 4 in `inspector.rs`, 2 each in
+`list.rs` and `notes.rs`, 1 each in `changes.rs`, `mod.rs` and
+`worktrees.rs`). What keeps the
 behavior right today is the invariants in `.claude/rules/` and the tests,
 not the types. `ApiBudget`, `GithubBackoff`, `FetchClaims` (in `engine`
 since FZ-105) and
