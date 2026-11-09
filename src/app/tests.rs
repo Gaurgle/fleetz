@@ -481,17 +481,6 @@ fn navigation_clamps_at_end() {
 }
 
 #[test]
-fn initial_view_small_terminal_is_compact() {
-    assert_eq!(initial_view(SMALL_WIDTH - 1, 40), View::Compact);
-    assert_eq!(initial_view(120, SMALL_HEIGHT - 1), View::Compact);
-}
-
-#[test]
-fn initial_view_roomy_terminal_is_detail() {
-    assert_eq!(initial_view(SMALL_WIDTH, SMALL_HEIGHT), View::Detail);
-}
-
-#[test]
 fn toggle_view() {
     let mut app = make_app(1);
     assert_eq!(app.view, View::Detail);

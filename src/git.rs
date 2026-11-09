@@ -1,4 +1,7 @@
 use crate::model::{BranchStatus, Commit, FileStat, GraphLine, ReflogEntry, RemoteBranch};
+pub use crate::model::{
+    FetchFailure, FetchFailureKind, FetchOutcome, FetchPhase, FetchProgress, WorkKey,
+};
 use chrono::DateTime;
 use std::path::Path;
 use std::process::Stdio;
@@ -131,45 +134,6 @@ pub async fn user_email(repo_path: &Path) -> Option<String> {
     }
     let email = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!email.is_empty()).then_some(email)
-}
-
-/// A cheap fingerprint of what the expensive probes (log, reflog, graph,
-/// stash) read. A sweep that finds it equal to the last one reuses their
-/// output instead of running them. The worktree list is not gated by it:
-/// worktrees are not refs, so `linked_worktrees` reads it on every sweep.
-///
-/// Refs are keyed by content, never by file metadata: every ref's full
-/// object id, as `for-each-ref` reports it, goes into `ref_signature`. File
-/// times and sizes missed nested tags, remote-tracking refs and other
-/// branches, and moved on `pack-refs` and `gc`, which change no ref.
-///
-/// Not seen: anything that changes a probe's answer without moving a ref,
-/// HEAD, the index, the shallow boundary or a reflog size, such as config
-/// that alters `git log` output. Working-tree state is never gated by this
-/// key: `dirty_count` runs on every sweep.
-///
-/// In memory only; never persisted.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkKey {
-    /// Output of rev-parse HEAD: one cheap subprocess buys exact commit identity.
-    pub head_sha: String,
-    pub index_mtime: Option<std::time::SystemTime>,
-    pub index_size: u64,
-    /// Size of the stash reflog (common dir aware); 0 when absent.
-    pub stash_size: u64,
-    /// Size of this checkout's HEAD reflog (`<git_dir>/logs/HEAD`); 0 when
-    /// absent. Catches `reflog expire`, which moves no ref.
-    pub head_log_size: u64,
-    /// The full refname of the branch HEAD names, `None` when detached. Per
-    /// checkout: a linked worktree and its main clone differ here.
-    pub head_ref: Option<String>,
-    /// Hash of every ref's (full refname, full object id) pair (local
-    /// branches, remote-tracking refs, tags at any depth, `refs/stash`,
-    /// notes, replace refs and any other namespace), plus the bytes of
-    /// `<common>/shallow` when it exists. Shared by every checkout of one
-    /// clone. Nothing derived (no ahead or behind, no upstream, no short
-    /// names) goes in.
-    pub ref_signature: u64,
 }
 
 /// One ref as `for-each-ref` lists it: the full refname and the full object
@@ -347,77 +311,6 @@ pub async fn work_key_from(
     })
 }
 
-/// Why a `git fetch` failed, grouped by what you would do about it. Read from
-/// git's stderr under the C locale `git_cmd` sets (`classify_fetch_error`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FetchFailureKind {
-    /// No progress for `FETCH_STALL_LIMIT`.
-    TimedOut,
-    /// Credentials wanted or refused. Prompts are disabled, so a remote that
-    /// asks for a password fails here instead of hanging.
-    Auth,
-    /// ssh refused the key (`Permission denied (publickey)`): the fix is the
-    /// key or the agent, not a password. fleetz fetches with `BatchMode=yes`,
-    /// so a passphrase key that is not in the agent lands here.
-    Ssh,
-    /// The network, DNS or the host itself.
-    Unreachable,
-    /// The remote is missing or is not a repository.
-    NoRemote,
-    /// Anything else, including git failing to start.
-    Other,
-    /// Received more than the automatic-fetch cap (`fetch_max_mb`, FZ-35b)
-    /// and was cut. Not an error: the repo is held until `f` fetches it
-    /// uncapped or a fetch succeeds. The detail is the bytes received
-    /// (`FetchFailure::received_bytes`).
-    TooBig,
-}
-
-/// A failed fetch: its kind, and at most git's first error line with any URL
-/// userinfo removed (rule 8). Never the raw stderr.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FetchFailure {
-    pub kind: FetchFailureKind,
-    pub detail: Option<String>,
-}
-
-/// The detail of a `TooBig` failure: `<bytes> bytes received`.
-const TOO_BIG_SUFFIX: &str = " bytes received";
-
-impl FetchFailure {
-    /// A fetch cut at the cap after receiving `bytes` (FZ-35b).
-    pub fn too_big(bytes: u64) -> Self {
-        Self {
-            kind: FetchFailureKind::TooBig,
-            detail: Some(format!("{bytes}{TOO_BIG_SUFFIX}")),
-        }
-    }
-
-    /// What a `TooBig` fetch had received when it was cut; `None` for any
-    /// other kind.
-    pub fn received_bytes(&self) -> Option<u64> {
-        if self.kind != FetchFailureKind::TooBig {
-            return None;
-        }
-        self.detail
-            .as_deref()?
-            .strip_suffix(TOO_BIG_SUFFIX)?
-            .parse()
-            .ok()
-    }
-}
-
-/// How a fetch for one checkout ended. `NotAttempted` is also what a sweep
-/// that did not fetch reports: requested is not successful (rule 1), and not
-/// requested says nothing at all (rule 2).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum FetchOutcome {
-    #[default]
-    NotAttempted,
-    Succeeded,
-    Failed(FetchFailure),
-}
-
 /// How the fetch process ended, before it is read as an outcome. `run_git`
 /// folds the first two into one `None`; a fetch has to tell them apart.
 enum FetchRun {
@@ -437,31 +330,6 @@ const FETCH_ARGS: &[&str] = &["fetch", "--progress", "--prune"];
 
 /// The longest git error line kept as a failure's detail.
 const FETCH_DETAIL_MAX: usize = 160;
-
-/// Which part of a fetch a progress update is about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FetchPhase {
-    /// The server building the pack (`remote: Counting objects`,
-    /// `remote: Compressing objects`, ...): no bytes yet.
-    Remote,
-    /// The pack arriving: `Receiving objects`, or `Unpacking objects` for a
-    /// fetch small enough to be unpacked loose.
-    Receiving,
-    /// `Resolving deltas` after the pack has arrived.
-    Resolving,
-}
-
-/// One progress update of a running fetch, read from git's stderr.
-/// `objects_total` is 0 when git gave only a count (`Enumerating objects:
-/// 1234`). `bytes` is what has been received so far: git prints it on the
-/// `Receiving objects` lines only, so later updates carry the last value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FetchProgress {
-    pub phase: FetchPhase,
-    pub objects_done: u64,
-    pub objects_total: u64,
-    pub bytes: u64,
-}
 
 /// One `\r`- or `\n`-separated piece of git's stderr read as a progress
 /// update, or `None` when it is anything else. The shapes, as git prints them

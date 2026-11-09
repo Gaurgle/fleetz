@@ -34,7 +34,7 @@ pub struct Config {
     /// Which glyphs mark a repo's kind, its stashes and the header's watch
     /// state: "nerd" (the default) draws Nerd Font icons, "plain" draws ASCII
     /// characters any monospace font has. An unknown value keeps the default.
-    /// See `app::Icons`.
+    /// See `Icons`.
     #[serde(default)]
     pub icons: Option<String>,
     #[serde(default)]
@@ -115,11 +115,11 @@ fn default_github_poll_interval() -> u64 {
 }
 
 fn default_repo_list_pct() -> u16 {
-    crate::app::DEFAULT_REPO_LIST_PCT
+    DEFAULT_REPO_LIST_PCT
 }
 
 fn default_inspector_pct() -> u16 {
-    crate::app::DEFAULT_INSPECTOR_PCT
+    DEFAULT_INSPECTOR_PCT
 }
 
 impl Default for Config {
@@ -225,10 +225,10 @@ impl Config {
 
     /// The view the user pinned in config, if any. Anything unrecognized
     /// (including "auto") means "decide from the terminal size".
-    pub fn forced_view(&self) -> Option<crate::app::View> {
+    pub fn forced_view(&self) -> Option<View> {
         match self.view.as_deref()?.trim().to_lowercase().as_str() {
-            "detail" => Some(crate::app::View::Detail),
-            "compact" => Some(crate::app::View::Compact),
+            "detail" => Some(View::Detail),
+            "compact" => Some(View::Compact),
             _ => None,
         }
     }
@@ -236,9 +236,9 @@ impl Config {
     /// The view to start in for a terminal of this size: the pinned one when
     /// the config names it, otherwise whatever fits. Single source of truth
     /// for both the first frame and every later resize.
-    pub fn startup_view(&self, width: u16, height: u16) -> crate::app::View {
+    pub fn startup_view(&self, width: u16, height: u16) -> View {
         self.forced_view()
-            .unwrap_or_else(|| crate::app::initial_view(width, height))
+            .unwrap_or_else(|| initial_view(width, height))
     }
 
     /// Resolved repo directory with ~ expanded to an absolute path.
@@ -286,6 +286,65 @@ fn config_candidates() -> Vec<PathBuf> {
         }
     }
     paths
+}
+
+/// Which TUI view is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Detail,
+    Compact,
+}
+
+/// Which glyph set the repo kind, stash and watch marks are drawn from,
+/// from the `icons` config key. `Nerd` is the default and draws the Nerd
+/// Font icons; `Plain` draws ASCII stand-ins every monospace font has, for a
+/// terminal without a Nerd Font, where those icons are tofu. The contribution
+/// strip's day squares are not covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Icons {
+    #[default]
+    Nerd,
+    Plain,
+}
+
+impl Icons {
+    /// "plain" selects `Plain`; anything else, a typo included, keeps the
+    /// default, as the other enum-like keys do.
+    pub fn from_config(value: &str) -> Self {
+        match value {
+            "plain" => Self::Plain,
+            _ => Self::Nerd,
+        }
+    }
+
+    /// The string `from_config` reads back as this set: what the settings
+    /// overlay writes and shows.
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Nerd => "nerd",
+            Self::Plain => "plain",
+        }
+    }
+}
+
+/// Repo list width as a percentage of the main area, and the inspector's share
+/// of the right column. These are the sizes every launch starts from.
+pub const DEFAULT_REPO_LIST_PCT: u16 = 35;
+pub const DEFAULT_INSPECTOR_PCT: u16 = 25;
+
+/// Below this width or height, `Detail`'s list+detail split doesn't have
+/// enough room to be useful, so `Compact`'s dense single-line-per-repo grid
+/// is the better default. `v` still lets the user override it either way.
+const SMALL_WIDTH: u16 = 70;
+const SMALL_HEIGHT: u16 = 20;
+
+/// Pick the view a fresh terminal size should start in.
+pub fn initial_view(term_width: u16, term_height: u16) -> View {
+    if term_width < SMALL_WIDTH || term_height < SMALL_HEIGHT {
+        View::Compact
+    } else {
+        View::Detail
+    }
 }
 
 #[cfg(test)]
@@ -692,5 +751,16 @@ mod tests {
         assert_eq!(cfg.contributions_author, None);
         let cfg: Config = toml::from_str(r#"contributions_author = "a@b\\|c@d""#).unwrap();
         assert_eq!(cfg.contributions_author.as_deref(), Some(r"a@b\|c@d"));
+    }
+
+    #[test]
+    fn initial_view_small_terminal_is_compact() {
+        assert_eq!(initial_view(SMALL_WIDTH - 1, 40), View::Compact);
+        assert_eq!(initial_view(120, SMALL_HEIGHT - 1), View::Compact);
+    }
+
+    #[test]
+    fn initial_view_roomy_terminal_is_detail() {
+        assert_eq!(initial_view(SMALL_WIDTH, SMALL_HEIGHT), View::Detail);
     }
 }

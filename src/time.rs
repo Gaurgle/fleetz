@@ -233,6 +233,18 @@ pub fn date_to_utc_end_of_day(date: NaiveDate) -> DateTime<Utc> {
         .unwrap_or_else(Utc::now)
 }
 
+/// How the budget spaces automatic polls (A2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pace {
+    /// No reading, or its window is over: the configured interval applies.
+    Unknown,
+    /// At most one automatic poll per this many seconds.
+    Every(i64),
+    /// At or below the reserve: no automatic poll before `until`, the reset
+    /// plus its jitter.
+    Paused { until: DateTime<Local> },
+}
+
 use chrono::Timelike;
 
 #[cfg(test)]

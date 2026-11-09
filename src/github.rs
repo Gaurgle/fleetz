@@ -2,38 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::contributions::{Calendar, Source};
+pub use crate::model::GithubRepo;
 use crate::model::{CiStatus, PullRequest, RepoKind, ReviewStatus};
-
-/// A repo as returned by the GitHub GraphQL API.
-#[derive(Debug, Clone)]
-pub struct GithubRepo {
-    pub name: String,
-    pub pushed_at: DateTime<Utc>,
-    pub pr_count: u32,
-    pub prs: Vec<PullRequest>,
-    pub ci_status: CiStatus,
-    pub ci_workflow: Option<String>,
-    pub ci_duration: Option<String>,
-    pub repo_kind: RepoKind,
-    /// The owner's login (`Gaurgle`, or an org name). `repo_kind` says which
-    /// *kind* of owner it is; this says who.
-    pub owner: Option<String>,
-    /// GitHub's `diskUsage`, in kilobytes: what the fetch cap's pre-check
-    /// measures growth by (FZ-35b). Updated lazily on GitHub's side. `None`
-    /// in a payload cached before the field was asked for.
-    pub disk_usage: Option<u64>,
-}
-
-impl GithubRepo {
-    /// The key two dataset entries are the same remote by: `model::identity_key`,
-    /// which states the rule.
-    ///
-    /// Takes the parts rather than `&self` so `merge_sources` can key the raw
-    /// nodes before they are parsed into entries.
-    pub fn identity_key(owner: Option<&str>, name: &str) -> (Option<String>, String) {
-        crate::model::identity_key(owner, name)
-    }
-}
 
 /// One GitHub poll's results. Boxed calendar because it is ~1.5KB and this
 /// travels through an `AppEvent` enum whose other variants are pointer-sized.

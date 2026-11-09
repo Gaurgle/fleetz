@@ -137,6 +137,102 @@ pub enum RepoLocation {
     NotCloned,
 }
 
+/// Why a `git fetch` failed, grouped by what you would do about it. Read from
+/// git's stderr under the C locale `git_cmd` sets (`classify_fetch_error`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchFailureKind {
+    /// No progress for `FETCH_STALL_LIMIT`.
+    TimedOut,
+    /// Credentials wanted or refused. Prompts are disabled, so a remote that
+    /// asks for a password fails here instead of hanging.
+    Auth,
+    /// ssh refused the key (`Permission denied (publickey)`): the fix is the
+    /// key or the agent, not a password. fleetz fetches with `BatchMode=yes`,
+    /// so a passphrase key that is not in the agent lands here.
+    Ssh,
+    /// The network, DNS or the host itself.
+    Unreachable,
+    /// The remote is missing or is not a repository.
+    NoRemote,
+    /// Anything else, including git failing to start.
+    Other,
+    /// Received more than the automatic-fetch cap (`fetch_max_mb`, FZ-35b)
+    /// and was cut. Not an error: the repo is held until `f` fetches it
+    /// uncapped or a fetch succeeds. The detail is the bytes received
+    /// (`FetchFailure::received_bytes`).
+    TooBig,
+}
+
+/// A failed fetch: its kind, and at most git's first error line with any URL
+/// userinfo removed (rule 8). Never the raw stderr.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchFailure {
+    pub kind: FetchFailureKind,
+    pub detail: Option<String>,
+}
+
+/// The detail of a `TooBig` failure: `<bytes> bytes received`.
+const TOO_BIG_SUFFIX: &str = " bytes received";
+
+impl FetchFailure {
+    /// A fetch cut at the cap after receiving `bytes` (FZ-35b).
+    pub fn too_big(bytes: u64) -> Self {
+        Self {
+            kind: FetchFailureKind::TooBig,
+            detail: Some(format!("{bytes}{TOO_BIG_SUFFIX}")),
+        }
+    }
+
+    /// What a `TooBig` fetch had received when it was cut; `None` for any
+    /// other kind.
+    pub fn received_bytes(&self) -> Option<u64> {
+        if self.kind != FetchFailureKind::TooBig {
+            return None;
+        }
+        self.detail
+            .as_deref()?
+            .strip_suffix(TOO_BIG_SUFFIX)?
+            .parse()
+            .ok()
+    }
+}
+
+/// How a fetch for one checkout ended. `NotAttempted` is also what a sweep
+/// that did not fetch reports: requested is not successful (rule 1), and not
+/// requested says nothing at all (rule 2).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum FetchOutcome {
+    #[default]
+    NotAttempted,
+    Succeeded,
+    Failed(FetchFailure),
+}
+
+/// Which part of a fetch a progress update is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchPhase {
+    /// The server building the pack (`remote: Counting objects`,
+    /// `remote: Compressing objects`, ...): no bytes yet.
+    Remote,
+    /// The pack arriving: `Receiving objects`, or `Unpacking objects` for a
+    /// fetch small enough to be unpacked loose.
+    Receiving,
+    /// `Resolving deltas` after the pack has arrived.
+    Resolving,
+}
+
+/// One progress update of a running fetch, read from git's stderr.
+/// `objects_total` is 0 when git gave only a count (`Enumerating objects:
+/// 1234`). `bytes` is what has been received so far: git prints it on the
+/// `Receiving objects` lines only, so later updates carry the last value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FetchProgress {
+    pub phase: FetchPhase,
+    pub objects_done: u64,
+    pub objects_total: u64,
+    pub bytes: u64,
+}
+
 /// The three fetch facts of `docs/fetch-outcome-contract.md` for one
 /// checkout: when its remote refs were last actually updated, when a fetch
 /// last finished, and how that ended. The same shape as
@@ -151,13 +247,13 @@ pub struct FetchFacts {
     pub last_success: Option<DateTime<chrono::Local>>,
     /// When a fetch last finished, however it ended.
     pub last_attempt: Option<DateTime<chrono::Local>>,
-    pub outcome: crate::git::FetchOutcome,
+    pub outcome: FetchOutcome,
     /// The latest progress of a fetch running now (FZ-35a), `None` when none
     /// is or it has not reported yet. On the facts rather than beside them
     /// because the row's badges read the facts and nothing else of the
     /// fetch, and because `carried_into` then keeps it across a reload that
     /// lands mid-fetch. In memory only; cleared when the fetch lands.
-    pub progress: Option<crate::git::FetchProgress>,
+    pub progress: Option<FetchProgress>,
     /// GitHub's `diskUsage` (kB) for this checkout's remote when a fetch of
     /// it last succeeded in this session (FZ-35b), the baseline the
     /// pre-check measures growth from. `None` is unknown. In memory only.
@@ -204,8 +300,7 @@ impl FetchFacts {
     /// A fetch for this checkout finished. Only a success advances
     /// `last_success` (rule 3); `NotAttempted` changes nothing (rule 2), not
     /// even the progress of a fetch still running. A finished one ends it.
-    pub fn record(&mut self, outcome: &crate::git::FetchOutcome, now: DateTime<chrono::Local>) {
-        use crate::git::FetchOutcome;
+    pub fn record(&mut self, outcome: &FetchOutcome, now: DateTime<chrono::Local>) {
         match outcome {
             FetchOutcome::NotAttempted => return,
             FetchOutcome::Succeeded => {
@@ -221,9 +316,9 @@ impl FetchFacts {
 
     /// The failure, while the last fetch failed. Behind and ahead are then
     /// counted against the remote refs of `last_success` (rule 5).
-    pub fn failure(&self) -> Option<&crate::git::FetchFailure> {
+    pub fn failure(&self) -> Option<&FetchFailure> {
         match &self.outcome {
-            crate::git::FetchOutcome::Failed(failure) => Some(failure),
+            FetchOutcome::Failed(failure) => Some(failure),
             _ => None,
         }
     }
@@ -242,7 +337,7 @@ impl FetchFacts {
     /// named over a growth GitHub reports.
     pub fn size_hold(&self) -> Option<SizeHold> {
         if let Some(failure) = self.failure()
-            && failure.kind == crate::git::FetchFailureKind::TooBig
+            && failure.kind == FetchFailureKind::TooBig
         {
             return Some(SizeHold::OverCap(failure.received_bytes().unwrap_or(0)));
         }
@@ -269,7 +364,7 @@ impl FetchFacts {
             && newer(at, kept.last_success)
             && newer(at, kept.last_attempt)
         {
-            kept.record(&crate::git::FetchOutcome::Succeeded, at);
+            kept.record(&FetchOutcome::Succeeded, at);
             // The size baseline of that success: the load's own fetch knows
             // it, a `git fetch` run in a terminal does not.
             kept.disk_baseline = loaded.disk_baseline;
@@ -281,12 +376,51 @@ impl FetchFacts {
             && newer(at, kept.last_attempt)
         {
             kept.record(&loaded.outcome, at);
-            if loaded.outcome == crate::git::FetchOutcome::Succeeded {
+            if loaded.outcome == FetchOutcome::Succeeded {
                 kept.disk_baseline = loaded.disk_baseline;
             }
         }
         kept
     }
+}
+
+/// A cheap fingerprint of what the expensive probes (log, reflog, graph,
+/// stash) read. A sweep that finds it equal to the last one reuses their
+/// output instead of running them. The worktree list is not gated by it:
+/// worktrees are not refs, so `linked_worktrees` reads it on every sweep.
+///
+/// Refs are keyed by content, never by file metadata: every ref's full
+/// object id, as `for-each-ref` reports it, goes into `ref_signature`. File
+/// times and sizes missed nested tags, remote-tracking refs and other
+/// branches, and moved on `pack-refs` and `gc`, which change no ref.
+///
+/// Not seen: anything that changes a probe's answer without moving a ref,
+/// HEAD, the index, the shallow boundary or a reflog size, such as config
+/// that alters `git log` output. Working-tree state is never gated by this
+/// key: `dirty_count` runs on every sweep.
+///
+/// In memory only; never persisted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkKey {
+    /// Output of rev-parse HEAD: one cheap subprocess buys exact commit identity.
+    pub head_sha: String,
+    pub index_mtime: Option<std::time::SystemTime>,
+    pub index_size: u64,
+    /// Size of the stash reflog (common dir aware); 0 when absent.
+    pub stash_size: u64,
+    /// Size of this checkout's HEAD reflog (`<git_dir>/logs/HEAD`); 0 when
+    /// absent. Catches `reflog expire`, which moves no ref.
+    pub head_log_size: u64,
+    /// The full refname of the branch HEAD names, `None` when detached. Per
+    /// checkout: a linked worktree and its main clone differ here.
+    pub head_ref: Option<String>,
+    /// Hash of every ref's (full refname, full object id) pair (local
+    /// branches, remote-tracking refs, tags at any depth, `refs/stash`,
+    /// notes, replace refs and any other namespace), plus the bytes of
+    /// `<common>/shallow` when it exists. Shared by every checkout of one
+    /// clone. Nothing derived (no ahead or behind, no upstream, no short
+    /// names) goes in.
+    pub ref_signature: u64,
 }
 
 /// Aggregate status for a single repository.
@@ -373,7 +507,7 @@ pub struct RepoStatus {
     /// instead of re-running those subprocesses; `worktrees` is re-read on
     /// every sweep, since the key cannot see it. None means "unknown", which
     /// always counts as changed.
-    pub work_key: Option<crate::git::WorkKey>,
+    pub work_key: Option<WorkKey>,
     /// Whether the remote refs behind `behind` and `ahead` are current: the
     /// fetch facts for this checkout.
     pub fetch: FetchFacts,
@@ -696,13 +830,65 @@ pub fn host_key(host: &str) -> String {
 
 /// The key two remotes are the same repo by: lowercased owner and name, the
 /// one rule every "same remote" check spells an owner and a name by
-/// (`RemoteRef::key`, `GithubRepo::identity_key`, `main.rs::remote_key`,
-/// `main.rs::names_remote`, discovery's `repo_key`). No owner is the legacy
+/// (`RemoteRef::key`, `GithubRepo::identity_key`, `engine::remote_key`,
+/// `engine::names_remote`, discovery's `repo_key`). No owner is the legacy
 /// key of a payload without `login`, so such an entry is the same as another
 /// only by name, and never the same as an owned one. Logins and repo names
 /// are ASCII, so lowercasing agrees with `eq_ignore_ascii_case`.
 pub fn identity_key(owner: Option<&str>, name: &str) -> (Option<String>, String) {
     (owner.map(str::to_lowercase), name.to_lowercase())
+}
+
+/// A remote identity as assembly compares it: lowercased owner and name. No
+/// owner is the legacy key of a payload without `login`, matched by name.
+/// The host is left out: every dataset entry is on `github.com`, and matching
+/// is host-agnostic (D2).
+pub(crate) type RemoteKey = (Option<String>, String);
+
+/// The remote key of the GitHub repo `repo` carries, or None when it carries
+/// none. Follows `engine::carries`: a Primary, Elsewhere or NotCloned row is
+/// keyed by its owner and name (name alone for a legacy row without owner);
+/// a LocalOnly row only when the load made it a carrier by giving it an
+/// owner, and then by the name its stored origin names, since its own `name`
+/// is its folder's.
+pub fn carrier_key(repo: &RepoStatus) -> Option<RemoteKey> {
+    if repo.location != RepoLocation::LocalOnly {
+        return Some(GithubRepo::identity_key(repo.owner.as_deref(), &repo.name));
+    }
+    let owner = repo.owner.as_deref()?;
+    let origin = crate::model::RemoteRef::parse(repo.remote_url.as_deref()?)?;
+    Some(GithubRepo::identity_key(Some(owner), &origin.name))
+}
+
+/// A repo as returned by the GitHub GraphQL API.
+#[derive(Debug, Clone)]
+pub struct GithubRepo {
+    pub name: String,
+    pub pushed_at: DateTime<Utc>,
+    pub pr_count: u32,
+    pub prs: Vec<PullRequest>,
+    pub ci_status: CiStatus,
+    pub ci_workflow: Option<String>,
+    pub ci_duration: Option<String>,
+    pub repo_kind: RepoKind,
+    /// The owner's login (`Gaurgle`, or an org name). `repo_kind` says which
+    /// *kind* of owner it is; this says who.
+    pub owner: Option<String>,
+    /// GitHub's `diskUsage`, in kilobytes: what the fetch cap's pre-check
+    /// measures growth by (FZ-35b). Updated lazily on GitHub's side. `None`
+    /// in a payload cached before the field was asked for.
+    pub disk_usage: Option<u64>,
+}
+
+impl GithubRepo {
+    /// The key two dataset entries are the same remote by: `model::identity_key`,
+    /// which states the rule.
+    ///
+    /// Takes the parts rather than `&self` so `merge_sources` can key the raw
+    /// nodes before they are parsed into entries.
+    pub fn identity_key(owner: Option<&str>, name: &str) -> (Option<String>, String) {
+        identity_key(owner, name)
+    }
 }
 
 /// `host` from `user@host`, or the input when there is no user.
@@ -818,8 +1004,8 @@ impl RepoStatus {
     /// The destructure is exhaustive on purpose, so a field added to
     /// `GithubRepo` does not compile until someone decides whether the poll
     /// writes it.
-    pub fn apply_github(&mut self, gh: &crate::github::GithubRepo) {
-        let crate::github::GithubRepo {
+    pub fn apply_github(&mut self, gh: &GithubRepo) {
+        let GithubRepo {
             // The match key, not data.
             name: _,
             // Read by `remotes_that_moved` from the dataset, never stored here.

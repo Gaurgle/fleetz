@@ -635,3 +635,20 @@ fn a_load_carries_the_baseline_of_its_own_successful_fetch() {
     let untouched = FetchFacts::from_disk(None);
     assert_eq!(session.carried_into(&untouched).disk_baseline, Some(1_000));
 }
+
+/// Only a `TooBig` failure carries a byte count, and only in the shape
+/// `too_big` wrote.
+#[test]
+fn only_a_too_big_failure_reports_received_bytes() {
+    assert_eq!(FetchFailure::too_big(0).received_bytes(), Some(0));
+    let other = FetchFailure {
+        kind: FetchFailureKind::Other,
+        detail: Some(FetchFailure::too_big(5).detail.unwrap()),
+    };
+    assert_eq!(other.received_bytes(), None);
+    let mangled = FetchFailure {
+        kind: FetchFailureKind::TooBig,
+        detail: Some("lots".to_string()),
+    };
+    assert_eq!(mangled.received_bytes(), None);
+}
