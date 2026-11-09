@@ -28,8 +28,7 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 ## In flight
 
 - Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f`, FZ-104
-  `e831dd1`, FZ-105 `8f3a57d`, FZ-106 `cc1ecf5`, FZ-107 `270bd71`
-  (20:00; `main` CI 42679265479 watched, worktree sweeps when green).
+  `e831dd1`, FZ-105 `8f3a57d`, FZ-106 `cc1ecf5`, FZ-107 `270bd71`.
 - FZ-108 (#165, U1) In progress since 20:20: ten files, rulings on
   the issue; worktree `.claude/worktrees/fz-108`, branch
   `refactor/fz-108-detail-by-pane`, base `270bd71`, worker hard.
@@ -37,25 +36,19 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
   worktree `.claude/worktrees/fz-109`, branch
   `refactor/fz-109-main-split`, base `565b974`, worker hard. The two
   share no file; merges one at a time.
-- The survey is on `main` (`565b974`); `docs/app-split-design.md`
-  (`a0b95ab`) is proposed for his reading: A1, E3, E2b as eight tickets,
-  owner items O-A to O-D. The architect's module-measuring script is
-  only in the scratchpad: adding `scripts/measure-modules` is his call.
-  E2b (planning functions under a fetch owner type) waits with E3 and
-  A1 for the consults, filed on his yes (O6).
-  Then FZ-105 to FZ-107 (E1, E2, D1), then FZ-108 (#165, U1) and F1
-  (filed after D1). No worker or reviewer running.
-- Open from the 11-09 reviews (in the log entries): FZ-83's branch-name
-  and side-run follow-ups and `ci/tip.rs` split; FZ-95's held-fetch glyph
-  (needs his yes on a `badges.rs` test rewrite), two-row header block,
-  `detail.rs` seams. FZ-100 (#157), FZ-102 (#159), the build label and
-  FZ-97 (#154) wait on his word after the batch.
+- `docs/app-split-design.md` (`a0b95ab`) is proposed for his reading:
+  A1, E3, E2b as eight tickets, owner items O-A to O-D; the survey is
+  on `main` (`565b974`).
+- Open from the 11-09 reviews (log): FZ-83 and FZ-95 follow-ups.
+  FZ-100 (#157), FZ-102 (#159), the build label and FZ-97 (#154) wait
+  on his word after the refactor.
 
 ## Open questions
 
-- O5: `cli` as a source (lead's ruling on #162, reversible); O6: E2b
-  as its own ticket. F1 after D1. Older: to file on his 11-05 answers
-  (log); wall-clock tests flaky under load; help `y` row (#116).
+- O5: `cli` as a source (ruling on #162, reversible); O6: E2b as its
+  own ticket; `scripts/measure-modules` from the architect's scratch
+  script? Older: his 11-05 answers to file (log); wall-clock tests flaky
+  under load; help `y` row (#116).
 
 ## Next step
 
