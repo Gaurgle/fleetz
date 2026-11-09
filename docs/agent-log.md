@@ -320,6 +320,12 @@ the `model.rs` seam, the `cache`/`github` hash) run on architect checks;
 E3 and E2b wait for his acceptance of D1 to D7. 21:56: "I accept all
 changes in the design plan" (`docs/app-split-design.md`, D1 to D7 and
 O-A to O-D as recommended); E3 is next, after FZ-110 frees `app.rs`.
+22:25: "We can start rounding off so that we are finished around
+23:00"; 22:26: "We don't have the relay triggers here do we? We've
+passed 80% context. Round off asap, at a good place." Baton released
+22:27 with FZ-111 and FZ-110 at Ready to integrate (both accepted,
+committed, pushed), FZ-113 Ready, nothing running. The automatic
+context handoff did not fire this session (not started with `relay`).
 Lead's failure, the same as the morning lead's: from about 16:30 the
 lead wrote estimated times into comments, the log and the handoff
 without reading the clock, up to 3h20 ahead by 18:48; corrected here
