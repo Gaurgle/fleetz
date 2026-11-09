@@ -406,6 +406,28 @@ comment timestamps are authoritative.
   nothing to keep.
   FZ-106: review accepted first; fix cycles 0; owner decisions 0; worker 9; review 4; models opus:medium/opus:medium; usage worker 91331 tokens, reviewer 47003 tokens
 
+- **#164 (FZ-107), D1: the backward edges cut, the allowlist empty.**
+  Merged `270bd71` at 20:00 CET. Commit `df985d3` on base `cc1ecf5`, 18
+  files: the fetch types, `WorkKey` and `GithubRepo` down into `model`
+  (`git` and `github` re-export); `carrier_key` and `RemoteKey` into
+  `model`, `Pace` into `time` (round 2's ruling after the worker stopped
+  on `A1: ci -> engine`: the design's D1 line sent them to the engine,
+  which a source may not import; `budget.rs` dropped); `View`, `Icons`,
+  `initial_view`, the pane defaults into `config`, `report` takes
+  `Icons` from `config`. Three tests moved; `ALLOWED` is `[]`. Architect
+  check "fits with note" on each edge; review accepted first time on
+  `7da01e770dfd` with three A1 probes; CI 42673565507 green; combined on
+  `0dcf364` 1757 passed; gate holds. Observed, out of scope: `model.rs`
+  at 1,194 production lines (the `sweep.rs` seam next); `docs/architecture.md`
+  section 7 A1 says "removes every dotted edge" though the two in-layer
+  cycles remain; section 2 rows no longer in size order; `docs/ideas.md:776`
+  stale line number; `docs/api-budget-design.md` and the E3 paragraph
+  place the budget in the engine while `Pace` sits in `time`; the worker
+  killed two of its own stalled shells (`cp -i`). Remembered, to the
+  design doc's D1 line (done, `696ea73`): a source imports only sources
+  and the domain, so a value a source reads must live in the domain.
+  FZ-107: review accepted first; fix cycles 0; owner decisions 0; worker 7 + 12; review 5; models opus:high/opus:high; usage worker 86668 + 147565 tokens, reviewer 72567 tokens
+
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, about 10:45: "allright ooks good
 to me". About 11:05: "lets look at fz-65 / look at fz-38, could/should it

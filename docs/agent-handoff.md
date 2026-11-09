@@ -30,10 +30,13 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 - Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f`, FZ-104
   `e831dd1`, FZ-105 `8f3a57d`, FZ-106 `cc1ecf5` (E2a; `main` CI
   42667992050 watched, `fz-106` worktree sweeps when green).
-- FZ-107 (#164, D1) Review since 19:18: diff `7da01e770dfd`, the
-  allowlist is empty (`ci`'s types went to the domain, ruling on the
-  issue). Worktree `.claude/worktrees/fz-107`, branch
-  `refactor/fz-107-cut-backward-edges`, base `cc1ecf5`; reviewer running.
+- FZ-107 (#164, D1) Done, merged `270bd71` 20:00, logged; `main` CI
+  42679265479 watched, worktree sweeps when green. The five are in.
+- FZ-108 (#165, U1) next: worktree `.claude/worktrees/fz-108`, branch
+  `refactor/fz-108-detail-by-pane`, base `270bd71`; the architect's
+  survey plus U1 ticket check (writes the map) and the A1 and E3
+  consults (report) dispatched 20:05; U1's worker on `fits`, F1 filed
+  from the survey's function list.
   E2b (planning functions under a fetch owner type) waits with E3 and
   A1 for the consults, filed on his yes (O6).
   Then FZ-105 to FZ-107 (E1, E2, D1), then FZ-108 (#165, U1) and F1
