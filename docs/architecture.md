@@ -254,7 +254,9 @@ Rules:
   `fleetz-core` that epoz needs without a rewrite.
 - **A6. Rules are checked, not remembered.** A script fails when an import
   breaks A1 or A2, in the spirit of Relay's gates in tools rather than
-  prose.
+  prose. The check is the unit test `architecture::layers_hold_but_for_the_allowlist`
+  (`src/architecture.rs`), which also fails on A3 and on an allowlist entry
+  that no longer occurs.
 
 What this means for the refactor: the seams come from these layers, not
 from the order functions sit in today's files. The tickets, their order and
