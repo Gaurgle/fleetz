@@ -50,8 +50,8 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 ## Next step
 
-The unattended scope is complete: eight merges today, all green. Nothing
-starts without his read of `docs/app-split-design.md` (E3 first, per
-its order) and his word on O-A to O-D, O5, O6. Suggest `cargo install`
-(the shading is the one visible change; the refactors should show
-nothing). The lead stays up for his return or hands back on request.
+21:25, "Go on as you see fit" (2 to 3 more hours; he reads the design
+later from an artifact): the pure moves run tonight, A1b (overlays and
+query to `app/`), the `model.rs` seam and the `cache`/`github` hash
+cycle, each on an architect check (dispatched 21:28); E3 and E2b wait
+for his acceptance of D1 to D7. Stop conditions as before.

@@ -310,7 +310,14 @@ for humans. I want to read and learn from it ... I still think we should
 have a very good code structure and compartmentalization"; then "We
 can keep on refactoring as we go"; about 19:20: "Or just keep on refactoring
 tonight. I'll be at dinner then sleep, so the cleaner it is the sooner,
-the better." Unattended scope recorded in the handoff.
+the better." Unattended scope recorded in the handoff. 21:15, on
+interleaving features with the refactor: his question, the lead's
+advice to interleave under the gate with E3 and E2b early. 21:20: "Why
+not continue refactoring tonight then? 2-3 additional hours I can go
+on". 21:25: "I can read the design later, if you get me an artifact.
+Go on as you see fit." Design artifact published; the pure moves (A1b,
+the `model.rs` seam, the `cache`/`github` hash) run on architect checks;
+E3 and E2b wait for his acceptance of D1 to D7.
 Lead's failure, the same as the morning lead's: from about 16:30 the
 lead wrote estimated times into comments, the log and the handoff
 without reading the clock, up to 3h20 ahead by 18:48; corrected here
