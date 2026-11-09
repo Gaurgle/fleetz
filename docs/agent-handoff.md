@@ -33,16 +33,16 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 
 - `main` at `cb9987f` (FZ-83 merged `985b682` 10:50, Done; FZ-38 #88
   closed 11:25; both logged). Comment times before 12:30 drift ahead (log).
-- FZ-65 (#121): his look failed 12:00. Rework 1 (wrapped tree rows
-  clipped, FZ-102 for the notes tree) reviewed, committed `97bb086`, CI
-  green; but its test fails on at-a only (worker investigating the
-  environment dependence, 12:30). Then gate, his look again. Record: #121.
+- FZ-65 (#121): his look failed 12:00. Rework (wrapped tree rows clipped,
+  FZ-102 for the notes tree) reviewed, committed `97bb086`, CI green,
+  combined checks green, gate holds on `4e3626b`. **Ready to integrate,
+  his second look** (13:00). On his word: merge, `Closes #121`. Record: #121.
 - FZ-95 (#152, P1): `c3c6830` + merge `5f12f3b` (reviewed), pushed. Fix
-  cycle built (1743 green, both placements behind `W`); review 3 of
-  `fd5b63d0a764` running (12:20). **Asked him 12:20:** may the
-  `badges.rs` hold-text test be rewritten (glyph in pane 1, text in the
-  banner)? Then his look (pick the placement), remove the loser,
-  re-review, gate. FZ-100 (#157, P1) follows it. Record: #152.
+  cycle reviewed, committed `cbff8e5` (both placements behind `W`), CI
+  42609778666 watched. **Asked him 12:20:** may the `badges.rs` hold-text
+  test be rewritten (glyph in pane 1, text in the banner)? Then his look
+  (pick the placement), remove the loser, re-review, gate. FZ-100 (#157,
+  P1) follows it, not started on his 12:40 word. Record: #152.
 - FZ-102 (#159, P2, wrapped rows in the other views); FZ-101 (#158, P2);
   FZ-97 (#154, P1, docs-only, his word). Ready: 78, 79, 58, 84, 87, 89, 90, 92.
 
@@ -56,5 +56,5 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 
 ## Next step
 
-FZ-65 and FZ-95 are running (his 11:20 word); FZ-100 after FZ-95. Then
-on his word: FZ-97, the L1 answer, the next Ready ticket. `cargo install`.
+His 12:40 word: finish FZ-65 and FZ-95 completely, start no new ticket
+(FZ-100 included), then a summary of fleetz's state. Then his word again.
