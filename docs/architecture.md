@@ -135,7 +135,7 @@ paths). Arrows point from user to used. No edge breaks the rules in
 section 7: the layer test's allowlist is empty since FZ-107 (`report` to
 `main` left with FZ-105, `report` to `app` with D1's `Icons`, `ci` and
 `config` to `app` and `model` to `git` and `github` with FZ-107, by moving
-the shared types down). What remains are two cycles inside one layer,
+the shared types down). What remains is one cycle inside one layer,
 drawn dotted, which A1 does not forbid:
 
 - `app` and `ui`, both front ends. `app` names `ui` at 11 sites: three
@@ -148,10 +148,10 @@ drawn dotted, which A1 does not forbid:
   four sites. `ui` names `app` in ten of its files (`footer.rs` 22
   sites, `mod.rs` 17, `detail.rs` 13, `compact.rs` 13). A4 is the fix
   (the A1 ticket): the view state and render feedback get owned types.
-- `cache` and `github`, both sources. One site back: `src/cache.rs:167`
-  calls `github::fnv1a_64` for the account hash; `github.rs` takes
-  `cache::ApiCache` and `cache::KeyedCache` at 11 sites. The seam is the
-  hash: moved to `cache` (or `model`), the edge is gone.
+
+The `cache` and `github` cycle ended with FZ-112: `fnv1a_64` lives in
+`cache`, and `github.rs` takes `cache::ApiCache` and `cache::KeyedCache`
+at 11 sites, so the edge runs one way.
 
 Sideways edges inside a layer, allowed and worth knowing: `ci` to `git`
 and `github`; `git` to `notes` (the note body read, FZ-60); `notes` to
@@ -199,7 +199,6 @@ flowchart TB
   git --> model
   github --> model
   github --> cache
-  cache -.->|fnv1a_64| github
   io --> dom
 ```
 
@@ -208,7 +207,6 @@ The edges that matter, with what crosses them:
 | Edge | What crosses | Why it is a problem |
 |---|---|---|
 | `app` to `ui`, `app` to ratatui | `DetailHits`, `DetailClick`, `Divider`, `Loading`, colors, `run_status`, `shown_log`, layout widths; `Rect`, `Line`, `Color` | State depends on drawing, so neither can change alone |
-| `cache` to `github` | `fnv1a_64`, the account hash (one site) | The cache and the fetcher depend on each other |
 
 ## 4. Runtime and data flow
 
@@ -305,9 +303,9 @@ flowchart TB
 Rules:
 
 - **A1. Down only.** No module imports from a layer above it. It holds
-  since FZ-107 (the allowlist is empty); the two dotted edges left in
-  section 3 are cycles inside one layer, which A1 permits and A4 (`app`
-  and `ui`) and the `cache` hash seam remove.
+  since FZ-107 (the allowlist is empty); the dotted edge left in
+  section 3 is a cycle inside one layer, which A1 permits and A4 (`app`
+  and `ui`) removes; the `cache` and `github` cycle ended in FZ-112.
 - **A2. No terminal below the front ends.** `ratatui` and `crossterm`
   appear only in `ui/`, the event loop and `App`'s view state.
 - **A3. One engine, two front ends.** The assembly that `report` borrows
