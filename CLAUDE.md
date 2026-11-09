@@ -74,6 +74,7 @@ and blink, watch mode re-sweeps on an interval.
 | `docs/repoz-print-design.md` | Proposed design: bash repoz rebuilt as a print mode of this binary, repoz's look held by a golden test, decisions D1 to D9, tickets FZ-46 to FZ-51, owner items O1 to O8 (naming deferred) |
 | `docs/architecture.md` | The code map: modules and what they own, dependencies, runtime flow, state ownership, measured drift, and the proposed target layers. Read section 1 first |
 | `docs/module-split-design.md` | Proposed plan from the target layers: the layer test (L1), tests into sibling files, the engine out of `main.rs` and `app.rs`, the front-end splits; the gate on open trees and where each lives |
+| `docs/app-split-design.md` | Proposed design for `App` by concern (A1, E3, E2b): the owner types `GithubSync`, `FetchState`, `RenderFeedback` and the per-view structs, decisions D1 to D7, eight tickets in order, owner items O-A to O-D |
 | `docs/coverage-cache-design.md` | Design for GitHub coverage and cache isolation (FZ-09): what the payload covers, the cache keyed by account, host and version, decisions C1 to C9, tickets FZ-09a to f, owner items accepted 2026-10-02 |
 | `.claude/agents/` | Claude-native workforce: `fz-coordinator`, `fz-worker`, `fz-reviewer`, `fz-small`, `fz-architect` |
 | `.claude/rules/` | Domain invariants, one path-scoped file per area; loaded when a matching source file is touched |
