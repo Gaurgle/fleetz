@@ -34,9 +34,14 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
   `fz-109` worktree sweeps when green. Nothing running. One lead ruling
   for his review: F1 changed an existing test's `include_str!("main.rs")`
   to `"input.rs"` (the arm it reads moved; option A on #166).
-- `docs/app-split-design.md` (`a0b95ab`) is proposed for his reading:
-  A1, E3, E2b as eight tickets, owner items O-A to O-D; the survey is
-  on `main` (`565b974`).
+- In progress since 21:40, all three in parallel, no shared source
+  file, base `b870f69`: FZ-110 (#167, A1b overlays and query,
+  `.claude/worktrees/fz-110`, standard), FZ-111 (#168, `model/fetch.rs`,
+  `fz-111`, standard), FZ-112 (#169, `fnv1a_64` to `cache`, `fz-112`,
+  `fz-small` light). Records on the issues. Merges one at a time;
+  `docs/architecture.md` conflicts resolved by the lead.
+- `docs/app-split-design.md` (`a0b95ab`) is proposed for his reading
+  (artifact sent 21:30): E3 and E2b start on his "accept D1 to D7".
 - Open from the 11-09 reviews (log): FZ-83 and FZ-95 follow-ups.
   FZ-100 (#157), FZ-102 (#159), the build label and FZ-97 (#154) wait
   on his word after the refactor.
