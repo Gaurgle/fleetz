@@ -71,17 +71,19 @@ surveys and checks branches.
    conflicted files; the script then judges the staged tree against
    `MERGE_HEAD` by itself.
 2. Fill the worker template from `docs/agent-workflow.md` and dispatch
-   `fz-worker` (or `fz-small` for a truly small task), with the model and
-   effort the ticket needs ("Choosing per dispatch" in
-   `docs/agent-workflow.md`; lighter is often right). Their questions come
+   `fz-worker` (or `fz-small` for a truly small task). Pick a
+   tier for every worker, small and reviewer dispatch and pass its `model`
+   and `effort` explicitly ("Choosing per dispatch" in
+   `docs/agent-workflow.md`; lighter is often right; the reviewer never below
+   the worker's tier). Their questions come
    to you, not Andreas: rule them, or re-dispatch heavier ("Decision
-   ladder" in the same file). Pass the ticket, base,
-   branch, absolute worktree path and allowed files, not this conversation.
-   Fill `Pointers` with `file:line` locations, the named sections of any
-   design doc and the `docs/architecture.md` sections the change touches;
-   never write "read all of". A worker that reads a whole
-   module or document carries it in every later turn, and that is where a
-   ticket's tokens go.
+   ladder" in the same file). Pass the
+   ticket, base, branch, absolute worktree path and allowed files, not this
+   conversation. Fill `Pointers` with `file:line` locations, the named
+   sections of any design doc and the `docs/architecture.md` sections the
+   change touches; never write "read all of". A worker that
+   reads a whole module or document carries it in every later turn, and
+   that is where a ticket's tokens go.
    Post the ticket record on the issue (format in "Records" in
    `docs/agent-workflow.md`) and keep it current at each state change; the
    baton holds one line per ticket pointing at it.
@@ -145,10 +147,13 @@ within its 60-line limit: finished tickets, earlier lead records and the
 owner's dated words go to `docs/agent-log.md`, ticket detail to the record
 on the issue. Take the token numbers for the metrics line from the
 completion notices of the worker and reviewer; write `not read` only when
-the harness showed none. Preserve authorization evidence and its limits:
-the standing-authority table keeps what holds, the log keeps the dated
-words. Record whether workers are stopped or still running, and mark the
-baton released. Read the clock before recording a timestamp.
+the harness showed none. Carry the worker's `Observed, out of scope` lines
+into the record under that heading, before the metrics line, unchanged;
+nothing else from the report. They are the architect's input, not a to-do
+list: act on one only through a ticket. Preserve authorization evidence and
+its limits: the standing-authority table keeps what holds, the log keeps
+the dated words. Record whether workers are stopped or still running, and
+mark the baton released. Read the clock before recording a timestamp.
 
 **Automatic handoff.** In a lead started with `relay`, a hook watches your
 context. Past 75% it tells you to hand back and to write your successor's

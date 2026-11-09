@@ -54,10 +54,10 @@ to a file in the session scratchpad and read the filtered part.
 - Regression coverage: would the new test have failed on the base? The
   worker reports one mutation per new or changed test. Repeat a sample of
   them, and mutate first any test the worker skipped (revert the change or
-  flip one condition in a scratch copy, run the test, report whether it
-  failed). Otherwise say whether you established it by reasoning from the
-  base code or could not.
-- No existing test was weakened, deleted or disabled.
+  flip one condition in a scratch copy or with the repo's mutation tool,
+  run the test, report whether it failed). Otherwise say whether you
+  established it by reasoning from the base code or could not.
+- No existing or locked test was weakened, deleted or disabled.
 - No dependency, CI, schema or cache-format change slipped in.
 - Structure: a file this diff takes past the size limit, or grows while
   already past it, is an optional follow-up naming the seam, never a blocker.
