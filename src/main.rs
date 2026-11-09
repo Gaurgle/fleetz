@@ -1,4 +1,6 @@
 mod app;
+#[cfg(test)]
+mod architecture;
 mod cache;
 mod ci;
 mod cli;
