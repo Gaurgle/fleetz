@@ -139,7 +139,9 @@ so it starts with an `fz-architect` consult and a short design, then moves.
 
 **D1, cut the remaining backward edges.** Small tickets, one edge each:
 `model` to `git` and `github` (the shared types move down into the domain),
-`ci` to `app` (`Pace`, `RemoteKey`, `carrier_key` to the engine), `config`
+`ci` to `app` (`Pace` to `time`, `RemoteKey` and `carrier_key` to `model`:
+`ci` is a source, so they must sit in the domain, not the engine; ruled on
+#164, 2026-11-09), `config`
 to `app` (`View`, `Icons` and the pane defaults become config's own value
 types). The allowlist is empty after D1.
 
