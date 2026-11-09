@@ -162,8 +162,8 @@ pub fn ci_display(status: &CiStatus, dim_pending: bool) -> (&'static str, Color,
     }
 }
 
-fn ci_text(repo: &RepoStatus) -> String {
-    let sym = repo.ci_status.symbol();
+fn ci_text(status: &CiStatus) -> String {
+    let sym = status.symbol();
     if sym.is_empty() {
         String::new()
     } else {
@@ -300,8 +300,16 @@ pub fn counter_color(behind: u32, ahead: u32, dirty: u32) -> Color {
 /// `dim_pending` is the off phase of the pending-CI blink: callers pass
 /// `app.watch_mode && !app.blink_on`, so a running job pulses only while the
 /// dashboard is actually live.
+///
+/// Drawn with the fleet poll's lamp; the screens draw `badge_spans_ci`
+/// (FZ-83), so this one is kept for the tests.
+#[cfg(test)]
 pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>, usize) {
-    badge_spans_marked(repo, dim_pending, false)
+    let ci = RowCi {
+        status: &repo.ci_status,
+        side_run: false,
+    };
+    badge_spans_ci(repo, ci, dim_pending, false)
 }
 
 /// The colour of GitHub values from an earlier refresh: a carrier row the
@@ -311,24 +319,53 @@ pub fn badge_spans(repo: &RepoStatus, dim_pending: bool) -> (Vec<Span<'static>>,
 /// `docs/coverage-cache-design.md`); an existing colour, not a new one.
 pub const EARLIER_REFRESH: Color = colors::OVERLAY;
 
-/// `badge_spans`, with the CI lamp and PR count drawn in `EARLIER_REFRESH`
-/// when `not_in_last_poll`. Widths and glyphs are unchanged, so a marked row
-/// lines up with the rest.
-pub fn badge_spans_marked(
+/// The mark beside the CI lamp while a run is in progress on a branch other
+/// than the default one (FZ-83): a small ring, the lamp's family, one column
+/// in either icon set (East Asian Narrow, not private-use).
+pub const SIDE_RUN_GLYPH: &str = "◦";
+
+/// What a row's CI part draws (FZ-83): the state `App::ci_shown` gives, and
+/// whether `App::ci_side_run` adds the side-run mark.
+#[derive(Debug, Clone, Copy)]
+pub struct RowCi<'a> {
+    pub status: &'a CiStatus,
+    pub side_run: bool,
+}
+
+/// The side-run mark's colour: dimmer than the lamp, pulsing on the lamp's
+/// blink (`dim_pending`), held still in `EARLIER_REFRESH` on a row the last
+/// poll did not return.
+fn side_run_color(dim_pending: bool, not_in_last_poll: bool) -> Color {
+    if not_in_last_poll {
+        EARLIER_REFRESH
+    } else if dim_pending {
+        colors::SURFACE
+    } else {
+        colors::OVERLAY
+    }
+}
+
+/// `badge_spans`, with the CI part as `ci` says rather than the fleet
+/// poll's `ci_status` (FZ-83), the one lamp the repo list, the compact grid
+/// and the slot digest draw; and with the CI lamp and PR count in
+/// `EARLIER_REFRESH` when `not_in_last_poll`. Widths and glyphs are
+/// unchanged by that mark, so a marked row lines up with the rest.
+pub fn badge_spans_ci(
     repo: &RepoStatus,
+    ci: RowCi,
     dim_pending: bool,
     not_in_last_poll: bool,
 ) -> (Vec<Span<'static>>, usize) {
     let mut spans = Vec::new();
     let mut width = 0usize;
 
-    let ci = ci_text(repo);
-    if !ci.is_empty() {
-        width += ci.chars().count();
+    let lamp = ci_text(ci.status);
+    if !lamp.is_empty() {
+        width += lamp.chars().count();
         // Pending is orange; under watch it blinks (dim phase drops to
         // SURFACE, same glyph, so column widths never jitter). Passed and
         // Failed stay steady.
-        let ci_color = match repo.ci_status {
+        let ci_color = match ci.status {
             CiStatus::Passed => colors::GREEN,
             CiStatus::Failed => colors::RED,
             CiStatus::Pending => {
@@ -345,7 +382,13 @@ pub fn badge_spans_marked(
         } else {
             ci_color
         };
-        spans.push(Span::styled(ci, Style::default().fg(ci_color)));
+        spans.push(Span::styled(lamp, Style::default().fg(ci_color)));
+    }
+    if ci.side_run {
+        let mark = format!("{SIDE_RUN_GLYPH} ");
+        width += mark.chars().count();
+        let color = side_run_color(dim_pending, not_in_last_poll);
+        spans.push(Span::styled(mark, Style::default().fg(color)));
     }
 
     let pr = pr_text(repo);

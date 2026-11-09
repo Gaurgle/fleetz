@@ -232,14 +232,20 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
             ListRow::Header(section) => section_header_item(section.label()),
             ListRow::Repo(pos) => {
                 let repo = visible[pos].1;
-                repo_list_item(
+                let shown = app.ci_shown(repo);
+                let ci = badges::RowCi {
+                    status: &shown.status,
+                    side_run: app.ci_side_run(repo),
+                };
+                ListItem::new(Line::from(repo_row_spans_ci(
                     repo,
+                    ci,
                     on_cursor,
                     col_width,
                     dim_pending,
                     app.is_not_in_last_poll(repo),
                     app.search_match_field(repo).and_then(|f| f.mark()),
-                )
+                )))
             }
         });
     }
@@ -369,24 +375,6 @@ fn section_header_item(label: &str) -> ListItem<'static> {
     ]))
 }
 
-fn repo_list_item(
-    repo: &RepoStatus,
-    is_selected: bool,
-    col_width: usize,
-    dim_pending: bool,
-    not_in_last_poll: bool,
-    match_mark: Option<&'static str>,
-) -> ListItem<'static> {
-    ListItem::new(Line::from(repo_row_spans(
-        repo,
-        is_selected,
-        col_width,
-        dim_pending,
-        not_in_last_poll,
-        match_mark,
-    )))
-}
-
 /// Widest a repo row is drawn: the repo list's column cap less its two
 /// borders and two padding columns. The slot digest (FZ-45) draws its rows'
 /// shared columns at this width, as pane 1 does at its default size.
@@ -395,9 +383,38 @@ pub const REPO_ROW_MAX_W: usize = REPO_LIST_MAX_COLS as usize - 4;
 /// A repo row's spans, `col_width` wide: marker, kind glyph, name, dot fill
 /// and the badge group flush right. The one grammar a repo row has: the repo
 /// list draws it, and so do the slot digest's lines (FZ-45), so every
-/// indicator keeps its place and its colour in both.
+/// indicator keeps its place and its colour in both. Drawn with the fleet
+/// poll's lamp; the screens draw `repo_row_spans_ci` (FZ-83), so this one
+/// is kept for the tests.
+#[cfg(test)]
 pub fn repo_row_spans(
     repo: &RepoStatus,
+    is_selected: bool,
+    col_width: usize,
+    dim_pending: bool,
+    not_in_last_poll: bool,
+    match_mark: Option<&'static str>,
+) -> Vec<Span<'static>> {
+    let ci = badges::RowCi {
+        status: &repo.ci_status,
+        side_run: false,
+    };
+    repo_row_spans_ci(
+        repo,
+        ci,
+        is_selected,
+        col_width,
+        dim_pending,
+        not_in_last_poll,
+        match_mark,
+    )
+}
+
+/// `repo_row_spans` with the CI part as `ci` says (FZ-83): the repo list
+/// passes `App::ci_shown` and `App::ci_side_run`.
+pub fn repo_row_spans_ci(
+    repo: &RepoStatus,
+    ci: badges::RowCi,
     is_selected: bool,
     col_width: usize,
     dim_pending: bool,
@@ -419,7 +436,7 @@ pub fn repo_row_spans(
     // badges land at the same right edge whether or not the row is selected;
     // only differing badge sets between rows shift a status token, exactly
     // as in repoz. Truncate the name rather than let it overflow when narrow.
-    let (badge_spans, badge_w) = badges::badge_spans_marked(repo, dim_pending, not_in_last_poll);
+    let (badge_spans, badge_w) = badges::badge_spans_ci(repo, ci, dim_pending, not_in_last_poll);
     let right_len = badge_w + 1; // +1 for space after dots
     // A search hit on the owner or an author says so after the name (FZ-56),
     // in the filter strip's dim, so it does not read as a name match.
@@ -1275,6 +1292,21 @@ fn pane_rows(inner: Rect) -> std::rc::Rc<[Rect]> {
     Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner)
 }
 
+/// The header's CI word (FZ-83): `CI ◉ passed` while the default branch's
+/// name is not known, `CI ◉ main passed` once it is, and the culprit after a
+/// state that is not green, `CI ◉ main failed: Vercel`.
+fn ci_header_text(sym: &str, label: &str, shown: &crate::app::CiShown) -> String {
+    let mut text = match &shown.branch {
+        Some(branch) => format!("CI {sym} {branch} {label}"),
+        None => format!("CI {sym} {label}"),
+    };
+    if let Some(culprit) = &shown.culprit {
+        text.push_str(": ");
+        text.push_str(culprit);
+    }
+    text
+}
+
 /// Pane 2's identity header, pinned above every repo view: how the repo is
 /// doing, where it lives, what is out, then the view's headliner.
 fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>> {
@@ -1288,7 +1320,7 @@ fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>
     //
     //   ○ 3 behind, 1 ahead                               ● Gaurgle
     //   ~/repos/fleetz              git@github.com:Gaurgle/fleetz.git
-    //   * main · 1 stash               2 open PRs #13 · CI ◉ passed
+    //   * main · 1 stash          2 open PRs #13 · CI ◉ main passed
     //
     // Each row right-aligns its own remote half independently and drops it
     // when it will not fit. Owner and name used to be placed together or not
@@ -1410,9 +1442,10 @@ fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>
         };
         row3_right.push(Span::styled(text, Style::default().fg(pr_color)));
     }
-    if repo.ci_status != CiStatus::Unknown {
+    let shown = app.ci_shown(repo);
+    if shown.status != CiStatus::Unknown {
         let (ci_sym, ci_color, ci_label) =
-            badges::ci_display(&repo.ci_status, app.watch_mode && !app.blink_on);
+            badges::ci_display(&shown.status, app.watch_mode && !app.blink_on);
         let ci_color = if not_in_last_poll {
             badges::EARLIER_REFRESH
         } else {
@@ -1422,7 +1455,7 @@ fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>
             row3_right.push(Span::styled(" · ", Style::default().fg(colors::SURFACE)));
         }
         row3_right.push(Span::styled(
-            format!("CI {ci_sym} {ci_label}"),
+            ci_header_text(ci_sym, ci_label, &shown),
             Style::default().fg(ci_color),
         ));
     }
@@ -3659,6 +3692,7 @@ mod tests {
                 full_log: None,
                 failure: None,
                 budget: None,
+                tip: None,
             },
             chrono::Local::now(),
         );
