@@ -2,6 +2,7 @@ use super::assembly::{assemble_view_with, sort_by_activity, stale_remotes};
 use super::fetch::{ProgressThrottle, fetch_under_claim};
 use super::status::{local_only_status, local_repo_is_current};
 use super::*;
+use crate::app::tests::fetch_failed;
 use crate::cli::{Args, Mode};
 use crate::model::{self, RepoLocation, RepoStatus};
 use crate::tests::{
@@ -1277,4 +1278,45 @@ fn a_permit_takes_a_free_path_and_refuses_a_held_one() {
     claims.touch("~/r", old, t0 + std::time::Duration::from_secs(400));
     claims.expire(limit, t0 + std::time::Duration::from_secs(364));
     assert!(!claims.contains_key("~/r"));
+}
+
+/// An update that did not fetch is not the fetch being waited on.
+#[test]
+fn a_tally_is_not_settled_by_an_update_that_did_not_fetch() {
+    let mut tally = FetchTally::default();
+    tally.expect(["a".to_string()]);
+    let not_fetched = crate::git::FetchOutcome::NotAttempted;
+    assert_eq!(tally.land("a", "a", &not_fetched), None);
+    let report = tally.land("a", "a", &fetch_failed(crate::git::FetchFailureKind::Other));
+    assert_eq!(report.map(|r| r.total), Some(1));
+}
+
+/// `r` and `F` pressed together report once, over both batches, and a
+/// path in both counts once.
+#[test]
+fn a_tally_joins_a_batch_still_in_flight() {
+    let mut tally = FetchTally::default();
+    tally.expect(["a".to_string(), "b".to_string()]);
+    tally.expect(["b".to_string(), "c".to_string()]);
+    let failed = fetch_failed(crate::git::FetchFailureKind::Auth);
+    assert_eq!(tally.land("a", "a", &failed), None);
+    assert_eq!(
+        tally.land("b", "b", &crate::git::FetchOutcome::Succeeded),
+        None
+    );
+    let report = tally.land("c", "c", &crate::git::FetchOutcome::Succeeded);
+    assert_eq!(report.map(|r| (r.total, r.failed.len())), Some((3, 1)));
+}
+
+/// A fetch that never lands cannot hold a report open for the session.
+#[test]
+fn a_tally_that_outlives_its_limit_is_dropped() {
+    let mut tally = FetchTally::default();
+    tally.expect(["a".to_string()]);
+    tally.expire(std::time::Duration::from_secs(60));
+    assert!(tally.started.is_some(), "expired inside its limit");
+    tally.started = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(120));
+    tally.expire(std::time::Duration::from_secs(60));
+    let late = tally.land("a", "a", &fetch_failed(crate::git::FetchFailureKind::Auth));
+    assert_eq!(late, None);
 }

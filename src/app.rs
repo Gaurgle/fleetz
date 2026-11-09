@@ -2,7 +2,7 @@ use crate::model::{CiStatus, RepoLocation, RepoStatus, Summary};
 use crate::time::{TimeWindow, WINDOW_N_MIN, WindowUnit};
 use chrono::{DateTime, Local};
 
-pub use crate::engine::{ApplyProgress, DatasetSource, FetchClaims};
+pub use crate::engine::{ApplyProgress, DatasetSource, FetchClaims, FetchReport, FetchTally};
 
 /// Which TUI view is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1713,94 +1713,6 @@ impl FetchBackoff {
     #[cfg(test)]
     pub fn timeouts(&self, path: &str) -> u32 {
         self.timeouts.get(path).map_or(0, |&(n, _)| n)
-    }
-}
-
-/// What a batch of fetches someone asked for came to, once the last landed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FetchReport {
-    pub total: usize,
-    /// Repo name and failure kind of each fetch that failed, in landing order.
-    pub failed: Vec<(String, crate::git::FetchFailureKind)>,
-}
-
-/// The fetches a keypress is waiting on, so a mixed result is reported as
-/// mixed (rule 9 of the fetch contract): `3 of 12 fetches failed`, not
-/// silence. Only fetches someone asked for are tallied; a watch sweep's
-/// failures show on their rows and nowhere else.
-///
-/// Pure transitions, like `GithubFreshness`: `expect` when fetches start,
-/// `land` as each one finishes, which hands back the report with the last.
-#[derive(Debug, Default)]
-pub struct FetchTally {
-    awaiting: std::collections::HashSet<String>,
-    total: usize,
-    failed: Vec<(String, crate::git::FetchFailureKind)>,
-    /// The batch's last sign of life: when it started, or the latest
-    /// progress of a fetch it awaits (`touch`). What `expire` measures from.
-    started: Option<std::time::Instant>,
-}
-
-impl FetchTally {
-    /// Fetches for these display paths have started. Joins a batch still in
-    /// flight, so `r` and `F` pressed together report once.
-    pub fn expect(&mut self, paths: impl IntoIterator<Item = String>) {
-        if self.awaiting.is_empty() {
-            *self = Self::default();
-        }
-        for path in paths {
-            if self.awaiting.insert(path) {
-                self.total += 1;
-            }
-        }
-        if !self.awaiting.is_empty() && self.started.is_none() {
-            self.started = Some(std::time::Instant::now());
-        }
-    }
-
-    /// A repo's update landed. An update that did not fetch is not the one
-    /// awaited. Returns the report when this was the last fetch awaited and
-    /// at least one failed; every fetch succeeding says nothing extra.
-    pub fn land(
-        &mut self,
-        path: &str,
-        name: &str,
-        fetch: &crate::git::FetchOutcome,
-    ) -> Option<FetchReport> {
-        use crate::git::FetchOutcome;
-        if *fetch == FetchOutcome::NotAttempted || !self.awaiting.remove(path) {
-            return None;
-        }
-        if let FetchOutcome::Failed(failure) = fetch {
-            self.failed.push((name.to_string(), failure.kind));
-        }
-        if !self.awaiting.is_empty() {
-            return None;
-        }
-        let done = std::mem::take(self);
-        (!done.failed.is_empty()).then_some(FetchReport {
-            total: done.total,
-            failed: done.failed,
-        })
-    }
-
-    /// A fetch for `path` made progress at `now`: if this batch awaits it,
-    /// the batch is alive. An uncapped `f` on a big repo can run far longer
-    /// than `SWEEP_STUCK_AFTER` and still owes its report (FZ-35b,
-    /// criterion 7).
-    pub fn touch(&mut self, path: &str, now: std::time::Instant) {
-        if self.awaiting.contains(path) {
-            self.started = Some(now);
-        }
-    }
-
-    /// Stop waiting on fetches that have shown no sign of life for longer
-    /// than `limit`. They report nothing; their rows say what happened if
-    /// they ever land.
-    pub fn expire(&mut self, limit: std::time::Duration) {
-        if self.started.is_some_and(|t| t.elapsed() > limit) {
-            *self = Self::default();
-        }
     }
 }
 
@@ -6379,7 +6291,7 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// FZ-45: the digest's `git log --since` reads are claimed once per touched
 /// repo per cutoff and refs, and a read under a key the row has left is

@@ -125,6 +125,9 @@ allowlist. `.claude/rules/discovery.md` follows.
 `SweepTarget`, `sweep_targets`, `plan_sweep_fetch`, `FetchAsk`, the fetch
 skips and held paths. From `app.rs`: `FetchClaims`, `FetchBackoff`,
 `FetchReport`, `FetchTally`. `report` to `app` leaves the allowlist.
+E2a (FZ-106) moved the pure types (`SweepTarget`, `FetchAsk`,
+`size_held_rows`, `FetchReport`, `FetchTally`) into `engine/fetch.rs`;
+E2b, the planning functions under a fetch owner type, is pending.
 
 **E3, the engine: GitHub poll scheduling (needs design first).**
 `GithubFreshness`, `ApiBudget`, `GithubBackoff` and the due and backoff

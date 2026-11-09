@@ -32,9 +32,9 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use engine::{
-    FETCH_CONCURRENCY, HISTORY_COUNT, LoadError, ViewNotes, activity_position, assemble_view,
-    carries, disk_usage_of, fetch_under_claim_capped, load_repos, names_remote, probe_concurrency,
-    resolve_cutoff, tilde_display,
+    FETCH_CONCURRENCY, FetchAsk, HISTORY_COUNT, LoadError, SweepTarget, ViewNotes,
+    activity_position, assemble_view, carries, disk_usage_of, fetch_under_claim_capped, load_repos,
+    names_remote, probe_concurrency, resolve_cutoff, size_held_rows, tilde_display,
 };
 use model::{RepoLocation, RepoStatus};
 use ratatui::Terminal;
@@ -2446,17 +2446,6 @@ fn reclaim_terminal(out: &mut impl io::Write) -> io::Result<()> {
     crossterm::execute!(out, EnterAlternateScreen, EnableMouseCapture)
 }
 
-/// One repo queued for a sweep.
-struct SweepTarget {
-    /// Display path as stored in RepoStatus.path (tilde form), the update key.
-    display_path: String,
-    fs_path: std::path::PathBuf,
-    /// The row as it was when the sweep started: the WorkKey baseline and
-    /// the source of reused probes. Its non-local fields are stale by the
-    /// time the result lands, which is why `apply_local_sweep` ignores them.
-    old: Box<RepoStatus>,
-}
-
 /// A sweep that never reported back must not hold the watch lock forever.
 const SWEEP_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(180);
 
@@ -3449,49 +3438,6 @@ fn plan_sweep_fetch(
     }
 }
 
-/// Who asked for a fetch, which decides the holds it honours and whether
-/// the fetch cap bounds it (FZ-34, FZ-35b).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FetchAsk {
-    /// The watch timer, a moved remote, the recovery refetch: skips a
-    /// timeout hold and a size hold, and is capped.
-    Automatic,
-    /// `F`: fetches through a timeout hold, but skips a size hold and is
-    /// capped. Nothing but a deliberate per-row key pulls a big repo.
-    All,
-    /// `f` on one row: the permission. Fetches through both holds, uncapped.
-    One,
-}
-
-impl FetchAsk {
-    /// A full sweep: `F` when `manual`, else the watch timer.
-    fn for_full_sweep(manual: bool) -> Self {
-        if manual {
-            FetchAsk::All
-        } else {
-            FetchAsk::Automatic
-        }
-    }
-
-    /// A single-repo sweep: a moved remote or the recovery refetch when
-    /// `automatic`, else `f` (a single sweep that does not fetch is no ask).
-    fn for_single_sweep(automatic: bool) -> Self {
-        if automatic {
-            FetchAsk::Automatic
-        } else {
-            FetchAsk::One
-        }
-    }
-
-    /// The byte cap this fetch runs under, given the configured one.
-    fn cap(self, configured: Option<u64>) -> Option<u64> {
-        match self {
-            FetchAsk::One => None,
-            FetchAsk::Automatic | FetchAsk::All => configured,
-        }
-    }
-}
-
 /// The targets an automatic sweep rebuilds without fetching at `now`: those
 /// a recent fetch timeout holds (`App::fetch_held`, FZ-34).
 fn held_fetch_paths(
@@ -3503,15 +3449,6 @@ fn held_fetch_paths(
         .iter()
         .filter(|t| app.fetch_held(&t.display_path, now))
         .map(|t| t.display_path.clone())
-        .collect()
-}
-
-/// The display paths of the rows the fetch cap holds until `f` (FZ-35b).
-fn size_held_rows(repos: &[RepoStatus]) -> HashSet<String> {
-    repos
-        .iter()
-        .filter(|r| r.fetch.size_hold().is_some())
-        .filter_map(|r| r.path.clone())
         .collect()
 }
 

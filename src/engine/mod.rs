@@ -10,7 +10,7 @@ mod load;
 mod status;
 
 pub use assembly::ApplyProgress;
-pub use fetch::FetchClaims;
+pub use fetch::{FetchClaims, FetchReport, FetchTally};
 pub use load::{DatasetSource, LoadError};
 
 pub(crate) use assembly::{
@@ -18,7 +18,7 @@ pub(crate) use assembly::{
     probe_concurrency, resolve_cutoff, unclaimed_local,
 };
 pub(crate) use carriers::{RemoteKey, carries, mark_local_carriers, names_remote, remote_key};
-pub(crate) use fetch::fetch_under_claim_capped;
+pub(crate) use fetch::{FetchAsk, SweepTarget, fetch_under_claim_capped, size_held_rows};
 pub(crate) use load::load_repos;
 pub(crate) use status::{HISTORY_COUNT, disk_usage_of, tilde_display};
 

@@ -3,9 +3,11 @@
 
 use super::Sink;
 use crate::git;
+use crate::model::RepoStatus;
+use std::collections::HashSet;
 use std::path::Path;
 
-/// At most one `AppEvent::FetchProgress` per `PROGRESS_EVENT_GAP` per fetch:
+/// At most one progress event per `PROGRESS_EVENT_GAP` per fetch:
 /// git prints an update on every percent and every second, more than a row
 /// can show.
 pub(crate) const PROGRESS_EVENT_GAP: std::time::Duration = std::time::Duration::from_millis(500);
@@ -29,7 +31,7 @@ impl ProgressThrottle {
     }
 }
 
-/// Run one fetch under its claim (`app::FetchClaims`): taken at the moment
+/// Run one fetch under its claim (`FetchClaims`): taken at the moment
 /// the caller's fetch permit was granted, before git starts, and kept alive
 /// by each progress update. `NotAttempted` without running git when a newer
 /// claim holds the path. With `tx`, progress goes to the row, throttled.
@@ -195,4 +197,155 @@ impl FetchClaims {
     pub fn clear(&self) {
         self.table().claims.clear();
     }
+}
+
+/// What a batch of fetches someone asked for came to, once the last landed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchReport {
+    pub total: usize,
+    /// Repo name and failure kind of each fetch that failed, in landing order.
+    pub failed: Vec<(String, crate::git::FetchFailureKind)>,
+}
+
+/// The fetches a keypress is waiting on, so a mixed result is reported as
+/// mixed (rule 9 of the fetch contract): `3 of 12 fetches failed`, not
+/// silence. Only fetches someone asked for are tallied; a watch sweep's
+/// failures show on their rows and nowhere else.
+///
+/// Pure transitions, like `GithubFreshness`: `expect` when fetches start,
+/// `land` as each one finishes, which hands back the report with the last.
+#[derive(Debug, Default)]
+pub struct FetchTally {
+    pub(crate) awaiting: std::collections::HashSet<String>,
+    total: usize,
+    failed: Vec<(String, crate::git::FetchFailureKind)>,
+    /// The batch's last sign of life: when it started, or the latest
+    /// progress of a fetch it awaits (`touch`). What `expire` measures from.
+    pub(crate) started: Option<std::time::Instant>,
+}
+
+impl FetchTally {
+    /// Fetches for these display paths have started. Joins a batch still in
+    /// flight, so `r` and `F` pressed together report once.
+    pub fn expect(&mut self, paths: impl IntoIterator<Item = String>) {
+        if self.awaiting.is_empty() {
+            *self = Self::default();
+        }
+        for path in paths {
+            if self.awaiting.insert(path) {
+                self.total += 1;
+            }
+        }
+        if !self.awaiting.is_empty() && self.started.is_none() {
+            self.started = Some(std::time::Instant::now());
+        }
+    }
+
+    /// A repo's update landed. An update that did not fetch is not the one
+    /// awaited. Returns the report when this was the last fetch awaited and
+    /// at least one failed; every fetch succeeding says nothing extra.
+    pub fn land(
+        &mut self,
+        path: &str,
+        name: &str,
+        fetch: &crate::git::FetchOutcome,
+    ) -> Option<FetchReport> {
+        use crate::git::FetchOutcome;
+        if *fetch == FetchOutcome::NotAttempted || !self.awaiting.remove(path) {
+            return None;
+        }
+        if let FetchOutcome::Failed(failure) = fetch {
+            self.failed.push((name.to_string(), failure.kind));
+        }
+        if !self.awaiting.is_empty() {
+            return None;
+        }
+        let done = std::mem::take(self);
+        (!done.failed.is_empty()).then_some(FetchReport {
+            total: done.total,
+            failed: done.failed,
+        })
+    }
+
+    /// A fetch for `path` made progress at `now`: if this batch awaits it,
+    /// the batch is alive. An uncapped `f` on a big repo can run far longer
+    /// than `SWEEP_STUCK_AFTER` and still owes its report (FZ-35b,
+    /// criterion 7).
+    pub fn touch(&mut self, path: &str, now: std::time::Instant) {
+        if self.awaiting.contains(path) {
+            self.started = Some(now);
+        }
+    }
+
+    /// Stop waiting on fetches that have shown no sign of life for longer
+    /// than `limit`. They report nothing; their rows say what happened if
+    /// they ever land.
+    pub fn expire(&mut self, limit: std::time::Duration) {
+        if self.started.is_some_and(|t| t.elapsed() > limit) {
+            *self = Self::default();
+        }
+    }
+}
+
+/// One repo queued for a sweep.
+pub(crate) struct SweepTarget {
+    /// Display path as stored in RepoStatus.path (tilde form), the update key.
+    pub(crate) display_path: String,
+    pub(crate) fs_path: std::path::PathBuf,
+    /// The row as it was when the sweep started: the WorkKey baseline and
+    /// the source of reused probes. Its non-local fields are stale by the
+    /// time the result lands, which is why `apply_local_sweep` ignores them.
+    pub(crate) old: Box<RepoStatus>,
+}
+
+/// Who asked for a fetch, which decides the holds it honours and whether
+/// the fetch cap bounds it (FZ-34, FZ-35b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FetchAsk {
+    /// The watch timer, a moved remote, the recovery refetch: skips a
+    /// timeout hold and a size hold, and is capped.
+    Automatic,
+    /// `F`: fetches through a timeout hold, but skips a size hold and is
+    /// capped. Nothing but a deliberate per-row key pulls a big repo.
+    All,
+    /// `f` on one row: the permission. Fetches through both holds, uncapped.
+    One,
+}
+
+impl FetchAsk {
+    /// A full sweep: `F` when `manual`, else the watch timer.
+    pub(crate) fn for_full_sweep(manual: bool) -> Self {
+        if manual {
+            FetchAsk::All
+        } else {
+            FetchAsk::Automatic
+        }
+    }
+
+    /// A single-repo sweep: a moved remote or the recovery refetch when
+    /// `automatic`, else `f` (a single sweep that does not fetch is no ask).
+    pub(crate) fn for_single_sweep(automatic: bool) -> Self {
+        if automatic {
+            FetchAsk::Automatic
+        } else {
+            FetchAsk::One
+        }
+    }
+
+    /// The byte cap this fetch runs under, given the configured one.
+    pub(crate) fn cap(self, configured: Option<u64>) -> Option<u64> {
+        match self {
+            FetchAsk::One => None,
+            FetchAsk::Automatic | FetchAsk::All => configured,
+        }
+    }
+}
+
+/// The display paths of the rows the fetch cap holds until `f` (FZ-35b).
+pub(crate) fn size_held_rows(repos: &[RepoStatus]) -> HashSet<String> {
+    repos
+        .iter()
+        .filter(|r| r.fetch.size_hold().is_some())
+        .filter_map(|r| r.path.clone())
+        .collect()
 }

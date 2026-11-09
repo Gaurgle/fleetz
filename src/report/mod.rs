@@ -94,7 +94,7 @@ pub async fn print(args: &Args, out: &mut dyn Write) -> io::Result<i32> {
         &scan_roots,
         true,
         None,
-        &crate::app::FetchClaims::default(),
+        &crate::engine::FetchClaims::default(),
         &HashSet::new(),
     )
     .await
