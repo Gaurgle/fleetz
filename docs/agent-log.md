@@ -428,6 +428,23 @@ comment timestamps are authoritative.
   and the domain, so a value a source reads must live in the domain.
   FZ-107: review accepted first; fix cycles 0; owner decisions 0; worker 7 + 12; review 5; models opus:high/opus:high; usage worker 86668 + 147565 tokens, reviewer 72567 tokens
 
+- **#165 (FZ-108), U1: `ui/detail.rs` by pane.** Merged `74d527d` at
+  20:52 CET. Commit `48affc4` on base `270bd71` plus the merge of `main`
+  `74c5997` (`2c5cd40`, `docs/architecture.md` resolved by the lead):
+  one 4,615-line file into ten under `src/ui/detail/` (`pane.rs` 1,030
+  the largest), tests per file, stripped test list identical, no path
+  outside `ui::detail` changed. Architect "fits with note" (ten files,
+  not six); review accepted first time on `211148b2d20b` (item-level
+  comparison, 145 production and 281 test items, 0 missing), the
+  resolution on `6e62ad09e8c3`; CI 42686789079 green; combined on
+  `74c5997` 1757 passed; gate holds. Observed, out of scope: stray or
+  doubled doc comments in `detail/commits.rs:9-11,65-73` and `mod.rs`'s
+  `render` (as at base); the survey's figures do not sum (`ui/` parts
+  12,164 against 13,266; Cell sites 25 against 27); the `ui/` row names
+  `mod.rs` twice; `docs/ideas.md:489` names `detail::split_right_column`,
+  gone. Remembered: nothing to keep.
+  FZ-108: review accepted first; fix cycles 0; owner decisions 0; worker 20; review 6 + 1; models opus:high/opus:high; usage worker 232931 tokens, reviewer 81444 + 6844 tokens
+
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, about 10:45: "allright ooks good
 to me". About 11:05: "lets look at fz-65 / look at fz-38, could/should it

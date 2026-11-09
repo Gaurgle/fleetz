@@ -159,7 +159,7 @@ reads the file for the module it is about to change:
 | `.claude/rules/discovery.md` | `discovery.rs`, `engine/`, `main.rs` and its siblings (`event`, `input`, `handoff`, `load`, `poll`, `sweep`), `model.rs` | pass order, carrier rows, origin-first clone matching, pass 3 dedupe, dot-prefixed clones, hidden directories, repoz parity |
 | `.claude/rules/github.md` | `github.rs`, `cache.rs`, `contributions.rs`, `app.rs`, `main.rs` and its siblings, `engine/` | batch on GraphQL, `first:` billing, launch from cache, fetch widening, `contributionsCollection` caching, cache only `data` |
 | `.claude/rules/ui.md` | `ui/`, `app.rs`, `contributions.rs`, `model.rs` | `panel_rects` and `render`, `visible_repos` order, one color ladder, contribution day glyph, `contributionLevel`, status vocabulary |
-| `.claude/rules/git-graph.md` | `git.rs`, `graph.rs`, `ui/detail.rs` | computed graph, commit list and graph on the same refs |
+| `.claude/rules/git-graph.md` | `git.rs`, `graph.rs`, `ui/detail/` | computed graph, commit list and graph on the same refs |
 
 A new invariant goes into the file whose paths it governs; a cross-cutting
 one goes here.

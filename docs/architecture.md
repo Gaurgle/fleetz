@@ -38,7 +38,7 @@ flowchart LR
   IN[input thread] --> CH
   TK[tick task, 100 ms] --> CH
   sources --> CH[(mpsc channel<br/>AppEvent)]
-  CH --> LOOP[run_event_loop<br/>main.rs]
+  CH --> LOOP[run_event_loop<br/>event.rs]
   LOOP -->|handlers mutate| APP[App<br/>app.rs]
   APP -->|read by| R[ui::render<br/>ui/mod.rs]
   R --> TERM[terminal]
@@ -67,7 +67,7 @@ after F1 (FZ-109) split it; rows are in size order.
 
 | Module | Lines | Owns | Effects |
 |---|---|---|---|
-| `ui/` (19 files) | 13,266 | Drawing every view from `&App`; `detail.rs` alone is 4,615, `mod.rs` 1,541, `markdown.rs` 1,245, `ci.rs` 1,072, `digest.rs` 699, the other 14 files 2,992 together | term |
+| `ui/` (28 files) | 13,402 | Drawing every view from `&App`; `detail/` is ten files by pane since FZ-108, 4,751 together: `pane.rs` 1,030, `notes.rs` 612, `mod.rs` 530 (the entry `render` and the helpers the panes share), `commits.rs` 501, `header.rs` 482, `list.rs` 403, `inspector.rs` 377, `worktrees.rs` 355, `changes.rs` 301, `layout.rs` 160; then `mod.rs` 1,541, `markdown.rs` 1,245, `ci.rs` 1,072, `digest.rs` 699, the other 14 files 2,992 together | term |
 | `app.rs` | 6,184 | `App`: all TUI state (115 fields), the overlays, filters and query parsing, API budget and backoff, per-view caches for ci, notes, worktrees, changes and digest | none (holds ratatui types) |
 | `git.rs` | 2,444 | Every git read and fetch, reading a fetch's outcome and progress and a checkout's `WorkKey` (the types live in `model`), the `changes` read (`changes`, `changed_file_diff`), the note body read | proc, fs |
 | `report/` (3 files) | 2,057 | Print mode: run (`mod.rs` 910), golden parity harness (`parity.rs` 765), render byte for byte as repoz (`render.rs` 382) | proc, fs |
@@ -108,10 +108,10 @@ Module docs (`//!`) exist on `engine/`, `report/`, `ci`, `notes`, `graph`,
 1200 production lines per file, 150 per function; the seams are tickets in
 `docs/module-split-design.md`):
 
-- Files over the limit: `app.rs` 6,184 (A1), `ui/detail.rs` 4,615 (U1),
-  `main.rs` 3,813 (F1), `git.rs` 2,444 (G1), `github.rs` 1,567,
-  `ui/mod.rs` 1,541, `ci.rs` 1,538, `ui/markdown.rs` 1,245 (the last
-  four are not planned: revisit if they grow).
+- Files over the limit: `app.rs` 6,184 (A1), `git.rs` 2,444 (G1),
+  `github.rs` 1,567, `ui/mod.rs` 1,541, `ci.rs` 1,538, `ui/markdown.rs`
+  1,245 (the last four are not planned: revisit if they grow).
+  `ui/detail.rs` (U1, FZ-108) and `main.rs` (F1, FZ-109) are split.
 - `model.rs` is at 1,194, six lines under. The seam: the types the sweep
   fills, `FetchFailureKind` through `FetchFacts`, `SizeHold` and `WorkKey`
   (`src/model.rs:143-424`, about 290 lines with their docs), into a
@@ -266,7 +266,9 @@ worktrees, changes and ci. Contracts: `docs/freshness-contract.md`,
 
 As it is, any code holding `&mut App` may change any field, and `ui`
 changes some through `Cell` while it holds only `&App` (27 `.set(` and
-`.borrow_mut(` sites, 19 of them in `ui/detail.rs`, then two each in
+`.borrow_mut(` sites, 19 of them in `ui/detail/`: 8 in `pane.rs`, 4 in
+`inspector.rs`, 2 each in `list.rs` and `notes.rs`, 1 each in
+`changes.rs`, `mod.rs` and `worktrees.rs`; then two each in
 `contributions.rs`, `digest.rs` and `footer.rs`). What keeps the
 behavior right today is the invariants in `.claude/rules/` and the tests,
 not the types. `ApiBudget`, `GithubBackoff`, `FetchClaims` (in `engine`
