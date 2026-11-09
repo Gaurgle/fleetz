@@ -62,8 +62,11 @@ pub async fn print(args: &Args, out: &mut dyn Write) -> io::Result<i32> {
     scan_roots.extend(config.resolved_extra_dirs());
     add_cwd_toplevel(&mut scan_roots).await;
     let home = dirs::home_dir().unwrap_or_default();
-    let plain = config.icons.as_deref().map(crate::app::Icons::from_config)
-        == Some(crate::app::Icons::Plain);
+    let plain = config
+        .icons
+        .as_deref()
+        .map(crate::config::Icons::from_config)
+        == Some(crate::config::Icons::Plain);
     let layout = Layout {
         width: render::term_width(),
         glyphs: !plain && !args.no_glyphs,

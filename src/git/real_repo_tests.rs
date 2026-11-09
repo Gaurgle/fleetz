@@ -1381,23 +1381,6 @@ async fn a_fetch_with_no_cap_runs_past_any_size() {
     std::fs::remove_dir_all(&upstream).ok();
 }
 
-/// Only a `TooBig` failure carries a byte count, and only in the shape
-/// `too_big` wrote.
-#[test]
-fn only_a_too_big_failure_reports_received_bytes() {
-    assert_eq!(FetchFailure::too_big(0).received_bytes(), Some(0));
-    let other = FetchFailure {
-        kind: FetchFailureKind::Other,
-        detail: Some(FetchFailure::too_big(5).detail.unwrap()),
-    };
-    assert_eq!(other.received_bytes(), None);
-    let mangled = FetchFailure {
-        kind: FetchFailureKind::TooBig,
-        detail: Some("lots".to_string()),
-    };
-    assert_eq!(mangled.received_bytes(), None);
-}
-
 // --- #70: ssh gets a connect timeout and batch mode, unless the user
 // chose their own ssh ---
 

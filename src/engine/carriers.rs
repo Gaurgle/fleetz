@@ -3,6 +3,7 @@
 
 use super::status::tilde_display;
 use crate::model::{self, RepoLocation, RepoStatus};
+pub(crate) use crate::model::{RemoteKey, carrier_key};
 use crate::{discovery, github};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -47,12 +48,6 @@ pub(crate) fn carries(repo: &RepoStatus, entry: &github::GithubRepo) -> bool {
     };
     names_remote(Some(owner), &origin.name, entry)
 }
-
-/// A remote identity as assembly compares it: lowercased owner and name. No
-/// owner is the legacy key of a payload without `login`, matched by name.
-/// The host is left out: every dataset entry is on `github.com`, and matching
-/// is host-agnostic (D2).
-pub(crate) type RemoteKey = (Option<String>, String);
 
 pub(crate) fn remote_key(owner: Option<&str>, name: &str) -> RemoteKey {
     model::identity_key(owner, name)

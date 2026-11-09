@@ -140,7 +140,7 @@ Needs a Nerd Font for five uses of its codepoints: the repo kind glyph
 eye (`WATCH_ON_GLYPH` and `WATCH_OFF_GLYPH` in `ui/mod.rs`), the failed-fetch
 marker's warning icon (`badges::FETCH_WARNING_GLYPH`) and the contribution
 strip's day squares (`app::CellSize::glyph`). Without one they are tofu. The
-`icons = "plain"` config key, or the `,` settings row (`app::Icons::Plain`),
+`icons = "plain"` config key, or the `,` settings row (`config::Icons::Plain`),
 swaps the first three for ASCII stand-ins and the warning icon for `⚠`; the
 day squares have no plain fallback. It also needs an authenticated `gh` on PATH, which the GitHub fetch
 uses.

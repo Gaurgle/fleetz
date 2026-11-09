@@ -2,14 +2,9 @@ use crate::model::{CiStatus, RepoLocation, RepoStatus, Summary};
 use crate::time::{TimeWindow, WINDOW_N_MIN, WindowUnit};
 use chrono::{DateTime, Local};
 
-pub use crate::engine::{ApplyProgress, DatasetSource, FetchClaims, FetchReport, FetchTally};
-
-/// Which TUI view is active.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum View {
-    Detail,
-    Compact,
-}
+pub use crate::config::{DEFAULT_INSPECTOR_PCT, DEFAULT_REPO_LIST_PCT, Icons, View, initial_view};
+pub use crate::engine::{ApplyProgress, DatasetSource, FetchClaims, FetchReport, FetchTally, Pace};
+pub(crate) use crate::engine::{RemoteKey, carrier_key};
 
 /// Which panel has keyboard focus in `Detail` view -- only meaningful there,
 /// since `Compact` has a single flat grid. Reachable directly with 1/2/3 or
@@ -205,38 +200,6 @@ impl CellSize {
             (Self::Small, false) => Self::Large,
             (Self::Medium, false) => Self::Small,
             (Self::Large, false) => Self::Medium,
-        }
-    }
-}
-
-/// Which glyph set the repo kind, stash and watch marks are drawn from,
-/// from the `icons` config key. `Nerd` is the default and draws the Nerd
-/// Font icons; `Plain` draws ASCII stand-ins every monospace font has, for a
-/// terminal without a Nerd Font, where those icons are tofu. The contribution
-/// strip's day squares are not covered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Icons {
-    #[default]
-    Nerd,
-    Plain,
-}
-
-impl Icons {
-    /// "plain" selects `Plain`; anything else, a typo included, keeps the
-    /// default, as the other enum-like keys do.
-    pub fn from_config(value: &str) -> Self {
-        match value {
-            "plain" => Self::Plain,
-            _ => Self::Nerd,
-        }
-    }
-
-    /// The string `from_config` reads back as this set: what the settings
-    /// overlay writes and shows.
-    pub fn config_value(self) -> &'static str {
-        match self {
-            Self::Nerd => "nerd",
-            Self::Plain => "plain",
         }
     }
 }
@@ -583,11 +546,6 @@ impl SettingField {
         )
     }
 }
-
-/// Repo list width as a percentage of the main area, and the inspector's share
-/// of the right column. These are the sizes every launch starts from.
-pub const DEFAULT_REPO_LIST_PCT: u16 = 35;
-pub const DEFAULT_INSPECTOR_PCT: u16 = 25;
 
 /// Bounds the resize keys clamp to. Both panes stay wide/tall enough to be
 /// worth drawing, so a held key can never collapse one to nothing.
@@ -1387,18 +1345,6 @@ pub enum Observed {
     Updated,
     /// An applied answer on another token replaced the held reading.
     Switched,
-}
-
-/// How the budget spaces automatic polls (A2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Pace {
-    /// No reading, or its window is over: the configured interval applies.
-    Unknown,
-    /// At most one automatic poll per this many seconds.
-    Every(i64),
-    /// At or below the reserve: no automatic poll before `until`, the reset
-    /// plus its jitter.
-    Paused { until: DateTime<Local> },
 }
 
 /// `x-ratelimit-reset` as a local instant. The delay to the reset is taken in
@@ -2618,42 +2564,6 @@ pub enum JobFollow {
     Free,
     Due,
     At(u16),
-}
-
-/// Below this width or height, `Detail`'s list+detail split doesn't have
-/// enough room to be useful, so `Compact`'s dense single-line-per-repo grid
-/// is the better default. `v` still lets the user override it either way.
-const SMALL_WIDTH: u16 = 70;
-const SMALL_HEIGHT: u16 = 20;
-
-/// Pick the view a fresh terminal size should start in.
-pub fn initial_view(term_width: u16, term_height: u16) -> View {
-    if term_width < SMALL_WIDTH || term_height < SMALL_HEIGHT {
-        View::Compact
-    } else {
-        View::Detail
-    }
-}
-
-/// A remote identity as assembly compares it: lowercased owner and name, no
-/// owner for the legacy key of a payload without `login`
-/// (`GithubRepo::identity_key`, the shape of `engine::remote_key`).
-pub type RemoteKey = (Option<String>, String);
-
-/// The remote key of the GitHub repo `repo` carries, or None when it carries
-/// none. Follows `engine::carries`: a Primary, Elsewhere or NotCloned row is
-/// keyed by its owner and name (name alone for a legacy row without owner);
-/// a LocalOnly row only when the load made it a carrier by giving it an
-/// owner, and then by the name its stored origin names, since its own `name`
-/// is its folder's.
-pub fn carrier_key(repo: &RepoStatus) -> Option<RemoteKey> {
-    use crate::github::GithubRepo;
-    if repo.location != RepoLocation::LocalOnly {
-        return Some(GithubRepo::identity_key(repo.owner.as_deref(), &repo.name));
-    }
-    let owner = repo.owner.as_deref()?;
-    let origin = crate::model::RemoteRef::parse(repo.remote_url.as_deref()?)?;
-    Some(GithubRepo::identity_key(Some(owner), &origin.name))
 }
 
 /// Which half of the yank chord (FZ-74): `yy` copies the thing under the

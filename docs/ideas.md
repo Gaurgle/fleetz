@@ -772,7 +772,7 @@ get the name, and they are complementary rather than competing:
 
 1. **Add `login` to the existing selection**: `owner { __typename, login }`.
    Same request, same rate-limit cost, no extra round trip. Then carry
-   `owner: Option<String>` through `GithubRepo` (`src/github.rs:8`) into
+   `owner: Option<String>` through `GithubRepo` (`src/model.rs:865`) into
    `RepoStatus` (`src/model.rs:105`). Authoritative, and it is the smallest
    possible change to the query.
 2. **Parse `remote_url`** (`git@github.com:Gaurgle/fleetz.git` -> `Gaurgle`).
@@ -1355,7 +1355,7 @@ existing client behind a base-URL config key rather than needing a new one.
 newer releases were never tagged" -- they were, on GitHub and locally, and
 `git log --decorate=full` returned them correctly when asked by hand.
 
-**Cause.** `WorkKey` (`git.rs`) fingerprints `head_sha`, the index mtime and
+**Cause.** `WorkKey` (`model.rs`) fingerprints `head_sha`, the index mtime and
 size, and the stash size. **Refs were not in it.** Creating a tag moves none of
 those, so the key was byte-identical across the sweep and `assemble_view` took
 the `unchanged` branch, cloning the previous `commits`, `reflog`, `graph`,

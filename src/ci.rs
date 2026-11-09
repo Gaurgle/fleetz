@@ -18,9 +18,10 @@
 use chrono::{DateTime, Local, Utc};
 use serde::Deserialize;
 
-use crate::app::{Pace, RemoteKey};
 use crate::github::{BudgetReading, Failure, FailureKind};
 use crate::model::CiStatus;
+use crate::model::RemoteKey;
+use crate::time::Pace;
 
 /// Where the REST API lives.
 pub const API_ROOT: &str = "https://api.github.com";
@@ -693,7 +694,7 @@ pub struct CiAnswer {
 /// the URL. `None` for a row with no GitHub identity, or one known only by
 /// name (a legacy row with no owner), which has no URL.
 pub fn target(repo: &crate::model::RepoStatus) -> Option<(RemoteKey, String, String)> {
-    let key = crate::app::carrier_key(repo)?;
+    let key = crate::model::carrier_key(repo)?;
     let owner = key.0.clone()?;
     let name = key.1.clone();
     Some((key, owner, name))

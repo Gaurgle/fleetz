@@ -35,13 +35,7 @@ const LAYERS: [(&str, &[&str]); 4] = [
 
 /// Today's violations. The list may only shrink: an entry that no longer
 /// occurs fails the test, so the fix that removes an edge removes its entry.
-const ALLOWED: [(&str, &str); 5] = [
-    ("ci", "app"),
-    ("config", "app"),
-    ("model", "git"),
-    ("model", "github"),
-    ("report", "app"),
-];
+const ALLOWED: [(&str, &str); 0] = [];
 
 const TERMINAL_CRATES: [&str; 2] = ["ratatui", "crossterm"];
 const TERMINAL_OWNERS: [&str; 3] = ["main", "app", "ui"];

@@ -172,7 +172,7 @@ userinfo never appearing in the detail.
    section A, approved by Andreas). Amends amendment 2. The fetch runs with
    `--progress` instead of `--quiet` and its stderr is read while it runs:
    each `\r`- or `\n`-separated update (`Receiving objects`, `Resolving
-   deltas`, the server's `remote:` phases) is a `git::FetchProgress`; what
+   deltas`, the server's `remote:` phases) is a `model::FetchProgress`; what
    `--quiet` used to keep off stderr is dropped, and the rest is what rule
    8's classification and detail read, as before. `FETCH_TIMEOUT` is gone:
    `FETCH_STALL_LIMIT` (30 s) restarts on every update, so a fetch still

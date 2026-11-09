@@ -9,6 +9,7 @@ mod fetch;
 mod load;
 mod status;
 
+pub use crate::time::Pace;
 pub use assembly::ApplyProgress;
 pub use fetch::{FetchClaims, FetchReport, FetchTally};
 pub use load::{DatasetSource, LoadError};
@@ -17,7 +18,9 @@ pub(crate) use assembly::{
     FETCH_CONCURRENCY, ViewNotes, activity_position, assemble_view, assemble_view_held,
     probe_concurrency, resolve_cutoff, unclaimed_local,
 };
-pub(crate) use carriers::{RemoteKey, carries, mark_local_carriers, names_remote, remote_key};
+pub(crate) use carriers::{
+    RemoteKey, carrier_key, carries, mark_local_carriers, names_remote, remote_key,
+};
 pub(crate) use fetch::{FetchAsk, SweepTarget, fetch_under_claim_capped, size_held_rows};
 pub(crate) use load::load_repos;
 pub(crate) use status::{HISTORY_COUNT, disk_usage_of, tilde_display};

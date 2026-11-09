@@ -61,27 +61,28 @@ what the module does beyond computing: `proc` runs a program, `net` talks
 HTTP, `fs` touches the disk, `term` draws or reads the terminal. The
 `main.rs`, `app.rs` and `engine/` rows were re-measured for FZ-105, on its
 base `e831dd1` with the move applied, and moved by FZ-106's line deltas
-(`main.rs` 63 out, `app.rs` 88 out, `engine/` 153 in).
+(`main.rs` 63 out, `app.rs` 88 out, `engine/` 153 in). FZ-107's moves
+are applied the same way to every row they touch.
 
 | Module | Lines | Owns | Effects |
 |---|---|---|---|
 | `main.rs` | 3,798 | Startup, the event loop, every input handler, task spawning, sweep and fetch planning, GitHub poll scheduling, editor and opener handoff | proc, term |
-| `app.rs` | 6,262 | `App`: all TUI state (109 fields), the overlays, filters and query parsing, API budget and backoff, per-view caches for ci, notes, worktrees and digest | none (holds ratatui types) |
+| `app.rs` | 6,172 | `App`: all TUI state (109 fields), the overlays, filters and query parsing, API budget and backoff, per-view caches for ci, notes, worktrees and digest | none (holds ratatui types) |
 | `ui/` (18 files) | 12,318 | Drawing every view from `&App`; `detail.rs` alone is 3,984 | term |
-| `git.rs` | 2,245 | Every git read and fetch, fetch outcomes and progress, `WorkKey`, the `changes` read (`changes`, `changed_file_diff`) | proc, fs |
-| `report/` | 2,062 | Print mode: run, render byte for byte as repoz, golden parity harness | proc, fs |
-| `github.rs` | 1,594 | The GraphQL query and its cost, the HTTP client, token lookup, failure kinds | net, proc |
-| `ci.rs` | 1,537 | Workflow runs, jobs and log tails over REST, with ETags; the default branch tip's `TipStatus`, `TipChecks` and `StatusEvent` history, and `tip_verdict` over them | net |
-| `engine/` (6 files) | 1,547 | View assembly (discovery passes, carriers, activity order, the startup fetch baseline), a row's status probe, the load (GitHub dataset or dirty mode), fetches under a claim (`FetchClaims`), the fetch types the sweep plans with (`SweepTarget`, `FetchAsk`, `FetchTally`, `FetchReport`, FZ-106); progress leaves through `Sink`, which a front end's channel implements (FZ-105) | proc, fs, net |
-| `model.rs` | 1,009 | `RepoStatus` and the row types the views draw | none |
+| `git.rs` | 2,113 | Every git read and fetch, reading a fetch's outcome and progress and a checkout's `WorkKey` (the types live in `model`), the `changes` read (`changes`, `changed_file_diff`) | proc, fs |
+| `report/` | 2,065 | Print mode: run, render byte for byte as repoz, golden parity harness | proc, fs |
+| `github.rs` | 1,564 | The GraphQL query and its cost, the HTTP client, token lookup, failure kinds; parsing the payload into `model::GithubRepo` | net, proc |
+| `ci.rs` | 1,538 | Workflow runs, jobs and log tails over REST, with ETags; the default branch tip's `TipStatus`, `TipChecks` and `StatusEvent` history, and `tip_verdict` over them | net |
+| `engine/` (6 files) | 1,545 | View assembly (discovery passes, carriers, activity order, the startup fetch baseline), a row's status probe, the load (GitHub dataset or dirty mode), fetches under a claim (`FetchClaims`), the fetch types the sweep plans with (`SweepTarget`, `FetchAsk`, `FetchTally`, `FetchReport`, FZ-106); progress leaves through `Sink`, which a front end's channel implements (FZ-105) | proc, fs, net |
+| `model.rs` | 1,195 | `RepoStatus` and the row types the views draw; the types the sources fill (fetch outcome and progress, `WorkKey`, `GithubRepo`); remote identity (`identity_key`, `RemoteKey`, `carrier_key`) | none |
 | `discovery.rs` | 617 | Finding clones under roots and `$HOME`, clone matching (`Wanted`, `CheckoutRank`) | fs |
 | `cache.rs` | 537 | The keyed on-disk API cache | fs |
 | `graph.rs` | 472 | Commit graph lanes and glyphs | none |
 | `contributions.rs` | 397 | The 53 by 7 contribution grid | none |
 | `notes.rs` | 348 | Walking a repo for notes and markdown | fs |
 | `digest.rs` | 334 | The slot digest model | none |
-| `config.rs` | 290 | Config file, defaults, settings writes | fs |
-| `time.rs` | 238 | Time windows and slots | none |
+| `config.rs` | 349 | Config file, defaults, settings writes; the values its keys select (`View` and `initial_view`, `Icons`, the pane defaults) | fs |
+| `time.rs` | 250 | Time windows and slots; the poll `Pace` | none |
 | `clipboard.rs` | 138 | Copying a hash to the system clipboard | proc |
 | `cli.rs` | 116 | Flags (`clap`) | none |
 | `fuzzy.rs` | 82 | Fuzzy match for search | none |
@@ -94,11 +95,15 @@ the ones a newcomer most needs.
 ## 3. Dependencies as they are
 
 Who uses whom, from `crate::` paths in production code. Arrows point from
-user to used. Dotted arrows are the problem edges: five break the rules in
-section 7 (`report` to `app`, `ci` and `config` to `app`, `model` to `git`
-and `github`), and two are cycles inside one layer (`app` and `ui`, `cache`
-and `github`). All but `report` to `app` close a cycle. `report` to `main`
-left with FZ-105: print mode and the TUI both call the engine.
+user to used. Dotted arrows are the problem edges: two cycles inside one
+layer (`app` and `ui`, `cache` and `github`). No edge breaks the rules in
+section 7. `report` to `main` left with FZ-105: print mode and the TUI both
+call the engine. FZ-107 cut the last five by moving the shared types down:
+the fetch outcome and progress types, `WorkKey` and `GithubRepo` into
+`model`, which `git` and `github` re-export; `carrier_key` and `RemoteKey`
+into `model` and `Pace` into `time`, which `ci` imports; `View`,
+`initial_view`, `Icons` and the pane defaults into `config`, which `app`
+re-exports and `report` imports.
 
 ```mermaid
 flowchart TB
@@ -135,13 +140,9 @@ flowchart TB
   report --> engine
   app --> engine
   engine --> io
-  report -.->|Icons| app
-  ci -.->|Pace, RemoteKey,<br/>carrier_key| app
-  config -.->|View, Icons,<br/>pane defaults| app
   app --> io
   main --> io
-  model -.->|FetchOutcome, WorkKey,<br/>fetch helpers| git
-  model -.->|GithubRepo| github
+  report --> io
   git --> model
   github --> model
   github --> cache
@@ -153,11 +154,7 @@ The edges that matter, with what crosses them:
 
 | Edge | What crosses | Why it is a problem |
 |---|---|---|
-| `report` to `app` | `Icons` | Print mode depends on TUI state types |
 | `app` to `ui`, `app` to ratatui | `DetailHits`, `Divider`, `Loading`, colors, layout widths; `Rect`, `Line`, `Color` | State depends on drawing, so neither can change alone |
-| `ci` to `app` | `Pace`, `RemoteKey`, `carrier_key` | A data source depends on TUI state |
-| `config` to `app` | `View`, `Icons`, pane defaults | Settings depend on TUI state |
-| `model` to `git`, `github` | Fetch outcome types and helpers, `GithubRepo` | The domain types depend on the sources that fill them, and the sources depend on them |
 | `cache` to `github` | Token fingerprint, response check, hash | The cache and the fetcher depend on each other |
 
 ## 4. Runtime and data flow
