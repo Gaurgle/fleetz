@@ -291,6 +291,15 @@ first (from `git log --merges main`).
 
 ### 2026-11-09
 
+Lead `19b5ad57` (`claude-fable-5-1`) on at-a from 15:15 CET. His word at
+15:14: "refactor only, from docs/module-split-design.md. O1 yes, O2
+sibling tests.rs, O4 as written. File L1, T1, E1, E2 and D1 and run them
+in order; F1 and U1 after. E3 and A1 wait for architect consults. No
+feature tickets until then: FZ-100, FZ-102 and the build label wait."
+Filed FZ-103 to FZ-107 (#160 to #164) under M5 at P1; FZ-103 dispatched
+15:25. The 11-07 order's steps 4 and 5 (L1, the architect's Ready check,
+FZ-97) are superseded by this instruction: L1 is FZ-103, FZ-97 waits.
+
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, about 10:45: "allright ooks good
 to me". About 11:05: "lets look at fz-65 / look at fz-38, could/should it
