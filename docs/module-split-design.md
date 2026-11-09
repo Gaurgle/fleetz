@@ -121,7 +121,9 @@ out of `main.rs`: `load_repos`, `assemble_view*`, `unclaimed_local`,
 and their helpers. `report` calls the engine; `report` to `main` leaves the
 allowlist. `.claude/rules/discovery.md` follows.
 
-**E2, the engine: sweep and fetch planning.** From `main.rs`:
+**E2, the engine: sweep and fetch planning.** (`FetchBackoff` stays in
+`app.rs` until E3: it calls the GitHub backoff ladder, which E3 moves;
+ruled on #163, 2026-11-09.) From `main.rs`:
 `SweepTarget`, `sweep_targets`, `plan_sweep_fetch`, `FetchAsk`, the fetch
 skips and held paths. From `app.rs`: `FetchClaims`, `FetchBackoff`,
 `FetchReport`, `FetchTally`. `report` to `app` leaves the allowlist.
