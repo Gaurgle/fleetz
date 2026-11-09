@@ -5,9 +5,10 @@
 //! wrapping them again, so `lines.len()` is the exact row count its scroll
 //! clamp and `H`/`L` paging count against.
 //!
-//! Ported from notez (`crates/notez-cli/src/tui/markdown.rs`) without its
-//! tree-sitter highlighting: a fenced block is its lines in the code style.
-//! Parsing is `pulldown-cmark` with tables, footnotes, strikethrough and
+//! Ported from notez (`crates/notez-cli/src/tui/markdown.rs`), its
+//! tree-sitter highlighting included (FZ-71): a fence whose tag names a
+//! language in `highlight.rs` is highlighted, any other fence is its lines
+//! in the code style. Parsing is `pulldown-cmark` with tables, footnotes, strikethrough and
 //! task lists on. Nothing is rendered as HTML: raw HTML is shown as its
 //! source text. Every colour is a `colors.rs` token; this file adds no
 //! ladder of its own.
@@ -20,6 +21,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::colors;
+use super::highlight::{Language, MAX_HIGHLIGHT_BYTES, highlight_lines, language_available};
 
 /// What a tab becomes in rendered text. Terminal width of a raw tab is
 /// undefined, so it is expanded before measuring.
@@ -43,17 +45,96 @@ fn text_style() -> Style {
     Style::default().fg(colors::TEXT)
 }
 
-/// Every heading level: the title colour panel titles use, bold.
-pub fn heading_style() -> Style {
+/// A heading, as notez draws it: level 1 bold mauve, level 2 bold sapphire,
+/// deeper levels bold in the text colour.
+pub fn heading_style(level: u8) -> Style {
+    let style = Style::default().add_modifier(Modifier::BOLD);
+    match level {
+        1 => style.fg(colors::MAUVE),
+        2 => style.fg(colors::SAPPHIRE),
+        _ => style.fg(colors::TEXT),
+    }
+}
+
+/// Inline code and fenced code: peach, as notez's `theme::code`, monospace
+/// being the terminal's own.
+pub fn code_style() -> Style {
+    Style::default().fg(colors::PEACH)
+}
+
+/// The base style of uncaptured text in a highlighted code block: plain
+/// text, not [`code_style`], whose colour [`syntax_string`] shares.
+fn highlighted_code_base() -> Style {
+    text_style()
+}
+
+// Syntax highlighting, one style per capture in `highlight.rs`, in notez's
+// colours.
+
+/// Keywords (`fn`, `def`, `if`, `return`).
+pub fn syntax_keyword() -> Style {
+    Style::default().fg(colors::MAUVE)
+}
+
+/// Function and method names, macros.
+pub fn syntax_function() -> Style {
     Style::default()
-        .fg(colors::LAVENDER)
+        .fg(colors::SAPPHIRE)
         .add_modifier(Modifier::BOLD)
 }
 
-/// Inline code and fenced code: the receding text colour, monospace being
-/// the terminal's own.
-pub fn code_style() -> Style {
+/// Type names, built-in types.
+pub fn syntax_type() -> Style {
+    Style::default().fg(colors::YELLOW)
+}
+
+/// String literals, escapes, JSON keys.
+pub fn syntax_string() -> Style {
+    Style::default().fg(colors::PEACH)
+}
+
+/// Numeric literals.
+pub fn syntax_number() -> Style {
+    Style::default().fg(colors::RED)
+}
+
+/// Comments, including doc comments.
+pub fn syntax_comment() -> Style {
+    Style::default()
+        .fg(colors::OVERLAY)
+        .add_modifier(Modifier::ITALIC)
+}
+
+/// Constants and built-in constants (`true`, `None`, `NULL`).
+pub fn syntax_constant() -> Style {
+    Style::default().fg(colors::RED)
+}
+
+/// Variables and parameters.
+pub fn syntax_variable() -> Style {
+    Style::default().fg(colors::TEXT)
+}
+
+/// Operators.
+pub fn syntax_operator() -> Style {
     Style::default().fg(colors::SUBTEXT)
+}
+
+/// Brackets, delimiters and other punctuation.
+pub fn syntax_punctuation() -> Style {
+    Style::default().fg(colors::OVERLAY)
+}
+
+/// Attributes and annotations (`#[derive]`, `@Override`).
+pub fn syntax_attribute() -> Style {
+    Style::default()
+        .fg(colors::YELLOW)
+        .add_modifier(Modifier::ITALIC)
+}
+
+/// Fields, properties and TOML keys.
+pub fn syntax_property() -> Style {
+    Style::default().fg(colors::SAPPHIRE)
 }
 
 /// A link's text, in the colour repo names are drawn in.
@@ -104,7 +185,8 @@ pub fn render_markdown(text: &str, width: u16) -> Vec<Line<'static>> {
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS;
-    let mut renderer = Renderer::new(usize::from(width.max(1)));
+    let is_highlighting = source.len() <= MAX_HIGHLIGHT_BYTES;
+    let mut renderer = Renderer::new(usize::from(width.max(1)), is_highlighting);
     for event in Parser::new_ext(source, options) {
         renderer.event(event);
     }
@@ -175,6 +257,10 @@ struct Renderer<'s> {
     image_depth: usize,
     image_alt: String,
     code: Option<String>,
+    /// The open fence's language, when its tag names one.
+    code_language: Option<Language>,
+    /// False for a document over [`MAX_HIGHLIGHT_BYTES`].
+    is_highlighting: bool,
     html: Option<String>,
     table: Option<Table<'s>>,
     footnotes: Footnotes<'s>,
@@ -182,7 +268,7 @@ struct Renderer<'s> {
 }
 
 impl<'s> Renderer<'s> {
-    fn new(width: usize) -> Self {
+    fn new(width: usize, is_highlighting: bool) -> Self {
         Self {
             width,
             lines: Vec::new(),
@@ -195,6 +281,8 @@ impl<'s> Renderer<'s> {
             image_depth: 0,
             image_alt: String::new(),
             code: None,
+            code_language: None,
+            is_highlighting,
             html: None,
             table: None,
             footnotes: Footnotes::default(),
@@ -281,9 +369,9 @@ impl<'s> Renderer<'s> {
     fn start(&mut self, tag: Tag<'s>) {
         match tag {
             Tag::Paragraph => self.begin_block(),
-            Tag::Heading { .. } => {
+            Tag::Heading { level, .. } => {
                 self.begin_block();
-                self.push_style(heading_style());
+                self.push_style(heading_style(level as u8));
             }
             Tag::BlockQuote(_) => {
                 self.begin_block();
@@ -300,6 +388,7 @@ impl<'s> Renderer<'s> {
                 self.begin_block();
                 if let CodeBlockKind::Fenced(info) = kind {
                     let info = info.trim();
+                    self.code_language = Language::from_fence_tag(info);
                     if !info.is_empty() {
                         self.emit_wrapped(&[(Cow::Borrowed(info), aside_style())], CODE_INDENT);
                     }
@@ -513,22 +602,54 @@ impl<'s> Renderer<'s> {
         self.emit_wrapped(&segments, "");
     }
 
-    /// A code block's lines in the code style, each wrapped by character
-    /// inside the code indent (`wrap_chars`).
+    /// A code block's lines, highlighted when its fence tag names a
+    /// language whose grammar loaded and the document is within
+    /// [`MAX_HIGHLIGHT_BYTES`], each wrapped by character inside the code
+    /// indent (`wrap_chars`). In a highlighted block uncaptured text is
+    /// [`highlighted_code_base`], so string literals stand out; any other
+    /// block stays in [`code_style`].
     fn emit_code(&mut self, code: &str) {
+        let language = self.code_language.take();
         if code.is_empty() {
             return;
         }
         let body = code.strip_suffix('\n').unwrap_or(code);
-        for line in body.split('\n') {
-            let line = line.strip_suffix('\r').unwrap_or(line);
-            let avail = self.avail().saturating_sub(str_width(CODE_INDENT)).max(1);
-            for content in wrap_chars(line, code_style(), avail) {
-                let mut spans = Vec::with_capacity(content.len() + 1);
-                spans.push(Span::raw(CODE_INDENT));
-                spans.extend(content);
-                self.emit_line(spans);
+        let plain: Vec<&str> = body
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line))
+            .collect();
+        let highlighted = language
+            .filter(|&language| self.is_highlighting && language_available(language))
+            .map(|language| highlight_lines(code, language))
+            .filter(|lines| lines.len() == plain.len());
+        match highlighted {
+            Some(lines) => {
+                for line in lines {
+                    let spans: Vec<Span<'static>> = line
+                        .into_iter()
+                        .map(|span| {
+                            let style = highlighted_code_base().patch(span.style);
+                            span.style(style)
+                        })
+                        .collect();
+                    self.emit_code_line(&spans);
+                }
             }
+            None => {
+                for line in plain {
+                    self.emit_code_line(&[Span::styled(line.to_string(), code_style())]);
+                }
+            }
+        }
+    }
+
+    fn emit_code_line(&mut self, spans: &[Span<'static>]) {
+        let avail = self.avail().saturating_sub(str_width(CODE_INDENT)).max(1);
+        for content in wrap_chars(spans, avail) {
+            let mut line = Vec::with_capacity(content.len() + 1);
+            line.push(Span::raw(CODE_INDENT));
+            line.extend(content);
+            self.emit_line(line);
         }
     }
 
@@ -738,35 +859,54 @@ fn char_width(ch: char) -> usize {
 
 /// Wrap one code line to `avail` columns by character, as notez does. Every
 /// character is kept, spaces included, so leading indentation and inner
-/// runs survive the break. Tabs expand to [`TAB`]. A character wider than
-/// `avail` gets a line of its own. Always returns at least one line.
-fn wrap_chars(text: &str, style: Style, avail: usize) -> Vec<Vec<Span<'static>>> {
+/// runs survive the break; a span's style continues on the next line. Tabs
+/// expand to [`TAB`]. A character wider than `avail` gets a line of its
+/// own. Always returns at least one line.
+fn wrap_chars(spans: &[Span<'static>], avail: usize) -> Vec<Vec<Span<'static>>> {
     let avail = avail.max(1);
-    if text.bytes().all(|b| (0x20..0x7f).contains(&b)) && text.len() <= avail {
-        return vec![vec![Span::styled(text.to_string(), style)]];
-    }
     let mut lines = Vec::new();
-    let mut line = String::new();
+    let mut line: Vec<Span<'static>> = Vec::new();
     let mut width = 0;
-    let mut buf = [0u8; 4];
-    for ch in text.chars() {
-        let (piece, repeat): (&str, usize) = if ch == '\t' {
-            (" ", TAB.len())
-        } else {
-            (ch.encode_utf8(&mut buf), 1)
-        };
-        let piece_width = str_width(piece);
-        for _ in 0..repeat {
-            if width + piece_width > avail && width > 0 {
-                lines.push(vec![Span::styled(std::mem::take(&mut line), style)]);
-                width = 0;
+    for span in spans {
+        let style = span.style;
+        let text: &str = &span.content;
+        if text.bytes().all(|b| (0x20..0x7f).contains(&b)) && width + text.len() <= avail {
+            width += text.len();
+            push_styled(&mut line, text, style);
+            continue;
+        }
+        let mut buf = [0u8; 4];
+        for ch in text.chars() {
+            let (piece, repeat): (&str, usize) = if ch == '\t' {
+                (" ", TAB.len())
+            } else {
+                (ch.encode_utf8(&mut buf), 1)
+            };
+            let piece_width = str_width(piece);
+            for _ in 0..repeat {
+                if width + piece_width > avail && width > 0 {
+                    lines.push(std::mem::take(&mut line));
+                    width = 0;
+                }
+                width += piece_width;
+                push_styled(&mut line, piece, style);
             }
-            width += piece_width;
-            line.push_str(piece);
         }
     }
-    lines.push(vec![Span::styled(line, style)]);
+    lines.push(line);
     lines
+}
+
+/// Append `text` to the line, merging into the last span when the style
+/// matches.
+fn push_styled(line: &mut Vec<Span<'static>>, text: &str, style: Style) {
+    if let Some(last) = line.last_mut()
+        && last.style == style
+    {
+        last.content.to_mut().push_str(text);
+        return;
+    }
+    line.push(Span::styled(text.to_string(), style));
 }
 
 /// The width of a cell's widest line when it is not wrapped.
@@ -862,7 +1002,7 @@ fn trim_end_spans(spans: &mut Vec<Span<'static>>) {
 
 /// Cut a line to `avail - 1` columns and end it with `…` in the style of
 /// the span it cuts.
-fn clip_spans(spans: Vec<Span<'static>>, avail: usize) -> Vec<Span<'static>> {
+pub(crate) fn clip_spans(spans: Vec<Span<'static>>, avail: usize) -> Vec<Span<'static>> {
     let limit = avail.saturating_sub(1);
     let mut clipped = Vec::new();
     let mut width = 0;
@@ -1129,20 +1269,33 @@ mod tests {
         style.add_modifier.contains(modifier)
     }
 
-    /// FZ-59: no new ladder. A heading is the title colour panel titles are
-    /// drawn in, every level, and code, links and rules are existing tokens.
+    /// FZ-59: no new ladder, code, links and rules are existing tokens.
+    /// FZ-70: code is peach.
     #[test]
-    fn styles_are_colors_tokens_and_a_heading_wears_the_title_color() {
-        let lines = render_markdown("# One\n\n## Two\n\n###### Six", 40);
-        assert_eq!(texts(&lines), ["One", "", "Two", "", "Six"]);
-        for level in ["One", "Two", "Six"] {
-            let style = span(&lines, level).style;
-            assert_eq!(style.fg, Some(colors::LAVENDER), "{level}");
-            assert!(has(style, Modifier::BOLD), "{level} not bold");
-        }
-        assert_eq!(code_style().fg, Some(colors::SUBTEXT));
+    fn styles_are_colors_tokens() {
+        assert_eq!(code_style().fg, Some(colors::PEACH));
         assert_eq!(link_style().fg, Some(colors::SAPPHIRE));
         assert_eq!(rule_style().fg, Some(colors::SURFACE));
+    }
+
+    /// FZ-70, ported from notez: levels 1 and 2 have their own colour and
+    /// deeper levels are bold in the text colour.
+    #[test]
+    fn headings_one_and_two_have_their_own_style_and_deeper_levels_are_bold() {
+        let lines = render_markdown("# One\n\n## Two\n\n### Three\n\n###### Six", 40);
+        assert_eq!(texts(&lines), ["One", "", "Two", "", "Three", "", "Six"]);
+        assert_eq!(span(&lines, "One").style, heading_style(1));
+        assert_eq!(span(&lines, "Two").style, heading_style(2));
+        assert_ne!(heading_style(1), heading_style(2));
+        assert_eq!(heading_style(1).fg, Some(colors::MAUVE));
+        assert_eq!(heading_style(2).fg, Some(colors::SAPPHIRE));
+        for deep in ["Three", "Six"] {
+            let style = span(&lines, deep).style;
+            assert!(has(style, Modifier::BOLD), "{deep} not bold");
+            assert_eq!(style.fg, Some(colors::TEXT), "{deep} not text colour");
+        }
+        assert!(has(heading_style(1), Modifier::BOLD));
+        assert!(has(heading_style(2), Modifier::BOLD));
     }
 
     #[test]
@@ -1164,18 +1317,16 @@ mod tests {
         assert_eq!(span(&lines, "cargo test").style, code_style());
     }
 
-    /// No highlighting (a separate ticket): a fenced block is its lines in
-    /// the code style, under its language in the aside style.
     #[test]
-    fn fenced_code_is_plain_under_a_dim_language_line() {
+    fn fenced_code_keeps_the_language_as_a_dim_first_line_and_indents_the_code() {
         let lines = render_markdown("```rust\nfn main() {\n    go();\n}\n```\n", 80);
         assert_eq!(
             texts(&lines),
             ["  rust", "  fn main() {", "      go();", "  }"]
         );
         assert_eq!(span(&lines, "rust").style, aside_style());
-        assert_eq!(span(&lines, "fn main() {").style, code_style());
-        assert_eq!(span(&lines, "    go();").style, code_style());
+        assert_eq!(span(&lines, "fn").style, syntax_keyword());
+        assert_eq!(span(&lines, "go").style, syntax_function());
     }
 
     #[test]
@@ -1505,7 +1656,122 @@ mod tests {
             texts(&lines),
             ["before", "", "  sh", "  echo hi", "  # not a heading"]
         );
-        assert_eq!(span(&lines, "# not a heading").style, code_style());
+        assert_eq!(span(&lines, "# not a heading").style, syntax_comment());
+    }
+
+    /// FZ-71, notez's `fenced_rust_block_is_highlighted_and_keeps_the_line_count`.
+    #[test]
+    fn fenced_rust_block_is_highlighted_and_keeps_the_line_count() {
+        let source = "# T\n\n```rust\nfn main() {\n    let x = 1; // c\n}\n```\n\nafter\n";
+        let lines = render_markdown(source, 80);
+        assert_eq!(
+            texts(&lines),
+            [
+                "T",
+                "",
+                "  rust",
+                "  fn main() {",
+                "      let x = 1; // c",
+                "  }",
+                "",
+                "after"
+            ]
+        );
+        assert_eq!(span(&lines, "fn").style, syntax_keyword());
+        assert_eq!(span(&lines, "let").style, syntax_keyword());
+        assert_eq!(span(&lines, "// c").style, syntax_comment());
+        assert_eq!(span(&lines, "rust").style, aside_style());
+        assert_eq!(lines[3].spans[0].content, CODE_INDENT);
+        let plain = lines[3]
+            .spans
+            .iter()
+            .find(|s| s.content == " ")
+            .expect("uncaptured space");
+        assert_eq!(plain.style, highlighted_code_base());
+    }
+
+    /// FZ-71, notez's version of the unterminated fence: an `sh` fence keeps
+    /// `# not a heading` as a comment.
+    #[test]
+    fn an_sh_fence_highlights_a_hash_line_as_a_comment() {
+        let lines = render_markdown("before\n\n```sh\necho hi\n# not a heading\n", 80);
+        assert_eq!(
+            texts(&lines),
+            ["before", "", "  sh", "  echo hi", "  # not a heading"]
+        );
+        assert_eq!(span(&lines, "# not a heading").style, syntax_comment());
+    }
+
+    #[test]
+    fn an_untagged_fence_stays_in_the_code_style() {
+        let lines = render_markdown("```\nfn main() {}\n```", 80);
+        assert_eq!(texts(&lines), ["  fn main() {}"]);
+        assert_eq!(lines[0].spans.len(), 2);
+        assert_eq!(span(&lines, "fn main() {}").style, code_style());
+    }
+
+    #[test]
+    fn an_unknown_fence_tag_renders_plain_code() {
+        let lines = render_markdown("```yaml\nkey: \"value\" # c\n```", 80);
+        assert_eq!(texts(&lines), ["  yaml", "  key: \"value\" # c"]);
+        assert_eq!(lines[1].spans.len(), 2);
+        assert_eq!(span(&lines, "key: \"value\" # c").style, code_style());
+    }
+
+    #[test]
+    fn wrapped_highlighted_code_carries_styles_across_the_break() {
+        let lines = render_markdown("```rust\nlet s = 1; // abcdefgh\n```", 12);
+        assert_eq!(
+            texts(&lines),
+            ["  rust", "  let s = 1;", "   // abcdef", "  gh"]
+        );
+        assert_eq!(span(&lines, "let").style, syntax_keyword());
+        let head = lines[2].spans.last().unwrap();
+        assert_eq!(head.content, "// abcdef");
+        assert_eq!(head.style, syntax_comment());
+        let tail = &lines[3].spans[1];
+        assert_eq!(tail.content, "gh");
+        assert_eq!(tail.style, syntax_comment());
+        for line in &lines {
+            assert!(line.width() <= 12, "{:?}", text_of(line));
+        }
+    }
+
+    #[test]
+    fn a_document_over_the_limit_renders_fences_plain() {
+        let mut doc = String::from("```rust\nfn main() {}\n```\n\n");
+        while doc.len() <= MAX_HIGHLIGHT_BYTES {
+            doc.push_str("filler text for the size limit.\n\n");
+        }
+        let lines = render_markdown(&doc, 80);
+        assert_eq!(texts(&lines[..2]), ["  rust", "  fn main() {}"]);
+        assert_eq!(lines[1].spans[1].content, "fn main() {}");
+        assert_eq!(lines[1].spans[1].style, code_style());
+    }
+
+    /// FZ-71: the 12 capture styles are notez's, from `colors.rs`.
+    #[test]
+    fn capture_styles_are_notez_colours() {
+        let bold = Modifier::BOLD;
+        let italic = Modifier::ITALIC;
+        let table = [
+            (syntax_keyword(), colors::MAUVE, None),
+            (syntax_function(), colors::SAPPHIRE, Some(bold)),
+            (syntax_type(), colors::YELLOW, None),
+            (syntax_string(), colors::PEACH, None),
+            (syntax_number(), colors::RED, None),
+            (syntax_comment(), colors::OVERLAY, Some(italic)),
+            (syntax_constant(), colors::RED, None),
+            (syntax_variable(), colors::TEXT, None),
+            (syntax_operator(), colors::SUBTEXT, None),
+            (syntax_punctuation(), colors::OVERLAY, None),
+            (syntax_attribute(), colors::YELLOW, Some(italic)),
+            (syntax_property(), colors::SAPPHIRE, None),
+        ];
+        for (style, fg, modifier) in table {
+            assert_eq!(style.fg, Some(fg));
+            assert_eq!(style.add_modifier, modifier.unwrap_or(Modifier::empty()));
+        }
     }
 
     #[test]

@@ -59,6 +59,21 @@ impl NoteKind {
 }
 
 impl NoteFile {
+    /// Whether this is the personal board (`personal_board`), outside the
+    /// repo: the one file whose `rel` is absolute.
+    pub fn is_personal(&self) -> bool {
+        self.rel.is_absolute()
+    }
+
+    /// Where a board sits, as the `todos` section writes it beside the
+    /// name: its directory in the repo (`./` for the root), or `personal`.
+    pub fn place(&self) -> String {
+        match self.is_personal() {
+            true => "personal".to_string(),
+            false => section_label(self.rel.parent().unwrap_or(Path::new(""))),
+        }
+    }
+
     /// The file's kind, from its name and extension. A method rather than a
     /// field: the walk already holds the name, and nothing is stored twice.
     pub fn kind(&self) -> NoteKind {
@@ -163,6 +178,42 @@ pub enum Row {
     },
 }
 
+/// The heading of the section pinned first in the tree: every board.
+pub const TODOS_SECTION: &str = "todos";
+
+/// The project's personal todoz board, `<home>/notez/personal/<project>/
+/// TODO.md`, when it is a file: one stat, the one file of the deferred
+/// personal store that joins the tree (FZ-63). `<project>` is notez's name
+/// for the repo: its root directory's name as a slug (`project_slug`); the
+/// walked root is the git toplevel notez names it from.
+pub fn personal_board(home: &Path, root: &Path) -> Option<PathBuf> {
+    let project = project_slug(&root.file_name()?.to_string_lossy());
+    if project.is_empty() {
+        return None;
+    }
+    let board = home
+        .join("notez")
+        .join("personal")
+        .join(project)
+        .join("TODO.md");
+    board.is_file().then_some(board)
+}
+
+/// notez's project name for a directory name, ported from notez-core's
+/// `util::sanitize::name`: trimmed, lowercased, whitespace runs joined with
+/// `-`, then only alphanumerics and `-` kept (`My_Repo` is `myrepo`).
+fn project_slug(dir_name: &str) -> String {
+    dir_name
+        .trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .collect()
+}
+
 /// Walk the repo at `root`. An unreadable root is the error; an unreadable
 /// directory below it is skipped, as discovery skips one.
 pub fn walk(root: &Path) -> std::io::Result<Notes> {
@@ -226,18 +277,64 @@ fn visit(
 }
 
 impl Notes {
-    /// The tree drawn for `all_markdown`, in drawing order. Notes-only:
-    /// every notes directory a section, its files beneath and nested
-    /// directories indented. All markdown: the same, and every other
-    /// markdown file under a section for its directory. Sections run
-    /// shallowest first, then by path.
+    /// The walk of `root` with the personal board (`personal_board`) added,
+    /// when there is one and the walk did not already find it: compared as
+    /// resolved paths, so `~/notez` walked as a repo lists its own
+    /// `personal/<project>/TODO.md` once.
+    pub fn with_personal(mut self, root: &Path, board: Option<PathBuf>) -> Self {
+        let resolved = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        if let Some(board) = board {
+            let wanted = resolved(&board);
+            if !self
+                .files
+                .iter()
+                .any(|f| resolved(&root.join(&f.rel)) == wanted)
+            {
+                self.files.push(NoteFile {
+                    rel: board,
+                    notez: None,
+                });
+            }
+        }
+        self
+    }
+
+    /// The tree drawn for `all_markdown`, in drawing order. First, in both
+    /// modes, the `todos` section: every board the walk found, by path,
+    /// then the personal one, each named `TODO.md` (FZ-63); absent without
+    /// a board. Then, notes-only: every notes directory a section, its
+    /// files beneath and nested directories indented. All markdown: the
+    /// same, and every other markdown file under a section for its
+    /// directory. A board is never listed twice. Sections run shallowest
+    /// first, then by path.
     pub fn rows(&self, all_markdown: bool) -> Vec<Row> {
+        let mut rows = Vec::new();
+        let mut boards: Vec<usize> = (0..self.files.len())
+            .filter(|&i| self.files[i].kind() == NoteKind::Todo)
+            .collect();
+        boards.sort_by_key(|&i| (self.files[i].is_personal(), &self.files[i].rel));
+        if !boards.is_empty() {
+            rows.push(Row::Section(TODOS_SECTION.to_string()));
+        }
+        for i in boards {
+            let name = self.files[i]
+                .rel
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            rows.push(Row::File {
+                depth: 0,
+                name,
+                file: i,
+            });
+        }
         // (section dir, file index), the section being the notes directory
         // or, for loose markdown, the file's own directory.
         let mut placed: Vec<(PathBuf, usize)> = self
             .files
             .iter()
             .enumerate()
+            .filter(|(_, f)| f.kind() != NoteKind::Todo)
             .filter(|(_, f)| all_markdown || f.notez.is_some())
             .map(|(i, f)| {
                 let section = match &f.notez {
@@ -252,7 +349,6 @@ impl Notes {
             (depth(sa), sa, &self.files[*ia].rel).cmp(&(depth(sb), sb, &self.files[*ib].rel))
         });
 
-        let mut rows = Vec::new();
         let mut section: Option<&Path> = None;
         let mut open_dirs: Vec<String> = Vec::new();
         for (dir, i) in &placed {
@@ -441,6 +537,103 @@ mod tests {
             "the cursor walks the files in drawing order",
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FZ-63: the `todos` section comes first in both modes, the repo's
+    /// boards by path and then the personal one from the fixture home; a
+    /// board is not repeated under its directory. Without any board, and
+    /// with a home that has none for this project, there is no section.
+    #[test]
+    fn the_todos_section_pins_every_board_once() {
+        let parent = fixture(
+            "boards",
+            &[
+                "My_Repo/TODO.md",
+                "My_Repo/notez/TODO.md",
+                "My_Repo/notez/plan.md",
+                "My_Repo/docs/guide.md",
+            ],
+        );
+        let root = parent.join("My_Repo");
+        // notez names the project `myrepo`; the raw directory name is a
+        // decoy the slug must not find.
+        let home = fixture(
+            "boards_home",
+            &[
+                "notez/personal/myrepo/TODO.md",
+                "notez/personal/My_Repo/TODO.md",
+                "notez/personal/other/TODO.md",
+            ],
+        );
+        let personal = home.join("notez/personal/myrepo/TODO.md");
+        assert_eq!(personal_board(&home, &root), Some(personal.clone()));
+        let notes = walk(&root)
+            .unwrap()
+            .with_personal(&root, personal_board(&home, &root));
+
+        assert_eq!(
+            drawn(&notes.rows(false)),
+            [
+                "todos",
+                "  TODO.md",
+                "  TODO.md",
+                "  TODO.md",
+                "notez/",
+                "  plan.md",
+            ],
+        );
+        assert_eq!(
+            drawn(&notes.rows(true)),
+            [
+                "todos",
+                "  TODO.md",
+                "  TODO.md",
+                "  TODO.md",
+                "docs/",
+                "  guide.md",
+                "notez/",
+                "  plan.md",
+            ],
+        );
+        let places: Vec<String> = notes.listed(true).iter().map(|f| f.place()).collect();
+        assert_eq!(places, ["./", "notez/", "personal", "docs/", "notez/"]);
+        assert_eq!(notes.listed(true)[2].rel, personal);
+
+        // Added twice, listed once.
+        let again = notes.clone().with_personal(&root, Some(personal));
+        assert_eq!(again.files.len(), notes.files.len());
+
+        let bare = fixture("boards_none", &["notez/plan.md"]);
+        let notes = walk(&bare)
+            .unwrap()
+            .with_personal(&bare, personal_board(&home, &bare));
+        assert_eq!(drawn(&notes.rows(false)), ["notez/", "  plan.md"]);
+        for dir in [parent, home, bare] {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// notez's own name slug: `sanitize::name`'s rules.
+    #[test]
+    fn a_project_slug_is_notez_sanitized_name() {
+        assert_eq!(project_slug("My_Repo"), "myrepo");
+        assert_eq!(project_slug("  Big Project  Two "), "big-project-two");
+        assert_eq!(project_slug("fleetz"), "fleetz");
+        assert_eq!(project_slug("x.y-z"), "xy-z");
+    }
+
+    /// Review finding 2: the notez vault itself walked as a repo finds its
+    /// own `personal/notez/TODO.md`, which is also its personal board; it
+    /// is listed once.
+    #[test]
+    fn the_vault_walked_as_a_repo_lists_its_personal_board_once() {
+        let home = fixture("vault_home", &["notez/personal/notez/TODO.md"]);
+        let root = home.join("notez");
+        let board = personal_board(&home, &root);
+        assert_eq!(board, Some(home.join("notez/personal/notez/TODO.md")));
+        let notes = walk(&root).unwrap().with_personal(&root, board);
+        assert_eq!(drawn(&notes.rows(true)), ["todos", "  TODO.md"]);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// A repo with no notes directory draws no rows, and a nested repo's

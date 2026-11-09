@@ -8,13 +8,11 @@ use crate::app::{App, ContributionsMode, FocusedPanel, HistoryView, Overlay, Vie
 use crate::model::{NOT_CLONED, Summary};
 use crate::ui::colors;
 
-/// Render the footer: summary stats on the left, keybind hints on the right.
+/// Render the footer: keybind hints and nothing else.
 ///
-/// The hints open with the focused pane's keys (`focus_hints`). Never lets
-/// the two sides collide: when tight, the global keys drop their
-/// descriptions, then the pane's keys do, then the pane's keys go, and the
-/// summary drops entirely if even the bare global keys don't fit, rather
-/// than risk a negative spacer width.
+/// The hints open with the focused pane's keys (`focus_hints`). When tight,
+/// the global keys drop their descriptions, then the pane's keys do, then
+/// the pane's keys go.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // An in-flight window apply takes over the whole footer with a gauge,
     // so the user sees real-time progress instead of a frozen list.
@@ -35,38 +33,31 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let summary = app.summary();
-    // The fit and spacer math below is about the *padded* width, not the
-    // footer's full rect: the block insets the content on both sides so the
-    // summary lines up with the pane content above it rather than starting two
-    // columns further left, hard against the terminal edge.
+    // The fit math below is about the *padded* width, not the footer's full
+    // rect: the block insets the content on both sides so the keys line up
+    // with the pane content above them rather than starting two columns
+    // further left, hard against the terminal edge.
     let width = area.width.saturating_sub(2 * crate::ui::PANE_CONTENT_INSET) as usize;
 
-    // A transient status message (fetch/switch/refresh result) takes over the
-    // left side while present, so single-shot actions actually report back --
-    // otherwise the summary just sits there and the action looks like a no-op.
-    let left = match &app.status_message {
-        Some(msg) => {
-            let color = if msg.is_error {
-                colors::RED
-            } else {
-                colors::GREEN
-            };
-            vec![Span::styled(msg.text.clone(), Style::default().fg(color))]
-        }
-        None => summary_spans(&summary),
+    // The fleet's state lives in pane 2's header (FZ-93) and on the compact
+    // view's status line. Where this frame drew neither, the footer carries
+    // it, as it always did: a manual refresh's spinner, then the last
+    // action's message or the summary. Otherwise the keys have the row.
+    let left = if crate::ui::uses_status_line(app) || app.fleet_drawn.get() {
+        Vec::new()
+    } else {
+        fallback_spans(app)
     };
 
     // Widest first (Andreas, 2026-10-17): the global row's words go before
     // the segment's, since they are the same every day and the segment is
-    // the news; the segment goes before the summary, which outranks it.
+    // the news; the segment goes before the left side, which outranks it.
     let with_segment = [
         hints_with_segment(app, true, true),
         hints_with_segment(app, true, false),
         hints_with_segment(app, false, false),
     ];
     let compact_hints = keybind_hints(app, false);
-
     let (mut spans, hints) = if let Some(hints) = with_segment
         .into_iter()
         .find(|hints| fits(width, &left, hints))
@@ -78,21 +69,61 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         (Vec::new(), compact_hints)
     };
 
+    // Right-aligned. Measured in columns, so the row ends flush with the
+    // content's right edge.
     let spacer_width = width.saturating_sub(line_width(&spans) + line_width(&hints));
     spans.push(Span::raw(" ".repeat(spacer_width.max(1))));
     spans.extend(hints);
-
     let line = Line::from(spans);
+    // Under the compact view's status line the keys take the bottom row
+    // alone, the grid's border dividing them; elsewhere a rule above them,
+    // as it always was.
+    let (area, borders) = if crate::ui::uses_status_line(app) {
+        let last = area.bottom().saturating_sub(1);
+        (
+            Rect {
+                y: last,
+                height: 1,
+                ..area
+            },
+            Borders::NONE,
+        )
+    } else {
+        (area, Borders::TOP)
+    };
     let paragraph = Paragraph::new(line).block(
         Block::default()
-            .borders(Borders::TOP)
+            .borders(borders)
             .border_style(Style::default().fg(colors::SURFACE))
             .padding(Padding::horizontal(crate::ui::PANE_CONTENT_INSET)),
     );
     frame.render_widget(paragraph, area);
 }
 
-fn summary_spans(summary: &Summary) -> Vec<Span<'static>> {
+/// The footer's left side where no fleet column was drawn: a manual
+/// refresh's spinner, then the last action's message, or the summary when
+/// there is none.
+fn fallback_spans(app: &App) -> Vec<Span<'static>> {
+    let p = crate::ui::fleet_pieces(app, chrono::Local::now());
+    let mut spans: Vec<Span<'static>> = p
+        .refreshing
+        .into_iter()
+        .flatten()
+        .map(|s| Span::styled(s.content.trim().to_string(), s.style))
+        .collect();
+    if !spans.is_empty() {
+        spans.push(Span::raw("  "));
+    }
+    match p.message {
+        Some(message) => spans.push(message),
+        None => spans.extend(p.summary),
+    }
+    spans
+}
+
+/// The fleet's counters, `3↓ · 2↑ · 4! · 17 synced`, as the status line
+/// draws them.
+pub(crate) fn summary_spans(summary: &Summary) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let dot = || Span::styled(" · ", Style::default().fg(colors::SURFACE));
 
@@ -232,6 +263,22 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
         hints.push(Span::styled(" switch", desc_style));
     }
     hints.push(gap.clone());
+    // The yank chords (FZ-74), where the focused pane has a cursor on
+    // something to copy: not the compact grid, the strip or a header. Not
+    // on the repo list either, whose row has no column to spare for it.
+    if app.view == View::Detail
+        && !matches!(
+            app.focused_panel,
+            FocusedPanel::Contributions | FocusedPanel::RepoList
+        )
+        && app.on_header().is_none()
+    {
+        hints.push(Span::styled("[yy/yp]", key_style));
+        if with_desc {
+            hints.push(Span::styled(" yank", desc_style));
+        }
+        hints.push(gap.clone());
+    }
     hints.push(Span::styled("[v]", lit(app.view == View::Compact)));
     if with_desc {
         hints.push(Span::styled(format!(" {view_hint}"), desc_style));
@@ -973,6 +1020,39 @@ mod tests {
         assert!(with_summary > 0 && without > 0);
     }
 
+    /// Where pane 2 drew the fleet's state (FZ-93), the footer is keys only:
+    /// no summary, and the full hints have the whole width.
+    #[test]
+    fn beside_a_drawn_fleet_column_the_footer_is_keys_only() {
+        let app = app_with_glyph_summary();
+        app.fleet_drawn.set(true);
+        let full = text(&keybind_hints(&app, true));
+        let segment = text(&focus_hints(&app, true));
+        let width = snug_width("", &format!("{segment}{SEGMENT_GAP}{full}"));
+        let row = footer_row(&app, width);
+        assert!(row.contains(&full), "descriptions dropped: {row:?}");
+        assert!(!row.contains("synced"), "summary in the footer: {row:?}");
+        let tighter = footer_row(&app, width - 1);
+        assert!(!tighter.contains(" lazygit"), "{tighter:?}");
+    }
+
+    /// Where it did not (a section's digest, no repo, a narrow pane 2), the
+    /// footer carries the last action's message in the summary's place, so
+    /// an action never ends in silence (FZ-93 review, B1).
+    #[test]
+    fn without_a_fleet_column_the_footer_carries_the_message() {
+        let mut app = app_with_glyph_summary();
+        app.set_status("Already refreshing".to_string(), true);
+        let row = footer_row(&app, 200);
+        assert!(row.contains("Already refreshing"), "{row:?}");
+        assert!(
+            !row.contains("synced"),
+            "the message takes its place: {row:?}"
+        );
+        app.fleet_drawn.set(true);
+        assert!(!footer_row(&app, 200).contains("Already refreshing"));
+    }
+
     /// The strip's segment names `c` as that pane's key, but plainly: the
     /// global row's `[c]` is the one that lights in the strip's colour.
     #[test]
@@ -986,6 +1066,33 @@ mod tests {
             .find(|s| s.content == "[c]")
             .expect("[c] in the strip segment");
         assert_eq!(c.style.fg, Some(colors::TEXT));
+    }
+
+    /// FZ-74: the yank chords are hinted where pane 2, the inspector or the
+    /// reader has a cursor to copy from, and not on the repo list, the
+    /// strip or the compact grid.
+    #[test]
+    fn the_yank_chords_are_hinted_beside_the_panes_that_copy() {
+        let mut app = app_in(View::Detail);
+        for panel in [
+            FocusedPanel::Detail,
+            FocusedPanel::Inspector,
+            FocusedPanel::Reader,
+        ] {
+            app.focused_panel = panel;
+            let row = global_row(&app);
+            assert!(
+                row.contains("[s] switch  [yy/yp] yank  [v]"),
+                "{panel:?}: {row}"
+            );
+        }
+        for panel in [FocusedPanel::RepoList, FocusedPanel::Contributions] {
+            app.focused_panel = panel;
+            assert!(!global_row(&app).contains("[yy/yp]"), "{panel:?}");
+        }
+        let mut app = app_in(View::Compact);
+        app.focused_panel = FocusedPanel::Detail;
+        assert!(!global_row(&app).contains("[yy/yp]"), "compact");
     }
 
     #[test]

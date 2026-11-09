@@ -1,0 +1,36 @@
+# Relay placeholder values, read by ~/claude-config/scripts/relay-upgrade.
+# DEVIATIONS is the stamp's local-deviations text.
+BOARD = "https://github.com/users/Gaurgle/projects/1"
+BOARD_NUMBER = "1"
+BOARD_OWNER = "Gaurgle"
+BOARD_READ = "`gh project item-list 1 --owner Gaurgle --format json`"
+CHECKS = '''
+claude -p \
+  --model claude-opus-5-5 \
+  --effort medium \
+  --restricted \
+  --tools 'Read,Glob,Grep' \
+  --allowedTools 'Read,Glob,Grep' \
+  --disallowedTools 'mcp__*' \
+  --strict-mcp-config \
+  --permission-mode dontAsk \
+  --permission-prompts none \
+  --max-turns 5 \
+  --output-format json \
+  < /tmp/fz-02-review-handoff.txt \
+  > /tmp/fz-02-claude-review.json
+'''
+INTEGRATION_BRANCH = "main"
+INTEGRATION_POLICY = "No section of its own: see the Ship policy in CLAUDE.md and \"Lead ownership and carried authorization\"."
+LEAD_MODEL = "claude-fable-5-1"
+OWNER = "Andreas"
+OWNER_ONLY = "run `cargo install`"
+PREFIX = "fz"
+PROJECT = "fleetz"
+SMALL_MODEL = "sonnet"
+SWEEP = "scripts/relay-sweep main"
+TICKET_PREFIX = "FZ"
+TRY_BUILD_BRANCH = "`cargo run --release --manifest-path <worktree>/Cargo.toml`"
+TRY_BUILD_MAIN = "`cargo run --release` from `main`"
+WORKER_MODEL = "claude-opus-5-5"
+DEVIATIONS = "hand-evolved origin of Relay (release-plan order, bounded Claude review pilot, Claude-native workforce, validation contract with the standing existing-test exception, two fz-worker plus one fz-small, coordination docs straight to main)"

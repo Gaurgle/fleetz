@@ -61,7 +61,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let columns = column_count(&visible, content.width as usize);
+    let columns = grid_column_count(app, &visible, content.width as usize);
     let col_width = cell_width(columns, content.width as usize);
 
     let selected = app.selected_repo_index().unwrap_or(usize::MAX);
@@ -75,8 +75,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 let pad = col_width.saturating_sub(prev_len) + GUTTER;
                 row_spans.push(Span::raw(" ".repeat(pad)));
             }
+            let shown = app.ci_shown(entry.1);
+            let ci = badges::RowCi {
+                status: &shown.status,
+                side_run: app.ci_side_run(entry.1),
+            };
             row_spans.extend(compact_repo_spans_marked(
                 entry.1,
+                ci,
                 entry.0 == selected,
                 col_width,
                 app.watch_mode && !app.blink_on,
@@ -112,7 +118,30 @@ const MAX_COLUMNS: usize = 6;
 /// Was a constant 2, at any width from 48 columns to 300. That is the whole
 /// bug: a wider terminal bought longer leader dots instead of more repos on
 /// screen, in the one view whose entire job is showing the fleet at once.
+#[cfg(test)]
 fn column_count(visible: &[(usize, &RepoStatus)], width: usize) -> usize {
+    column_count_by(visible, width, |r| badges::badge_spans(r, false).1)
+}
+
+/// `column_count` with each cell's badges measured as the grid draws them
+/// (FZ-83): the lamp `App::ci_shown` gives and the side-run mark.
+fn grid_column_count(app: &App, visible: &[(usize, &RepoStatus)], width: usize) -> usize {
+    column_count_by(visible, width, |r| {
+        let shown = app.ci_shown(r);
+        let ci = badges::RowCi {
+            status: &shown.status,
+            side_run: app.ci_side_run(r),
+        };
+        badges::badge_spans_ci(r, ci, false, false).1
+    })
+}
+
+/// `column_count`, with `badge_width` measuring one repo's badge group.
+fn column_count_by(
+    visible: &[(usize, &RepoStatus)],
+    width: usize,
+    badge_width: impl Fn(&RepoStatus) -> usize,
+) -> usize {
     if visible.is_empty() || width == 0 {
         return 1;
     }
@@ -124,7 +153,7 @@ fn column_count(visible: &[(usize, &RepoStatus)], width: usize) -> usize {
         .min(NAME_TARGET);
     let widest_badges = visible
         .iter()
-        .map(|(_, r)| badges::badge_spans(r, false).1)
+        .map(|(_, r)| badge_width(r))
         .max()
         .unwrap_or(0);
     // Mirrors what `compact_repo_spans` lays out: marker, glyph, name, the
@@ -146,14 +175,20 @@ fn compact_repo_spans(
     max_width: usize,
     dim_pending: bool,
 ) -> Vec<Span<'static>> {
-    compact_repo_spans_marked(repo, is_selected, max_width, dim_pending, false)
+    let ci = badges::RowCi {
+        status: &repo.ci_status,
+        side_run: false,
+    };
+    compact_repo_spans_marked(repo, ci, is_selected, max_width, dim_pending, false)
 }
 
-/// One grid cell. `not_in_last_poll` draws the CI lamp and PR count as from
-/// an earlier refresh, as the detail view's list does
-/// (`badges::badge_spans_marked`), so the mark looks the same in every view.
+/// One grid cell, its CI part as `ci` says (`App::ci_shown`, FZ-83).
+/// `not_in_last_poll` draws the CI lamp and PR count as from an earlier
+/// refresh, as the detail view's list does (`badges::badge_spans_ci`), so
+/// the mark looks the same in every view.
 fn compact_repo_spans_marked(
     repo: &RepoStatus,
+    ci: badges::RowCi,
     is_selected: bool,
     max_width: usize,
     dim_pending: bool,
@@ -173,7 +208,7 @@ fn compact_repo_spans_marked(
     // room for marker, glyph, at least one dot, and the badges; whatever
     // remains is the name's budget -- truncate rather than overflow into the
     // next column.
-    let (badge_spans, badge_w) = badges::badge_spans_marked(repo, dim_pending, not_in_last_poll);
+    let (badge_spans, badge_w) = badges::badge_spans_ci(repo, ci, dim_pending, not_in_last_poll);
     let right_len = badge_w + 1; // +1 for space after dots
     let reserved = badges::MARKER_W + badges::GLYPH_W + 1 + right_len;
     let name_budget = max_width.saturating_sub(reserved).max(3);
@@ -366,6 +401,129 @@ mod tests {
             Some(colors::OVERLAY),
             "the list title drawn focused while the strip has focus"
         );
+    }
+
+    /// FZ-83 case 2: the fleet poll still says pending, the default branch's
+    /// check runs read after it say green. The grid cell draws the lamp
+    /// `App::ci_shown` gives, as pane 1's list does. Fails while the cell
+    /// reads `ci_status`.
+    #[test]
+    fn a_compact_cell_shows_the_fresher_verdict() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut repos = vec![repo("fleetz")];
+        repos[0].ci_status = CiStatus::Pending;
+        let width = 60u16;
+        let mut app = App::new(repos, "t".to_string(), width, 20);
+        app.view = crate::app::View::Compact;
+        let now = chrono::Local::now();
+        app.github_freshness.data_time =
+            crate::app::DataTime::At(now - chrono::Duration::minutes(1));
+        let key = crate::ci::target(&app.repos[0])
+            .expect("a GitHub identity")
+            .0;
+        app.ci.insert(
+            key,
+            crate::app::CiState {
+                tip: Some(crate::app::CiTip {
+                    sha: "cc524b4".to_string(),
+                    statuses_complete: true,
+                    checks: Some(crate::ci::TipChecks {
+                        runs: vec![crate::ci::Context {
+                            name: "build".to_string(),
+                            state: CiStatus::Passed,
+                            description: None,
+                            url: None,
+                            actions: true,
+                            source: "actions".to_string(),
+                            started: None,
+                            completed: None,
+                        }],
+                        complete: true,
+                    }),
+                    confirmed: Some(now),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+
+        let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
+        term.draw(|f| render(f, f.area(), &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let lamp = (0..20u16)
+            .find_map(|y| {
+                (0..width)
+                    .find(|&x| buf[(x, y)].symbol() == "◉")
+                    .map(|x| buf[(x, y)].fg)
+            })
+            .expect("lamp drawn");
+        assert_eq!(lamp, colors::GREEN);
+    }
+
+    /// FZ-83: the grid sizes its cells for the badges it draws, the side-run
+    /// mark included, so a cell carrying it still holds its name and the
+    /// minimum dots at every width. Fails while the estimate measures the
+    /// fleet poll's lamp alone, two columns short.
+    #[test]
+    fn the_column_estimate_counts_the_side_run_mark() {
+        let repos = fleet(12);
+        let mut app = App::new(repos, "t".to_string(), 200, 40);
+        let now = chrono::Local::now();
+        app.github_freshness.data_time =
+            crate::app::DataTime::At(now - chrono::Duration::minutes(1));
+        let mut run = crate::ci::parse_runs(include_str!("../ci/fixtures/runs.json"))
+            .unwrap()
+            .remove(0);
+        run.status = Some("in_progress".to_string());
+        run.head_sha = Some("feed000".to_string());
+        for r in &app.repos {
+            let key = crate::ci::target(r).expect("a GitHub identity").0;
+            let mut state = crate::app::CiState {
+                runs: vec![run.clone()],
+                tip: Some(crate::app::CiTip {
+                    sha: "cc524b4".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            state.freshness.data_time = crate::app::DataTime::At(now);
+            app.ci.insert(key, state);
+        }
+        assert!(
+            app.ci_side_run(&app.repos[0]),
+            "every cell carries the mark"
+        );
+        let drawn_badges = |r: &RepoStatus| {
+            let ci = badges::RowCi {
+                status: &r.ci_status,
+                side_run: true,
+            };
+            badges::badge_spans_ci(r, ci, false, false).1
+        };
+        let visible: Vec<(usize, &RepoStatus)> = app.repos.iter().enumerate().collect();
+        for width in 40..=240 {
+            let columns = grid_column_count(&app, &visible, width);
+            if columns == 1 {
+                continue;
+            }
+            let cell = cell_width(columns, width);
+            for (_, r) in &visible {
+                let needed = badges::MARKER_W
+                    + badges::GLYPH_W
+                    + r.name.chars().count()
+                    + 1
+                    + MIN_DOTS
+                    + 1
+                    + drawn_badges(r);
+                assert!(
+                    cell >= needed,
+                    "width {width}: {columns} cells of {cell}, {} needs {needed}",
+                    r.name
+                );
+            }
+        }
     }
 
     /// FZ-09d: a repo the last poll did not return draws its lamp in the

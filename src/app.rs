@@ -43,6 +43,12 @@ pub enum HistoryView {
     Commits,
     Reflog,
     Graph,
+    /// The selected repo's worktrees, the main checkout first, the
+    /// highlighted one's facts and newest commits in the inspector (FZ-77).
+    /// Reads a worktree's log only while on screen
+    /// (`App::worktrees_wanted`). Beside `branches`, whose checkouts these
+    /// are, and before it: `branches`, `ci` and `notes` keep their order.
+    Worktrees,
     Branches,
     /// The selected repo's recent workflow runs (FZ-30d). The only view that
     /// polls: the CI data layer asks GitHub only while this one is on
@@ -52,18 +58,24 @@ pub enum HistoryView {
     /// inspector (FZ-53). Walks the repo only while on screen
     /// (`App::notes_wanted`).
     Notes,
+    /// The selected repo's files that have not left this machine:
+    /// uncommitted, then unpushed, the highlighted file's diff in the
+    /// inspector (FZ-60). Read only while on screen (`App::changes_wanted`).
+    Changes,
 }
 
 impl HistoryView {
     /// Every view, in the order the tab strip draws them and `V` cycles them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Info,
         Self::Commits,
         Self::Reflog,
         Self::Graph,
+        Self::Worktrees,
         Self::Branches,
         Self::Ci,
         Self::Notes,
+        Self::Changes,
     ];
     pub const COUNT: usize = Self::ALL.len();
 
@@ -74,9 +86,11 @@ impl HistoryView {
             Self::Commits => 1,
             Self::Reflog => 2,
             Self::Graph => 3,
-            Self::Branches => 4,
-            Self::Ci => 5,
-            Self::Notes => 6,
+            Self::Worktrees => 4,
+            Self::Branches => 5,
+            Self::Ci => 6,
+            Self::Notes => 7,
+            Self::Changes => 8,
         }
     }
 
@@ -89,6 +103,8 @@ impl HistoryView {
             Self::Branches => "branches",
             Self::Ci => "ci",
             Self::Notes => "notes",
+            Self::Worktrees => "worktrees",
+            Self::Changes => "changes",
         }
     }
 }
@@ -569,7 +585,7 @@ impl SettingField {
 /// Repo list width as a percentage of the main area, and the inspector's share
 /// of the right column. These are the sizes every launch starts from.
 pub const DEFAULT_REPO_LIST_PCT: u16 = 35;
-pub const DEFAULT_INSPECTOR_PCT: u16 = 40;
+pub const DEFAULT_INSPECTOR_PCT: u16 = 25;
 
 /// Bounds the resize keys clamp to. Both panes stay wide/tall enough to be
 /// worth drawing, so a held key can never collapse one to nothing.
@@ -636,6 +652,9 @@ pub struct SettingsOverlay {
     /// Seeded from the set the app is drawing with, so a save that only
     /// meant to change another row writes back the set already in force.
     pub icons: Icons,
+    /// The set in force when the overlay opened, or when it last saved: what
+    /// Esc puts back, because stepping the icons row previews at once.
+    pub icons_in_force: Icons,
     pub intro: bool,
     /// Result of the last save attempt, shown as a footer line.
     pub status: Option<String>,
@@ -670,6 +689,7 @@ impl SettingsOverlay {
             contributions,
             contrib_cell,
             icons,
+            icons_in_force: icons,
             intro,
             status: None,
             digits: String::new(),
@@ -2173,6 +2193,13 @@ pub struct App {
     /// are written on the first frame, which is always drawn before any input
     /// is processed.
     pub detail_max_scroll: std::cell::Cell<u16>,
+    /// Whether this frame drew the fleet's state in pane 2 (FZ-93): its
+    /// header's fleet column, or the `notes` layout's slot beside it. Reset
+    /// at the start of every frame and read by the footer, drawn after pane
+    /// 2, which carries the summary and the message itself when nothing
+    /// else did (a section's digest, no repo, a pane too narrow for the
+    /// column), so an action never ends in silence.
+    pub fleet_drawn: std::cell::Cell<bool>,
     /// Set when the cursor moves, cleared once the renderer has scrolled to
     /// show it.
     ///
@@ -2303,7 +2330,9 @@ pub struct App {
     /// Whether the in-flight sweep was asked for by a keypress rather than by
     /// the watch timer. Only a manual one announces itself in the header: a
     /// background refresh firing on an interval should not repaint a big
-    /// colored indicator over a dashboard you are reading.
+    /// colored indicator over a dashboard you are reading. An `r` pressed
+    /// while a watch sweep runs marks that sweep manual: it starts none of
+    /// its own, so the running one's rows are the ones it waits for.
     ///
     /// Only meaningful while `sweep_started` is `Some`.
     pub sweep_manual: bool,
@@ -2436,6 +2465,12 @@ pub struct App {
     /// no other key came since: the streak keeps cycling views on arriving
     /// in `ci` rather than stepping the run bodies there.
     pub brackets_cycling_views: bool,
+    /// A `y` was pressed and the next key finishes the yank chord (FZ-74):
+    /// `y` copies the thing under the cursor, `p` its path, anything else
+    /// copies nothing. Cleared by the next key whatever it is.
+    pub pending_yank: bool,
+    /// The row a successful `yy` or `yp` copied from flashes once (FZ-81).
+    pub yank_flash: YankFlash,
     /// The run the scrolls and the mark belong to, and since when it is
     /// highlighted, for the dwell before the inspector fetches anything.
     pub ci_inspected: Option<(u64, std::time::Instant)>,
@@ -2443,6 +2478,16 @@ pub struct App {
     /// (`RefCell` for the reason `detail_row_tops` is one). A held log never
     /// changes, so its job id and the width are the whole key.
     pub ci_log_wrap: std::cell::RefCell<Option<CiLogWrap>>,
+    /// The `worktrees` view's newest commits per worktree, keyed by the
+    /// worktree's path as the row holds it, for the session (FZ-77). Read
+    /// only while the view is on screen (`worktrees_wanted`).
+    pub worktree_logs: std::collections::HashMap<String, WorktreeLog>,
+    /// Bumped when a sweep lands: a held worktree log from an older
+    /// generation is read again the next time it is shown.
+    pub worktree_logs_generation: u64,
+    /// The row path the cursor rests on in the `worktrees` view and since
+    /// when, for the dwell (`ci::DWELL`) before a log read starts.
+    pub worktrees_cursor: Option<(Option<String>, std::time::Instant)>,
     /// The `notes` view's walk per repo, keyed by the row's path, held for
     /// the session and never written to disk (FZ-53). Walked only while the
     /// view is on screen (`notes_wanted`).
@@ -2456,11 +2501,14 @@ pub struct App {
     /// The row path the cursor rests on in the `notes` view and since when,
     /// for the dwell (`ci::DWELL`) before a walk starts.
     pub notes_cursor: Option<(Option<String>, std::time::Instant)>,
-    /// The highlighted file's body and facts, for the reader and the card:
-    /// one file at a time.
+    /// The highlighted file's body and facts, for the reader and the facts
+    /// beside pane 2's header: one file at a time.
     pub note_body: Option<NoteBody>,
+    /// The footer has said once this session that a board went to
+    /// `$EDITOR` because `todoz` is not on PATH (FZ-63).
+    pub todoz_fallback_said: bool,
     /// The reader's scroll offset (FZ-62), its own rather than the
-    /// inspector's, which the card scrolls. Reset when the file changes.
+    /// inspector's. Reset when the file changes.
     pub reader_scroll: u16,
     /// Largest useful reader offset, measured by the renderer for the
     /// reason `inspector_max_scroll` is.
@@ -2470,6 +2518,11 @@ pub struct App {
     /// Columns the reader's body drew on the last frame: the width a
     /// markdown body is rendered at (FZ-59), off the UI thread.
     pub reader_width: std::cell::Cell<u16>,
+    /// Columns of the main area the repo list and the right column split,
+    /// as the key handler last measured it; 0 before it has. `<` and `>`
+    /// step from the list width this draws (FZ-69), which differs from
+    /// `repo_list_pct` where the default yields to the cap.
+    pub main_area_width: std::cell::Cell<u16>,
     /// `p` in the `notes` layout: the reader shows markdown as its source.
     /// One flag for the session, not per file; other kinds are always raw.
     pub reader_raw: bool,
@@ -2494,6 +2547,69 @@ pub struct App {
     /// The section header under the resting pointer and since when; the
     /// tick lands on it after `HOVER_DWELL` (`settle_hover`).
     pub hover_pending: Option<(crate::digest::Section, std::time::Instant)>,
+    /// The `changes` view's read per repo, keyed by the row's path, held for
+    /// the session and never written to disk (FZ-60). Read only while the
+    /// view is on screen (`changes_wanted`).
+    pub changes: std::collections::HashMap<String, ChangesState>,
+    /// Bumped when a sweep lands or a suspend returns: a read or a diff from
+    /// an older generation is read again the next time it is shown.
+    pub changes_generation: u64,
+    /// `u`: what the second section compares `HEAD` with.
+    pub changes_base: crate::git::ChangesBase,
+    /// The row path the cursor rests on in the `changes` view and since
+    /// when, for the dwell (`ci::DWELL`) before a read starts.
+    pub changes_cursor: Option<(Option<String>, std::time::Instant)>,
+    /// The highlighted file's diff for the inspector: one file at a time.
+    pub change_diff: Option<ChangeDiff>,
+}
+
+/// The `changes` view's read of one repo (FZ-60).
+#[derive(Debug, Clone, Default)]
+pub struct ChangesState {
+    /// The last read's answer, kept on screen while a newer one runs.
+    pub held: Option<Result<crate::git::Changes, String>>,
+    /// A read is running.
+    pub reading: bool,
+    /// The generation and base `held` was read in.
+    pub generation: u64,
+    pub base: crate::git::ChangesBase,
+}
+
+/// A claimed read of one repo's `changes`, for `git::changes` off the UI
+/// thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangesRead {
+    pub key: String,
+    pub root: std::path::PathBuf,
+    pub generation: u64,
+    pub base: crate::git::ChangesBase,
+}
+
+/// Which section of the `changes` view a file is listed in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeSection {
+    Uncommitted,
+    Outgoing,
+}
+
+/// A claimed diff of the highlighted `changes` file, for
+/// `git::changed_file_diff`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffRead {
+    pub root: std::path::PathBuf,
+    pub section: ChangeSection,
+    pub file: crate::git::ChangedFile,
+    /// The outgoing section's base ref; `None` for an uncommitted file.
+    pub base: Option<String>,
+    pub generation: u64,
+}
+
+/// The highlighted file's diff, as `read` asked for it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChangeDiff {
+    pub read: DiffRead,
+    /// `None` while the read runs.
+    pub text: Option<Result<String, String>>,
 }
 
 /// The `notes` view's walk of one repo (FZ-53).
@@ -2508,7 +2624,7 @@ pub struct NotesState {
 }
 
 /// The body and facts of one file in the `notes` view: the reader draws the
-/// text, the card the facts.
+/// text, the facts beside pane 2's header the facts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoteBody {
     pub path: std::path::PathBuf,
@@ -2544,6 +2660,30 @@ pub struct NoteRender {
     pub text: String,
 }
 
+/// One worktree's newest commits as the `worktrees` view's inspector draws
+/// them (FZ-77): `None` until a read lands.
+#[derive(Debug, Clone, Default)]
+pub struct WorktreeLog {
+    pub commits: Option<Vec<crate::model::Commit>>,
+    /// The generation `commits` was read in (`App::worktree_logs_generation`).
+    pub generation: u64,
+    /// A read is in flight; one per worktree at a time.
+    pub reading: bool,
+}
+
+/// How many commits the `worktrees` inspector lists for a worktree.
+pub const WORKTREE_LOG_COUNT: u32 = 6;
+
+/// A claimed log read of one worktree, for `git::branch_commits` on `HEAD`
+/// off the UI thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeLogRead {
+    /// The worktree's path as its row holds it, the `worktree_logs` key.
+    pub key: String,
+    pub dir: std::path::PathBuf,
+    pub generation: u64,
+}
+
 /// A claimed walk of one repo, for `notes::walk` off the UI thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotesWalk {
@@ -2553,7 +2693,7 @@ pub struct NotesWalk {
 }
 
 /// A claimed read of the highlighted file, for `notes::read_body` and the
-/// card's facts.
+/// file's facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteRead {
     pub path: std::path::PathBuf,
@@ -2649,6 +2789,118 @@ pub struct CiState {
     /// from every other repo's, so one repo's failures never delay another
     /// repo's first poll.
     pub backoff: GithubBackoff,
+    /// The default branch's tip and its contexts (FZ-83), read with the runs
+    /// while the `ci` view shows this repo. Memory only.
+    pub tip: Option<CiTip>,
+}
+
+/// The default branch's tip as the `ci` poll last read it (FZ-83).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CiTip {
+    pub sha: String,
+    pub status_etag: Option<String>,
+    pub statuses: Vec<crate::ci::Context>,
+    pub statuses_complete: bool,
+    pub checks_etag: Option<String>,
+    /// `None` until the check runs of this sha answered.
+    pub checks: Option<crate::ci::TipChecks>,
+    /// When both reads last answered for this sha, fresh or 304: the data
+    /// time `App::ci_shown` weighs against the fleet poll's.
+    pub confirmed: Option<DateTime<Local>>,
+    /// Every state change of the tip's commit statuses, which dates their
+    /// rows in the `ci` list.
+    pub history: Vec<crate::ci::StatusEvent>,
+    pub history_etag: Option<String>,
+}
+
+impl CiTip {
+    /// Every context of the tip is held: all its statuses and check runs.
+    pub fn complete(&self) -> bool {
+        self.statuses_complete && self.checks.as_ref().is_some_and(|c| c.complete)
+    }
+
+    /// The statuses, then the check runs.
+    pub fn contexts(&self) -> impl Iterator<Item = &crate::ci::Context> {
+        self.statuses
+            .iter()
+            .chain(self.checks.iter().flat_map(|c| c.runs.iter()))
+    }
+
+    /// Land the tip reads' answer at `now`. A new sha starts over: the old
+    /// tip's contexts say nothing about it.
+    fn land(held: &mut Option<Self>, answer: crate::ci::TipAnswer, now: DateTime<Local>) {
+        use crate::ci::Fetched;
+        if let Fetched::Fresh { data, etag } = answer.status {
+            if held.as_ref().is_none_or(|t| t.sha != data.sha) {
+                *held = Some(Self {
+                    sha: data.sha.clone(),
+                    ..Self::default()
+                });
+            }
+            if let Some(tip) = held.as_mut() {
+                tip.status_etag = etag;
+                tip.statuses = data.statuses;
+                tip.statuses_complete = data.complete;
+            }
+        }
+        let Some(tip) = held.as_mut() else {
+            return;
+        };
+        if let Some((sha, checks)) = answer.checks
+            && tip.sha == sha
+        {
+            if let Fetched::Fresh { data, etag } = checks {
+                tip.checks = Some(data);
+                tip.checks_etag = etag;
+            }
+            if tip.checks.is_some() {
+                tip.confirmed = Some(now);
+            }
+        }
+        if let Some((sha, Fetched::Fresh { data, etag })) = answer.history
+            && tip.sha == sha
+        {
+            tip.history = data;
+            tip.history_etag = etag;
+        }
+    }
+
+    /// The tip's contexts the run list does not already show, as rows of
+    /// it: every commit status, from its history, and every check run of
+    /// an app other than GitHub Actions.
+    pub fn context_runs(&self) -> Vec<crate::ci::ContextRun> {
+        let statuses = self
+            .statuses
+            .iter()
+            .map(|s| crate::ci::status_run(s, &self.history));
+        let checks = self
+            .checks
+            .iter()
+            .flat_map(|c| c.runs.iter())
+            .filter(|c| !c.actions)
+            .map(crate::ci::check_run);
+        statuses.chain(checks).collect()
+    }
+}
+
+/// One row of the `ci` view's list (FZ-83): a workflow run, or another
+/// context of the default branch's tip, sorted together by time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CiEntry<'a> {
+    Run(&'a crate::ci::WorkflowRun),
+    Context(crate::ci::ContextRun),
+}
+
+/// The CI state to show for a repo (FZ-83): what the row lamp, pane 2's
+/// header and the `info` line all draw, from `App::ci_shown`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CiShown {
+    pub status: CiStatus,
+    /// The default branch's name, once a held run on its tip names it.
+    pub branch: Option<String>,
+    /// The context to blame while not passed (`Vercel`, `Vercel +2`), known
+    /// only when the verdict came from the tip's own contexts.
+    pub culprit: Option<String>,
 }
 
 /// One run's jobs as last read.
@@ -2659,15 +2911,21 @@ pub struct CiJobs {
 }
 
 impl CiState {
-    /// What one poll of this repo costs on `core`: the list, plus the
-    /// expanded run's jobs.
+    /// What one poll of this repo costs on `core`: the list, the tip's
+    /// status and check runs (FZ-83), its status history while it has
+    /// commit statuses, plus the expanded run's jobs.
     pub fn poll_cost(&self) -> u32 {
-        crate::ci::CALL_COST * if self.expanded.is_some() { 2 } else { 1 }
+        let history = self.tip.as_ref().is_some_and(|t| !t.statuses.is_empty());
+        crate::ci::CALL_COST * (3 + u32::from(history) + u32::from(self.expanded.is_some()))
     }
 
-    /// Land an applied answer's data. The outcome is `App::apply_ci`'s.
-    fn land(&mut self, answer: crate::ci::CiAnswer) {
+    /// Land an applied answer's data at `now`. The outcome is
+    /// `App::apply_ci`'s.
+    fn land(&mut self, mut answer: crate::ci::CiAnswer, now: DateTime<Local>) {
         use crate::ci::{Fetched, JobsAnswer};
+        if let Some(tip) = answer.tip.take() {
+            CiTip::land(&mut self.tip, tip, now);
+        }
         if let Some(Fetched::Fresh { data, etag }) = answer.runs {
             let gone = std::mem::take(&mut self.gone);
             self.runs = data.into_iter().filter(|r| !gone.contains(&r.id)).collect();
@@ -2821,6 +3079,159 @@ pub fn carrier_key(repo: &RepoStatus) -> Option<RemoteKey> {
     Some(GithubRepo::identity_key(Some(owner), &origin.name))
 }
 
+/// Which half of the yank chord (FZ-74): `yy` copies the thing under the
+/// cursor, `yp` its path or address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YankKind {
+    Thing,
+    Path,
+}
+
+/// How long the copy flash (FZ-81) takes to sweep over the cursor row: `yy`
+/// from the left edge, `yp` from the right. notez's timing.
+pub const YANK_SWEEP: std::time::Duration = std::time::Duration::from_millis(100);
+/// How long the swept row then takes to fade back to the band.
+pub const YANK_FADE: std::time::Duration = std::time::Duration::from_millis(200);
+/// The whole copy flash: the sweep, then the fade.
+pub const YANK_FLASH: std::time::Duration = YANK_SWEEP.saturating_add(YANK_FADE);
+/// The longest the event loop waits while the flash is live: about 8
+/// frames over the sweep.
+pub const YANK_FRAME: std::time::Duration = std::time::Duration::from_millis(12);
+
+/// Which row a copy flash belongs to: the pane, pane 2's view and the cursor
+/// there. The flash paints only while the app still points at it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlashSource {
+    pub pane: FocusedPanel,
+    pub view: HistoryView,
+    pub row: usize,
+}
+
+/// The one flash after a successful `yy` or `yp` (FZ-81), as notez draws
+/// it: a timestamp read at draw time, no thread and no timer task. While it
+/// lasts the event loop cuts its wait to `YankFlash::wait` and redraws
+/// when `YankFlash::tick` says so.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct YankFlash {
+    start: Option<(std::time::Instant, FlashSource)>,
+    from_right: bool,
+}
+
+impl YankFlash {
+    /// Start the flash at `now` on `source`, sweeping from the right edge
+    /// when `from_right`.
+    pub fn show(&mut self, source: FlashSource, from_right: bool, now: std::time::Instant) {
+        self.start = Some((now, source));
+        self.from_right = from_right;
+    }
+
+    pub fn clear(&mut self) {
+        self.start = None;
+    }
+
+    /// Whether a flash is started and not yet ended by `tick` or `clear`.
+    pub fn is_active(&self) -> bool {
+        self.start.is_some()
+    }
+
+    /// The row the flash belongs to, while there is one.
+    pub fn source(&self) -> Option<FlashSource> {
+        self.start.map(|(_, source)| source)
+    }
+
+    /// Time into a live flash at `now`, or `None` once it is over.
+    fn elapsed(&self, now: std::time::Instant) -> Option<std::time::Duration> {
+        let elapsed = now.saturating_duration_since(self.start?.0);
+        (elapsed < YANK_FLASH).then_some(elapsed)
+    }
+
+    /// The background at `now` of cell `col` of a flashed row `width` cells
+    /// wide: `YANKED_BG` where the sweep has reached and the band
+    /// (`SELECTED_BG`) ahead of it, then the whole row fading from
+    /// `YANKED_BG` back to the band; the band before a copy and after.
+    pub fn cell_bg(&self, now: std::time::Instant, col: u16, width: u16) -> ratatui::style::Color {
+        use crate::ui::colors::{SELECTED_BG, YANKED_BG, mix};
+        let Some(elapsed) = self.elapsed(now) else {
+            return SELECTED_BG;
+        };
+        if elapsed >= YANK_SWEEP {
+            let faded = (elapsed - YANK_SWEEP).as_secs_f64() / YANK_FADE.as_secs_f64();
+            return mix(YANKED_BG, SELECTED_BG, faded);
+        }
+        let reached = elapsed.as_secs_f64() / YANK_SWEEP.as_secs_f64();
+        let reached = ((reached * f64::from(width)).floor() as u16).min(width);
+        let swept = match self.from_right {
+            true => col >= width - reached,
+            false => col < reached,
+        };
+        if swept { YANKED_BG } else { SELECTED_BG }
+    }
+
+    /// True when the view should redraw at `now`: the flash is live, or its
+    /// time just ran out, which ends it.
+    pub fn tick(&mut self, now: std::time::Instant) -> bool {
+        if self.start.is_none() {
+            return false;
+        }
+        if self.elapsed(now).is_none() {
+            self.start = None;
+        }
+        true
+    }
+
+    /// `wait`, or no longer than the next frame while the flash lasts, or no
+    /// wait at all once its time is up but `tick` has not ended it yet, so a
+    /// late frame does not leave the row a shade off.
+    pub fn wait(&self, wait: std::time::Duration, now: std::time::Instant) -> std::time::Duration {
+        match self.elapsed(now) {
+            Some(elapsed) => wait.min(YANK_FRAME).min(YANK_FLASH - elapsed),
+            None if self.start.is_some() => std::time::Duration::ZERO,
+            None => wait,
+        }
+    }
+}
+
+/// How the status line names what a yank copied: a short value by itself
+/// (a hash, a branch, a run id), a url or a path by kind, a body by size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum YankWord {
+    Value,
+    Url,
+    Path,
+    Size,
+}
+
+/// The repo's page on GitHub, `https://github.com/<owner>/<repo>`: the
+/// carrier's owner and name as GitHub spells them, else an `origin` on
+/// github.com. `None` for a row with neither.
+fn github_web_url(repo: &RepoStatus) -> Option<String> {
+    let origin = repo
+        .remote_url
+        .as_deref()
+        .and_then(crate::model::RemoteRef::parse);
+    let (owner, name) = match (&repo.owner, &repo.location) {
+        (Some(owner), RepoLocation::LocalOnly) => (owner.clone(), origin?.name),
+        (Some(owner), _) => (owner.clone(), repo.name.clone()),
+        (None, _) => {
+            let origin = origin.filter(|o| o.host.eq_ignore_ascii_case("github.com"))?;
+            (origin.owner, origin.name)
+        }
+    };
+    Some(format!("https://github.com/{owner}/{name}"))
+}
+
+/// A note's text as the reader reads it, up to `notes::BODY_CAP`, without
+/// the reader's cut marker, which is not the file's. `None` for a file that
+/// cannot be read as text.
+fn note_text(path: &std::path::Path) -> Option<String> {
+    let body = crate::notes::read_body(path).ok()?;
+    let marker = format!("\n… cut at {} KiB", crate::notes::BODY_CAP / 1024);
+    Some(match body.strip_suffix(&marker) {
+        Some(text) => text.to_string(),
+        None => body,
+    })
+}
+
 impl App {
     pub fn new(repos: Vec<RepoStatus>, header: String, term_width: u16, term_height: u16) -> Self {
         Self {
@@ -2844,6 +3255,7 @@ impl App {
             detail_selections: [0; HistoryView::COUNT],
             inspector_scroll: 0,
             detail_max_scroll: std::cell::Cell::new(0),
+            fleet_drawn: std::cell::Cell::new(false),
             follow_selection: std::cell::Cell::new(false),
             detail_row_tops: std::cell::RefCell::new(Vec::new()),
             detail_hits: std::cell::RefCell::new(Default::default()),
@@ -2909,17 +3321,24 @@ impl App {
             ci_job_mark: None,
             ci_job_follow: std::cell::Cell::new(JobFollow::Free),
             brackets_cycling_views: false,
+            pending_yank: false,
+            yank_flash: YankFlash::default(),
             ci_inspected: None,
             ci_log_wrap: std::cell::RefCell::new(None),
+            worktree_logs: std::collections::HashMap::new(),
+            worktree_logs_generation: 0,
+            worktrees_cursor: None,
             notes: std::collections::HashMap::new(),
             notes_generation: 0,
             notes_all_markdown: false,
             notes_cursor: None,
             note_body: None,
+            todoz_fallback_said: false,
             reader_scroll: 0,
             reader_max_scroll: std::cell::Cell::new(0),
             reader_view_height: std::cell::Cell::new(0),
             reader_width: std::cell::Cell::new(0),
+            main_area_width: std::cell::Cell::new(0),
             reader_raw: false,
             list_stop: None,
             digest_window: crate::digest::DigestWindow::default(),
@@ -2928,6 +3347,11 @@ impl App {
             work_hours: (9, 18),
             list_hits: std::cell::Cell::new(ListHits::default()),
             hover_pending: None,
+            changes: std::collections::HashMap::new(),
+            changes_generation: 0,
+            changes_base: crate::git::ChangesBase::default(),
+            changes_cursor: None,
+            change_diff: None,
         }
     }
 
@@ -2996,12 +3420,131 @@ impl App {
         Some((key, state))
     }
 
-    /// The run under the `ci` view's cursor, clamped onto the last run as the
-    /// view draws it; `None` while the selected repo holds no runs.
+    /// The CI state to show for `repo` (FZ-83), the one answer the row
+    /// lamp, pane 2's header and the `info` line draw: the fleet poll's
+    /// `ci_status`, unless every context of the default branch's tip is held
+    /// from the `ci` view and was confirmed after the fleet poll's data time
+    /// (`GithubFreshness::data_time`, `docs/freshness-contract.md`); then the
+    /// verdict of those contexts, with its culprit. The branch is named
+    /// whenever a held run ran on the held tip.
+    pub fn ci_shown(&self, repo: &RepoStatus) -> CiShown {
+        let state = crate::ci::target(repo).and_then(|(key, ..)| self.ci.get(&key));
+        let tip = state.and_then(|s| Some((s, s.tip.as_ref()?)));
+        let branch = tip.and_then(|(s, t)| {
+            s.runs
+                .iter()
+                .find(|r| r.head_sha.as_deref() == Some(t.sha.as_str()))
+                .and_then(|r| r.branch.clone())
+        });
+        let fresher = tip
+            .map(|(_, t)| t)
+            .filter(|t| t.complete() && self.newer_than_fleet(t.confirmed));
+        match fresher {
+            Some(t) => {
+                let (status, culprit) = crate::ci::tip_verdict(t.contexts());
+                CiShown {
+                    status,
+                    branch,
+                    culprit,
+                }
+            }
+            None => CiShown {
+                status: repo.ci_status.clone(),
+                branch,
+                culprit: None,
+            },
+        }
+    }
+
+    /// Whether data confirmed at `at` is newer than the fleet poll's: later
+    /// than its data time, or any time while that is unknown or absent.
+    fn newer_than_fleet(&self, at: Option<DateTime<Local>>) -> bool {
+        let Some(at) = at else {
+            return false;
+        };
+        match self.github_freshness.data_time {
+            DataTime::At(fleet) => at > fleet,
+            DataTime::Unknown | DataTime::NoData => true,
+        }
+    }
+
+    /// Whether `repo`'s row shows the second, dimmer mark (FZ-83): the held
+    /// runs, newer than the fleet poll, have one in progress on a commit
+    /// other than the default branch's held tip. Never while the tip is not
+    /// known, since then no run can be told apart from the default branch's.
+    pub fn ci_side_run(&self, repo: &RepoStatus) -> bool {
+        let Some(state) = crate::ci::target(repo).and_then(|(key, ..)| self.ci.get(&key)) else {
+            return false;
+        };
+        let Some(tip) = &state.tip else {
+            return false;
+        };
+        let runs_at = match state.freshness.data_time {
+            DataTime::At(t) => Some(t),
+            DataTime::Unknown | DataTime::NoData => None,
+        };
+        self.newer_than_fleet(runs_at)
+            && state
+                .runs
+                .iter()
+                .any(|r| r.is_live() && r.head_sha.as_deref() != Some(tip.sha.as_str()))
+    }
+
+    /// The selected repo's `ci` list as the view draws it (FZ-83): the held
+    /// runs and the tip's other contexts (`CiTip::context_runs`), newest
+    /// first by the time each row's age counts from, a run's creation or a
+    /// context's `at`; a context with no time leads. One cursor stop each.
+    pub fn ci_entries(&self) -> Vec<CiEntry<'_>> {
+        let Some(state) = self.selected_ci().and_then(|(_, state)| state) else {
+            return Vec::new();
+        };
+        let mut contexts = state
+            .tip
+            .as_ref()
+            .map(CiTip::context_runs)
+            .unwrap_or_default();
+        contexts.sort_by(|a, b| match (a.at, b.at) {
+            (Some(a), Some(b)) => b.cmp(&a),
+            (a, b) => a.is_some().cmp(&b.is_some()),
+        });
+        let mut contexts = contexts.into_iter().peekable();
+        let mut entries = Vec::new();
+        for run in &state.runs {
+            while let Some(context) = contexts.next_if(|c| c.at.is_none_or(|at| at >= run.created))
+            {
+                entries.push(CiEntry::Context(context));
+            }
+            entries.push(CiEntry::Run(run));
+        }
+        entries.extend(contexts.map(CiEntry::Context));
+        entries
+    }
+
+    /// The entry under the `ci` view's cursor, clamped onto the last as the
+    /// view draws it.
+    fn highlighted_ci_entry(&self) -> Option<CiEntry<'_>> {
+        let mut entries = self.ci_entries();
+        let last = entries.len().checked_sub(1)?;
+        let at = self.detail_selections[HistoryView::Ci.index()].min(last);
+        Some(entries.swap_remove(at))
+    }
+
+    /// The other context under the `ci` view's cursor, if it is on one.
+    pub fn highlighted_ci_context(&self) -> Option<crate::ci::ContextRun> {
+        match self.highlighted_ci_entry()? {
+            CiEntry::Context(context) => Some(context),
+            CiEntry::Run(_) => None,
+        }
+    }
+
+    /// The run under the `ci` view's cursor, clamped onto the last row as
+    /// the view draws it; `None` while the selected repo holds no runs or
+    /// the cursor is on another context's row.
     pub fn highlighted_ci_run(&self) -> Option<&crate::ci::WorkflowRun> {
-        let runs = &self.selected_ci()?.1?.runs;
-        let at = self.detail_selections[HistoryView::Ci.index()];
-        runs.get(at.min(runs.len().saturating_sub(1)))
+        match self.highlighted_ci_entry()? {
+            CiEntry::Run(run) => Some(run),
+            CiEntry::Context(_) => None,
+        }
     }
 
     /// Whether the CI data layer may poll: pane 2 is on screen showing the
@@ -3027,13 +3570,14 @@ impl App {
     }
 
     /// Whether the `ci` view shows a run still moving, whose duration
-    /// ticks and whose lamp pulses: about one repaint a second.
+    /// ticks and whose lamp pulses: about one repaint a second. A pending
+    /// context's row (FZ-83) counts too.
     pub fn ci_view_live(&self) -> bool {
         self.ci_wanted()
-            && self
-                .selected_ci()
-                .and_then(|(_, state)| state)
-                .is_some_and(|s| s.runs.iter().any(crate::ci::WorkflowRun::is_live))
+            && self.ci_entries().iter().any(|entry| match entry {
+                CiEntry::Run(run) => run.is_live(),
+                CiEntry::Context(context) => context.state == CiStatus::Pending,
+            })
     }
 
     /// Give up on CI polls claimed longer than `limit` before `instant` that
@@ -3106,6 +3650,13 @@ impl App {
             attempt,
             runs_etag: state.runs_etag.clone(),
             expanded,
+            tip: Some(crate::ci::TipRequest {
+                sha: state.tip.as_ref().map(|t| t.sha.clone()),
+                status_etag: state.tip.as_ref().and_then(|t| t.status_etag.clone()),
+                checks_etag: state.tip.as_ref().and_then(|t| t.checks_etag.clone()),
+                has_statuses: state.tip.as_ref().is_some_and(|t| !t.statuses.is_empty()),
+                history_etag: state.tip.as_ref().and_then(|t| t.history_etag.clone()),
+            }),
         }
     }
 
@@ -3162,16 +3713,16 @@ impl App {
             }
         }
         let key = answer.key.clone();
-        state.land(answer);
+        state.land(answer, now);
         // A shorter list for the repo on screen pulls the `ci` cursor onto
         // its last run rather than leaving it past the end.
         if self
             .selected_ci()
             .is_some_and(|(selected, _)| selected == key)
         {
-            let runs = self.ci.get(&key).map_or(0, |s| s.runs.len());
+            let rows = self.ci_entries().len();
             let slot = &mut self.detail_selections[HistoryView::Ci.index()];
-            *slot = (*slot).min(runs.saturating_sub(1));
+            *slot = (*slot).min(rows.saturating_sub(1));
             self.sync_ci_inspector(std::time::Instant::now());
         }
     }
@@ -3199,9 +3750,7 @@ impl App {
     /// inspector details: read from the view's own selection slot, so it
     /// holds while another view is on screen.
     pub fn ci_highlighted_run(&self) -> Option<&crate::ci::WorkflowRun> {
-        let runs = &self.selected_ci()?.1?.runs;
-        let last = runs.len().checked_sub(1)?;
-        runs.get(self.detail_selections[HistoryView::Ci.index()].min(last))
+        self.highlighted_ci_run()
     }
 
     /// The highlighted run's jobs, once read.
@@ -3294,6 +3843,306 @@ impl App {
         self.ci_wanted() && !self.inspector_folded
     }
 
+    /// Whether the `changes` view may read a repo or a diff: pane 2 is on
+    /// screen showing it. The one gate both reads pass (FZ-60).
+    pub fn changes_wanted(&self) -> bool {
+        self.view == View::Detail && self.history_view == HistoryView::Changes
+    }
+
+    /// The selected row's read, by its path; `None` for a row with nothing
+    /// on disk to read, and a `None` state while nothing was read yet.
+    pub fn selected_changes(&self) -> Option<(&str, Option<&ChangesState>)> {
+        let path = self.selected_repo()?.path.as_deref()?;
+        Some((path, self.changes.get(path)))
+    }
+
+    /// The selected row's sections as last read, when the read succeeded.
+    pub fn changes_held(&self) -> Option<&crate::git::Changes> {
+        self.selected_changes()?.1?.held.as_ref()?.as_ref().ok()
+    }
+
+    /// The files the `changes` view lists, uncommitted then outgoing, in
+    /// drawing order: what its cursor walks.
+    pub fn changes_listed(&self) -> Vec<(ChangeSection, &crate::git::ChangedFile)> {
+        let Some(changes) = self.changes_held() else {
+            return Vec::new();
+        };
+        let uncommitted = changes
+            .uncommitted
+            .iter()
+            .map(|f| (ChangeSection::Uncommitted, f));
+        let outgoing = changes
+            .outgoing
+            .files()
+            .iter()
+            .map(|f| (ChangeSection::Outgoing, f));
+        uncommitted.chain(outgoing).collect()
+    }
+
+    /// The file the `changes` view's cursor is on, clamped to the files
+    /// there are.
+    pub fn changes_highlighted(&self) -> Option<(ChangeSection, &crate::git::ChangedFile)> {
+        let listed = self.changes_listed();
+        let last = listed.len().checked_sub(1)?;
+        Some(listed[self.detail_selections[HistoryView::Changes.index()].min(last)])
+    }
+
+    /// Claim the read of the selected repo the `changes` view needs at
+    /// `instant`, or `None`. Nothing unless the view is on screen, the
+    /// cursor has rested on the row for `ci::DWELL`, and the row's read is
+    /// missing, from an older generation or for the other base; one read
+    /// per repo at a time.
+    pub fn claim_changes_read(&mut self, instant: std::time::Instant) -> Option<ChangesRead> {
+        if !self.changes_wanted() {
+            return None;
+        }
+        let key = self.selected_repo().and_then(|r| r.path.clone());
+        let settled_for = match &self.changes_cursor {
+            Some((held, since)) if *held == key => instant.duration_since(*since),
+            _ => {
+                self.changes_cursor = Some((key.clone(), instant));
+                std::time::Duration::ZERO
+            }
+        };
+        let key = key?;
+        if settled_for < crate::ci::DWELL {
+            return None;
+        }
+        let (generation, base) = (self.changes_generation, self.changes_base);
+        let state = self.changes.entry(key.clone()).or_default();
+        let fresh = state.held.is_some() && state.generation == generation && state.base == base;
+        if state.reading || fresh {
+            return None;
+        }
+        state.reading = true;
+        let root = std::path::PathBuf::from(shellexpand::tilde(&key).as_ref());
+        Some(ChangesRead {
+            key,
+            root,
+            generation,
+            base,
+        })
+    }
+
+    /// Land a read (`AppEvent::ChangesRead`) and ask for a redraw.
+    pub fn apply_changes_read(
+        &mut self,
+        read: ChangesRead,
+        result: Result<crate::git::Changes, String>,
+    ) {
+        let state = self.changes.entry(read.key).or_default();
+        state.reading = false;
+        state.held = Some(result);
+        state.generation = read.generation;
+        state.base = read.base;
+        self.needs_redraw = true;
+    }
+
+    /// Claim the diff of the highlighted file, or `None`: only while the
+    /// `changes` view shows with the inspector open, and only when the diff
+    /// held is another file's, base's or generation's. One file at a time,
+    /// whatever the cursor passed over since the last tick. A new file
+    /// starts the inspector at its top.
+    pub fn claim_change_diff(&mut self) -> Option<DiffRead> {
+        if !self.changes_wanted() || self.inspector_folded {
+            return None;
+        }
+        let root = self.changes_root()?;
+        let base = self
+            .changes_held()
+            .and_then(|c| c.outgoing.base_ref())
+            .map(str::to_string);
+        let (section, file) = self.changes_highlighted()?;
+        let read = DiffRead {
+            root,
+            section,
+            file: file.clone(),
+            base: match section {
+                ChangeSection::Uncommitted => None,
+                ChangeSection::Outgoing => base,
+            },
+            generation: self.changes_generation,
+        };
+        let held = self.change_diff.as_ref().map(|d| &d.read);
+        if held == Some(&read) {
+            return None;
+        }
+        if held.is_none_or(|h| {
+            h.root != read.root || h.file.path != read.file.path || h.section != read.section
+        }) {
+            self.inspector_scroll = 0;
+        }
+        self.change_diff = Some(ChangeDiff {
+            read: read.clone(),
+            text: None,
+        });
+        Some(read)
+    }
+
+    /// Land a diff (`AppEvent::ChangeDiff`); one no longer wanted is dropped.
+    pub fn apply_change_diff(&mut self, read: DiffRead, text: Result<String, String>) {
+        if let Some(held) = &mut self.change_diff
+            && held.read == read
+        {
+            held.text = Some(text);
+            self.needs_redraw = true;
+        }
+    }
+
+    /// The held diff, when it is the highlighted file's in the selected
+    /// repo: a same-named file in another repo is not it.
+    pub fn highlighted_change_diff(&self) -> Option<&ChangeDiff> {
+        let root = self.changes_root()?;
+        let (section, file) = self.changes_highlighted()?;
+        self.change_diff.as_ref().filter(|d| {
+            d.read.root == root && d.read.section == section && d.read.file.path == file.path
+        })
+    }
+
+    /// The selected row's directory, `~` expanded, as a diff read names it.
+    fn changes_root(&self) -> Option<std::path::PathBuf> {
+        let (path, _) = self.selected_changes()?;
+        Some(std::path::PathBuf::from(shellexpand::tilde(path).as_ref()))
+    }
+
+    /// A sweep landed or a suspend returned: the held reads and the diff
+    /// are read again the next time they are shown.
+    pub fn invalidate_changes(&mut self) {
+        self.changes_generation += 1;
+        self.needs_redraw = true;
+    }
+
+    /// `u` in the `changes` view: compare `HEAD` with the default branch
+    /// instead of the upstream, or back. Nothing elsewhere.
+    pub fn toggle_changes_base(&mut self) {
+        if !self.changes_wanted() {
+            return;
+        }
+        use crate::git::ChangesBase;
+        self.changes_base = match self.changes_base {
+            ChangesBase::Upstream => ChangesBase::DefaultBranch,
+            ChangesBase::DefaultBranch => ChangesBase::Upstream,
+        };
+        self.needs_redraw = true;
+    }
+
+    /// The highlighted `changes` file as an absolute path, for `Enter`.
+    pub fn change_to_open(&self) -> Option<std::path::PathBuf> {
+        let root = self.selected_changes()?.0;
+        let (_, file) = self.changes_highlighted()?;
+        Some(std::path::PathBuf::from(shellexpand::tilde(root).as_ref()).join(&file.path))
+    }
+
+    /// `y` in the `changes` view: copy the highlighted file's repo-relative
+    /// path through `copy`.
+    pub fn yank_change_path(&mut self, copy: impl FnOnce(&str) -> Result<(), String>) {
+        let Some(path) = self.changes_highlighted().map(|(_, f)| f.path.clone()) else {
+            self.set_status("nothing to copy".to_string(), false);
+            return;
+        };
+        self.copy_hash(&path, copy);
+    }
+
+    /// Whether the `worktrees` view is on screen (FZ-77): the one gate its
+    /// log read passes.
+    pub fn worktrees_wanted(&self) -> bool {
+        self.view == View::Detail && self.history_view == HistoryView::Worktrees
+    }
+
+    /// The worktrees the `worktrees` view lists for the selected repo, in
+    /// drawing order: the main checkout first, then the linked ones as
+    /// `git worktree list` gave them. Empty for a row with nothing on disk.
+    pub fn worktrees_listed(&self) -> Vec<crate::model::Worktree> {
+        let Some(repo) = self.selected_repo() else {
+            return Vec::new();
+        };
+        let Some(main) = repo.main_worktree() else {
+            return Vec::new();
+        };
+        std::iter::once(main)
+            .chain(repo.worktrees.iter().cloned())
+            .collect()
+    }
+
+    /// The worktree the `worktrees` view's cursor is on, clamped to the
+    /// rows there are.
+    pub fn worktree_highlighted(&self) -> Option<crate::model::Worktree> {
+        let mut listed = self.worktrees_listed();
+        let last = listed.len().checked_sub(1)?;
+        let at = self.detail_selections[HistoryView::Worktrees.index()].min(last);
+        Some(listed.swap_remove(at))
+    }
+
+    /// The directory `Enter`, `e` and `o` act in, `~` expanded: the
+    /// highlighted worktree's while pane 2 has focus on the `worktrees`
+    /// view (FZ-77), else the selected repo's. `None` for a row with
+    /// nothing on disk.
+    pub fn action_dir(&self) -> Option<String> {
+        let worktree = (self.worktrees_wanted() && self.focused_panel == FocusedPanel::Detail)
+            .then(|| self.worktree_highlighted())
+            .flatten();
+        let path = match worktree {
+            Some(wt) => wt.path,
+            None => self.selected_repo()?.path.clone()?,
+        };
+        Some(shellexpand::tilde(&path).to_string())
+    }
+
+    /// The held log of the highlighted worktree, `None` while none landed.
+    pub fn worktree_log(&self) -> Option<&[crate::model::Commit]> {
+        let wt = self.worktree_highlighted()?;
+        self.worktree_logs.get(&wt.path)?.commits.as_deref()
+    }
+
+    /// Claim the log read of the highlighted worktree at `instant`, or
+    /// `None`: only while the `worktrees` view is on screen with the
+    /// inspector open, once the cursor has rested on the repo for
+    /// `ci::DWELL` (as `claim_notes_walk` waits), and only when the log is
+    /// missing or from an older generation. One read per worktree at a time.
+    pub fn claim_worktree_log(&mut self, instant: std::time::Instant) -> Option<WorktreeLogRead> {
+        if !self.worktrees_wanted() || !self.inspector_is_expanded() {
+            return None;
+        }
+        let repo = self.selected_repo().and_then(|r| r.path.clone());
+        let settled_for = match &self.worktrees_cursor {
+            Some((held, since)) if *held == repo => instant.duration_since(*since),
+            _ => {
+                self.worktrees_cursor = Some((repo, instant));
+                std::time::Duration::ZERO
+            }
+        };
+        if settled_for < crate::ci::DWELL {
+            return None;
+        }
+        let key = self.worktree_highlighted()?.path;
+        let generation = self.worktree_logs_generation;
+        let state = self.worktree_logs.entry(key.clone()).or_default();
+        let fresh = state.commits.is_some() && state.generation == generation;
+        if state.reading || fresh {
+            return None;
+        }
+        state.reading = true;
+        let dir = std::path::PathBuf::from(shellexpand::tilde(&key).as_ref());
+        Some(WorktreeLogRead {
+            key,
+            dir,
+            generation,
+        })
+    }
+
+    /// Land a log read (`AppEvent::WorktreeLogRead`) and ask for a redraw.
+    pub fn apply_worktree_log(
+        &mut self,
+        read: WorktreeLogRead,
+        commits: Vec<crate::model::Commit>,
+    ) {
+        let state = self.worktree_logs.entry(read.key).or_default();
+        state.reading = false;
+        state.commits = Some(commits);
+        state.generation = read.generation;
+        self.needs_redraw = true;
+    }
+
     /// Whether the `notes` view may walk a repo or read a file: pane 2 is on
     /// screen showing it. The one gate the walk and the body read pass.
     pub fn notes_wanted(&self) -> bool {
@@ -3330,8 +4179,8 @@ impl App {
         Some(std::path::PathBuf::from(shellexpand::tilde(root).as_ref()).join(&file.rel))
     }
 
-    /// The walk's entry for the file the cursor is on: what the card and the
-    /// reader's border describe (FZ-62).
+    /// The walk's entry for the file the cursor is on: what the facts and
+    /// the reader describe (FZ-62, FZ-68).
     pub fn notes_highlighted_file(&self) -> Option<&crate::notes::NoteFile> {
         let listed = self.notes_listed();
         let last = listed.len().checked_sub(1)?;
@@ -3389,7 +4238,7 @@ impl App {
     /// Claim the read of the highlighted file, or `None`: only while the
     /// `notes` view shows, and only when the body held is another file's or
     /// from an older generation. One file at a time, whatever the cursor
-    /// passed over since the last tick. A folded card still reads: the
+    /// passed over since the last tick. A folded inspector still reads: the
     /// reader beside the tree shows the body (FZ-62). A new file starts the
     /// reader at its top; a re-read of the same one keeps its place.
     pub fn claim_note_read(&mut self) -> Option<NoteRead> {
@@ -3524,7 +4373,8 @@ impl App {
     }
 
     /// Whether the main area takes the `notes` layout (FZ-62): pane 2 at
-    /// full height split into tree and reader, the card under pane 1. Not on
+    /// full height split into tree and reader, the facts beside its header,
+    /// and no inspector under pane 1 (FZ-68). Not on
     /// a section header, where pane 2 is the digest and the usual layout
     /// returns. Read by `ui::panel_rects`, so render and hit-testing agree.
     pub fn notes_layout(&self) -> bool {
@@ -3582,6 +4432,8 @@ impl App {
         self.sweep_started = None;
         self.last_refreshed = Some(at);
         self.invalidate_notes();
+        self.invalidate_changes();
+        self.worktree_logs_generation += 1;
         self.needs_redraw = true;
     }
 
@@ -3808,7 +4660,7 @@ impl App {
     /// local sweep, then the GitHub poll it started and the fetches that poll
     /// set off. The spinner and the lit `[r]` key both read this, so neither
     /// stops before the last row lands. A watch-timer sweep does not count; it
-    /// runs silently.
+    /// runs silently, unless an `r` pressed during it marked it manual.
     pub fn refresh_phase(&self) -> Option<RefreshPhase> {
         if self.sweep_started.is_some() && self.sweep_manual {
             Some(RefreshPhase::Local)
@@ -3957,6 +4809,48 @@ impl App {
         self.inspector_scroll = 0;
     }
 
+    /// Stable-sort `repos` by `keys` (one per row, in row order), keeping the
+    /// cursor on the repo it stood on (FZ-86). The caller supplies the keys,
+    /// so the order has one source (`main.rs::order_rows_by_activity`).
+    ///
+    /// A search in progress is left alone: its ranked list breaks ties by row
+    /// order, so moving rows under it would reshuffle what is being read. The
+    /// next update after the search ends applies the order. False, with no
+    /// redraw asked, when nothing moved.
+    pub fn reorder_repos<K: Ord>(&mut self, keys: Vec<K>) -> bool {
+        if self.has_text_query() || keys.len() != self.repos.len() {
+            return false;
+        }
+        let mut order: Vec<usize> = (0..keys.len()).collect();
+        order.sort_by(|&a, &b| keys[a].cmp(&keys[b]));
+        if order.iter().enumerate().all(|(new, &old)| new == old) {
+            return false;
+        }
+        // None on a section header, and there the cursor needs no help: the
+        // sections are by location, which no re-sort changes, so each one
+        // starts at the same visible position before and after.
+        let held = self.selected_repo_index();
+
+        let mut rows: Vec<Option<RepoStatus>> = std::mem::take(&mut self.repos)
+            .into_iter()
+            .map(Some)
+            .collect();
+        self.repos = order.iter().filter_map(|&old| rows[old].take()).collect();
+
+        if let Some(held) = held {
+            let moved_to = order.iter().position(|&old| old == held);
+            if let Some(pos) = self
+                .visible_repos()
+                .iter()
+                .position(|(i, _)| Some(*i) == moved_to)
+            {
+                self.selected = pos;
+            }
+        }
+        self.needs_redraw = true;
+        true
+    }
+
     /// Repos filtered by the current search query, active group, and quick
     /// filters -- the latter two both parsed out of `search_query`'s `#tag`
     /// words (see `parse_query`), so there's a single source of truth for
@@ -3979,8 +4873,11 @@ impl App {
     /// the block needs. Read by both `ui::panel_rects` and `ui::render`
     /// through `detail::split_inspector`, so the two cannot disagree about
     /// whether the pane exists.
+    ///
+    /// The `notes` layout docks none either: the file's facts sit in pane 2
+    /// beside the header (FZ-68), and `ui::panel_rects` gives pane 1 the rows.
     pub fn shows_inspector(&self) -> bool {
-        self.history_view != HistoryView::Graph
+        self.history_view != HistoryView::Graph && !self.notes_layout()
     }
 
     /// Whether the inspector is drawn with its content, not folded to an
@@ -4119,13 +5016,37 @@ impl App {
 
     /// Move the vertical divider between the repo list and the right column.
     /// Positive widens the repo list.
+    ///
+    /// The step starts from the width on screen (FZ-69). Where the default
+    /// yields to the cap in `split_main`, the percentage is not what is
+    /// drawn, and stepping it blind made `<` widen the list.
     pub fn resize_repo_list(&mut self, delta: i16) {
-        self.repo_list_pct = step_pct(
-            self.repo_list_pct,
-            delta,
-            REPO_LIST_PCT_MIN,
-            REPO_LIST_PCT_MAX,
-        );
+        use crate::ui::detail::repo_list_width;
+        let area = self.main_area_width.get();
+        let pct = self.repo_list_pct;
+        let drawn = repo_list_width(area, pct);
+        // The percentage that draws `drawn`, rounded up as a drag converts
+        // a column, so the start is the list on screen.
+        let uncapped = u32::from(area) * u32::from(pct) / 100;
+        let from = if area > 0 && u32::from(drawn) < uncapped {
+            (u32::from(drawn) * 100).div_ceil(u32::from(area)) as u16
+        } else {
+            pct
+        };
+        let mut next = step_pct(from, delta, REPO_LIST_PCT_MIN, REPO_LIST_PCT_MAX);
+        // Landing back on the default would draw the capped width again.
+        if delta > 0
+            && area > 0
+            && next == DEFAULT_REPO_LIST_PCT
+            && repo_list_width(area, next) <= drawn
+        {
+            next = (next + 1).min(REPO_LIST_PCT_MAX);
+        }
+        // Already narrower than the floor draws: `<` has nowhere to go.
+        if delta < 0 && area > 0 && repo_list_width(area, next) > drawn {
+            return;
+        }
+        self.repo_list_pct = next;
         self.needs_redraw = true;
     }
 
@@ -4282,13 +5203,15 @@ impl App {
             HistoryView::Graph => graph_commits(),
             // Local branches then remotes, in the order the view draws them.
             HistoryView::Branches => repo.branches.len() + repo.remote_branches.len(),
-            // The runs held for the repo, as the view draws them.
-            HistoryView::Ci => self
-                .selected_ci()
-                .and_then(|(_, state)| state)
-                .map_or(0, |s| s.runs.len()),
+            // The runs held for the repo and the tip's other contexts among
+            // them (FZ-83), as the view draws them.
+            HistoryView::Ci => self.ci_entries().len(),
             // The files the tree lists, in its current mode.
             HistoryView::Notes => self.notes_listed().len(),
+            // The main checkout and the linked worktrees.
+            HistoryView::Worktrees => self.worktrees_listed().len(),
+            // Both sections' files, uncommitted first.
+            HistoryView::Changes => self.changes_listed().len(),
         }
     }
 
@@ -4408,6 +5331,28 @@ impl App {
             HistoryView::Ci => None,
             // A file is not a commit; the inspector reads the file itself.
             HistoryView::Notes => None,
+            // A worktree names its HEAD, as a branch names its tip; the main
+            // checkout first, as the view draws it. Borrowed from the rows
+            // the hash came from, not from a list built here.
+            HistoryView::Worktrees => match i {
+                0 => repo.main_worktree().and_then(|_| {
+                    repo.branches
+                        .iter()
+                        .find(|b| b.is_head)
+                        .map(|b| b.tip.as_str())
+                        .filter(|t| !t.is_empty())
+                        // Detached: the 7-digit form the row's
+                        // `detached @ <sha>` names (`main_worktree`).
+                        .or(repo
+                            .work_key
+                            .as_ref()
+                            .map(|k| k.head_sha.get(..7).unwrap_or(&k.head_sha)))
+                }),
+                _ => repo.worktrees.get(i - 1).map(|w| w.head.as_str()),
+            }
+            .filter(|h| !h.is_empty()),
+            // Nor is a changed file; the inspector reads its diff.
+            HistoryView::Changes => None,
         }
     }
 
@@ -4434,6 +5379,253 @@ impl App {
             return;
         };
         self.copy_hash(&hash, copy);
+    }
+
+    /// Feed one key press to the yank chord (FZ-74) and say whether the
+    /// chord took it. `key` is the character pressed, `None` for any key
+    /// that is not a plain character. A `y` arms the chord; the next key
+    /// finishes it: `y` copies the thing under the cursor, `p` its path,
+    /// anything else ends it, copies nothing and is not taken, so it does
+    /// what it does on its own. On a commit list in pane 2 the first `y`
+    /// already copies the hash, as `y` always did there, and still arms
+    /// the chord.
+    pub fn press_yank_key(
+        &mut self,
+        key: Option<char>,
+        copy: impl FnOnce(&str) -> Result<(), String>,
+    ) -> bool {
+        if std::mem::take(&mut self.pending_yank) {
+            let kind = match key {
+                Some('y') => YankKind::Thing,
+                Some('p') => YankKind::Path,
+                _ => return false,
+            };
+            self.yank(kind, copy);
+            return true;
+        }
+        if key != Some('y') {
+            return false;
+        }
+        self.pending_yank = true;
+        if self.on_commit_list() {
+            self.yank_with(copy);
+        } else if self.on_changed_file() {
+            self.yank_change_path(copy);
+        }
+        true
+    }
+
+    /// Whether pane 2 has focus on a list of commits, where a plain `y`
+    /// copies the hash at once.
+    fn on_commit_list(&self) -> bool {
+        self.view == View::Detail
+            && self.focused_panel == FocusedPanel::Detail
+            && self.on_header().is_none()
+            && matches!(
+                self.history_view,
+                HistoryView::Info | HistoryView::Commits | HistoryView::Reflog | HistoryView::Graph
+            )
+    }
+
+    /// Whether pane 2 or the inspector has focus on the `changes` view,
+    /// where a plain `y` copies the highlighted file's path at once (FZ-60),
+    /// as it copies the hash on a commit list.
+    fn on_changed_file(&self) -> bool {
+        self.changes_wanted()
+            && matches!(
+                self.focused_panel,
+                FocusedPanel::Detail | FocusedPanel::Inspector
+            )
+    }
+
+    /// `yy` or `yp`: copy what `kind` names under the focused cursor through
+    /// `copy` and say so on the status line, `nothing to copy` where there
+    /// is nothing (`yank_target`).
+    /// A successful copy starts the row's flash (FZ-81), `yp` sweeping from
+    /// the right; a failed one and `nothing to copy` end any flash.
+    pub fn yank(&mut self, kind: YankKind, copy: impl FnOnce(&str) -> Result<(), String>) {
+        self.yank_flash.clear();
+        let Some((text, word)) = self.yank_target(kind) else {
+            self.set_status("nothing to copy".to_string(), false);
+            return;
+        };
+        let said = match word {
+            YankWord::Value => format!("copied {text}"),
+            YankWord::Url => "copied url".to_string(),
+            YankWord::Path => "copied path".to_string(),
+            // Bytes under a KB, where `0.0 KB` would read as empty.
+            YankWord::Size => match text.len() {
+                n if n < 1024 => format!("copied {n} B"),
+                n => format!("copied {:.1} KB", n as f64 / 1024.0),
+            },
+        };
+        match copy(&text) {
+            Ok(()) => {
+                self.set_status(said, false);
+                let from_right = kind == YankKind::Path;
+                let source = self.flash_source();
+                self.yank_flash
+                    .show(source, from_right, std::time::Instant::now());
+            }
+            Err(reason) => self.set_status(format!("copy failed: {reason}"), true),
+        }
+    }
+
+    /// The row a copy made now would flash (FZ-81): the focused pane, pane
+    /// 2's view and the cursor there. The inspector and the reader have no
+    /// cursor row; their flash is on their border label.
+    pub fn flash_source(&self) -> FlashSource {
+        let row = match self.focused_panel {
+            FocusedPanel::RepoList => self.selected,
+            FocusedPanel::Detail if self.history_view == HistoryView::Graph => {
+                usize::from(self.graph_cursor)
+            }
+            FocusedPanel::Detail => self.detail_selected(),
+            _ => 0,
+        };
+        FlashSource {
+            pane: self.focused_panel,
+            view: self.history_view,
+            row,
+        }
+    }
+
+    /// What `yy` (`Thing`) or `yp` (`Path`) copies from the focused pane,
+    /// and the word the status line says it in. Nothing on the compact
+    /// grid, the strip, a section header or a row with nothing to name.
+    fn yank_target(&self, kind: YankKind) -> Option<(String, YankWord)> {
+        use YankKind::{Path, Thing};
+        if self.view != View::Detail || self.on_header().is_some() {
+            return None;
+        }
+        let repo = self.selected_repo()?;
+        match (self.focused_panel, self.history_view) {
+            (FocusedPanel::Contributions, _) => None,
+            (FocusedPanel::RepoList, _) => match kind {
+                Thing => Some((github_web_url(repo)?, YankWord::Url)),
+                Path => Some((
+                    shellexpand::tilde(repo.path.as_deref()?).into_owned(),
+                    YankWord::Path,
+                )),
+            },
+            (_, HistoryView::Notes) => {
+                let path = self.notes_highlighted()?;
+                match kind {
+                    Thing => Some((note_text(&path)?, YankWord::Size)),
+                    Path => Some((path.to_string_lossy().into_owned(), YankWord::Path)),
+                }
+            }
+            (FocusedPanel::Reader, _) => None,
+            // A changed file's path in the repo and its absolute path
+            // (FZ-60), from pane 2 or the inspector showing its diff.
+            (_, HistoryView::Changes) => {
+                let (_, file) = self.changes_highlighted()?;
+                match kind {
+                    Thing => Some((file.path.clone(), YankWord::Value)),
+                    Path => Some((
+                        self.change_to_open()?.to_string_lossy().into_owned(),
+                        YankWord::Path,
+                    )),
+                }
+            }
+            (FocusedPanel::Detail, HistoryView::Branches) => {
+                let (name, on_remote) = self.highlighted_branch(repo)?;
+                match kind {
+                    Thing => Some((name.to_string(), YankWord::Value)),
+                    Path => {
+                        let branch = match on_remote {
+                            true => name.split_once('/').map_or(name, |(_, b)| b),
+                            false => name,
+                        };
+                        let url = github_web_url(repo)?;
+                        Some((format!("{url}/tree/{branch}"), YankWord::Url))
+                    }
+                }
+            }
+            // A worktree's branch and its directory; a detached one has no
+            // branch to name (FZ-77 on FZ-74).
+            (FocusedPanel::Detail, HistoryView::Worktrees) => {
+                let wt = self.worktree_highlighted()?;
+                match kind {
+                    Thing => (!wt.branch.is_empty()).then_some((wt.branch, YankWord::Value)),
+                    Path => Some((shellexpand::tilde(&wt.path).into_owned(), YankWord::Path)),
+                }
+            }
+            (FocusedPanel::Detail, HistoryView::Ci) => {
+                let run = self.ci_highlighted_run()?;
+                match kind {
+                    Thing => Some((run.url.clone(), YankWord::Url)),
+                    Path => Some((run.id.to_string(), YankWord::Value)),
+                }
+            }
+            (FocusedPanel::Detail, _) => {
+                let hash = self.inspected_hash()?;
+                match kind {
+                    Thing => Some((hash.to_string(), YankWord::Value)),
+                    Path => {
+                        let url = github_web_url(repo)?;
+                        Some((format!("{url}/commit/{hash}"), YankWord::Url))
+                    }
+                }
+            }
+            (FocusedPanel::Inspector, HistoryView::Ci) => {
+                if !self.inspects_ci_run() {
+                    return None;
+                }
+                match kind {
+                    Thing => Some((self.ci_shown_text()?, YankWord::Size)),
+                    Path => Some((self.ci_highlighted_run()?.url.clone(), YankWord::Url)),
+                }
+            }
+            (FocusedPanel::Inspector, _) => match kind {
+                Thing => {
+                    let commit = self.inspected_commit()?;
+                    let message = match commit.body.trim().is_empty() {
+                        true => commit.message.clone(),
+                        false => format!("{}\n\n{}", commit.message, commit.body.trim_end()),
+                    };
+                    Some((message, YankWord::Size))
+                }
+                Path => Some((self.inspected_hash()?.to_string(), YankWord::Value)),
+            },
+        }
+    }
+
+    /// The `branches` view's highlighted entry: its name as the view lists
+    /// it, and whether it is a remote-tracking branch. Locals come first.
+    fn highlighted_branch<'a>(&self, repo: &'a RepoStatus) -> Option<(&'a str, bool)> {
+        let locals = repo.branches.len();
+        let last = (locals + repo.remote_branches.len()).checked_sub(1)?;
+        let i = self.detail_selected().min(last);
+        match i < locals {
+            true => repo.branches.get(i).map(|b| (b.name.as_str(), false)),
+            false => repo
+                .remote_branches
+                .get(i - locals)
+                .map(|r| (r.name.as_str(), true)),
+        }
+    }
+
+    /// The text of the run body the inspector shows: the marked job's log
+    /// tail in `jobs`, its whole held log in `log`, the workflow file in
+    /// `script`. `None` while the body holds no text.
+    fn ci_shown_text(&self) -> Option<String> {
+        let run = self.ci_highlighted_run()?;
+        let state = self.selected_ci()?.1?;
+        match self.ci_body {
+            CiBody::Jobs => match state.logs.get(&self.ci_marked_job()?.id)? {
+                crate::ci::LogTail::Lines(tail) => Some(tail.join("\n")),
+                crate::ci::LogTail::Unavailable(_) => None,
+            },
+            CiBody::Log => Some(crate::ui::ci::shown_log(self)?.1.join("\n")),
+            CiBody::Script => {
+                let key = (run.head_sha.clone()?, run.path.clone()?);
+                match state.scripts.get(&key)? {
+                    crate::ci::Detail::Ready(text) => Some(text.clone()),
+                    _ => None,
+                }
+            }
+        }
     }
 
     /// Copy `hash` through `copy` and say so on the status line, in the
@@ -4496,7 +5688,7 @@ impl App {
         Some(match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             // In the `notes` layout the pane after the tree is the reader,
-            // as Tab goes, ahead of the card.
+            // as Tab goes.
             FocusedPanel::Detail if self.notes_layout() => FocusedPanel::Reader,
             FocusedPanel::Detail if self.inspector_is_expanded() => FocusedPanel::Inspector,
             // The graph docks no inspector, so there is no next pane to reach
@@ -4584,7 +5776,8 @@ impl App {
             };
             return;
         }
-        // The `notes` layout puts its reader between pane 2 and the card.
+        // The `notes` layout puts its reader after pane 2, and docks no
+        // inspector after it (FZ-68).
         self.focused_panel = match self.focused_panel {
             FocusedPanel::RepoList => FocusedPanel::Detail,
             FocusedPanel::Detail if self.notes_layout() => FocusedPanel::Reader,
@@ -5295,6 +6488,11 @@ impl App {
                     self.selected = pos;
                     self.reset_detail_view();
                 }
+                // Off a header onto a repo in `notes` the layout returns and
+                // docks no inspector; focus cannot stay on it (FZ-68).
+                if self.focused_panel == FocusedPanel::Inspector && !self.shows_inspector() {
+                    self.focused_panel = FocusedPanel::Detail;
+                }
             }
             ListRow::Results | ListRow::Gap => return,
         }
@@ -5833,7 +7031,9 @@ mod tests {
 
         // And backwards, which a shifted letter could not have given us.
         app.cycle_history_view(true);
-        assert_eq!(app.history_view, HistoryView::Notes, "wraps backward");
+        assert_eq!(app.history_view, HistoryView::Changes, "wraps backward");
+        app.cycle_history_view(true);
+        assert_eq!(app.history_view, HistoryView::Notes);
         app.cycle_history_view(true);
         assert_eq!(app.history_view, HistoryView::Ci);
     }
@@ -5967,6 +7167,50 @@ mod tests {
             .collect();
         assert_eq!(names[0], "repo-1");
         assert_eq!(names[1], "repo-4");
+    }
+
+    fn visible_names(app: &App) -> Vec<String> {
+        app.visible_repos()
+            .iter()
+            .map(|(_, r)| r.name.clone())
+            .collect()
+    }
+
+    /// FZ-86: rows move only when the order changes. An unchanged order
+    /// asks for no redraw, so a poll that moved nothing does not flicker.
+    #[test]
+    fn an_unchanged_order_moves_nothing_and_asks_no_redraw() {
+        let mut app = make_app(3);
+        app.selected = 1;
+        app.needs_redraw = false;
+        assert!(!app.reorder_repos(vec![0, 1, 1]));
+        assert!(!app.needs_redraw);
+        assert_eq!(visible_names(&app), ["repo-0", "repo-1", "repo-2"]);
+        assert_eq!(app.selected, 1);
+
+        assert!(app.reorder_repos(vec![2, 1, 0]));
+        assert!(app.needs_redraw);
+        assert_eq!(visible_names(&app), ["repo-2", "repo-1", "repo-0"]);
+    }
+
+    /// FZ-86: a cursor on a section header stays on the header when the
+    /// section's rows move under it; the repo it stands over is the
+    /// section's new first, as landing on the header would choose.
+    #[test]
+    fn a_cursor_on_a_header_stays_on_it_when_its_rows_move() {
+        use crate::digest::Section;
+        let mut app = make_app(3);
+        app.view = View::Detail;
+        app.repos[1].location = RepoLocation::LocalOnly;
+        app.repos[2].location = RepoLocation::LocalOnly;
+        app.land_on(ListRow::Header(Section::LocalChanges));
+        assert_eq!(app.on_header(), Some(Section::LocalChanges), "premise");
+        assert_eq!(app.repos[app.selected].name, "repo-1", "premise");
+
+        assert!(app.reorder_repos(vec![0, 2, 1]));
+        assert_eq!(app.on_header(), Some(Section::LocalChanges));
+        assert_eq!(visible_names(&app), ["repo-0", "repo-2", "repo-1"]);
+        assert_eq!(app.visible_repos()[app.selected].1.name, "repo-2");
     }
 
     #[test]
@@ -6736,6 +7980,90 @@ mod tests {
         app.reset_pane_sizes();
         assert_eq!(app.repo_list_pct, DEFAULT_REPO_LIST_PCT);
         assert_eq!(app.inspector_pct, DEFAULT_INSPECTOR_PCT);
+    }
+
+    /// The list width `split_main` draws for `app` in a main area `w` wide.
+    fn drawn_list_width(app: &App, w: u16) -> u16 {
+        let area = ratatui::layout::Rect::new(0, 0, w, 40);
+        crate::ui::detail::split_main(area, app.repo_list_pct)
+            .0
+            .width
+    }
+
+    /// FZ-69: at 180 columns the default draws 52 (the cap), and stepping
+    /// the percentage blind gave `>` 72 but `<` 54, wider than the 52 on
+    /// screen. Every step now starts from the drawn width.
+    #[test]
+    fn resize_keys_step_from_the_capped_width_on_screen() {
+        let w = 180;
+        let at_default = || {
+            let app = make_app(1);
+            app.main_area_width.set(w);
+            app
+        };
+
+        let mut app = at_default();
+        let default = drawn_list_width(&app, w);
+        assert!(default < w * DEFAULT_REPO_LIST_PCT / 100, "the cap bites");
+        app.resize_repo_list(-1);
+        let after_lt = drawn_list_width(&app, w);
+        assert!(after_lt < default, "< widened: {default} -> {after_lt}");
+        assert_eq!(after_lt, 43, "< steps 5% of 180 from 52");
+
+        let mut app = at_default();
+        let mut widths = vec![default];
+        for _ in 0..3 {
+            app.resize_repo_list(1);
+            widths.push(drawn_list_width(&app, w));
+        }
+        assert_eq!(widths[1], 61, "> steps 5% of 180 from 52");
+        assert!(
+            widths.windows(2).all(|p| p[0] < p[1]),
+            "> did not widen every press: {widths:?}"
+        );
+    }
+
+    /// At every width a key press moves the list the way it says or, at a
+    /// bound, not at all: never back onto the capped default (which would
+    /// stall `>`), never wider under `<` where the floor exceeds the cap.
+    #[test]
+    fn resize_keys_never_move_the_list_the_wrong_way_at_any_width() {
+        for w in 60..=400 {
+            for delta in [-1i16, 1] {
+                let mut app = make_app(1);
+                app.main_area_width.set(w);
+                for press in 0..10 {
+                    let before = drawn_list_width(&app, w);
+                    let pct = app.repo_list_pct;
+                    app.resize_repo_list(delta);
+                    let after = drawn_list_width(&app, w);
+                    if delta < 0 {
+                        assert!(
+                            after <= before,
+                            "w {w} press {press}: < {before} -> {after}"
+                        );
+                    } else if pct < REPO_LIST_PCT_MAX {
+                        assert!(after > before, "w {w} press {press}: > {before} -> {after}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Where the cap does not bite the step is the plain 5% it always was.
+    #[test]
+    fn resize_keys_step_five_percent_where_the_cap_does_not_bite() {
+        let w = 100;
+        let mut app = make_app(1);
+        app.main_area_width.set(w);
+        assert_eq!(drawn_list_width(&app, w), 35);
+        app.resize_repo_list(-1);
+        assert_eq!(app.repo_list_pct, DEFAULT_REPO_LIST_PCT - 5);
+        assert_eq!(drawn_list_width(&app, w), 30);
+        app.reset_pane_sizes();
+        app.resize_repo_list(1);
+        assert_eq!(app.repo_list_pct, DEFAULT_REPO_LIST_PCT + 5);
+        assert_eq!(drawn_list_width(&app, w), 40);
     }
 
     #[test]
@@ -8980,6 +10308,89 @@ mod tests {
         assert!(!app.fetch_held("~/repos/repo-0", t0 + chrono::Duration::seconds(60)));
     }
 
+    // --- The `worktrees` view (FZ-77) ---
+
+    /// An app on one repo with one linked worktree, pane 2 in the detail
+    /// view.
+    fn worktrees_app() -> App {
+        let mut app = make_app(1);
+        app.view = View::Detail;
+        app.repos[0].worktrees = vec![crate::model::Worktree {
+            path: "~/repos/repo-0-wt".to_string(),
+            branch: "side".to_string(),
+            head: "b2c3d4e".to_string(),
+            dirty: Some(0),
+            ..Default::default()
+        }];
+        app
+    }
+
+    /// `[` and `]` reach the view: forward from `graph`, back from
+    /// `branches`.
+    #[test]
+    fn brackets_reach_the_worktrees_view() {
+        let mut app = worktrees_app();
+        app.history_view = HistoryView::Graph;
+        app.press_bracket(false);
+        assert_eq!(app.history_view, HistoryView::Worktrees);
+        app.history_view = HistoryView::Branches;
+        app.press_bracket(true);
+        assert_eq!(app.history_view, HistoryView::Worktrees);
+        assert!(app.worktrees_wanted());
+    }
+
+    /// The log is read only while the view is on screen with the inspector
+    /// open, once the cursor has rested on the repo for the dwell, one read
+    /// per worktree at a time, held once landed, and read again after a
+    /// sweep.
+    #[test]
+    fn a_worktree_log_is_read_on_demand_and_again_after_a_sweep() {
+        let start = std::time::Instant::now();
+        let after = |ms: u64| start + std::time::Duration::from_millis(ms);
+        let rested = after(2000) + crate::ci::DWELL;
+        let mut app = worktrees_app();
+        app.inspector_folded = false;
+        for view in HistoryView::ALL {
+            if view == HistoryView::Worktrees {
+                continue;
+            }
+            app.history_view = view;
+            assert_eq!(app.claim_worktree_log(start), None, "{view:?}");
+            assert_eq!(app.claim_worktree_log(after(1000)), None, "{view:?}");
+        }
+        app.history_view = HistoryView::Worktrees;
+        app.view = View::Compact;
+        assert_eq!(app.claim_worktree_log(after(1500)), None, "compact");
+        app.view = View::Detail;
+
+        app.detail_selections[HistoryView::Worktrees.index()] = 1;
+        assert_eq!(
+            app.claim_worktree_log(after(2000)),
+            None,
+            "the dwell starts"
+        );
+        let early = rested - std::time::Duration::from_millis(1);
+        assert_eq!(app.claim_worktree_log(early), None, "still dwelling");
+        app.inspector_folded = true;
+        assert_eq!(app.claim_worktree_log(rested), None, "inspector folded");
+        app.inspector_folded = false;
+        let read = app
+            .claim_worktree_log(rested)
+            .expect("reads the highlighted one");
+        assert_eq!(read.key, "~/repos/repo-0-wt");
+        assert!(read.dir.ends_with("repos/repo-0-wt"), "{:?}", read.dir);
+        assert_eq!(app.claim_worktree_log(rested), None, "one at a time");
+        app.apply_worktree_log(read, Vec::new());
+        assert_eq!(app.worktree_log().map(<[_]>::len), Some(0));
+        assert_eq!(app.claim_worktree_log(rested), None, "held, not read again");
+
+        app.sweep_landed(chrono::Local::now());
+        assert!(
+            app.claim_worktree_log(rested).is_some(),
+            "read again after a sweep"
+        );
+    }
+
     // --- The `notes` view (FZ-53) ---
 
     /// An app on one repo at `/notes-fixture`, pane 2 in the detail view.
@@ -9097,7 +10508,7 @@ mod tests {
 
     /// The body read is the highlighted file's alone, however far the cursor
     /// moved since the last tick, and nothing outside the view. Read again
-    /// after a suspend returns, and with the card folded: the reader beside
+    /// after a suspend returns, and with the inspector folded: the reader beside
     /// the tree still shows the body (FZ-62).
     #[test]
     fn only_the_highlighted_file_is_read() {
@@ -9160,18 +10571,18 @@ mod tests {
         assert!(app.notes_all_markdown, "not the view");
     }
 
-    /// In the `notes` layout Tab walks repo list, tree, reader, card, strip
-    /// and Shift-Tab walks it back; the reader takes focus nowhere else, and
-    /// leaving the view moves focus off it (FZ-62).
+    /// In the `notes` layout Tab walks repo list, tree, reader, strip and
+    /// Shift-Tab walks it back, with no card to stop on since FZ-68 round 2:
+    /// `3` does not reach an inspector there either. The reader takes focus
+    /// nowhere else, and leaving the view moves focus off it (FZ-62).
     #[test]
-    fn focus_walks_tree_reader_and_card_in_the_notes_layout() {
+    fn focus_walks_tree_and_reader_in_the_notes_layout() {
         let mut app = notes_app();
         app.history_view = HistoryView::Notes;
         let order = [
             FocusedPanel::RepoList,
             FocusedPanel::Detail,
             FocusedPanel::Reader,
-            FocusedPanel::Inspector,
             FocusedPanel::Contributions,
         ];
         app.focused_panel = FocusedPanel::RepoList;
@@ -9184,6 +10595,12 @@ mod tests {
             app.toggle_panel_focus_back();
             assert_eq!(app.focused_panel, *want, "Shift-Tab");
         }
+        app.focus_panel(FocusedPanel::Inspector);
+        assert_eq!(
+            app.focused_panel,
+            FocusedPanel::RepoList,
+            "no card to focus"
+        );
 
         app.focus_panel(FocusedPanel::Reader);
         assert_eq!(app.focused_panel, FocusedPanel::Reader);
@@ -9196,21 +10613,23 @@ mod tests {
     }
 
     /// `J`/`K` in the `notes` layout scroll the reader a line from the tree,
-    /// with the card open (the default) as well as folded (FZ-62 review F1),
-    /// and from the reader itself, focus unmoved (finding 6).
+    /// with the inspector's fold open (the default) as well as folded
+    /// (FZ-62 review F1; no card is docked since FZ-68 round 2, so the fold
+    /// must not matter), and from the reader itself, focus unmoved
+    /// (finding 6).
     #[test]
-    fn shift_scroll_walks_tree_reader_card_in_the_notes_layout() {
+    fn shift_scroll_walks_tree_and_reader_in_the_notes_layout() {
         let mut app = notes_app();
         app.history_view = HistoryView::Notes;
         walked(&mut app, &["notez/a.md"]);
-        assert!(!app.inspector_folded, "the card is open");
+        assert!(!app.inspector_folded, "the fold is open");
 
         app.focused_panel = FocusedPanel::Detail;
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
         app.reader_max_scroll.set(20);
         app.scroll_next_panel(3);
         assert_eq!(app.reader_scroll, 3, "J from the tree scrolls the reader");
-        assert_eq!(app.inspector_scroll, 0, "not the card");
+        assert_eq!(app.inspector_scroll, 0, "not the inspector");
 
         assert_eq!(app.focused_panel, FocusedPanel::Detail, "focus unmoved");
 
@@ -9222,6 +10641,26 @@ mod tests {
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
         app.focused_panel = FocusedPanel::Detail;
         assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
+    }
+
+    /// FZ-68 round 2: on a section header in `notes` pane 2 is the digest and
+    /// the inspector is docked, so it can hold focus; stepping onto the repo
+    /// brings the `notes` layout back, which docks none, and focus lands on
+    /// pane 2 rather than staying on a pane that is not drawn.
+    #[test]
+    fn leaving_a_header_in_notes_moves_focus_off_the_inspector() {
+        let mut app = notes_app();
+        app.history_view = HistoryView::Notes;
+        app.repos[0].location = crate::model::RepoLocation::LocalOnly;
+        let section = crate::digest::Section::of(&app.repos[0]);
+        app.land_on(ListRow::Header(section));
+        assert!(!app.notes_layout(), "on the digest");
+        app.focus_panel(FocusedPanel::Inspector);
+        assert_eq!(app.focused_panel, FocusedPanel::Inspector, "docked here");
+
+        app.land_on(ListRow::Repo(0));
+        assert!(app.notes_layout(), "the notes layout is back");
+        assert_eq!(app.focused_panel, FocusedPanel::Detail);
     }
 
     /// `H`/`L` page the reader by the height its last frame drew, from the
@@ -9433,6 +10872,89 @@ mod tests {
         app.apply_note_facts(&a, facts.clone());
         assert_eq!(app.note_body.as_ref().and_then(|b| b.facts.clone()), None);
     }
+
+    // FZ-81: the copy flash, as pure functions of an injected instant.
+
+    fn flash_at(from_right: bool) -> (YankFlash, std::time::Instant) {
+        let start = std::time::Instant::now();
+        let source = FlashSource {
+            pane: FocusedPanel::RepoList,
+            view: HistoryView::Info,
+            row: 0,
+        };
+        let mut flash = YankFlash::default();
+        flash.show(source, from_right, start);
+        (flash, start)
+    }
+
+    fn ms(n: u64) -> std::time::Duration {
+        std::time::Duration::from_millis(n)
+    }
+
+    /// The backgrounds of a 10-cell row at `start + at`.
+    fn row_at(flash: &YankFlash, start: std::time::Instant, at: u64) -> Vec<ratatui::style::Color> {
+        (0..10)
+            .map(|c| flash.cell_bg(start + ms(at), c, 10))
+            .collect()
+    }
+
+    #[test]
+    fn yy_sweeps_the_row_from_the_left_then_fades_to_the_band() {
+        use crate::ui::colors::{SELECTED_BG, YANKED_BG, mix};
+        let (flash, start) = flash_at(false);
+        let (y, b) = (YANKED_BG, SELECTED_BG);
+        assert_eq!(row_at(&flash, start, 0), vec![b; 10], "nothing swept yet");
+        assert_eq!(
+            row_at(&flash, start, 50),
+            [vec![y; 5], vec![b; 5]].concat(),
+            "the left half at 50 ms"
+        );
+        assert_eq!(row_at(&flash, start, 100), vec![y; 10], "fully yanked");
+        let half = mix(YANKED_BG, SELECTED_BG, 0.5);
+        assert_ne!(half, y);
+        assert_ne!(half, b);
+        assert_eq!(row_at(&flash, start, 200), vec![half; 10], "halfway faded");
+        assert_eq!(row_at(&flash, start, 300), vec![b; 10], "the plain band");
+        assert_eq!(row_at(&flash, start, 900), vec![b; 10]);
+    }
+
+    #[test]
+    fn yp_sweeps_the_row_from_the_right() {
+        use crate::ui::colors::{SELECTED_BG, YANKED_BG};
+        let (flash, start) = flash_at(true);
+        assert_eq!(
+            row_at(&flash, start, 50),
+            [vec![SELECTED_BG; 5], vec![YANKED_BG; 5]].concat()
+        );
+        assert_eq!(row_at(&flash, start, 100), vec![YANKED_BG; 10]);
+    }
+
+    #[test]
+    fn no_flash_paints_the_plain_band() {
+        let flash = YankFlash::default();
+        let now = std::time::Instant::now();
+        assert_eq!(flash.cell_bg(now, 0, 10), crate::ui::colors::SELECTED_BG);
+        assert_eq!(flash.source(), None);
+    }
+
+    /// The loop waits at most `YANK_FRAME` while the flash lasts, not at
+    /// all once it is due to end, and the normal tick after `tick` ends it.
+    #[test]
+    fn the_loop_waits_a_frame_while_the_flash_is_live() {
+        let tick = ms(100);
+        let (mut flash, start) = flash_at(false);
+        for at in [0, 50, 150, 280] {
+            assert!(flash.wait(tick, start + ms(at)) <= YANK_FRAME, "at {at} ms");
+        }
+        assert_eq!(flash.wait(tick, start + ms(295)), ms(5), "the last frame");
+        assert_eq!(flash.wait(tick, start + ms(300)), ms(0), "due to end");
+        assert!(flash.tick(start + ms(150)), "live: redraw");
+        assert!(flash.is_active());
+        assert!(flash.tick(start + ms(300)), "ended: one last redraw");
+        assert!(!flash.is_active());
+        assert_eq!(flash.wait(tick, start + ms(310)), tick, "the normal tick");
+        assert!(!flash.tick(start + ms(320)), "nothing left to redraw");
+    }
 }
 
 /// FZ-45: the digest's `git log --since` reads are claimed once per touched
@@ -9632,5 +11154,273 @@ mod digest_log_tests {
         assert_eq!(app.list_rows(), vec![ListRow::Repo(0), ListRow::Repo(1)]);
         app.move_up();
         assert_eq!(app.on_header(), None);
+    }
+}
+
+/// The `changes` view's reads and their gates (FZ-60).
+#[cfg(test)]
+mod changes_tests {
+    use super::*;
+    use crate::digest::tests::repo;
+
+    fn changes_app() -> App {
+        let repos = vec![repo("fixture", RepoLocation::Primary)];
+        let mut app = App::new(repos, String::new(), 120, 40);
+        app.repos[0].path = Some("/changes-fixture".to_string());
+        app.view = View::Detail;
+        app.inspector_folded = false;
+        app
+    }
+
+    fn changed_file(status: &str, path: &str) -> crate::git::ChangedFile {
+        crate::git::ChangedFile {
+            status: status.to_string(),
+            path: path.to_string(),
+            from: None,
+            churn: Some((1, 0)),
+        }
+    }
+
+    /// Land a read of `/changes-fixture`: `uncommitted`, and `unpushed`
+    /// ahead of `origin/main`.
+    fn changes_landed(app: &mut App, uncommitted: &[&str], unpushed: &[&str]) {
+        let read = ChangesRead {
+            key: "/changes-fixture".to_string(),
+            root: "/changes-fixture".into(),
+            generation: app.changes_generation,
+            base: app.changes_base,
+        };
+        let files = |paths: &[&str], status: &str| -> Vec<crate::git::ChangedFile> {
+            paths.iter().map(|p| changed_file(status, p)).collect()
+        };
+        let changes = crate::git::Changes {
+            uncommitted: files(uncommitted, " M"),
+            outgoing: crate::git::Outgoing::Unpushed {
+                upstream: "origin/main".to_string(),
+                ahead: 1,
+                files: files(unpushed, "M"),
+            },
+        };
+        app.apply_changes_read(read, Ok(changes));
+    }
+
+    /// FZ-60: the read starts only while `changes` is on screen in the
+    /// detail view, and only once the cursor has rested on the row for the
+    /// dwell. Fails if any other view, or the compact grid, reads the repo.
+    #[test]
+    fn the_changes_read_waits_for_its_view_and_the_dwell() {
+        let start = std::time::Instant::now();
+        let after = |ms: u64| start + std::time::Duration::from_millis(ms);
+        let mut app = changes_app();
+        for view in HistoryView::ALL {
+            if view == HistoryView::Changes {
+                continue;
+            }
+            app.history_view = view;
+            assert_eq!(app.claim_changes_read(start), None, "{view:?}");
+            assert_eq!(app.claim_changes_read(after(1000)), None, "{view:?}");
+        }
+        app.history_view = HistoryView::Changes;
+        app.view = View::Compact;
+        assert_eq!(app.claim_changes_read(after(2000)), None, "compact");
+
+        app.view = View::Detail;
+        assert_eq!(app.claim_changes_read(after(3000)), None, "dwell starts");
+        assert_eq!(app.claim_changes_read(after(3299)), None, "still dwelling");
+        let read = app.claim_changes_read(after(3300)).expect("reads");
+        assert_eq!(read.root, std::path::PathBuf::from("/changes-fixture"));
+        assert_eq!(read.base, crate::git::ChangesBase::Upstream);
+        assert_eq!(app.claim_changes_read(after(4000)), None, "one at a time");
+    }
+
+    /// A not-cloned row has nothing to read.
+    #[test]
+    fn a_not_cloned_row_reads_no_changes() {
+        let start = std::time::Instant::now();
+        let mut app = changes_app();
+        app.repos[0].path = None;
+        app.history_view = HistoryView::Changes;
+        app.claim_changes_read(start);
+        let later = start + std::time::Duration::from_secs(5);
+        assert_eq!(app.claim_changes_read(later), None);
+        assert!(app.changes.is_empty());
+    }
+
+    /// Held for the session: leaving the view and coming back reads
+    /// nothing, until a sweep lands or a suspend returns, or the base
+    /// toggle asks for the other section.
+    #[test]
+    fn coming_back_to_changes_rereads_only_after_a_sweep_a_suspend_or_the_toggle() {
+        let start = std::time::Instant::now();
+        let after = |ms: u64| start + std::time::Duration::from_millis(ms);
+        let mut app = changes_app();
+        app.history_view = HistoryView::Changes;
+        app.claim_changes_read(start);
+        app.claim_changes_read(after(300)).expect("first read");
+        changes_landed(&mut app, &["a.txt"], &[]);
+
+        app.history_view = HistoryView::Info;
+        app.claim_changes_read(after(400));
+        app.history_view = HistoryView::Changes;
+        assert_eq!(app.claim_changes_read(after(5000)), None, "held");
+        assert_eq!(app.changes_listed().len(), 1);
+
+        app.sweep_landed(chrono::Local::now());
+        let read = app.claim_changes_read(after(5100)).expect("after a sweep");
+        assert_eq!(app.changes_listed().len(), 1, "the old read stays drawn");
+        app.apply_changes_read(read, Err("gone".to_string()));
+        assert_eq!(app.claim_changes_read(after(5200)), None, "held again");
+
+        app.invalidate_changes();
+        let read = app
+            .claim_changes_read(after(5300))
+            .expect("after a suspend");
+        app.apply_changes_read(read, Err("gone".to_string()));
+
+        app.toggle_changes_base();
+        let read = app.claim_changes_read(after(5400)).expect("the toggle");
+        assert_eq!(read.base, crate::git::ChangesBase::DefaultBranch);
+    }
+
+    /// The diff read is the highlighted file's alone, however far the
+    /// cursor moved, nothing outside the view or with the inspector folded,
+    /// and an outgoing file is read against its section's base.
+    #[test]
+    fn only_the_highlighted_changed_file_is_diffed() {
+        let mut app = changes_app();
+        app.history_view = HistoryView::Changes;
+        changes_landed(&mut app, &["a.txt", "b.txt"], &["c.txt"]);
+        app.history_view = HistoryView::Info;
+        assert_eq!(app.claim_change_diff(), None, "another view reads nothing");
+
+        app.history_view = HistoryView::Changes;
+        app.select_commit_down();
+        let b = app.claim_change_diff().expect("reads");
+        assert_eq!(b.file.path, "b.txt");
+        assert_eq!(b.base, None, "uncommitted diffs against HEAD");
+        assert_eq!(app.claim_change_diff(), None, "read once");
+
+        app.select_commit_down();
+        let c = app.claim_change_diff().expect("c");
+        assert_eq!(c.file.path, "c.txt");
+        assert_eq!(c.section, ChangeSection::Outgoing);
+        assert_eq!(c.base.as_deref(), Some("origin/main"));
+
+        app.apply_change_diff(b, Ok("b".to_string()));
+        assert_eq!(app.highlighted_change_diff().unwrap().text, None, "stale");
+        app.apply_change_diff(c, Ok("c".to_string()));
+        assert_eq!(
+            app.highlighted_change_diff().unwrap().text,
+            Some(Ok("c".to_string()))
+        );
+
+        app.invalidate_changes();
+        app.inspector_folded = true;
+        assert_eq!(app.claim_change_diff(), None, "folded inspector");
+        app.inspector_folded = false;
+        assert!(app.claim_change_diff().is_some(), "re-read after a suspend");
+    }
+
+    /// The merge with the yank chord (FZ-74): in `changes`, a plain `y`
+    /// still copies the file's path in the repo at once, `yy` copies it
+    /// again and `yp` copies its absolute path. Fails while the chord has no
+    /// `changes` arm and the first `y` copies nothing there.
+    #[test]
+    fn the_yank_chord_copies_a_changed_files_paths() {
+        let mut app = changes_app();
+        app.history_view = HistoryView::Changes;
+        app.focused_panel = FocusedPanel::Detail;
+        changes_landed(&mut app, &["src/a b.rs"], &[]);
+        let mut copied = Vec::new();
+        for key in ['y', 'y', 'y', 'p'] {
+            assert!(app.press_yank_key(Some(key), |s| {
+                copied.push(s.to_string());
+                Ok(())
+            }));
+        }
+        assert_eq!(
+            copied,
+            [
+                "src/a b.rs",
+                "src/a b.rs",
+                "src/a b.rs",
+                "/changes-fixture/src/a b.rs"
+            ]
+        );
+    }
+
+    /// Review 1 on #116: a diff held for one repo is not another's. Two
+    /// repos each with `a.txt` uncommitted; the first one's diff is held
+    /// and scrolled, a search moves the cursor to the second: it draws no
+    /// diff until its own lands, and its claim starts the inspector at the
+    /// top. Fails while the held diff is matched on section and path alone.
+    #[test]
+    fn a_same_named_file_in_another_repo_draws_no_held_diff() {
+        let mut app = changes_app();
+        app.repos.push(repo("second", RepoLocation::Primary));
+        app.repos[1].path = Some("/changes-second".to_string());
+        app.history_view = HistoryView::Changes;
+        for key in ["/changes-fixture", "/changes-second"] {
+            let read = ChangesRead {
+                key: key.to_string(),
+                root: key.into(),
+                generation: app.changes_generation,
+                base: app.changes_base,
+            };
+            let changes = crate::git::Changes {
+                uncommitted: vec![changed_file(" M", "a.txt")],
+                outgoing: crate::git::Outgoing::NoUpstream { branch: None },
+            };
+            app.apply_changes_read(read, Ok(changes));
+        }
+        assert_eq!(
+            app.selected_repo().map(|r| r.name.as_str()),
+            Some("fixture")
+        );
+        let first = app.claim_change_diff().expect("the first repo's diff");
+        app.apply_change_diff(first, Ok("first".to_string()));
+        assert!(app.highlighted_change_diff().is_some(), "held for its repo");
+        app.inspector_scroll = 7;
+
+        // A search moves the cursor without the list's scroll reset, so the
+        // claim's own reset is what starts the new diff at its top.
+        app.start_search();
+        "second".chars().for_each(|c| app.search_push_char(c));
+        assert_eq!(app.selected_repo().map(|r| r.name.as_str()), Some("second"));
+        assert_eq!(
+            app.highlighted_change_diff(),
+            None,
+            "the first repo's diff under the second's heading"
+        );
+        let second = app.claim_change_diff().expect("the second repo's diff");
+        assert_eq!(second.root, std::path::PathBuf::from("/changes-second"));
+        assert_eq!(
+            app.inspector_scroll, 0,
+            "a new repo's diff starts at its top"
+        );
+    }
+
+    /// `y` copies the highlighted file's repo-relative path; `u` toggles
+    /// the base only in the view.
+    #[test]
+    fn y_copies_the_changed_path_and_u_toggles_only_in_the_view() {
+        let mut app = changes_app();
+        app.history_view = HistoryView::Info;
+        app.toggle_changes_base();
+        assert_eq!(app.changes_base, crate::git::ChangesBase::Upstream);
+        app.history_view = HistoryView::Changes;
+        changes_landed(&mut app, &["src/a b.rs"], &[]);
+        let mut copied = String::new();
+        app.yank_change_path(|s| {
+            copied = s.to_string();
+            Ok(())
+        });
+        assert_eq!(copied, "src/a b.rs");
+        assert_eq!(
+            app.change_to_open(),
+            Some(std::path::PathBuf::from("/changes-fixture/src/a b.rs"))
+        );
+        app.toggle_changes_base();
+        assert_eq!(app.changes_base, crate::git::ChangesBase::DefaultBranch);
     }
 }

@@ -2,17 +2,16 @@
 
 The baton between leads: at most 60 lines, read on every start. GitHub
 (the issues and https://github.com/users/Gaurgle/projects/1) holds status,
-each ticket's issue holds its record and rulings, `docs/agent-log.md` holds
-finished work, the owner's dated words and the practical notes. Also read
-`release-plan.md`.
+each issue its record and rulings, `docs/agent-log.md` finished work, the
+owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Session `11cc93e2`, `claude-fable-5-1`, `at-a` (smbp), took over 2026-11-03
-12:00 CET from `018zBNkN` on `jean-1` (stopped, confirmed by Andreas).
-Nothing running. Worktrees are per machine: `issue-115`, `issue-96` and
-`issue-88` are here; `issue-119` and `issue-116` appear on neither
-machine's `git worktree list` so far (ssh to `jean-1` refused, 11-03).
+Session `6d8fd7f3` (`claude-fable-5-1`, at-a) took over 2026-11-09
+09:49 CET on his "we need to finish ticket fz-83"; the previous lead
+(`4d31e22a`, RoosMacbookA) released the baton 11-07 20:55. at-a holds the
+FZ-83 (`issue-140`), FZ-65 (`issue-121`), FZ-38 (`issue-88`) and FZ-95
+(`issue-152`) trees; `issue-137` and `status-bar` are merged, sweepable.
 
 ## Standing authority
 
@@ -22,39 +21,40 @@ machine's `git worktree list` so far (ssh to `jean-1` refused, 11-03).
 | Choose and dispatch tickets from the board | 2026-10-27 11:05, "you, as the lead, have authority to decide what tickets to start on" | two workers plus one `fz-small`; look items stop for him; FZ-52 and the `0.7.0` bump need his explicit word; issues only on his yes | revoked by word |
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
+| No ticket touching `main.rs`, `app.rs` or `ui/detail.rs` | 2026-11-07 19:30 (log) | the refactor window opens after the SMBP trees merge; FZ-83 merged, FZ-38 closed 11-09, FZ-65 left; FZ-95 and FZ-100 named by him 11-09 | FZ-65's merge |
 
-The 10-30 stop was lifted 2026-11-02 20:18 ("lets keep working then. you
-choose tickets as you see fit best", log). Astra is the preferred lead,
-Fable when Astra is unavailable. Never `cargo install`, tag or release.
-UI rules from his FZ-45 look (2026-10-27) apply to every UI ticket (log).
+The 11-07 order (steps 1 to 3) is done; steps 4 and 5 (L1, the architect's
+Ready check, FZ-97) were not reached and need his word again: he stopped
+the session at "the current tickets" (20:10, log). Astra is the preferred
+lead. No `cargo install`, tag or release. His FZ-45 look rules (10-27,
+log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 
 ## In flight
 
-- #96 (`19a21d6`): Ready to integrate, his look 11-03 passes points 1,
-  3, 4; his answer on the pane 2 rows pending; his inspector points go
-  to FZ-41 (#97). #88 (FZ-38): parked, uncommitted on at-a.
-- Reported 11-03, unfiled: notes tree wheel on a narrow window, the
-  highlight moves two rows a tick, the view one (needs his yes to file).
-- FZ-63 (#119), FZ-60 (#116): their unreviewed trees from `41ecd76` went
-  with worktrees found on neither machine (11-03); redispatch on his word.
+- `main` at the FZ-83 merge `985b682`, CI green. FZ-83 Done 12:45; FZ-38
+  (#88) closed 13:20, both in the log. FZ-83 follow-ups in its log entry.
+- FZ-65 (#121): review of `9f4018d7160d` vs `b8d394b` running
+  (`fz-reviewer`, fable, 13:30) in `issue-121`; then a merge of `main`
+  (119 behind), his look (the wheel selects now). Record: #121.
+- FZ-95 (#152, P1): merge of `main` `985b682` into `feat/fz-95-sections`
+  in progress in `issue-152` (`fz-worker`, fable, 13:35; one conflict,
+  the FZ-83 CI word in the new header); then review, merge commit, the
+  fix cycle (B2, B3, N1 to N6, his 11-06/11-07 amendments, the window in
+  both placements), review, his look. FZ-100 (#157, P1) follows it.
+- Filed 11-09: FZ-102 (#159, P2, Backlog, wrapped-row follow, after FZ-65
+  and FZ-95). FZ-101 (#158, P2). FZ-97 (#154, P1): docs-only, his word.
+- Ready: FZ-78, 79, 58, 84, 87, 89, 90, 92.
 
 ## Open questions
 
-- Highlighting route (fenced code and the CI YAML): `syntect` proposed
-  11-03, tree-sitter as notez, or own. His decision, then a ticket.
-- #88 worktree: stays or goes; FZ-38 resume with font-checked glyphs?
-- #81 and #79: his answer on the existing footer and header test edits.
-- Pane 1 wheel coalescing ticket, flaky `clipboard::tests` issue: his yes.
+- L1 adds one line to `main.rs` (`mod architecture;`): allowed under the
+  19:30 rule (a, lead's pick), after the SMBP merges (b), or a `tests/` file (c)?
+- To file on his 11-05 13:50 answers (log): ssh README paragraph,
+  `fleetz doctor`, `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2.
+- #88 worktree: stays or goes; FZ-38 with font-checked glyphs? Flaky
+  `clipboard::tests`. Help `y` row still "copy hash; changes: path" (#116).
 
 ## Next step
 
-FZ-59 merged `4545a1f` 11-03. His word on #96's pane 2 rows (`cargo run
---release --manifest-path .claude/worktrees/issue-96/Cargo.toml`), then
-gate and merge; FZ-41 (#97) once #96 is on `main`, amended with a
-jobs/log/script mode line on his yes. Once the FZ-63 and
-FZ-60 trees are found (or redispatched from `main` on his word): FZ-63
-round 2 and re-review, review FZ-60, FZ-58 (#114) after FZ-63 merges.
-FZ-52 not before 0.8.0 and his word.
-
-Start a lead from the repo root: `claude --agent fz-coordinator` (normal
-permissions, subscription, no provider override); Codex from `AGENTS.md`.
+FZ-65 and FZ-95 are running (his 13:15 word); FZ-100 after FZ-95. Then
+on his word: FZ-97, the L1 answer, the next Ready ticket. `cargo install`.

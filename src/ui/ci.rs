@@ -23,11 +23,45 @@ pub const INFO_RUNS: usize = 3;
 /// The `info` section's pointer to the full list, while no runs are held.
 pub const RUNS_HINT: &str = "] for runs";
 
-/// Column caps, so one long workflow or branch name cannot take the title's
-/// room. Longer names truncate with `…`.
-const WORKFLOW_MAX: usize = 16;
-const BRANCH_MAX: usize = 24;
-const EVENT_MAX: usize = 17;
+/// Column caps, so one long workflow, branch or trigger cannot take the
+/// title's room. Longer names truncate with `…`.
+const WORKFLOW_MAX: usize = 40;
+const BRANCH_MAX: usize = 30;
+const EVENT_MAX: usize = 18;
+
+/// The narrowest title worth drawing. Below it the trigger goes first, to
+/// give the title room, and then the title itself.
+const TITLE_MIN: usize = 20;
+
+/// How far the workflow name truncates before the branch gives way; past
+/// both, the two shrink to nothing and duration and age stay.
+const WORKFLOW_MIN: usize = 8;
+const BRANCH_MIN: usize = 6;
+
+/// The headline's words, one per column after the lamp's: workflow,
+/// branch, trigger, title, duration, age.
+const HEADINGS: [&str; 6] = ["workflow", "branch", "trigger", "title", "duration", "age"];
+
+/// The `source` column's word (FZ-83), between `workflow` and `branch`
+/// while the list holds a row from outside GitHub Actions.
+const SOURCE_HEADING: &str = "source";
+
+/// The headline's words in `cells`' order.
+fn headings() -> [&'static str; 7] {
+    let [workflow, branch, event, title, duration, age] = HEADINGS;
+    [
+        workflow,
+        SOURCE_HEADING,
+        branch,
+        event,
+        title,
+        duration,
+        age,
+    ]
+}
+
+/// The `source` column's cap (`cloudflare`, `buildkite`).
+const SOURCE_MAX: usize = 12;
 
 /// Blank columns between two run columns.
 const COLUMN_GAP: &str = "  ";
@@ -74,24 +108,79 @@ pub fn run_rows(
     selected: usize,
     focused: bool,
 ) -> Vec<Line<'static>> {
-    let Some(state) = app.selected_ci().and_then(|(_, state)| state) else {
-        return Vec::new();
-    };
+    let rows = list_rows(app, now);
     let dim_pending = app.watch_mode && !app.blink_on;
-    let widths = Widths::of(&state.runs, now);
-    state
-        .runs
-        .iter()
+    let widths = Widths::of_rows(&rows).headed();
+    rows.iter()
         .enumerate()
-        .map(|(i, run)| {
-            run_line(run, &widths, width, now, dim_pending).marked(i == selected, focused)
+        .map(|(i, row)| {
+            let line = row_line(row, &widths, width, dim_pending).marked(i == selected, focused);
+            // Below the row's floor (lamp, duration and age) the row is cut,
+            // so the wrapping body never breaks it onto a second row.
+            Line::from(crate::ui::detail::clip_spans(line.spans, width))
         })
         .collect()
 }
 
+/// The `ci` list's rows as text (`App::ci_entries`): the runs, and the
+/// tip's other contexts among them (FZ-83), their branch the default
+/// branch's name when known.
+fn list_rows(app: &App, now: DateTime<Local>) -> Vec<RowText> {
+    let now = now.with_timezone(&Utc);
+    let branch = app
+        .selected_repo()
+        .and_then(|repo| app.ci_shown(repo).branch);
+    app.ci_entries()
+        .iter()
+        .map(|entry| match entry {
+            crate::app::CiEntry::Run(run) => RowText::of_run(run, now),
+            crate::app::CiEntry::Context(context) => {
+                RowText::of_context(context, branch.as_deref(), now)
+            }
+        })
+        .collect()
+}
+
+/// The colour of a row's `source` (FZ-83): the `ci` tab's maroon for
+/// GitHub Actions, a palette colour per known source, dim for the rest.
+pub fn source_color(source: &str) -> ratatui::style::Color {
+    match source {
+        "actions" => colors::MAROON,
+        "vercel" => colors::LAVENDER,
+        "netlify" => colors::TEAL,
+        "cloudflare" => colors::PR_CLR,
+        "circleci" => colors::YELLOW,
+        "buildkite" => colors::MAUVE,
+        "codecov" => colors::HASH_CLR,
+        _ => colors::OVERLAY,
+    }
+}
+
+/// The headline over the run rows (FZ-40): each shown column's word, dim,
+/// in the columns `run_rows` draws at the same `width`. `None` while no
+/// runs are listed. Not a run, so not a cursor stop.
+pub fn headline(app: &App, width: usize, now: DateTime<Local>) -> Option<Line<'static>> {
+    let rows = list_rows(app, now);
+    if rows.is_empty() {
+        return None;
+    }
+    let columns = Widths::of_rows(&rows).headed().fit(width);
+    let mut text = " ".repeat(MARKER_W + 2);
+    text.extend(
+        cells(&columns, headings())
+            .into_iter()
+            .map(|(_, cell)| cell),
+    );
+    let words = Span::styled(text, Style::default().fg(colors::OVERLAY));
+    Some(Line::from(crate::ui::detail::clip_spans(
+        vec![words],
+        width,
+    )))
+}
+
 /// The `info` view's `ci` section under its label, from what is in hand and
-/// never polled for: the default branch's check state as the fleet poll
-/// left it (the pane 1 lamp's fact), then the latest run of each of the
+/// never polled for: the default branch's check state (`App::ci_shown`,
+/// the pane 1 lamp's fact), then the latest run of each of the
 /// three most recently run branches when runs are held from a visit to
 /// `ci`, else a dim `] for runs` hint. `None` for a row with no GitHub
 /// identity, which has no section.
@@ -122,12 +211,12 @@ pub fn info_rows(
 }
 
 /// The default branch's line: the lamp and word the repo list and the
-/// header draw for `ci_status`, dimmed as they are when the last poll did
+/// header draw (`App::ci_shown`), dimmed as they are when the last poll did
 /// not return the repo, or `no checks`. Held still, as the section's run
 /// rows are: the list lamp and the header's already pulse for this fact,
 /// and a third in step reads as a third thing happening.
 fn default_branch_line(app: &App, repo: &RepoStatus) -> Line<'static> {
-    let (glyph, color, label) = badges::ci_display(&repo.ci_status, false);
+    let (glyph, color, label) = badges::ci_display(&app.ci_shown(repo).status, false);
     if label.is_empty() {
         return Line::from(Span::styled(
             "  no checks",
@@ -275,7 +364,12 @@ fn duration_text(secs: i64) -> String {
 
 /// How long ago the run was created, always with `ago`: `3m ago`, `1d ago`.
 fn run_age(run: &WorkflowRun, now: DateTime<Utc>) -> String {
-    let diff = now - run.created;
+    age_text(run.created, now)
+}
+
+/// How long ago `at` was, in the age column's words.
+fn age_text(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let diff = now - at;
     let days = diff.num_days();
     match days {
         0 if diff.num_hours() == 0 => format!("{}m ago", diff.num_minutes().max(1)),
@@ -295,12 +389,69 @@ fn workflow_text(run: &WorkflowRun) -> &str {
     run.workflow.as_deref().unwrap_or("-")
 }
 
+/// One row of the `ci` list as its cells' text (FZ-83): a workflow run, or
+/// another context of the tip drawn the same way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowText {
+    status: CiStatus,
+    workflow: String,
+    source: String,
+    branch: String,
+    event: String,
+    title: String,
+    duration: String,
+    age: String,
+}
+
+impl RowText {
+    fn of_run(run: &WorkflowRun, now: DateTime<Utc>) -> Self {
+        Self {
+            status: run_status(run),
+            workflow: workflow_text(run).to_string(),
+            source: "actions".to_string(),
+            branch: branch_text(run).to_string(),
+            event: run.event.clone(),
+            title: run.title.clone(),
+            duration: run_duration(run, now),
+            age: run_age(run, now),
+        }
+    }
+
+    /// A context's row: its name, its source, the default branch's name
+    /// (blank while unknown), its trigger, its title, how long its latest
+    /// attempt took (to `now` while pending; `-` with no start known) and
+    /// its age (`-` with no time known).
+    fn of_context(
+        context: &crate::ci::ContextRun,
+        branch: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Self {
+        let end = context.finished.unwrap_or(now);
+        Self {
+            status: context.state.clone(),
+            workflow: context.name.clone(),
+            source: context.source.clone(),
+            branch: branch.unwrap_or_default().to_string(),
+            event: context.trigger.to_string(),
+            title: context.title.clone(),
+            duration: context.started.map_or_else(
+                || "-".to_string(),
+                |start| duration_text((end - start).num_seconds()),
+            ),
+            age: context
+                .at
+                .map_or_else(|| "-".to_string(), |at| age_text(at, now)),
+        }
+    }
+}
+
 /// Column widths, sized as the repo list sizes its columns: to the widest
 /// entry among all the runs held (not only the ones scrolled into view, so
 /// the columns hold still while the view scrolls), capped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Widths {
     workflow: usize,
+    source: usize,
     branch: usize,
     event: usize,
     duration: usize,
@@ -310,29 +461,170 @@ pub struct Widths {
 impl Widths {
     pub fn of(runs: &[WorkflowRun], now: DateTime<Local>) -> Self {
         let now = now.with_timezone(&Utc);
-        let widest = |f: &dyn Fn(&WorkflowRun) -> usize, cap: usize| {
-            runs.iter().map(f).max().unwrap_or(0).min(cap)
+        let rows: Vec<RowText> = runs.iter().map(|r| RowText::of_run(r, now)).collect();
+        Self::of_rows(&rows)
+    }
+
+    fn of_rows(rows: &[RowText]) -> Self {
+        let widest = |f: &dyn Fn(&RowText) -> &str, cap: usize| {
+            rows.iter()
+                .map(|r| f(r).chars().count())
+                .max()
+                .unwrap_or(0)
+                .min(cap)
         };
+        // A list of Actions runs alone says `actions` on every row: no column.
+        let sources = rows.iter().any(|r| r.source != "actions");
         Self {
-            workflow: widest(&|r| workflow_text(r).chars().count(), WORKFLOW_MAX),
-            branch: widest(&|r| branch_text(r).chars().count(), BRANCH_MAX),
-            event: widest(&|r| r.event.chars().count(), EVENT_MAX),
-            duration: widest(&|r| run_duration(r, now).chars().count(), usize::MAX),
-            age: widest(&|r| run_age(r, now).chars().count(), usize::MAX),
+            workflow: widest(&|r| &r.workflow, WORKFLOW_MAX),
+            source: if sources {
+                widest(&|r| &r.source, SOURCE_MAX)
+            } else {
+                0
+            },
+            branch: widest(&|r| &r.branch, BRANCH_MAX),
+            event: widest(&|r| &r.event, EVENT_MAX),
+            duration: widest(&|r| &r.duration, usize::MAX),
+            age: widest(&|r| &r.age, usize::MAX),
         }
     }
 
-    /// Every column but the title's, with the marker, the lamp and the gaps.
-    fn fixed(&self) -> usize {
-        MARKER_W
-            + 2
-            + self.workflow
-            + self.branch
-            + self.event
-            + self.duration
-            + self.age
-            + COLUMN_GAP.len() * 5
+    /// Wide enough for the headline's words too, so a column of `ci`
+    /// names still reads `workflow` over it.
+    fn headed(self) -> Self {
+        let [workflow, source, branch, event, _, duration, age] = headings().map(str::len);
+        Self {
+            workflow: self.workflow.max(workflow),
+            source: if self.source > 0 {
+                self.source.max(source)
+            } else {
+                0
+            },
+            branch: self.branch.max(branch),
+            event: self.event.max(event),
+            duration: self.duration.max(duration),
+            age: self.age.max(age),
+        }
     }
+
+    /// The columns a row `width` wide shows (spec "Amendment 2026-10-22"):
+    /// every column while the title keeps `TITLE_MIN`, the title taking the
+    /// slack; then without the trigger; then without the source (FZ-83);
+    /// then without the title; then the workflow name truncates to
+    /// `WORKFLOW_MIN`, then the branch to `BRANCH_MIN`, then both to
+    /// nothing. Duration and age always stay.
+    fn fit(&self, width: usize) -> Columns {
+        let gap = COLUMN_GAP.len();
+        let core = |workflow: usize, branch: usize| {
+            MARKER_W
+                + 2
+                + workflow
+                + if branch > 0 { gap + branch } else { 0 }
+                + gap
+                + self.duration
+                + gap
+                + self.age
+        };
+        let mut columns = Columns {
+            workflow: self.workflow,
+            source: None,
+            branch: self.branch,
+            event: None,
+            title: None,
+            slack: 0,
+            duration: self.duration,
+            age: self.age,
+        };
+        let base = core(self.workflow, self.branch);
+        let source = (self.source > 0).then_some(self.source);
+        let with_source = base + source.map_or(0, |w| gap + w);
+        let with_event = with_source + gap + self.event;
+        if width >= with_event + gap + TITLE_MIN {
+            columns.source = source;
+            columns.event = Some(self.event);
+            columns.title = Some(width - with_event - gap);
+        } else if source.is_some() && width >= with_source + gap + TITLE_MIN {
+            columns.source = source;
+            columns.title = Some(width - with_source - gap);
+        } else if width >= base + gap + TITLE_MIN {
+            columns.title = Some(width - base - gap);
+        } else {
+            let mut over = base.saturating_sub(width);
+            let mut give = |column: &mut usize, floor: usize| {
+                let given = column.saturating_sub(floor).min(over);
+                *column -= given;
+                over -= given;
+            };
+            give(&mut columns.workflow, WORKFLOW_MIN);
+            give(&mut columns.branch, BRANCH_MIN);
+            give(&mut columns.workflow, 0);
+            give(&mut columns.branch, 0);
+            columns.slack = width.saturating_sub(core(columns.workflow, columns.branch));
+        }
+        columns
+    }
+}
+
+/// What one row `width` wide shows, from `Widths::fit`: the run rows and the
+/// headline both lay out through it, so the words sit over their columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Columns {
+    workflow: usize,
+    source: Option<usize>,
+    /// Zero once the branch has shrunk away, its gap with it.
+    branch: usize,
+    event: Option<usize>,
+    title: Option<usize>,
+    /// Blank columns before the duration while there is no title to fill.
+    slack: usize,
+    duration: usize,
+    age: usize,
+}
+
+/// Which column a cell is, for its style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cell {
+    Workflow,
+    Source,
+    Branch,
+    Event,
+    Title,
+    Duration,
+    Age,
+    Blank,
+}
+
+/// The cells of a row after the lamp, gaps included: `text` is the workflow,
+/// source, branch, trigger, title, duration and age, each padded or
+/// truncated with `…` to its column, the duration and the age right-aligned.
+fn cells(columns: &Columns, text: [&str; 7]) -> Vec<(Cell, String)> {
+    let [workflow, source, branch, event, title, duration, age] = text;
+    let pad = |text: &str, w: usize| format!("{:<w$}", crate::ui::truncate(text, w));
+    let gap = || (Cell::Blank, COLUMN_GAP.to_string());
+    let mut out = vec![(Cell::Workflow, pad(workflow, columns.workflow))];
+    if let Some(w) = columns.source {
+        out.extend([gap(), (Cell::Source, pad(source, w))]);
+    }
+    if columns.branch > 0 {
+        out.extend([gap(), (Cell::Branch, pad(branch, columns.branch))]);
+    }
+    if let Some(w) = columns.event {
+        out.extend([gap(), (Cell::Event, pad(event, w))]);
+    }
+    match columns.title {
+        Some(w) => out.extend([gap(), (Cell::Title, pad(title, w))]),
+        None => out.push((Cell::Blank, " ".repeat(columns.slack))),
+    }
+    out.extend([
+        gap(),
+        (
+            Cell::Duration,
+            format!("{duration:>w$}", w = columns.duration),
+        ),
+        gap(),
+        (Cell::Age, format!("{age:>w$}", w = columns.age)),
+    ]);
+    out
 }
 
 /// One run row before the cursor is applied.
@@ -361,8 +653,9 @@ impl RunLine {
     }
 }
 
-/// The cells of one run row (spec section E): lamp, workflow, branch, event,
-/// title, duration, age. The title takes whatever `width` leaves.
+/// The cells of one run row (spec section E): lamp, workflow, source,
+/// branch, event, title, duration, age, as many as `width` holds
+/// (`Widths::fit`). The title takes whatever `width` leaves.
 pub fn run_line(
     run: &WorkflowRun,
     widths: &Widths,
@@ -370,43 +663,47 @@ pub fn run_line(
     now: DateTime<Local>,
     dim_pending: bool,
 ) -> RunLine {
-    let utc_now = now.with_timezone(&Utc);
-    let status = run_status(run);
-    let (glyph, color, _) = badges::ci_display(&status, dim_pending);
+    let row = RowText::of_run(run, now.with_timezone(&Utc));
+    row_line(&row, widths, width, dim_pending)
+}
+
+/// `run_line` for any row of the list, a context's too (FZ-83).
+fn row_line(row: &RowText, widths: &Widths, width: usize, dim_pending: bool) -> RunLine {
+    let (glyph, color, _) = badges::ci_display(&row.status, dim_pending);
     // `ci_display` draws no lamp for a repo without CI; a run always has
     // one, so a run with no verdict gets the same ring in that grey.
     let glyph = if glyph.is_empty() { "◉" } else { glyph };
-    let pad = |text: &str, w: usize| format!("{:<w$}", crate::ui::truncate(text, w));
-    let title_w = width.saturating_sub(widths.fixed());
     let dim = Style::default().fg(colors::OVERLAY);
-    let spans = vec![
-        Span::styled(format!("{glyph} "), Style::default().fg(color)),
-        Span::styled(
-            pad(workflow_text(run), widths.workflow),
-            Style::default()
-                .fg(colors::TEXT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(COLUMN_GAP),
-        Span::styled(
-            pad(branch_text(run), widths.branch),
-            Style::default().fg(colors::SAPPHIRE),
-        ),
-        Span::raw(COLUMN_GAP),
-        Span::styled(pad(&run.event, widths.event), dim),
-        Span::raw(COLUMN_GAP),
-        Span::styled(pad(&run.title, title_w), Style::default().fg(colors::TEXT)),
-        Span::raw(COLUMN_GAP),
-        Span::styled(
-            format!("{:>w$}", run_duration(run, utc_now), w = widths.duration),
-            dim,
-        ),
-        Span::raw(COLUMN_GAP),
-        Span::styled(
-            format!("{:>w$}", run_age(run, utc_now), w = widths.age),
-            dim,
-        ),
+    let text = [
+        row.workflow.as_str(),
+        row.source.as_str(),
+        row.branch.as_str(),
+        row.event.as_str(),
+        row.title.as_str(),
+        row.duration.as_str(),
+        row.age.as_str(),
     ];
+    let mut spans = vec![Span::styled(
+        format!("{glyph} "),
+        Style::default().fg(color),
+    )];
+    spans.extend(
+        cells(&widths.fit(width), text)
+            .into_iter()
+            .map(|(cell, text)| match cell {
+                Cell::Workflow => Span::styled(
+                    text,
+                    Style::default()
+                        .fg(colors::TEXT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Cell::Source => Span::styled(text, Style::default().fg(source_color(&row.source))),
+                Cell::Branch => Span::styled(text, Style::default().fg(colors::SAPPHIRE)),
+                Cell::Title => Span::styled(text, Style::default().fg(colors::TEXT)),
+                Cell::Event | Cell::Duration | Cell::Age => Span::styled(text, dim),
+                Cell::Blank => Span::raw(text),
+            }),
+    );
     RunLine(spans, width)
 }
 
@@ -427,6 +724,10 @@ pub fn inspector_lines(
     app: &App,
     now: DateTime<Local>,
 ) -> (Vec<Line<'static>>, Option<std::ops::Range<usize>>) {
+    if let Some(context) = app.highlighted_ci_context() {
+        let text = format!("no jobs or log for {}", context.source);
+        return (vec![dim_line(&text)], None);
+    }
     let Some(run) = app.ci_highlighted_run() else {
         return (vec![dim_line("no run selected")], None);
     };
@@ -805,6 +1106,13 @@ mod tests {
             .expect("unambiguous local time")
     }
 
+    // The instant the text names, whatever the machine's zone.
+    fn instant(text: &str) -> DateTime<Local> {
+        DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&Local)
+    }
+
     fn key() -> crate::app::RemoteKey {
         (Some("gaurgle".to_string()), "fleetz".to_string())
     }
@@ -884,6 +1192,7 @@ mod tests {
                 full_log: None,
                 failure: None,
                 budget: None,
+                tip: None,
             },
             now,
         );
@@ -901,6 +1210,7 @@ mod tests {
                 full_log: None,
                 failure: Some(failure),
                 budget: None,
+                tip: None,
             },
             now,
         );
@@ -1019,6 +1329,7 @@ mod tests {
                     "API rate limit exceeded",
                 )),
                 budget: Some(reading),
+                tip: None,
             },
             now,
         );
@@ -1168,7 +1479,7 @@ mod tests {
             .expect("the first line");
         let held = runs();
         for (i, run) in held.iter().enumerate() {
-            let row = &rows[first + 1 + i];
+            let row = &rows[first + 2 + i];
             assert!(row.contains(&head(run)), "row {i}: {row}");
             assert_eq!(row.contains('▸'), i == 0, "cursor on the first: {row}");
         }
@@ -1253,6 +1564,292 @@ mod tests {
         assert_eq!(app.detail_selected(), 2);
     }
 
+    // --- The `ci` view's width (FZ-40) ---
+
+    /// His screenshot's workflow, on a manual dispatch from `main`.
+    const RELEASE: &str = "Release Traffic preview OTA";
+
+    /// The fixture's runs with a fourth run named as in his screenshot.
+    fn runs_with_release() -> Vec<WorkflowRun> {
+        let mut runs = runs();
+        let mut release = runs[1].clone();
+        release.workflow = Some(RELEASE.to_string());
+        release.branch = Some("main".to_string());
+        release.event = "workflow_dispatch".to_string();
+        runs.push(release);
+        runs
+    }
+
+    /// His screenshot's rows (FZ-82): `Frontend CI` on `feat/font-previews`
+    /// from a `pull_request`, `9m 14s`, `17h ago`, with a long title.
+    fn screenshot_runs() -> Vec<WorkflowRun> {
+        let created = Utc::now() - chrono::Duration::hours(17);
+        (0..3)
+            .map(|i| {
+                let mut run = runs()[1].clone();
+                run.id += i;
+                run.workflow = Some("Frontend CI".to_string());
+                run.branch = Some("feat/font-previews".to_string());
+                run.event = "pull_request".to_string();
+                run.title = "feat(fonts): preview every font in the picker".to_string();
+                run.created = created;
+                run.started = Some(created);
+                run.updated = created + chrono::Duration::seconds(554);
+                run
+            })
+            .collect()
+    }
+
+    /// His report of 2026-11-05: on a narrow pane 2 every run row kept the
+    /// trigger and broke `37s   6m ago` onto a second row. Pane 2 drawn
+    /// alone at each width from 40 to 80 columns: one rendered row per run,
+    /// each ending in its age, the headline too. Fails while a row is laid
+    /// out wider than the body it is drawn in.
+    #[test]
+    fn a_run_row_never_wraps_on_a_narrow_pane() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Detail;
+        landed(&mut app, screenshot_runs(), Local::now());
+        for pane in 40..=80u16 {
+            let mut terminal = Terminal::new(TestBackend::new(pane, 30)).unwrap();
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    crate::ui::detail::render(f, Rect::default(), area, None, None, &app);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let rows: Vec<String> = (0..30).map(|y| row_text(&buffer, y)).collect();
+            let first = rows
+                .iter()
+                .position(|r| r.contains("as of "))
+                .unwrap_or_else(|| panic!("the first line at {pane}: {rows:#?}"));
+            let body = |row: &str| row.trim_matches('│').trim_end().to_string();
+            let headline = body(&rows[first + 1]);
+            assert!(headline.ends_with("age"), "headline at {pane}: {rows:#?}");
+            for i in 0..3 {
+                let row = body(&rows[first + 2 + i]);
+                assert!(row.ends_with("17h ago"), "run {i} at {pane}: {rows:#?}");
+                assert!(row.contains("9m 14s"), "run {i} at {pane}: {rows:#?}");
+            }
+            let marked: usize = rows[first + 2..first + 5]
+                .iter()
+                .map(|r| r.matches('▸').count())
+                .sum();
+            assert_eq!(marked, 1, "the cursor on one row at {pane}");
+            assert!(
+                body(&rows[first + 5]).is_empty(),
+                "nothing under the runs at {pane}: {rows:#?}"
+            );
+        }
+    }
+
+    /// FZ-82: below the row's floor (lamp, duration and age, 23 columns)
+    /// the run rows and the headline are cut at the inner width, never
+    /// wrapped. Panes 20 to 26 hold 16 to 22 columns inside. Fails while a
+    /// row past the floor wraps its age onto a second row.
+    #[test]
+    fn below_its_floor_a_run_row_is_clipped_not_wrapped() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Detail;
+        landed(&mut app, screenshot_runs(), Local::now());
+        for pane in 20..=26u16 {
+            let mut terminal = Terminal::new(TestBackend::new(pane, 30)).unwrap();
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    crate::ui::detail::render(f, Rect::default(), area, None, None, &app);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let rows: Vec<String> = (0..30).map(|y| row_text(&buffer, y)).collect();
+            let first = rows
+                .iter()
+                .position(|r| r.contains("as of "))
+                .unwrap_or_else(|| panic!("the first line at {pane}: {rows:#?}"));
+            let body = |row: &str| row.trim_matches('│').trim().to_string();
+            assert!(
+                !body(&rows[first + 1]).contains('◉'),
+                "the headline on one row at {pane}: {rows:#?}"
+            );
+            for i in 0..3 {
+                let row = body(&rows[first + 2 + i]);
+                assert!(row.contains('◉'), "run {i} on one row at {pane}: {rows:#?}");
+            }
+            assert!(
+                body(&rows[first + 5]).is_empty(),
+                "nothing wrapped under the runs at {pane}: {rows:#?}"
+            );
+            // The pinned header draws unwrapped, so also hold the lines
+            // themselves to the inner width: a short pane scrolls the
+            // headline with the body, which wraps.
+            let inner = usize::from(pane) - 4;
+            let now = Local::now();
+            let head = headline(&app, inner, now).expect("runs are listed");
+            assert!(head.width() <= inner, "headline at {pane}: {head:?}");
+            for row in run_rows(&app, inner, now, 0, true) {
+                assert!(row.width() <= inner, "run at {pane}: {row:?}");
+            }
+        }
+    }
+
+    /// His look on #95: at 170 columns the workflow was cut at 18
+    /// characters beside 60 empty ones. Fails while the column is capped
+    /// short of the name.
+    #[test]
+    fn at_170_columns_the_workflow_name_is_drawn_in_full() {
+        let mut app = app();
+        landed(&mut app, runs_with_release(), Local::now());
+        let (rects, buffer) = draw(&app, 170, 50);
+        let detail = rects.detail.expect("detail pane laid out");
+        let rows: Vec<String> = (detail.y..detail.y + detail.height)
+            .map(|y| row_text(&buffer, y))
+            .collect();
+        assert!(
+            rows.iter().any(|r| r.contains(RELEASE)),
+            "{RELEASE} cut: {rows:#?}"
+        );
+    }
+
+    /// The headline and the run rows of `runs_with_release` at `width`, as
+    /// text. Headed widths: workflow 27, branch 30, trigger 17, duration 8,
+    /// age 7; so every column from 123, no trigger from 104, no title from
+    /// 82, and below 82 the workflow name gives way.
+    fn laid_out(width: usize) -> (String, Vec<String>) {
+        let now = local("2026-10-21T13:16:30+02:00");
+        let mut app = app();
+        landed(&mut app, runs_with_release(), now);
+        let headline = headline(&app, width, now).expect("runs are listed");
+        let rows = run_rows(&app, width, now, 0, false);
+        (line_text(&headline), rows.iter().map(line_text).collect())
+    }
+
+    /// The fixture's long branch, as its capped column draws it.
+    fn capped_branch() -> String {
+        crate::ui::truncate("feat/79-date-the-failed-attempt", BRANCH_MAX)
+    }
+
+    #[test]
+    fn a_wide_row_shows_every_column_under_its_word() {
+        let (head_row, rows) = laid_out(170);
+        assert_eq!(
+            head_row.split_whitespace().collect::<Vec<_>>(),
+            HEADINGS,
+            "{head_row}"
+        );
+        let release = &rows[3];
+        for cell in [
+            RELEASE,
+            "main",
+            "workflow_dispatch",
+            runs()[1].title.as_str(),
+        ] {
+            assert!(release.contains(cell), "{cell} missing: {release}");
+        }
+        assert!(rows[0].contains(&capped_branch()), "{}", rows[0]);
+        for row in &rows {
+            assert_eq!(row.chars().count(), 170, "the title fills: {row}");
+            assert!(row.ends_with("ago"), "{row}");
+        }
+        // In columns, not bytes: the lamp is wider in UTF-8 than the blank
+        // the headline holds for it.
+        let at = |row: &str, text: &str| row[..row.find(text).unwrap()].chars().count();
+        assert_eq!(at(&head_row, "workflow"), at(release, RELEASE));
+        assert_eq!(at(&head_row, "branch"), at(release, "main"));
+        assert_eq!(at(&head_row, "trigger"), at(release, "workflow_dispatch"));
+        assert_eq!(at(&head_row, "title"), at(release, &runs()[1].title));
+    }
+
+    #[test]
+    fn the_trigger_goes_first() {
+        let (head_row, rows) = laid_out(110);
+        assert!(!head_row.contains("trigger"), "{head_row}");
+        assert!(head_row.contains("title"), "{head_row}");
+        let release = &rows[3];
+        assert!(!release.contains("workflow_dispatch"), "{release}");
+        assert!(release.contains(RELEASE), "{release}");
+        assert!(release.contains(&head(&runs()[1])), "{release}");
+        assert_eq!(release.chars().count(), 110);
+    }
+
+    #[test]
+    fn the_title_goes_second() {
+        let (head_row, rows) = laid_out(90);
+        assert_eq!(
+            head_row.split_whitespace().collect::<Vec<_>>(),
+            ["workflow", "branch", "duration", "age"],
+            "{head_row}"
+        );
+        assert!(!rows[3].contains(&head(&runs()[1])), "{}", rows[3]);
+        assert!(
+            rows[3].contains(RELEASE),
+            "nothing truncated yet: {}",
+            rows[3]
+        );
+        assert!(rows[0].contains(&capped_branch()), "{}", rows[0]);
+        for row in &rows {
+            assert_eq!(row.chars().count(), 90, "{row}");
+            assert!(row.ends_with("ago"), "{row}");
+        }
+    }
+
+    #[test]
+    fn then_the_workflow_name_truncates_and_the_branch_holds() {
+        let (head_row, rows) = laid_out(70);
+        assert!(head_row.starts_with("    workflow  "), "{head_row}");
+        assert!(rows[3].contains("Release Traffi…  main"), "{}", rows[3]);
+        assert!(rows[0].contains(&capped_branch()), "{}", rows[0]);
+        // Branch last: only past the workflow's floor.
+        let (_, rows) = laid_out(50);
+        assert!(rows[3].contains("Release…  main"), "{}", rows[3]);
+        assert!(rows[0].contains("feat/79-date-the…"), "{}", rows[0]);
+    }
+
+    #[test]
+    fn duration_and_age_stay_at_every_width() {
+        let now = local("2026-10-21T13:16:30+02:00").with_timezone(&Utc);
+        let held = runs_with_release();
+        for width in 23..=200 {
+            let (head_row, rows) = laid_out(width);
+            let words: Vec<&str> = head_row.split_whitespace().collect();
+            assert!(words.ends_with(&["duration", "age"]), "{width}: {head_row}");
+            assert!(head_row.ends_with("age"), "{width}: {head_row}");
+            for (row, run) in rows.iter().zip(&held) {
+                let age = run_age(run, now);
+                let before_age = row.strip_suffix(&age).expect("age last");
+                assert!(
+                    before_age.trim_end().ends_with(&run_duration(run, now)),
+                    "{width}: {row}"
+                );
+                assert!(row.chars().count() <= width, "{width}: {row}");
+            }
+        }
+    }
+
+    /// The headline sits between the first line and the runs, and the
+    /// cursor starts on the first run, not on it. No runs, no headline.
+    #[test]
+    fn the_headline_heads_the_runs_and_is_not_a_cursor_stop() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Detail;
+        landed(&mut app, runs(), Local::now());
+        let rows = detail_rows(&app);
+        let at = rows
+            .iter()
+            .position(|r| r.contains("workflow") && r.contains("duration"))
+            .expect("the headline");
+        assert!(rows[at - 1].contains("as of "), "{}", rows[at - 1]);
+        assert!(!rows[at].contains('▸'), "{}", rows[at]);
+        assert!(rows[at + 1].contains('▸'), "{}", rows[at + 1]);
+        assert!(rows[at + 1].contains(&head(&runs()[0])), "{}", rows[at + 1]);
+        assert_eq!(app.selected_commit_count(), 3, "runs only");
+
+        landed(&mut app, Vec::new(), Local::now());
+        assert!(headline(&app, 120, Local::now()).is_none());
+        let rows = detail_rows(&app);
+        assert!(rows.iter().all(|r| !r.contains("duration")), "{rows:#?}");
+    }
+
     // --- The inspector's run bodies (FZ-30f) ---
 
     const JOBS_FAILED: &str = include_str!("../ci/fixtures/jobs-failed.json");
@@ -1304,6 +1901,7 @@ mod tests {
                 full_log: Some((FAILED_JOB, crate::ci::log_lines(LOG_FAILED))),
                 failure: None,
                 budget: None,
+                tip: None,
             },
             Local::now(),
         );
@@ -1365,6 +1963,7 @@ mod tests {
     #[test]
     fn the_log_body_draws_the_marked_jobs_whole_log() {
         let mut app = on_failed_run();
+        app.inspector_pct = 30;
         app.ci_body = CiBody::Log;
         let text = body_text(&app);
         assert!(text.contains(&"check log".to_string()), "{text:#?}");
@@ -1391,6 +1990,7 @@ mod tests {
     #[test]
     fn the_whole_log_is_wrapped_once_per_job_and_width() {
         let mut app = on_failed_run();
+        app.inspector_pct = 30;
         app.ci_body = CiBody::Log;
         draw(&app, 160, 50);
         let width = {
@@ -1421,6 +2021,7 @@ mod tests {
     #[test]
     fn another_jobs_log_at_the_same_width_is_wrapped_afresh() {
         let mut app = on_failed_run();
+        app.inspector_pct = 30;
         let mut second = jobs()[0].clone();
         second.id = 7;
         second.name = "docs".to_string();
@@ -1578,7 +2179,7 @@ mod tests {
         let (rects, buffer) = draw(&app, 160, 50);
         let inspector = rects.inspector.expect("inspector laid out");
         let title = row_text(&buffer, inspector.y);
-        assert!(title.contains("[3] inspector  log"), "{title}");
+        assert!(title.contains("[/] JOBS · LOG · SCRIPT"), "{title}");
 
         app.focused_panel = FocusedPanel::Detail;
         app.press_bracket(false);
@@ -1588,6 +2189,132 @@ mod tests {
             "pane 2 cycles its views"
         );
         assert_eq!(app.ci_body, CiBody::Log);
+    }
+
+    /// The cell where `needle` starts on row `y`, which must hold it.
+    fn cell_of<'a>(buffer: &'a Buffer, y: u16, needle: &str) -> &'a ratatui::buffer::Cell {
+        let row = row_text(buffer, y);
+        let byte = row
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} not on row {y}: {row}"));
+        let x = row[..byte].chars().count() as u16;
+        &buffer[(x, y)]
+    }
+
+    /// FZ-64: with room, the inspector's top border names every body as a
+    /// tab, as pane 2's names its views: the shown one bright in the `ci`
+    /// tab's colour, the others dim, and the title no longer repeats the
+    /// body's word.
+    #[test]
+    fn the_inspector_border_names_every_body_with_the_shown_one_lit() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.ci_body = CiBody::Log;
+        let (rects, buffer) = draw(&app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        assert!(title.contains("[/] JOBS · LOG · SCRIPT "), "{title}");
+        assert!(title.contains("[3] inspector "), "{title}");
+        assert!(!title.contains("inspector  log"), "{title}");
+        assert!(
+            title.trim_end().ends_with("SCRIPT ╮"),
+            "at the right: {title}"
+        );
+
+        let lit = cell_of(&buffer, inspector.y, "LOG");
+        assert_eq!(lit.fg, colors::history_view_color(HistoryView::Ci));
+        assert!(lit.modifier.contains(Modifier::BOLD));
+        for dim in ["JOBS", "SCRIPT"] {
+            assert_eq!(
+                cell_of(&buffer, inspector.y, dim).fg,
+                colors::SUBTEXT,
+                "{dim}"
+            );
+        }
+    }
+
+    /// FZ-64: a border too narrow for all three keeps the shown body alone,
+    /// as pane 2 drops to `[/] CI`.
+    #[test]
+    fn a_narrow_inspector_border_keeps_the_shown_body_alone() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.ci_body = CiBody::Script;
+        let (rects, buffer) = draw(&app, 40, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        assert!(title.contains("[/] SCRIPT "), "{title}");
+        assert!(!title.contains("JOBS"), "{title}");
+        assert!(!title.contains("LOG"), "{title}");
+        let lit = cell_of(&buffer, inspector.y, "SCRIPT");
+        assert_eq!(lit.fg, colors::history_view_color(HistoryView::Ci));
+        assert!(lit.modifier.contains(Modifier::BOLD));
+    }
+
+    /// FZ-64: the commit inspector keeps its plain title; the tabs belong to
+    /// a run only.
+    #[test]
+    fn the_commit_inspector_border_has_no_body_tabs() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.history_view = HistoryView::Commits;
+        assert!(!app.inspects_ci_run());
+        let (rects, buffer) = draw(&app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        // The title, then nothing but the rule (and its resize grip) to the
+        // corner.
+        let rest = title
+            .trim_end()
+            .strip_prefix("╭ [3] inspector ")
+            .unwrap_or_else(|| panic!("{title}"));
+        assert!(
+            rest.ends_with('╮') && rest.chars().all(|c| matches!(c, '─' | '⠶' | '╮')),
+            "{title}"
+        );
+    }
+
+    /// FZ-64: the resize grip sits mid-border and is painted after the
+    /// panes, so where the tabs would run under it they drop to the shown
+    /// body alone, clear of the mark. Before, widths 44 to 56 drew
+    /// `⠶⠶⠶⠶⠶⠶/] JOBS · LOG · SCRIPT`.
+    #[test]
+    fn the_inspector_tabs_never_run_under_the_resize_grip() {
+        let mut app = on_failed_run();
+        app.focused_panel = FocusedPanel::Inspector;
+        app.ci_body = CiBody::Log;
+        for width in 44..=56 {
+            let (rects, buffer) = draw(&app, width, 50);
+            let inspector = rects.inspector.expect("inspector laid out");
+            let title = row_text(&buffer, inspector.y);
+            let tabs = &title[title.find(" [/] ").unwrap_or_else(|| panic!("{title}"))..];
+            assert!(!tabs.contains('⠶'), "w={width}: {title}");
+            assert!(tabs.contains(" LOG "), "w={width}: {title}");
+            let lit = cell_of(&buffer, inspector.y, "LOG");
+            assert_eq!(
+                lit.fg,
+                colors::history_view_color(HistoryView::Ci),
+                "w={width}"
+            );
+            assert!(title.contains('⠶'), "the grip is still drawn: {title}");
+        }
+    }
+
+    /// FZ-64: a `ci` view with no run to inspect (loading here, and likewise
+    /// empty, offline or without a remote) has no bodies to step, and `[`/`]`
+    /// step pane 2 there, so its border shows no tabs.
+    #[test]
+    fn the_inspector_border_has_no_tabs_without_a_highlighted_run() {
+        let mut app = app();
+        app.focused_panel = FocusedPanel::Inspector;
+        assert!(app.inspects_ci_run());
+        assert!(app.ci_highlighted_run().is_none());
+        let (rects, buffer) = draw(&app, 160, 50);
+        let inspector = rects.inspector.expect("inspector laid out");
+        let title = row_text(&buffer, inspector.y);
+        assert!(title.contains("[3] inspector "), "{title}");
+        assert!(!title.contains("[/]"), "{title}");
+        assert!(!title.contains("JOBS"), "{title}");
     }
 
     /// Each body keeps its own scroll; a different highlighted run starts
@@ -1798,6 +2525,8 @@ mod tests {
     #[test]
     fn j_k_and_the_wheel_scroll_the_log_and_script_bodies() {
         let mut app = on_failed_run();
+        // Draws at the pre-FZ-88 inspector size (40%) it was written for.
+        app.inspector_pct = 40;
         let sha = runs()[FAILED_RUN].head_sha.clone().unwrap();
         app.ci.get_mut(&key()).unwrap().scripts.insert(
             (sha, WORKFLOW.to_string()),
@@ -2130,5 +2859,759 @@ mod tests {
         assert!(rows[ci + 1].contains("default branch passed"));
         assert!(rows[ci + 2].contains(RUNS_HINT));
         assert!(app.ci.is_empty(), "nothing claimed");
+    }
+
+    // --- The lamp, the header and the `ci` view agree (FZ-83) ---
+
+    const TIP: &str = "cc524b4717d724cfe74fdde29c5f5ae3853e5cdf";
+
+    fn main_run(status: &str, conclusion: Option<&str>) -> WorkflowRun {
+        WorkflowRun {
+            branch: Some("main".to_string()),
+            head_sha: Some(TIP.to_string()),
+            status: Some(status.to_string()),
+            conclusion: conclusion.map(str::to_string),
+            ..runs()[1].clone()
+        }
+    }
+
+    fn pr_run_in_progress() -> WorkflowRun {
+        WorkflowRun {
+            id: 99,
+            branch: Some("feat/x".to_string()),
+            head_sha: Some("feed000".to_string()),
+            status: Some("in_progress".to_string()),
+            conclusion: None,
+            ..runs()[1].clone()
+        }
+    }
+
+    fn build(state: CiStatus) -> crate::ci::Context {
+        crate::ci::Context {
+            name: "build".to_string(),
+            state,
+            description: None,
+            url: Some("https://github.com/gaurgle/fleetz/actions/runs/1/job/2".to_string()),
+            actions: true,
+            source: "actions".to_string(),
+            started: None,
+            completed: None,
+        }
+    }
+
+    fn vercel() -> crate::ci::Context {
+        crate::ci::Context {
+            name: "Vercel".to_string(),
+            state: CiStatus::Failed,
+            description: Some("Aliasing has failed".to_string()),
+            url: Some("https://vercel.com/gaurgles-projects/portfolio/DJX3".to_string()),
+            actions: false,
+            source: "vercel".to_string(),
+            started: None,
+            completed: None,
+        }
+    }
+
+    /// portfolio-site's `cc524b4` Vercel history, as recorded 2026-11-05.
+    fn vercel_history() -> Vec<crate::ci::StatusEvent> {
+        [
+            ("pending", "2026-11-05T11:23:52Z"),
+            ("success", "2026-11-05T11:24:09Z"),
+            ("pending", "2026-11-05T11:24:27Z"),
+            ("pending", "2026-11-05T11:52:18Z"),
+            ("success", "2026-11-05T11:52:43Z"),
+            ("failure", "2026-11-05T12:25:38Z"),
+        ]
+        .into_iter()
+        .map(|(state, at)| crate::ci::StatusEvent {
+            context: "Vercel".to_string(),
+            state: match state {
+                "pending" => CiStatus::Pending,
+                "success" => CiStatus::Passed,
+                _ => CiStatus::Failed,
+            },
+            description: None,
+            at: DateTime::parse_from_rfc3339(at)
+                .unwrap()
+                .with_timezone(&Utc),
+        })
+        .collect()
+    }
+
+    /// The fleet poll left `status`, with its data time at `at`.
+    fn fleet(app: &mut App, status: CiStatus, at: DateTime<Local>) {
+        app.repos[0].ci_status = status;
+        app.github_freshness.data_time = DataTime::At(at);
+    }
+
+    /// Land one `ci` poll at `now` that read `runs` and the tip at `TIP`,
+    /// whose statuses and check runs are all listed.
+    fn tip_landed(
+        app: &mut App,
+        runs: Vec<WorkflowRun>,
+        statuses: Vec<crate::ci::Context>,
+        checks: Vec<crate::ci::Context>,
+        now: DateTime<Local>,
+    ) {
+        tip_landed_with(app, runs, statuses, checks, Vec::new(), now);
+    }
+
+    /// `tip_landed`, with the statuses' `history` read too.
+    fn tip_landed_with(
+        app: &mut App,
+        runs: Vec<WorkflowRun>,
+        statuses: Vec<crate::ci::Context>,
+        checks: Vec<crate::ci::Context>,
+        history: Vec<crate::ci::StatusEvent>,
+        now: DateTime<Local>,
+    ) {
+        use crate::ci::{Fetched, TipAnswer, TipChecks, TipStatus};
+        let request = app.claim_ci_poll(key(), "gaurgle".into(), "fleetz".into());
+        let tip = TipAnswer {
+            status: Fetched::Fresh {
+                data: TipStatus {
+                    sha: TIP.to_string(),
+                    statuses,
+                    complete: true,
+                },
+                etag: Some("W/\"st\"".to_string()),
+            },
+            history: Some((
+                TIP.to_string(),
+                Fetched::Fresh {
+                    data: history,
+                    etag: Some("W/\"hi\"".to_string()),
+                },
+            )),
+            checks: Some((
+                TIP.to_string(),
+                Fetched::Fresh {
+                    data: TipChecks {
+                        runs: checks,
+                        complete: true,
+                    },
+                    etag: Some("W/\"cr\"".to_string()),
+                },
+            )),
+        };
+        app.apply_ci(
+            crate::ci::CiAnswer {
+                key: key(),
+                attempt: request.attempt,
+                runs: Some(Fetched::Fresh {
+                    data: runs,
+                    etag: None,
+                }),
+                jobs: None,
+                log: None,
+                full_log: None,
+                failure: None,
+                budget: None,
+                tip: Some(tip),
+            },
+            now,
+        );
+    }
+
+    fn t0() -> DateTime<Local> {
+        instant("2026-11-05T12:30:00+01:00")
+    }
+
+    fn minutes(n: i64) -> chrono::Duration {
+        chrono::Duration::minutes(n)
+    }
+
+    /// Pane 2's header CI word as drawn: from `CI` to the pane's border.
+    fn header_ci(app: &App) -> Option<String> {
+        detail_rows(app).iter().find_map(|row| {
+            let at = row.find("CI ◉")?;
+            Some(row[at..].trim_end_matches(['│', ' ']).to_string())
+        })
+    }
+
+    /// The repo list's rows as drawn, joined.
+    fn list_text(buffer: &Buffer, rect: Rect) -> String {
+        (rect.y..rect.y + rect.height)
+            .map(|y| {
+                (rect.x..rect.x + rect.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The colour of the first `◉` inside `rect`.
+    fn lamp_color(buffer: &Buffer, rect: Rect) -> Option<ratatui::style::Color> {
+        (rect.y..rect.y + rect.height).find_map(|y| {
+            (rect.x..rect.x + rect.width)
+                .find(|&x| buffer[(x, y)].symbol() == "◉")
+                .map(|x| buffer[(x, y)].fg)
+        })
+    }
+
+    /// The header lamp's colour: the `◉` after `CI ` in pane 2.
+    fn header_lamp_color(buffer: &Buffer, rect: Rect) -> Option<ratatui::style::Color> {
+        (rect.y..rect.y + rect.height).find_map(|y| {
+            (rect.x + 3..rect.x + rect.width).find_map(|x| {
+                let ci = (0..3)
+                    .map(|d| buffer[(x - 3 + d, y)].symbol())
+                    .collect::<String>();
+                (ci == "CI " && buffer[(x, y)].symbol() == "◉").then(|| buffer[(x, y)].fg)
+            })
+        })
+    }
+
+    /// Case 2 (11-05 12:30): the fleet poll still says pending, the tip's
+    /// check runs read after it say green. Lamp, header and `info` show
+    /// passed, and the header names the branch. Fails while all three draw
+    /// `ci_status`.
+    #[test]
+    fn a_fresher_tip_overrides_the_fleet_polls_stale_pending() {
+        let mut app = app();
+        fleet(&mut app, CiStatus::Pending, t0());
+        tip_landed(
+            &mut app,
+            vec![main_run("completed", Some("success"))],
+            vec![],
+            vec![build(CiStatus::Passed)],
+            t0() + minutes(1),
+        );
+        let shown = app.ci_shown(&app.repos[0]);
+        assert_eq!(shown.status, CiStatus::Passed);
+        assert_eq!(shown.branch.as_deref(), Some("main"));
+        assert_eq!(header_ci(&app).as_deref(), Some("CI ◉ main passed"));
+        let (rects, buffer) = draw(&app, 160, 50);
+        assert_eq!(lamp_color(&buffer, rects.repo_list), Some(colors::GREEN));
+        app.history_view = HistoryView::Info;
+        assert_eq!(info_text(&app).unwrap()[0], "  ◉ default branch passed");
+    }
+
+    /// Contexts read before the fleet poll's data time are older than it:
+    /// the fleet's state wins, and no culprit is guessed from them.
+    #[test]
+    fn an_older_tip_leaves_the_fleet_polls_state() {
+        let mut app = app();
+        tip_landed(
+            &mut app,
+            vec![main_run("completed", Some("success"))],
+            vec![],
+            vec![build(CiStatus::Passed)],
+            t0() - minutes(1),
+        );
+        fleet(&mut app, CiStatus::Failed, t0());
+        let shown = app.ci_shown(&app.repos[0]);
+        assert_eq!((shown.status, shown.culprit), (CiStatus::Failed, None));
+        assert_eq!(header_ci(&app).as_deref(), Some("CI ◉ main failed"));
+    }
+
+    /// Nothing held for the repo: the fleet's state, and no branch name to
+    /// give, so the header keeps its old words.
+    #[test]
+    fn with_nothing_held_the_fleet_state_shows_unnamed() {
+        let mut app = app();
+        fleet(&mut app, CiStatus::Passed, t0());
+        let shown = app.ci_shown(&app.repos[0]);
+        assert_eq!(
+            shown,
+            crate::app::CiShown {
+                status: CiStatus::Passed,
+                branch: None,
+                culprit: None,
+            }
+        );
+        assert_eq!(header_ci(&app).as_deref(), Some("CI ◉ passed"));
+    }
+
+    /// Only the status answered for this tip (its check runs did not), or
+    /// the check runs ran past a page: not every context is known, so the
+    /// fleet's state stands.
+    #[test]
+    fn a_tip_without_its_check_runs_does_not_override() {
+        use crate::ci::{Fetched, TipAnswer, TipStatus};
+        let mut app = app();
+        fleet(&mut app, CiStatus::Pending, t0());
+        let request = app.claim_ci_poll(key(), "gaurgle".into(), "fleetz".into());
+        let tip = TipAnswer {
+            status: Fetched::Fresh {
+                data: TipStatus {
+                    sha: TIP.to_string(),
+                    statuses: vec![],
+                    complete: true,
+                },
+                etag: None,
+            },
+            history: None,
+            checks: None,
+        };
+        app.apply_ci(
+            crate::ci::CiAnswer {
+                key: key(),
+                attempt: request.attempt,
+                runs: Some(Fetched::Fresh {
+                    data: vec![main_run("completed", Some("success"))],
+                    etag: None,
+                }),
+                jobs: None,
+                log: None,
+                full_log: None,
+                failure: Some(crate::github::Failure::new(
+                    crate::github::FailureKind::Offline,
+                    "offline",
+                )),
+                budget: None,
+                tip: Some(tip),
+            },
+            t0() + minutes(1),
+        );
+        assert_eq!(app.ci_shown(&app.repos[0]).status, CiStatus::Pending);
+
+        // Both answered, but the check runs ran past one page: still not
+        // every context.
+        let mut paged = self::app();
+        fleet(&mut paged, CiStatus::Pending, t0());
+        tip_landed(
+            &mut paged,
+            vec![main_run("completed", Some("success"))],
+            vec![],
+            vec![build(CiStatus::Passed)],
+            t0() + minutes(1),
+        );
+        let tip = paged.ci.get_mut(&key()).unwrap().tip.as_mut().unwrap();
+        tip.checks.as_mut().unwrap().complete = false;
+        assert_eq!(paged.ci_shown(&paged.repos[0]).status, CiStatus::Pending);
+    }
+
+    /// A new tip forgets the old commit's check runs: until its own answer,
+    /// the fleet's state stands again.
+    #[test]
+    fn a_moved_tip_forgets_the_old_commits_check_runs() {
+        use crate::ci::{Fetched, TipAnswer, TipStatus};
+        let mut app = app();
+        fleet(&mut app, CiStatus::Pending, t0());
+        tip_landed(
+            &mut app,
+            vec![main_run("completed", Some("success"))],
+            vec![],
+            vec![build(CiStatus::Passed)],
+            t0() + minutes(1),
+        );
+        assert_eq!(app.ci_shown(&app.repos[0]).status, CiStatus::Passed);
+        let request = app.claim_ci_poll(key(), "gaurgle".into(), "fleetz".into());
+        app.apply_ci(
+            crate::ci::CiAnswer {
+                key: key(),
+                attempt: request.attempt,
+                runs: Some(Fetched::NotModified),
+                jobs: None,
+                log: None,
+                full_log: None,
+                failure: Some(crate::github::Failure::new(
+                    crate::github::FailureKind::Offline,
+                    "offline",
+                )),
+                budget: None,
+                tip: Some(TipAnswer {
+                    status: Fetched::Fresh {
+                        data: TipStatus {
+                            sha: "a1b2c3d".to_string(),
+                            statuses: vec![],
+                            complete: true,
+                        },
+                        etag: None,
+                    },
+                    history: None,
+                    checks: None,
+                }),
+            },
+            t0() + minutes(2),
+        );
+        let tip = app.ci[&key()].tip.clone().unwrap();
+        assert_eq!((tip.sha.as_str(), tip.checks), ("a1b2c3d", None));
+        assert_eq!(app.ci_shown(&app.repos[0]).status, CiStatus::Pending);
+    }
+
+    /// Case 1 (11-04 18:33): a run in progress on a PR branch leaves the
+    /// default branch's state as it is, and adds the side-run mark beside
+    /// the lamp instead.
+    #[test]
+    fn a_pr_branch_run_in_progress_leaves_the_default_branchs_state() {
+        let mut app = app();
+        fleet(&mut app, CiStatus::Passed, t0());
+        tip_landed(
+            &mut app,
+            vec![pr_run_in_progress(), main_run("completed", Some("success"))],
+            vec![],
+            vec![build(CiStatus::Passed)],
+            t0() + minutes(1),
+        );
+        assert_eq!(app.ci_shown(&app.repos[0]).status, CiStatus::Passed);
+        assert_eq!(header_ci(&app).as_deref(), Some("CI ◉ main passed"));
+        assert!(app.ci_side_run(&app.repos[0]));
+        let (rects, buffer) = draw(&app, 160, 50);
+        assert_eq!(lamp_color(&buffer, rects.repo_list), Some(colors::GREEN));
+        let list = list_text(&buffer, rects.repo_list);
+        assert!(list.contains("◉ ◦ "), "{list}");
+    }
+
+    /// The side-run mark is for another branch only: not for a run on the
+    /// tip (the lamp covers that), not with no runs held, not while the
+    /// tip is unknown, and not once the fleet poll is newer than the runs.
+    #[test]
+    fn the_side_run_mark_needs_a_fresh_run_off_the_tip() {
+        let mut on_tip = app();
+        fleet(&mut on_tip, CiStatus::Passed, t0());
+        tip_landed(
+            &mut on_tip,
+            vec![main_run("in_progress", None)],
+            vec![],
+            vec![build(CiStatus::Pending)],
+            t0() + minutes(1),
+        );
+        assert!(!on_tip.ci_side_run(&on_tip.repos[0]), "the lamp says it");
+        assert_eq!(on_tip.ci_shown(&on_tip.repos[0]).status, CiStatus::Pending);
+
+        let nothing = app();
+        assert!(!nothing.ci_side_run(&nothing.repos[0]), "no runs held");
+
+        let mut no_tip = app();
+        fleet(&mut no_tip, CiStatus::Passed, t0());
+        landed(&mut no_tip, vec![pr_run_in_progress()], t0() + minutes(1));
+        assert!(!no_tip.ci_side_run(&no_tip.repos[0]), "tip unknown");
+
+        let mut stale = app();
+        tip_landed(
+            &mut stale,
+            vec![pr_run_in_progress()],
+            vec![],
+            vec![build(CiStatus::Passed)],
+            t0() - minutes(1),
+        );
+        fleet(&mut stale, CiStatus::Passed, t0());
+        assert!(!stale.ci_side_run(&stale.repos[0]), "older than the fleet");
+        let (rects, buffer) = draw(&stale, 160, 50);
+        let list = list_text(&buffer, rects.repo_list);
+        assert!(list.contains('◉'), "the row is drawn: {list}");
+        assert!(!list.contains('◦'), "{list}");
+    }
+
+    /// The side-run mark is one cell and a space, counted in the row's
+    /// width, so the row still ends at its edge, under either icon set.
+    #[test]
+    fn the_side_run_mark_is_counted_in_the_rows_width() {
+        use crate::app::Icons;
+        let repo = repo();
+        for icons in [Icons::Nerd, Icons::Plain] {
+            badges::set_active_icons(icons);
+            for side_run in [false, true] {
+                let ci = badges::RowCi {
+                    status: &CiStatus::Passed,
+                    side_run,
+                };
+                let line = Line::from(crate::ui::detail::repo_row_spans_ci(
+                    &repo, ci, false, 60, false, false, None,
+                ));
+                assert_eq!(line.width(), 60, "{icons:?} side_run {side_run}");
+                let text = line_text(&line);
+                assert_eq!(text.contains("◉ ◦ "), side_run, "{text}");
+            }
+        }
+        badges::set_active_icons(Icons::Nerd);
+    }
+
+    fn at_utc(text: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    /// portfolio-site on 11-05: a PR run started after Vercel's last state,
+    /// and `main`'s green run before it.
+    fn portfolio_runs() -> Vec<WorkflowRun> {
+        let newer = WorkflowRun {
+            created: at_utc("2026-11-05T13:00:00Z"),
+            started: Some(at_utc("2026-11-05T13:00:00Z")),
+            updated: at_utc("2026-11-05T13:01:00Z"),
+            status: Some("completed".to_string()),
+            conclusion: Some("success".to_string()),
+            ..pr_run_in_progress()
+        };
+        let older = WorkflowRun {
+            created: at_utc("2026-11-05T11:52:00Z"),
+            started: Some(at_utc("2026-11-05T11:52:00Z")),
+            updated: at_utc("2026-11-05T11:53:00Z"),
+            ..main_run("completed", Some("success"))
+        };
+        vec![newer, older]
+    }
+
+    /// portfolio-site's `ci` view: its runs, the green Actions check and
+    /// the Vercel status with its recorded history.
+    fn portfolio_app() -> App {
+        let mut app = app();
+        fleet(&mut app, CiStatus::Failed, t0());
+        tip_landed_with(
+            &mut app,
+            portfolio_runs(),
+            vec![vercel()],
+            vec![build(CiStatus::Passed)],
+            vercel_history(),
+            t0() + minutes(1),
+        );
+        app
+    }
+
+    /// The amendment's case 3 (portfolio-site, 11-05 13:36): the rollup is
+    /// red from a Vercel status while the Actions run is green. The header
+    /// names it, and the Vercel status is a row of the run list sorted by
+    /// time among the runs (its age is its final state's, 12:25:38, between
+    /// the 13:00 and the 11:52 runs): workflow `Vercel`, source `vercel`,
+    /// branch `main`, trigger `status`, its description as the title, the
+    /// latest job's duration (`ci::status_run`'s rule: 11:52:18 to
+    /// 11:52:43, 25s) and a red lamp. The Actions check is not listed twice.
+    #[test]
+    fn a_failing_status_context_is_named_in_the_header_and_listed() {
+        let app = portfolio_app();
+        let shown = app.ci_shown(&app.repos[0]);
+        assert_eq!(shown.culprit.as_deref(), Some("Vercel"));
+        assert_eq!(header_ci(&app).as_deref(), Some("CI ◉ main failed: Vercel"));
+        let now = instant("2026-11-05T14:41:00+01:00");
+        let rows: Vec<String> = run_rows(&app, 160, now, 1, false)
+            .iter()
+            .map(line_text)
+            .collect();
+        assert_eq!(rows.len(), 3, "{rows:#?}");
+        assert!(rows[0].contains("feat/x"), "{}", rows[0]);
+        assert!(
+            rows[2].contains("main") && !rows[2].contains("Vercel"),
+            "{}",
+            rows[2]
+        );
+        let vercel_row = &rows[1];
+        let words: Vec<&str> = vercel_row.split_whitespace().collect();
+        assert_eq!(
+            &words[..5],
+            ["▸", "◉", "Vercel", "vercel", "main"],
+            "{vercel_row}"
+        );
+        for cell in ["status", "Aliasing has failed", " 25s ", "1h ago"] {
+            assert!(vercel_row.contains(cell), "{cell} missing: {vercel_row}");
+        }
+        let line = &run_rows(&app, 160, now, 1, false)[1];
+        assert_eq!(line.spans[1].style.fg, Some(colors::RED), "the lamp");
+        assert!(
+            !rows.iter().any(|r| r.contains("build")),
+            "the Actions check is the run list's own"
+        );
+    }
+
+    /// Every context is an Actions check run: the run list says it all, so
+    /// no row is added.
+    #[test]
+    fn a_tip_of_actions_check_runs_adds_no_row() {
+        let mut app = app();
+        fleet(&mut app, CiStatus::Failed, t0());
+        tip_landed(
+            &mut app,
+            vec![main_run("completed", Some("failure"))],
+            vec![],
+            vec![build(CiStatus::Failed)],
+            t0() + minutes(1),
+        );
+        assert_eq!(app.ci_entries().len(), 1);
+        assert_eq!(header_ci(&app).as_deref(), Some("CI ◉ main failed: build"));
+        assert_eq!(app.selected_commit_count(), 1, "one run, no context stop");
+    }
+
+    /// The cursor walks the list as drawn: on the Vercel row, no run is
+    /// highlighted; on either side of it, the runs.
+    #[test]
+    fn the_cursor_walks_the_contexts_among_the_runs() {
+        let mut app = portfolio_app();
+        let held = portfolio_runs();
+        assert_eq!(app.selected_commit_count(), 3);
+        app.detail_selections[HistoryView::Ci.index()] = 1;
+        assert_eq!(
+            app.highlighted_ci_context().map(|c| c.name),
+            Some("Vercel".to_string())
+        );
+        assert_eq!(app.highlighted_ci_run(), None);
+        assert_eq!(app.ci_highlighted_run(), None);
+        app.detail_selections[HistoryView::Ci.index()] = 0;
+        assert_eq!(app.highlighted_ci_run(), Some(&held[0]));
+        app.detail_selections[HistoryView::Ci.index()] = 2;
+        assert_eq!(app.highlighted_ci_context(), None);
+        assert_eq!(app.highlighted_ci_run(), Some(&held[1]));
+        assert_eq!(app.ci_highlighted_run(), Some(&held[1]));
+    }
+
+    /// On a context's row the inspector has nothing to detail and says why.
+    #[test]
+    fn the_inspector_says_a_context_has_no_jobs_or_log() {
+        let mut app = portfolio_app();
+        app.detail_selections[HistoryView::Ci.index()] = 1;
+        let body = inspector_body(&app, Local::now());
+        assert_eq!(
+            body.iter().map(line_text).collect::<Vec<_>>(),
+            ["no jobs or log for vercel"]
+        );
+    }
+
+    /// Every row names its source in that source's colour: `actions` in the
+    /// `ci` tab's maroon, `vercel` in its own; each known source has a
+    /// colour of its own and an unknown one is dim.
+    #[test]
+    fn the_source_column_names_and_colours_each_source() {
+        let app = portfolio_app();
+        let now = instant("2026-11-05T14:41:00+01:00");
+        let rows = run_rows(&app, 160, now, 9, false);
+        let source_span = |line: &Line, word: &str| {
+            line.spans
+                .iter()
+                .find(|s| s.content.trim() == word)
+                .and_then(|s| s.style.fg)
+        };
+        assert_eq!(source_span(&rows[0], "actions"), Some(colors::MAROON));
+        assert_eq!(source_span(&rows[1], "vercel"), Some(colors::LAVENDER));
+        let known: Vec<_> = std::iter::once("actions")
+            .chain(crate::ci::KNOWN_SOURCES)
+            .map(source_color)
+            .collect();
+        for (i, a) in known.iter().enumerate() {
+            assert_ne!(*a, colors::OVERLAY, "a known source is not dim");
+            for b in &known[i + 1..] {
+                assert_ne!(a, b, "two sources share a colour");
+            }
+        }
+        assert_eq!(source_color("jenkins"), colors::OVERLAY);
+        let head = line_text(&headline(&app, 160, now).expect("a headline"));
+        assert_eq!(
+            head.split_whitespace().collect::<Vec<_>>(),
+            [
+                "workflow", "source", "branch", "trigger", "title", "duration", "age"
+            ],
+            "{head}"
+        );
+        // A list of Actions runs alone names no source: every row would say
+        // `actions`.
+        let mut actions_only = self::app();
+        landed(&mut actions_only, runs(), now);
+        let head = line_text(&headline(&actions_only, 160, now).unwrap());
+        assert!(!head.contains("source"), "{head}");
+        let row = line_text(&run_rows(&actions_only, 160, now, 9, false)[0]);
+        assert!(!row.contains("actions"), "{row}");
+    }
+
+    /// On a narrowing pane the trigger goes first, then the source, then
+    /// the title, by `Widths::fit`'s order.
+    #[test]
+    fn the_source_sheds_after_the_trigger_and_before_the_title() {
+        let app = portfolio_app();
+        let now = instant("2026-11-05T14:41:00+01:00");
+        let gone_below = |word: &str| {
+            (23..=200)
+                .rev()
+                .find(|&w| {
+                    let head = line_text(&headline(&app, w, now).unwrap());
+                    !head.split_whitespace().any(|h| h == word)
+                })
+                .unwrap_or_else(|| panic!("{word} never sheds"))
+        };
+        let (trigger, source, title) = (
+            gone_below("trigger"),
+            gone_below("source"),
+            gone_below("title"),
+        );
+        assert!(trigger > source, "trigger {trigger}, source {source}");
+        assert!(source > title, "source {source}, title {title}");
+        for w in [trigger, source, title] {
+            for row in run_rows(&app, w, now, 9, false) {
+                assert!(line_text(&row).chars().count() <= w, "{w}");
+            }
+        }
+    }
+
+    /// The next poll asks the tip again with what is held, so every read
+    /// can answer 304, and pays for them in its cost: 3 calls without
+    /// commit statuses, 4 with their history, one more with a run expanded
+    /// (1 and 2 before FZ-83).
+    #[test]
+    fn the_next_poll_asks_the_tip_conditionally_and_counts_it() {
+        let mut with_statuses = portfolio_app();
+        with_statuses.ci.get_mut(&key()).unwrap().expanded = None;
+        assert_eq!(with_statuses.ci[&key()].poll_cost(), 4);
+        with_statuses.ci.get_mut(&key()).unwrap().expanded = Some(1);
+        assert_eq!(with_statuses.ci[&key()].poll_cost(), 5);
+        let request = with_statuses.claim_ci_poll(key(), "gaurgle".into(), "fleetz".into());
+        let tip = request.tip.expect("the tip is asked");
+        assert!(tip.has_statuses);
+        assert_eq!(tip.history_etag.as_deref(), Some("W/\"hi\""));
+
+        let mut app = app();
+        tip_landed(
+            &mut app,
+            vec![main_run("completed", Some("success"))],
+            vec![],
+            vec![build(CiStatus::Passed)],
+            t0(),
+        );
+        app.ci.get_mut(&key()).unwrap().expanded = None;
+        assert_eq!(app.ci[&key()].poll_cost(), 3);
+        app.ci.get_mut(&key()).unwrap().expanded = Some(1);
+        assert_eq!(app.ci[&key()].poll_cost(), 4);
+        let request = app.claim_ci_poll(key(), "gaurgle".into(), "fleetz".into());
+        assert_eq!(
+            request.tip,
+            Some(crate::ci::TipRequest {
+                sha: Some(TIP.to_string()),
+                status_etag: Some("W/\"st\"".to_string()),
+                checks_etag: Some("W/\"cr\"".to_string()),
+                has_statuses: false,
+                history_etag: Some("W/\"hi\"".to_string()),
+            })
+        );
+    }
+
+    /// One function: for every fleet state, tip age and tip verdict, the
+    /// row lamp and the header lamp wear the same colour, the header the
+    /// same word, and both what `ci_shown` says.
+    #[test]
+    fn the_row_lamp_and_the_header_agree_in_every_case() {
+        for fleet_status in [CiStatus::Passed, CiStatus::Failed, CiStatus::Pending] {
+            for age in [None, Some(-1), Some(1)] {
+                for tip_green in [true, false] {
+                    let mut app = app();
+                    if let Some(offset) = age {
+                        let (statuses, check) = match tip_green {
+                            true => (vec![], build(CiStatus::Passed)),
+                            false => (vec![vercel()], build(CiStatus::Passed)),
+                        };
+                        tip_landed(
+                            &mut app,
+                            vec![main_run("completed", Some("success"))],
+                            statuses,
+                            vec![check],
+                            t0() + minutes(offset),
+                        );
+                    }
+                    fleet(&mut app, fleet_status.clone(), t0());
+                    let shown = app.ci_shown(&app.repos[0]);
+                    let expected = match (age, tip_green) {
+                        (Some(1), true) => CiStatus::Passed,
+                        (Some(1), false) => CiStatus::Failed,
+                        _ => fleet_status.clone(),
+                    };
+                    let case = format!("{fleet_status:?} {age:?} {tip_green}");
+                    assert_eq!(shown.status, expected, "{case}");
+                    let (rects, buffer) = draw(&app, 160, 50);
+                    let detail = rects.detail.expect("detail");
+                    let (_, color, word) = badges::ci_display(&shown.status, false);
+                    assert_eq!(lamp_color(&buffer, rects.repo_list), Some(color), "{case}");
+                    assert_eq!(header_lamp_color(&buffer, detail), Some(color), "{case}");
+                    let header = header_ci(&app).unwrap();
+                    assert!(header.contains(word), "{case}: {header}");
+                }
+            }
+        }
     }
 }

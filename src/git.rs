@@ -356,6 +356,10 @@ pub enum FetchFailureKind {
     /// Credentials wanted or refused. Prompts are disabled, so a remote that
     /// asks for a password fails here instead of hanging.
     Auth,
+    /// ssh refused the key (`Permission denied (publickey)`): the fix is the
+    /// key or the agent, not a password. fleetz fetches with `BatchMode=yes`,
+    /// so a passphrase key that is not in the agent lands here.
+    Ssh,
     /// The network, DNS or the host itself.
     Unreachable,
     /// The remote is missing or is not a repository.
@@ -1009,12 +1013,19 @@ fn classify_fetch_error(stderr: &str) -> FetchFailureKind {
         "could not read username",
         "could not read password",
         "terminal prompts disabled",
-        "permission denied (",
         "host key verification failed",
         "invalid username or password",
         "access denied",
         "returned error: 401",
         "returned error: 403",
+    ];
+    // OpenSSH's refusal, `Permission denied (publickey)` or with more
+    // methods in the parentheses, and the agent and identity lines it can
+    // print before it.
+    const SSH: &[&str] = &[
+        "permission denied (",
+        "agent refused operation",
+        "no such identity",
     ];
     const UNREACHABLE: &[&str] = &[
         "could not resolve host",
@@ -1053,8 +1064,11 @@ fn classify_fetch_error(stderr: &str) -> FetchFailureKind {
     });
     // Auth first even then: a credential that was asked for or refused means
     // a server answered at some point (another address, a jump host), and the
-    // credential is what the user has to fix.
-    if has(AUTH) {
+    // credential is what the user has to fix. Within that, ssh refusing the
+    // key comes first: its fix is the key or the agent, not a password.
+    if has(SSH) {
+        FetchFailureKind::Ssh
+    } else if has(AUTH) {
         FetchFailureKind::Auth
     } else if ssh_unreachable || has(UNREACHABLE) {
         FetchFailureKind::Unreachable
@@ -1856,6 +1870,338 @@ pub async fn default_branch(repo_path: &Path) -> Option<String> {
     None
 }
 
+/// One file in the `changes` view (FZ-60).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedFile {
+    /// Porcelain's two columns (`M `, ` M`, `??`) in the uncommitted section,
+    /// `--name-status`'s one letter in the other.
+    pub status: String,
+    /// Repo-relative; a rename's destination, an untracked directory with
+    /// its trailing `/`.
+    pub path: String,
+    /// A rename's or copy's source.
+    pub from: Option<String>,
+    /// `(added, removed)` lines; `None` for an untracked or binary file.
+    pub churn: Option<(u32, u32)>,
+}
+
+/// What the `changes` view's second section compares `HEAD` with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChangesBase {
+    /// The branch's upstream: what has not been pushed.
+    #[default]
+    Upstream,
+    /// The default branch (`default_branch`): the branch's whole divergence.
+    DefaultBranch,
+}
+
+/// The `changes` view's second section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outgoing {
+    /// The files the commits ahead of `upstream` touch.
+    Unpushed {
+        upstream: String,
+        ahead: u32,
+        files: Vec<ChangedFile>,
+    },
+    /// No upstream to compare with: the branch is not tracking one, or HEAD
+    /// is detached (`branch` is `None`).
+    NoUpstream { branch: Option<String> },
+    /// The files `HEAD` changed since it left `base`, the default branch.
+    VsDefault {
+        base: String,
+        files: Vec<ChangedFile>,
+    },
+    /// The base toggle is on and no default branch resolves.
+    NoDefault,
+}
+
+impl Outgoing {
+    /// The ref the section's per-file diffs run against, if it lists files.
+    pub fn base_ref(&self) -> Option<&str> {
+        match self {
+            Self::Unpushed { upstream, .. } => Some(upstream),
+            Self::VsDefault { base, .. } => Some(base),
+            Self::NoUpstream { .. } | Self::NoDefault => None,
+        }
+    }
+
+    /// The files the section lists.
+    pub fn files(&self) -> &[ChangedFile] {
+        match self {
+            Self::Unpushed { files, .. } | Self::VsDefault { files, .. } => files,
+            Self::NoUpstream { .. } | Self::NoDefault => &[],
+        }
+    }
+}
+
+/// One read of the `changes` view: what has not left this machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Changes {
+    pub uncommitted: Vec<ChangedFile>,
+    pub outgoing: Outgoing,
+}
+
+/// Read a repo's `changes` (FZ-60): `git status --porcelain` with
+/// `git diff HEAD --numstat` churn, then the files between `base` and
+/// `HEAD`. NUL-separated throughout, so a path with spaces or non-ASCII
+/// arrives as it is named. An error only when the status itself fails.
+pub async fn changes(repo_path: &Path, base: ChangesBase) -> Result<Changes, String> {
+    let status = git_ok(
+        repo_path,
+        &[
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=normal",
+            "--renames",
+        ],
+    )
+    .await?;
+    let churn = git_ok(repo_path, &["diff", "-M", "HEAD", "--numstat", "-z"])
+        .await
+        .map(|out| parse_numstat_z(&out))
+        .unwrap_or_default();
+    let mut uncommitted = parse_porcelain_z(&status);
+    for file in &mut uncommitted {
+        if file.status != "??" {
+            file.churn = churn.get(&file.path).copied().flatten();
+        }
+    }
+    let outgoing = match base {
+        ChangesBase::Upstream => unpushed(repo_path).await,
+        ChangesBase::DefaultBranch => vs_default(repo_path).await,
+    };
+    Ok(Changes {
+        uncommitted,
+        outgoing,
+    })
+}
+
+/// The section against the upstream: the commits ahead of it, and the files
+/// they touch since the merge base, so a branch that is also behind does not
+/// list the upstream's own changes as unpushed.
+async fn unpushed(repo_path: &Path) -> Outgoing {
+    let branch = git_ok(repo_path, &["symbolic-ref", "-q", "--short", "HEAD"])
+        .await
+        .ok()
+        .map(|b| b.trim().to_string());
+    let upstream = match branch {
+        None => None,
+        Some(_) => git_ok(
+            repo_path,
+            &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        )
+        .await
+        .ok()
+        .map(|u| u.trim().to_string()),
+    };
+    let Some(upstream) = upstream.filter(|u| !u.is_empty()) else {
+        return Outgoing::NoUpstream { branch };
+    };
+    let ahead = git_ok(
+        repo_path,
+        &["rev-list", "--count", &format!("{upstream}..HEAD")],
+    )
+    .await
+    .ok()
+    .and_then(|n| n.trim().parse().ok())
+    .unwrap_or(0);
+    let files = files_since(repo_path, &upstream).await;
+    Outgoing::Unpushed {
+        upstream,
+        ahead,
+        files,
+    }
+}
+
+/// The section against the default branch: `origin/<default>` when the
+/// clone has it, else the local one.
+async fn vs_default(repo_path: &Path) -> Outgoing {
+    let Some(name) = default_branch(repo_path).await else {
+        return Outgoing::NoDefault;
+    };
+    let remote = format!("origin/{name}");
+    let has_remote = git_ok(
+        repo_path,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/{remote}"),
+        ],
+    )
+    .await
+    .is_ok();
+    let base = if has_remote { remote } else { name };
+    let files = files_since(repo_path, &base).await;
+    Outgoing::VsDefault { base, files }
+}
+
+/// `git diff --name-status` joined with `--numstat`, `base...HEAD`.
+async fn files_since(repo_path: &Path, base: &str) -> Vec<ChangedFile> {
+    let range = format!("{base}...HEAD");
+    let Ok(names) = git_ok(repo_path, &["diff", "-M", "--name-status", "-z", &range]).await else {
+        return Vec::new();
+    };
+    let churn = git_ok(repo_path, &["diff", "-M", "--numstat", "-z", &range])
+        .await
+        .map(|out| parse_numstat_z(&out))
+        .unwrap_or_default();
+    let mut files = parse_name_status_z(&names);
+    for file in &mut files {
+        file.churn = churn.get(&file.path).copied().flatten();
+    }
+    files
+}
+
+/// The inspector's body for one `changes` file: `git diff HEAD` for an
+/// uncommitted file (`base` `None`), `git diff <base>...HEAD` for the other
+/// section, an untracked file's own text. Capped at `notes::BODY_CAP`.
+pub async fn changed_file_diff(
+    repo_path: &Path,
+    base: Option<&str>,
+    file: &ChangedFile,
+) -> Result<String, String> {
+    if base.is_none() && file.status == "??" {
+        if file.path.ends_with('/') {
+            return Ok(format!(
+                "{} is an untracked directory; Enter opens it",
+                file.path
+            ));
+        }
+        let path = repo_path.join(&file.path);
+        return tokio::task::spawn_blocking(move || crate::notes::read_body(&path))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    let range = match base {
+        Some(b) => format!("{b}...HEAD"),
+        None => "HEAD".to_string(),
+    };
+    // Literal, so a name with `:` or glob characters is a path; unquoted, so
+    // a non-ASCII name reads as itself in the diff's headers.
+    let mut args = vec![
+        "-c",
+        "core.quotePath=false",
+        "--literal-pathspecs",
+        "diff",
+        "--no-ext-diff",
+        "-M",
+        range.as_str(),
+        "--",
+        file.path.as_str(),
+    ];
+    if let Some(from) = &file.from {
+        args.push(from.as_str());
+    }
+    let diff = git_ok(repo_path, &args).await?;
+    Ok(cap_body(diff))
+}
+
+/// `text` cut at `notes::BODY_CAP` bytes on a character boundary, saying so.
+fn cap_body(mut text: String) -> String {
+    let cap = crate::notes::BODY_CAP;
+    if text.len() <= cap {
+        return text;
+    }
+    let mut cut = cap;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    text.truncate(cut);
+    format!("{text}\n… cut at {} KiB", cap / 1024)
+}
+
+/// stdout of a git command that succeeded, else its stderr as the error.
+async fn git_ok(repo_path: &Path, args: &[&str]) -> Result<String, String> {
+    let output = run_git(repo_path, args)
+        .await
+        .ok_or_else(|| "git did not answer".to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// `git status --porcelain -z`: `XY path`, a rename's or copy's source in
+/// the field after it. An untracked directory stays one row.
+fn parse_porcelain_z(out: &str) -> Vec<ChangedFile> {
+    let mut fields = out.split('\0');
+    let mut files = Vec::new();
+    while let Some(entry) = fields.next() {
+        let (Some(status), Some(path)) = (entry.get(..2), entry.get(3..)) else {
+            continue;
+        };
+        let from = match status.contains(['R', 'C']) {
+            true => fields.next().map(str::to_string),
+            false => None,
+        };
+        files.push(ChangedFile {
+            status: status.to_string(),
+            path: path.to_string(),
+            from,
+            churn: None,
+        });
+    }
+    files
+}
+
+/// `git diff --name-status -z`: a status field, then the path, or a
+/// rename's or copy's source and destination.
+fn parse_name_status_z(out: &str) -> Vec<ChangedFile> {
+    let mut fields = out.split('\0');
+    let mut files = Vec::new();
+    while let Some(status) = fields.next() {
+        let Some(letter) = status.chars().next() else {
+            continue;
+        };
+        let Some(first) = fields.next() else { break };
+        let (from, path) = match letter {
+            'R' | 'C' => match fields.next() {
+                Some(dest) => (Some(first.to_string()), dest.to_string()),
+                None => break,
+            },
+            _ => (None, first.to_string()),
+        };
+        files.push(ChangedFile {
+            status: letter.to_string(),
+            path,
+            from,
+            churn: None,
+        });
+    }
+    files
+}
+
+/// `git diff --numstat -z`, keyed by path (a rename's destination):
+/// `added\tremoved\tpath`, or an empty path followed by the source and the
+/// destination. A binary file's `-` counts are `None`.
+fn parse_numstat_z(out: &str) -> std::collections::HashMap<String, Option<(u32, u32)>> {
+    let mut fields = out.split('\0');
+    let mut churn = std::collections::HashMap::new();
+    while let Some(record) = fields.next() {
+        let mut parts = record.splitn(3, '\t');
+        let (Some(added), Some(removed), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let path = match path.is_empty() {
+            true => {
+                let _source = fields.next();
+                match fields.next() {
+                    Some(dest) => dest,
+                    None => break,
+                }
+            }
+            false => path,
+        };
+        let counts = added.parse().ok().zip(removed.parse().ok());
+        churn.insert(path.to_string(), counts);
+    }
+    churn
+}
+
 /// Get list of branches that have been merged into the given base branch.
 pub async fn merged_branches(repo_path: &Path, base_branch: &str) -> Vec<String> {
     let output = run_git(
@@ -2252,6 +2598,60 @@ pub fn is_protected_branch(name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::model::RefKind;
+
+    /// FZ-60: porcelain's `-z` form names a rename's destination first and
+    /// its source in the next field, keeps both status columns, and leaves
+    /// a path with spaces and non-ASCII as it is named.
+    #[test]
+    fn porcelain_z_parses_status_columns_renames_and_raw_paths() {
+        let out = "R  new näme.txt\0old name.txt\0 M a b.txt\0A  s.txt\0?? scratch/\0";
+        let parsed = parse_porcelain_z(out);
+        let row = |status: &str, path: &str, from: Option<&str>| ChangedFile {
+            status: status.to_string(),
+            path: path.to_string(),
+            from: from.map(str::to_string),
+            churn: None,
+        };
+        assert_eq!(
+            parsed,
+            vec![
+                row("R ", "new näme.txt", Some("old name.txt")),
+                row(" M", "a b.txt", None),
+                row("A ", "s.txt", None),
+                row("??", "scratch/", None),
+            ]
+        );
+    }
+
+    /// `--name-status -z`: one letter per file, a rename's score dropped and
+    /// its two paths read as source then destination.
+    #[test]
+    fn name_status_z_reads_renames_as_source_then_destination() {
+        let parsed = parse_name_status_z("M\0a.txt\0R100\0old.txt\0new.txt\0D\0gone.txt\0");
+        let paths: Vec<_> = parsed
+            .iter()
+            .map(|f| (f.status.as_str(), f.path.as_str(), f.from.as_deref()))
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                ("M", "a.txt", None),
+                ("R", "new.txt", Some("old.txt")),
+                ("D", "gone.txt", None),
+            ]
+        );
+    }
+
+    /// `--numstat -z`: a rename keyed by its destination, a binary file
+    /// with no churn.
+    #[test]
+    fn numstat_z_keys_renames_by_destination_and_binaries_by_none() {
+        let churn = parse_numstat_z("3\t1\ta.txt\x000\t0\t\0old.txt\0new.txt\0-\t-\tlogo.png\0");
+        assert_eq!(churn.get("a.txt"), Some(&Some((3, 1))));
+        assert_eq!(churn.get("new.txt"), Some(&Some((0, 0))));
+        assert_eq!(churn.get("old.txt"), None);
+        assert_eq!(churn.get("logo.png"), Some(&None));
+    }
 
     /// A local branch for the `unfetched_branches` tests. Only the name and
     /// the upstream take part in that decision.
@@ -4798,6 +5198,182 @@ mod real_repo_tests {
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&bare).ok();
     }
+
+    fn changed(status: &str, path: &str, churn: Option<(u32, u32)>) -> ChangedFile {
+        ChangedFile {
+            status: status.to_string(),
+            path: path.to_string(),
+            from: None,
+            churn,
+        }
+    }
+
+    fn commit_user(dir: &Path) {
+        sh(dir, &["git", "config", "user.email", "t@example.com"]);
+        sh(dir, &["git", "config", "user.name", "t"]);
+    }
+
+    /// A clone two commits past its upstream, carrying every kind of
+    /// uncommitted change: a staged addition, an unstaged modification, an
+    /// untracked file, an untracked directory with files beneath it, and a
+    /// staged rename to a name with a space and non-ASCII. Returns the
+    /// upstream and the clone.
+    fn changes_fixture(tag: &str) -> (PathBuf, PathBuf) {
+        let (upstream, dir) = fetched_clone(tag);
+        commit_user(&dir);
+        std::fs::write(dir.join("old name.txt"), "x\n").unwrap();
+        std::fs::write(dir.join("ü.txt"), "1\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh(&dir, &["git", "commit", "-q", "-m", "c1"]);
+        std::fs::write(dir.join("ü.txt"), "1\n2\n").unwrap();
+        sh(&dir, &["git", "commit", "-qam", "c2"]);
+        sh(&dir, &["git", "mv", "old name.txt", "new näme.txt"]);
+        std::fs::write(dir.join("staged.txt"), "s\n").unwrap();
+        sh(&dir, &["git", "add", "staged.txt"]);
+        std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+        std::fs::write(dir.join("loose.txt"), "loose body\n").unwrap();
+        std::fs::create_dir_all(dir.join("scratch")).unwrap();
+        std::fs::write(dir.join("scratch/x.txt"), "x\n").unwrap();
+        std::fs::write(dir.join("scratch/y.txt"), "y\n").unwrap();
+        (upstream, dir)
+    }
+
+    /// FZ-60: the two sections hold exactly the fixture's rows, with
+    /// porcelain's two status columns, the churn, the directory as one row,
+    /// the rename by its destination, and the paths as named.
+    #[tokio::test]
+    async fn changes_lists_every_uncommitted_kind_and_the_unpushed_files() {
+        let (upstream, dir) = changes_fixture("changes");
+        let read = changes(&dir, ChangesBase::Upstream).await.expect("reads");
+        let mut uncommitted = read.uncommitted.clone();
+        uncommitted.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut rename = changed("R ", "new näme.txt", Some((0, 0)));
+        rename.from = Some("old name.txt".to_string());
+        assert_eq!(
+            uncommitted,
+            vec![
+                changed(" M", "a.txt", Some((1, 1))),
+                changed("??", "loose.txt", None),
+                rename,
+                changed("??", "scratch/", None),
+                changed("A ", "staged.txt", Some((1, 0))),
+            ]
+        );
+        assert_eq!(
+            read.outgoing,
+            Outgoing::Unpushed {
+                upstream: "origin/main".to_string(),
+                ahead: 2,
+                files: vec![
+                    changed("A", "old name.txt", Some((1, 0))),
+                    changed("A", "ü.txt", Some((2, 0))),
+                ],
+            }
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// The inspector's reads: the uncommitted diff against HEAD (a rename
+    /// with both names, unquoted), an untracked file's body, an untracked
+    /// directory's one line, the other section's diff since the merge base,
+    /// and a failing read's error.
+    #[tokio::test]
+    async fn changed_file_diff_reads_each_kind_by_its_own_path() {
+        let (upstream, dir) = changes_fixture("changesdiff");
+        let read = changes(&dir, ChangesBase::Upstream).await.expect("reads");
+        let find = |files: &[ChangedFile], path: &str| {
+            files.iter().find(|f| f.path == path).cloned().expect(path)
+        };
+        let modified = changed_file_diff(&dir, None, &find(&read.uncommitted, "a.txt"))
+            .await
+            .expect("a.txt");
+        assert!(modified.contains("-one\n+two"), "{modified}");
+        let renamed = changed_file_diff(&dir, None, &find(&read.uncommitted, "new näme.txt"))
+            .await
+            .expect("rename");
+        assert!(renamed.contains("rename to new näme.txt"), "{renamed}");
+        let loose = changed_file_diff(&dir, None, &find(&read.uncommitted, "loose.txt")).await;
+        assert_eq!(loose, Ok("loose body\n".to_string()));
+        let scratch = changed_file_diff(&dir, None, &find(&read.uncommitted, "scratch/"))
+            .await
+            .expect("directory");
+        assert!(scratch.contains("untracked directory"), "{scratch}");
+        let pushed = find(read.outgoing.files(), "ü.txt");
+        let ahead = changed_file_diff(&dir, Some("origin/main"), &pushed)
+            .await
+            .expect("ü.txt");
+        assert!(ahead.contains("+1\n+2"), "{ahead}");
+        assert!(
+            changed_file_diff(&dir, Some("no-such-ref"), &pushed)
+                .await
+                .is_err(),
+            "a failing read is an error to show"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
+
+    /// A branch with no upstream and a detached HEAD both say "no upstream"
+    /// and list nothing as unpushed; the toggle on the same repo lists the
+    /// branch's files against the default branch.
+    #[tokio::test]
+    async fn no_upstream_and_detached_head_say_so_and_the_toggle_compares_with_default() {
+        let dir = temp_repo("changesnoup");
+        sh(&dir, &["git", "checkout", "-q", "-b", "feat"]);
+        std::fs::write(dir.join("f.txt"), "f\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh(&dir, &["git", "commit", "-q", "-m", "f"]);
+        let vs_main = Outgoing::VsDefault {
+            base: "main".to_string(),
+            files: vec![changed("A", "f.txt", Some((1, 0)))],
+        };
+
+        let read = changes(&dir, ChangesBase::Upstream).await.expect("reads");
+        assert_eq!(
+            read.outgoing,
+            Outgoing::NoUpstream {
+                branch: Some("feat".to_string())
+            }
+        );
+        assert!(read.uncommitted.is_empty());
+        let toggled = changes(&dir, ChangesBase::DefaultBranch).await.unwrap();
+        assert_eq!(toggled.outgoing, vs_main);
+
+        sh(&dir, &["git", "checkout", "-q", "--detach"]);
+        let read = changes(&dir, ChangesBase::Upstream).await.unwrap();
+        assert_eq!(read.outgoing, Outgoing::NoUpstream { branch: None });
+        let toggled = changes(&dir, ChangesBase::DefaultBranch).await.unwrap();
+        assert_eq!(toggled.outgoing, vs_main);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A branch both behind and ahead of its upstream lists only its own
+    /// commits' files as unpushed: the range starts at the merge base, so
+    /// the upstream's new file is not drawn as one this branch deleted.
+    #[tokio::test]
+    async fn a_branch_behind_and_ahead_lists_only_its_own_files() {
+        let (upstream, dir) = fetched_clone("changesbehind");
+        std::fs::write(upstream.join("up.txt"), "up\n").unwrap();
+        sh(&upstream, &["git", "add", "."]);
+        sh(&upstream, &["git", "commit", "-q", "-m", "up"]);
+        commit_user(&dir);
+        std::fs::write(dir.join("mine.txt"), "mine\n").unwrap();
+        sh(&dir, &["git", "add", "."]);
+        sh(&dir, &["git", "commit", "-q", "-m", "mine"]);
+        sh(&dir, &["git", "fetch", "-q"]);
+        let read = changes(&dir, ChangesBase::Upstream).await.expect("reads");
+        assert_eq!(
+            read.outgoing,
+            Outgoing::Unpushed {
+                upstream: "origin/main".to_string(),
+                ahead: 1,
+                files: vec![changed("A", "mine.txt", Some((1, 0)))],
+            }
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&upstream).ok();
+    }
 }
 
 #[cfg(test)]
@@ -4854,7 +5430,7 @@ mod fetch_outcome_tests {
             ),
             (
                 "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
-                Auth,
+                Ssh,
             ),
             (
                 "Host key verification failed.\nfatal: Could not read from remote repository.",
@@ -4902,10 +5478,10 @@ mod fetch_outcome_tests {
                 "fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n",
                 Other,
             ),
-            // A refused key stays Auth even if a connect line came first.
+            // A refused key is Ssh even if a connect line came first.
             (
                 "ssh: connect to host h port 22: Undefined error: 0\ngit@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
-                Auth,
+                Ssh,
             ),
             // git 2.39.3 on an HTTP 404 (a removed or renamed remote).
             (
@@ -4917,6 +5493,56 @@ mod fetch_outcome_tests {
                 Other,
             ),
             ("", Other),
+        ] {
+            assert_eq!(kind_of(stderr), want, "{stderr:?}");
+        }
+    }
+
+    /// FZ-72 (#128): ssh refusing the key is `Ssh`, whatever methods it
+    /// lists and whatever it printed first; an https credential refusal stays
+    /// `Auth`. Wording as OpenSSH, git and curl print it under `LC_ALL=C`.
+    #[test]
+    fn an_ssh_key_refusal_is_ssh_and_an_https_refusal_is_auth() {
+        use FetchFailureKind::*;
+        for (stderr, want) in [
+            (
+                "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+                Ssh,
+            ),
+            (
+                "git@host: Permission denied (publickey,password).\nfatal: Could not read from remote repository.",
+                Ssh,
+            ),
+            (
+                "sign_and_send_pubkey: signing failed for ED25519 \"/k\" from agent: agent refused operation\ngit@github.com: Permission denied (publickey).",
+                Ssh,
+            ),
+            ("no such identity: /k: No such file or directory", Ssh),
+            (
+                "ssh: connect to host h port 22: Undefined error: 0\ngit@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+                Ssh,
+            ),
+            (
+                "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+                Auth,
+            ),
+            (
+                "fatal: Authentication failed for 'https://github.com/o/r.git/'",
+                Auth,
+            ),
+            (
+                "fatal: unable to access 'https://h/o/r.git/': The requested URL returned error: 401",
+                Auth,
+            ),
+            (
+                "fatal: unable to access 'https://h/o/r.git/': The requested URL returned error: 403",
+                Auth,
+            ),
+            // A local file git cannot open is no ssh refusal.
+            (
+                "error: cannot open .git/FETCH_HEAD: Permission denied",
+                Other,
+            ),
         ] {
             assert_eq!(kind_of(stderr), want, "{stderr:?}");
         }

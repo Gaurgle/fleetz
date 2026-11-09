@@ -197,6 +197,9 @@ fn body_text(line: &DigestLine) -> String {
 /// the badges in their places: CI lamp, PRs, stash, worktrees, sync status
 /// flush right), then the digest's own slots in a fixed order, dimmed as
 /// pane 1 dims secondary text: the count, the authors, the newest subject.
+/// Drawn with the fleet poll's lamp; `render_pane` draws `line_spans_ci`
+/// (FZ-83), so this one is kept for the tests.
+#[cfg(test)]
 pub fn line_spans(
     line: &DigestLine,
     repo: &crate::model::RepoStatus,
@@ -206,8 +209,38 @@ pub fn line_spans(
     dim_pending: bool,
     not_in_last_poll: bool,
 ) -> Vec<Span<'static>> {
-    let mut spans = crate::ui::detail::repo_row_spans(
+    let ci = crate::ui::badges::RowCi {
+        status: &repo.ci_status,
+        side_run: false,
+    };
+    line_spans_ci(
+        line,
         repo,
+        ci,
+        selected,
+        columns,
+        width,
+        dim_pending,
+        not_in_last_poll,
+    )
+}
+
+/// `line_spans` with the row's CI part as `ci` says (FZ-83): `render_pane`
+/// passes `App::ci_shown` and `App::ci_side_run`, as pane 1's list does.
+#[allow(clippy::too_many_arguments)]
+pub fn line_spans_ci(
+    line: &DigestLine,
+    repo: &crate::model::RepoStatus,
+    ci: crate::ui::badges::RowCi,
+    selected: bool,
+    columns: Columns,
+    width: usize,
+    dim_pending: bool,
+    not_in_last_poll: bool,
+) -> Vec<Span<'static>> {
+    let mut spans = crate::ui::detail::repo_row_spans_ci(
+        repo,
+        ci,
         selected,
         columns.row,
         dim_pending,
@@ -319,15 +352,28 @@ pub fn render_pane(
     let (first, shown, hidden) = visible_lines(digest.lines.len(), selected, body_rows);
     for (i, line) in digest.lines.iter().enumerate().skip(first).take(shown) {
         let repo = &app.repos[line.repo];
-        lines.push(Line::from(line_spans(
+        let shown = app.ci_shown(repo);
+        let ci = crate::ui::badges::RowCi {
+            status: &shown.status,
+            side_run: app.ci_side_run(repo),
+        };
+        let mut spans = line_spans_ci(
             line,
             repo,
+            ci,
             i == selected,
             columns,
             width,
             dim_pending,
             app.is_not_in_last_poll(repo),
-        )));
+        );
+        // The cursor's band runs to the pane's edge, past the slots (FZ-66).
+        if i == selected {
+            let pad = width.saturating_sub(width_of(&spans));
+            spans.push(Span::raw(" ".repeat(pad)));
+            spans = crate::ui::detail::wash(spans);
+        }
+        lines.push(Line::from(spans));
     }
     if hidden > 0 {
         lines.push(crate::ui::detail::more_line(hidden));
@@ -494,8 +540,10 @@ pub fn facts(app: &App, line: &DigestLine) -> Facts {
         }
         (label("pull requests"), entries)
     });
-    let ci = (line.ci != CiStatus::Unknown).then(|| {
-        let (glyph, color, word) = badges::ci_display(&line.ci, false);
+    // The card's verdict is the row's lamp, `App::ci_shown` (FZ-83).
+    let shown = app.ci_shown(repo).status;
+    let ci = (shown != CiStatus::Unknown).then(|| {
+        let (glyph, color, word) = badges::ci_display(&shown, false);
         let mut spans = vec![Span::styled(
             format!("{glyph} CI {word}"),
             Style::default().fg(color),
@@ -1057,6 +1105,171 @@ mod tests {
             let all = screen.join("\n");
             assert!(!all.contains("h000 "), "{all}");
             assert!(all.contains("h005 "), "{all}");
+        }
+    }
+
+    /// FZ-83 case 2: the fleet poll still says pending, the default branch's
+    /// check runs read after it say green. The digest line's pane 1 row draws
+    /// the lamp `App::ci_shown` gives, as pane 1's list does. Fails while
+    /// `render_pane` reads `ci_status`.
+    #[test]
+    fn a_digest_line_shows_the_fresher_verdict() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut alpha = counted("alpha", vec![commit("a1", "Ann Bee", "first")]);
+        alpha.repo = 0;
+        alpha.ci = CiStatus::Pending;
+        let mut repo = repo_for(&alpha);
+        repo.owner = Some("Gaurgle".to_string());
+        let mut app = App::new(vec![repo], String::new(), 120, 40);
+        let now = chrono::Local::now();
+        app.github_freshness.data_time =
+            crate::app::DataTime::At(now - chrono::Duration::minutes(1));
+        let key = crate::ci::target(&app.repos[0])
+            .expect("a GitHub identity")
+            .0;
+        app.ci.insert(
+            key,
+            crate::app::CiState {
+                tip: Some(crate::app::CiTip {
+                    sha: "cc524b4".to_string(),
+                    statuses_complete: true,
+                    checks: Some(crate::ci::TipChecks {
+                        runs: vec![crate::ci::Context {
+                            name: "build".to_string(),
+                            state: CiStatus::Passed,
+                            description: None,
+                            url: None,
+                            actions: true,
+                            source: "actions".to_string(),
+                            started: None,
+                            completed: None,
+                        }],
+                        complete: true,
+                    }),
+                    confirmed: Some(now),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let d = digest(Section::GithubActivity, vec![alpha]);
+
+        let (w, h) = (100u16, 10u16);
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|f| {
+                let panel = Block::default().borders(Borders::ALL);
+                render_pane(f, Rect::new(0, 0, w, h), panel, &app, &d, true)
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let lamp = (0..h)
+            .find_map(|y| {
+                let row: String = (0..w).map(|x| buf[(x, y)].symbol()).collect();
+                row.contains(" alpha ").then_some(())?;
+                (0..w)
+                    .find(|&x| buf[(x, y)].symbol() == "◉")
+                    .map(|x| buf[(x, y)].fg)
+            })
+            .expect("the line's lamp drawn");
+        assert_eq!(lamp, colors::GREEN);
+    }
+
+    /// FZ-83 review: the same scenario as the row above, the fleet poll says
+    /// pending and the tip's check runs read after it say green. The
+    /// inspector card's `CI` line agrees with the row's lamp. Fails while
+    /// `facts` reads `line.ci`.
+    #[test]
+    fn a_digest_card_shows_the_fresher_verdict() {
+        let mut alpha = counted("alpha", vec![commit("a1", "Ann Bee", "first")]);
+        alpha.repo = 0;
+        alpha.ci = CiStatus::Pending;
+        let mut repo = repo_for(&alpha);
+        repo.owner = Some("Gaurgle".to_string());
+        let mut app = App::new(vec![repo], String::new(), 120, 40);
+        let now = chrono::Local::now();
+        app.github_freshness.data_time =
+            crate::app::DataTime::At(now - chrono::Duration::minutes(1));
+        let key = crate::ci::target(&app.repos[0])
+            .expect("a GitHub identity")
+            .0;
+        app.ci.insert(
+            key,
+            crate::app::CiState {
+                tip: Some(crate::app::CiTip {
+                    sha: "cc524b4".to_string(),
+                    statuses_complete: true,
+                    checks: Some(crate::ci::TipChecks {
+                        runs: vec![crate::ci::Context {
+                            name: "build".to_string(),
+                            state: CiStatus::Passed,
+                            description: None,
+                            url: None,
+                            actions: true,
+                            source: "actions".to_string(),
+                            started: None,
+                            completed: None,
+                        }],
+                        complete: true,
+                    }),
+                    confirmed: Some(now),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+
+        let card = facts(&app, &alpha).ci.expect("a CI line");
+        let text: String = card.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("CI passed"), "{text}");
+    }
+
+    /// FZ-66: the cursor's digest line wears pane 1's band across the whole
+    /// pane, slots and the blank past them included; the line below has none.
+    #[test]
+    fn the_cursor_line_wears_the_band_to_the_pane_edge() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Color as TermColor;
+
+        let mut alpha = counted("alpha", vec![commit("a1", "Ann Bee", "first")]);
+        alpha.repo = 0;
+        let mut beta = counted("beta", vec![commit("b1", "Cid Dee", "second")]);
+        beta.repo = 1;
+        let repos = vec![repo_for(&alpha), repo_for(&beta)];
+        let mut app = App::new(repos, String::new(), 120, 40);
+        app.digest_selected = 0;
+        let d = digest(Section::GithubActivity, vec![alpha, beta]);
+
+        let (w, h) = (100u16, 10u16);
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|f| {
+                let panel = Block::default().borders(Borders::ALL);
+                render_pane(f, Rect::new(0, 0, w, h), panel, &app, &d, true)
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let row_of = |needle: &str| {
+            (0..h)
+                .find(|&y| {
+                    let row: String = (0..w).map(|x| buf[(x, y)].symbol()).collect();
+                    row.contains(needle)
+                })
+                .unwrap_or_else(|| panic!("{needle:?} not drawn"))
+        };
+        let (on, off) = (row_of(" alpha "), row_of(" beta "));
+        assert_eq!(off, on + 1, "beta is the line below the cursor's");
+        let slot: String = (0..w).map(|x| buf[(x, on)].symbol()).collect();
+        assert!(
+            slot.contains("1 commit") && slot.contains("first"),
+            "{slot}"
+        );
+        for x in 1..w - 1 {
+            assert_eq!(buf[(x, on)].bg, colors::SELECTED_BG, "band at x {x}");
+            assert_eq!(buf[(x, off)].bg, TermColor::Reset, "no band at x {x}");
         }
     }
 
