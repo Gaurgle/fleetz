@@ -42,9 +42,8 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
   `docs/architecture.md` conflicts resolved by the lead.
 - `docs/app-split-design.md` (`a0b95ab`) is proposed for his reading
   (artifact sent 21:30): E3 and E2b start on his "accept D1 to D7".
-- Open from the 11-09 reviews (log): FZ-83 and FZ-95 follow-ups.
-  FZ-100 (#157), FZ-102 (#159), the build label and FZ-97 (#154) wait
-  on his word after the refactor.
+- FZ-100 (#157), FZ-102 (#159), the build label and FZ-97 (#154) wait
+  on his word; FZ-83 and FZ-95 follow-ups in the log.
 
 ## Open questions
 
@@ -55,8 +54,6 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 ## Next step
 
-21:25, "Go on as you see fit" (2 to 3 more hours; he reads the design
-later from an artifact): the pure moves run tonight, A1b (overlays and
-query to `app/`), the `model.rs` seam and the `cache`/`github` hash
-cycle, each on an architect check (dispatched 21:28); E3 and E2b wait
-for his acceptance of D1 to D7. Stop conditions as before.
+21:25, "Go on as you see fit" (2 to 3 more hours): the three pure moves
+above run to merge; E3 and E2b wait for his acceptance of D1 to D7.
+Stop conditions as before; report here at the end.
