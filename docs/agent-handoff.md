@@ -31,11 +31,11 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
   `super::` gap on #160), FZ-104 `e831dd1` (tests in sibling files).
 - FZ-105 (#162, E1) Done, merged `8f3a57d` 20:45, logged; `main` CI
   42664646798 watched, worktree sweeps when green.
-- FZ-106 (#163, E2a) In progress since 20:55: the pure fetch types
-  (`FetchBackoff`, `FetchReport`, `FetchTally`, `SweepTarget`,
-  `FetchAsk`, `size_held_rows`) into the engine; architect verdict and
-  ruling on the issue. Worktree `.claude/worktrees/fz-106`, branch
-  `refactor/fz-106-engine-fetch-types`, base `8f3a57d`, worker standard.
+- FZ-106 (#163, E2a) Review since 21:40: diff `e81875de2fcb`; five
+  items moved, `FetchBackoff` stays in `app.rs` (it calls the GitHub
+  backoff ladder, E3's; ruling on the issue). Worktree
+  `.claude/worktrees/fz-106`, branch `refactor/fz-106-engine-fetch-types`,
+  base `8f3a57d`; worker done (91k tokens), reviewer running (standard).
   E2b (planning functions under a fetch owner type) waits with E3 and
   A1 for the consults, filed on his yes (O6).
   Then FZ-105 to FZ-107 (E1, E2, D1), then FZ-108 (#165, U1) and F1
