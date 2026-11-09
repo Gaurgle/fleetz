@@ -618,7 +618,8 @@ pub struct FrameChunks {
     pub header: Rect,
     /// Only in the compact view (`uses_status_line`); the detail view puts
     /// the summary and the activity in pane 1's summary box and the window
-    /// in pane 2's header (`detail::summary_box_lines`, `detail::window_box`).
+    /// on pane 1's top border (`detail::summary_box_lines`,
+    /// `detail::list_title_window`).
     pub status: Option<Rect>,
     pub main: Rect,
     pub footer: Rect,

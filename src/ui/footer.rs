@@ -128,48 +128,10 @@ pub(crate) fn summary_spans(summary: &Summary) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let dot = || Span::styled(" · ", Style::default().fg(colors::SURFACE));
 
-    if summary.behind_count > 0 {
+    for counter in summary_counters(summary) {
         spans.push(Span::styled(
-            format!("{}↓", summary.behind_count),
-            Style::default().fg(colors::PEACH),
-        ));
-        spans.push(dot());
-    }
-    if summary.ahead_count > 0 {
-        spans.push(Span::styled(
-            format!("{}↑", summary.ahead_count),
-            Style::default().fg(colors::PEACH),
-        ));
-        spans.push(dot());
-    }
-    if summary.dirty_count > 0 {
-        spans.push(Span::styled(
-            format!("{}!", summary.dirty_count),
-            Style::default().fg(colors::YELLOW),
-        ));
-        spans.push(dot());
-    }
-    if summary.synced_count > 0 {
-        spans.push(Span::styled(
-            format!("{} synced", summary.synced_count),
-            Style::default().fg(colors::GREEN),
-        ));
-        spans.push(dot());
-    }
-    if summary.not_cloned_count > 0 {
-        spans.push(Span::styled(
-            format!("{} {NOT_CLONED}", summary.not_cloned_count),
-            Style::default().fg(colors::OVERLAY),
-        ));
-        spans.push(dot());
-    }
-    // Not gated on the `-p` flag: the count rides every poll for free, and a
-    // footer that stays silent about three open PRs because the detail list
-    // was not asked for is the failure this whole summary exists to prevent.
-    if summary.pr_count > 0 {
-        spans.push(Span::styled(
-            format!("{} PRs", summary.pr_count),
-            Style::default().fg(colors::PR_CLR),
+            counter.words,
+            Style::default().fg(counter.color),
         ));
         spans.push(dot());
     }
@@ -184,6 +146,41 @@ pub(crate) fn summary_spans(summary: &Summary) -> Vec<Span<'static>> {
     }
 
     spans
+}
+
+/// One of the fleet's counters as both summary forms draw it: in words
+/// (`17 synced`, `summary_spans`), as a glyph (`17✓`,
+/// `detail::glyph_counters`), and the colour both share.
+pub(crate) struct SummaryCounter {
+    pub words: String,
+    pub glyphs: String,
+    pub color: ratatui::style::Color,
+}
+
+/// The fleet's non-zero counters in the order every summary draws them:
+/// the one colour table for the words and the glyph forms (FZ-95).
+pub(crate) fn summary_counters(summary: &Summary) -> Vec<SummaryCounter> {
+    // The PR count is not gated on the `-p` flag: it rides every poll for
+    // free, and a footer that stays silent about three open PRs because the
+    // detail list was not asked for is the failure this whole summary
+    // exists to prevent.
+    let not_cloned = format!(" {NOT_CLONED}");
+    [
+        (summary.behind_count, "↓", "↓", colors::PEACH),
+        (summary.ahead_count, "↑", "↑", colors::PEACH),
+        (summary.dirty_count, "!", "!", colors::YELLOW),
+        (summary.synced_count, " synced", "✓", colors::GREEN),
+        (summary.not_cloned_count, &not_cloned, "-", colors::OVERLAY),
+        (summary.pr_count, " PRs", " PRs", colors::PR_CLR),
+    ]
+    .into_iter()
+    .filter(|(count, ..)| *count > 0)
+    .map(|(count, word, glyph, color)| SummaryCounter {
+        words: format!("{count}{word}"),
+        glyphs: format!("{count}{glyph}"),
+        color,
+    })
+    .collect()
 }
 
 /// Keybind hints. `with_desc` shows the trailing word ("lazygit", "pull", ...);
@@ -277,15 +274,6 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
         hints.push(Span::styled("[yy/yp]", key_style));
         if with_desc {
             hints.push(Span::styled(" yank", desc_style));
-        }
-        hints.push(gap.clone());
-    }
-    // FZ-95 temporary: placement toggle. Lit only while the window sits on
-    // pane 1's border, so the default footer is the one every test pins.
-    if app.view == View::Detail && app.window_in_list {
-        hints.push(Span::styled("[W]", lit(true)));
-        if with_desc {
-            hints.push(Span::styled(" window: pane 1", desc_style));
         }
         hints.push(gap.clone());
     }

@@ -2200,12 +2200,6 @@ pub struct App {
     /// else did (a pane 1 too short for the box), so an action never ends
     /// in silence.
     pub fleet_drawn: std::cell::Cell<bool>,
-    // FZ-95 temporary: placement toggle
-    /// Where the time window is drawn while Andreas compares the two
-    /// placements: `false` in the box at the right of pane 2's header,
-    /// `true` on pane 1's top border, pane 2's header then two sections.
-    /// Flipped by `W`; removed with the losing placement after his look.
-    pub window_in_list: bool,
     /// Set when the cursor moves, cleared once the renderer has scrolled to
     /// show it.
     ///
@@ -3262,8 +3256,6 @@ impl App {
             inspector_scroll: 0,
             detail_max_scroll: std::cell::Cell::new(0),
             fleet_drawn: std::cell::Cell::new(false),
-            // FZ-95 temporary: placement toggle
-            window_in_list: false,
             follow_selection: std::cell::Cell::new(false),
             detail_row_tops: std::cell::RefCell::new(Vec::new()),
             detail_hits: std::cell::RefCell::new(Default::default()),

@@ -259,14 +259,11 @@ fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         colors::SURFACE
     };
     let mut title = crate::ui::panel_title(1, "repos", focused);
-    // FZ-95 temporary: placement toggle. Placement 2 puts the window on
-    // this border, between the title and the count.
-    if app.window_in_list {
-        let count_w = format!(" {total} ").chars().count();
-        let budget =
-            (area.width as usize).saturating_sub(2 + span_width(&title.spans) + count_w + 2);
-        title.spans.extend(list_title_window(app, budget));
-    }
+    // The time window on this border, between the title and the count
+    // (FZ-95, Andreas 2026-11-09).
+    let count_w = format!(" {total} ").chars().count();
+    let budget = (area.width as usize).saturating_sub(2 + span_width(&title.spans) + count_w + 2);
+    title.spans.extend(list_title_window(app, budget));
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -342,10 +339,10 @@ fn split_summary_box(inner: Rect, lines: usize) -> (Rect, Option<Rect>) {
     (v[0], Some(v[1]))
 }
 
-// FZ-95 temporary: placement toggle
-/// Placement 2's window on pane 1's top border, `· ◷ since 1 week [t] `,
+/// The time window on pane 1's top border (FZ-95), `· ◷ since 1 week [t] `,
 /// in the short form (`· ◷ 1w [t] `) where `budget` columns cannot hold
-/// it, and nothing where they cannot hold that either.
+/// it, and nothing where they cannot hold that either. Before a load names
+/// the window, `· ◷ [t] `. Pane 2's sections never read this width.
 fn list_title_window(app: &App, budget: usize) -> Vec<Span<'static>> {
     let key = Style::default()
         .fg(colors::TEXT)
@@ -358,7 +355,13 @@ fn list_title_window(app: &App, budget: usize) -> Vec<Span<'static>> {
         .map(|text| {
             vec![
                 Span::styled("· ", Style::default().fg(colors::SURFACE)),
-                Span::styled(format!("{WINDOW_MARK} {text}"), label),
+                Span::styled(
+                    match text.is_empty() {
+                        true => WINDOW_MARK.to_string(),
+                        false => format!("{WINDOW_MARK} {text}"),
+                    },
+                    label,
+                ),
                 Span::raw(" "),
                 Span::styled("[t]", key),
                 Span::raw(" "),
@@ -459,26 +462,13 @@ fn wrap_groups(
 
 /// The summary's narrow form (Andreas, 2026-11-06): every counter a count
 /// and a glyph, the count first as the list's counters write it (`3↓ 1!`),
-/// synced a green `✓`, not cloned a grey `-`, the PRs kept in words. In
-/// the colours the words form draws them in (`footer::summary_spans`).
+/// synced a green `✓`, not cloned a grey `-`, the PRs kept in words. From
+/// the one table the words form reads (`footer::summary_counters`).
 fn glyph_counters(s: &crate::model::Summary) -> Vec<Vec<Span<'static>>> {
-    [
-        (s.behind_count, "↓", colors::PEACH),
-        (s.ahead_count, "↑", colors::PEACH),
-        (s.dirty_count, "!", colors::YELLOW),
-        (s.synced_count, "✓", colors::GREEN),
-        (s.not_cloned_count, "-", colors::OVERLAY),
-        (s.pr_count, " PRs", colors::PR_CLR),
-    ]
-    .into_iter()
-    .filter(|(count, _, _)| *count > 0)
-    .map(|(count, glyph, color)| {
-        vec![Span::styled(
-            format!("{count}{glyph}"),
-            Style::default().fg(color),
-        )]
-    })
-    .collect()
+    crate::ui::footer::summary_counters(s)
+        .into_iter()
+        .map(|c| vec![Span::styled(c.glyphs, Style::default().fg(c.color))])
+        .collect()
 }
 
 /// A section header the list cursor stands on (FZ-45): the marker repo rows
@@ -1533,9 +1523,10 @@ pub struct NotesPane {
     /// The divider's screen column, from under the top border to the bottom
     /// one.
     pub divider: u16,
-    /// Right of the divider on the header's rows above the rule: the time
-    /// window's box (FZ-95), `notes preview` on the last of them, level
-    /// with `NOTES`. `None` when the header is not pinned.
+    /// Right of the divider on the header's rows above the rule: blank but
+    /// for `notes preview` on the last of them, level with `NOTES`; the
+    /// window sits on pane 1's border (FZ-95). `None` when the header is
+    /// not pinned.
     pub facts: Option<Rect>,
     /// The tree column's last row: a divider carrying the highlighted
     /// file's facts (FZ-93). `None` when the tree has no row to spare.
@@ -1693,21 +1684,8 @@ fn render_notes_heads(frame: &mut Frame, pane: Rect, notes: &NotesPane, app: &Ap
     if facts.height == 0 {
         return;
     }
+    // Only `notes preview` here: the window sits on pane 1's border (FZ-95).
     let label_row = facts.bottom() - 1;
-    // The window's box (FZ-95), as the other views draw it at the right of
-    // their header: whole or not at all (review 1, N4), and not while the
-    // window sits on pane 1's border.
-    let lines: Vec<Line<'static>> = match fits_window_box(facts.height - 1, app) {
-        true => window_box(app, false).into_iter().map(Line::from).collect(),
-        false => Vec::new(),
-    };
-    frame.render_widget(
-        Paragraph::new(lines),
-        Rect {
-            height: facts.height - 1,
-            ..facts
-        },
-    );
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             READER_LABEL,
@@ -1721,14 +1699,6 @@ fn render_notes_heads(frame: &mut Frame, pane: Rect, notes: &NotesPane, app: &Ap
             ..facts
         },
     );
-}
-
-/// Whether the `notes` layout draws the window box in the `rows` above
-/// `notes preview`: all three of its rows fit, and the window is not on
-/// pane 1's border.
-fn fits_window_box(rows: u16, app: &App) -> bool {
-    // FZ-95 temporary: placement toggle
-    rows >= 3 && !app.window_in_list
 }
 
 /// The tree's foot in the `notes` layout (FZ-93): a static divider with
@@ -1767,13 +1737,10 @@ fn ci_header_text(sym: &str, label: &str, shown: &crate::app::CiShown) -> String
 /// Columns of the divider between two sections of pane 2's header.
 const SECTION_DIVIDER: &str = " │ ";
 
-/// The narrowest the local section of pane 2's header may be beside the
-/// window box before the header gives way to its plain two-sided rows.
+/// The narrowest the local section of pane 2's header may be before the
+/// header gives way to its plain two-sided rows. The remote section, the
+/// other half, is at most a column narrower.
 const MIN_LOCAL_SECTION: usize = 20;
-
-/// The narrowest the remote section may be before it is dropped, leaving
-/// local and the window box.
-const MIN_REMOTE_SECTION: usize = 16;
 
 /// `spans` cut to `width` columns with `…`, or as they are when they fit.
 fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
@@ -1803,22 +1770,16 @@ fn right_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     out
 }
 
-/// The time window's mark inside its box.
+/// The time window's mark on pane 1's border.
 const WINDOW_MARK: &str = "◷";
 
-/// The subtitle on the window box's top rule (Andreas, 2026-11-06: "put
-/// small subtitle on each of the three boxes").
-const WINDOW_SUBTITLE: &str = "window";
-
-/// The window's label as its box and placement 2's border draw it: the
-/// header's own words. Empty before a load names it: the box's subtitle
-/// already says what it is (review 1, N6), so it does not say `window`
-/// twice.
+/// The window's label as pane 1's border draws it: the header's own words,
+/// empty before a load names it.
 fn window_label(app: &App) -> String {
     app.header.clone()
 }
 
-/// The window's short form for a narrow pane (FZ-95): `since 4 weeks` as
+/// The window's short form for a narrow border (FZ-95): `since 4 weeks` as
 /// `4w`, `since 2 hours` as `2h`; a slot window by its slot (`Work`);
 /// anything else cut to `SHORT_WINDOW_MAX` columns with `…`. A coverage
 /// note after the label is dropped with the rest.
@@ -1852,134 +1813,31 @@ fn window_short_label(header: &str) -> String {
 /// The widest a short window label is drawn.
 const SHORT_WINDOW_MAX: usize = 8;
 
-/// The time window as a box of three rows (FZ-95): a rounded frame in the
-/// window's teal, `window` on its top rule, `◷ since 1 week` bold inside,
-/// `[t]` on its bottom border as the key to what it frames; `◷ 4w` inside
-/// in the `short` form a narrow pane draws. No ground fill: the frame is
-/// what makes it the heavier feature (his look, 2026-11-05: "capsulate it
-/// and decorate it some more ... dont overdo it").
-fn window_box(app: &App, short: bool) -> [Vec<Span<'static>>; 3] {
-    let label = match short {
-        true => window_short_label(&app.header),
-        false => window_label(app),
-    };
-    let text = match label.is_empty() {
-        true => format!(" {WINDOW_MARK} "),
-        false => format!(" {WINDOW_MARK} {label} "),
-    };
-    // Room for ` window ` on the top rule.
-    let subtitle_w = WINDOW_SUBTITLE.chars().count() + 2;
-    let inner = text.chars().count().max(subtitle_w);
-    let frame = Style::default().fg(colors::TEAL);
-    let key = Style::default()
-        .fg(colors::TEXT)
-        .add_modifier(Modifier::BOLD);
-    let left = (inner - 5) / 2;
-    let right = inner - 5 - left;
-    // `─ window ──` where there is a column to lead with, ` window ` alone
-    // where there is not.
-    let lead = usize::from(inner > subtitle_w);
-    let top = vec![
-        Span::styled(format!("╭{}", "─".repeat(lead)), frame),
-        Span::styled(
-            format!(" {WINDOW_SUBTITLE} "),
-            Style::default().fg(colors::OVERLAY),
-        ),
-        Span::styled(format!("{}╮", "─".repeat(inner - subtitle_w - lead)), frame),
-    ];
-    [
-        top,
-        vec![
-            Span::styled("│", frame),
-            Span::styled(
-                format!("{text:<inner$}"),
-                Style::default()
-                    .fg(colors::TEAL)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("│", frame),
-        ],
-        vec![
-            Span::styled(format!("╰{} ", "─".repeat(left)), frame),
-            Span::styled("[t]", key),
-            Span::styled(format!(" {}╯", "─".repeat(right)), frame),
-        ],
-    ]
-}
-
-/// The window box's width, borders included.
-fn window_box_width(app: &App, short: bool) -> usize {
-    span_width(&window_box(app, short)[0])
-}
-
 /// Pane 2's header sections at one width (FZ-95).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Sections {
     local: usize,
-    /// Zero where the remote section gives way.
     remote: usize,
-    /// The window box's width and whether it is in its short form; `None`
-    /// while the window sits on pane 1's border (placement 2).
-    window: Option<(usize, bool)>,
 }
 
 /// The widths of pane 2's header sections at `width`, from the pane's
-/// width and the window's label alone, never from what a repo puts in
-/// them, so the dividers stand in the same columns for every repo (FZ-95).
-/// The space left of the window box is split in two by the first divider.
-/// On a narrow pane local and remote keep their floors and the window box
-/// gives way first, to its short form (`◷ 4w`, Andreas 2026-11-06); then
-/// the remote section goes. `None` where even the local section and the
-/// short box do not fit side by side; the header then draws its plain
-/// two-sided rows.
-fn section_widths(app: &App, width: usize) -> Option<Sections> {
-    let divider = SECTION_DIVIDER.chars().count();
-    let halves = |before: usize| {
-        let both = before.saturating_sub(divider);
-        (both.div_ceil(2), both / 2)
-    };
-    let fits = |(local, remote): (usize, usize)| {
-        local >= MIN_LOCAL_SECTION && remote >= MIN_REMOTE_SECTION
-    };
-    // FZ-95 temporary: placement toggle. Placement 2: local and remote,
-    // split in the middle.
-    if app.window_in_list {
-        let (local, remote) = halves(width);
-        return fits((local, remote)).then_some(Sections {
-            local,
-            remote,
-            window: None,
-        });
-    }
-    for short in [false, true] {
-        let box_w = window_box_width(app, short);
-        let Some(before) = width.checked_sub(divider + box_w) else {
-            continue;
-        };
-        if fits(halves(before)) {
-            let (local, remote) = halves(before);
-            return Some(Sections {
-                local,
-                remote,
-                window: Some((box_w, short)),
-            });
-        }
-    }
-    let box_w = window_box_width(app, true);
-    let local = width.checked_sub(divider + box_w)?;
-    (local >= MIN_LOCAL_SECTION).then_some(Sections {
-        local,
-        remote: 0,
-        window: Some((box_w, true)),
-    })
+/// width alone, never from what a repo puts in them or from the window's
+/// label on pane 1's border, so the divider stands in the same column for
+/// every repo and every window (FZ-95). The divider splits the row in the
+/// middle. `None` where the local half would fall under its floor; the
+/// header then draws its plain two-sided rows.
+fn section_widths(width: usize) -> Option<Sections> {
+    let both = width.saturating_sub(SECTION_DIVIDER.chars().count());
+    let (local, remote) = (both.div_ceil(2), both / 2);
+    (local >= MIN_LOCAL_SECTION).then_some(Sections { local, remote })
 }
 
 /// The sections pane 2's header is drawn in for this frame, or `None` for
-/// its plain two-sided rows: the `notes` layout, whose window box sits
-/// right of its divider, and a pane too narrow for them.
+/// its plain two-sided rows: the `notes` layout, whose header sits left of
+/// its divider, and a pane too narrow for them.
 fn header_sections(app: &App, width: usize) -> Option<Sections> {
     (!app.notes_layout())
-        .then(|| section_widths(app, width))
+        .then(|| section_widths(width))
         .flatten()
 }
 
@@ -1988,30 +1846,17 @@ fn section_divider() -> Span<'static> {
 }
 
 /// Pane 2's header in fixed sections (FZ-95): the repo's local facts
-/// leaning left, its remote ones right-aligned against the second divider,
-/// and the time window's box. Every row draws every divider; the box takes
-/// the block's first three rows.
+/// leaning left, its remote ones right-aligned against the pane's edge.
+/// Every row draws the divider.
 fn sectioned_rows(
     rows: Vec<(Vec<Span<'static>>, Vec<Span<'static>>)>,
-    window: Option<[Vec<Span<'static>>; 3]>,
     sections: Sections,
 ) -> Vec<Line<'static>> {
-    let box_w = sections.window.map(|(w, _)| w);
-    let height = rows.len().max(if window.is_some() { 3 } else { 0 });
-    let mut rows = rows.into_iter();
-    let mut window = window.into_iter().flatten();
-    (0..height)
-        .map(|_| {
-            let (left, right) = rows.next().unwrap_or_default();
+    rows.into_iter()
+        .map(|(left, right)| {
             let mut line = pad_spans(fit_spans(left, sections.local), sections.local);
-            if sections.remote > 0 {
-                line.push(section_divider());
-                line.extend(right_spans(right, sections.remote));
-            }
-            if let Some(box_w) = box_w {
-                line.push(section_divider());
-                line.extend(pad_spans(window.next().unwrap_or_default(), box_w));
-            }
+            line.push(section_divider());
+            line.extend(right_spans(right, sections.remote));
             Line::from(line)
         })
         .collect()
@@ -2019,25 +1864,18 @@ fn sectioned_rows(
 
 /// The row above pane 2's sectioned header, on the pane's top padding: a
 /// small subtitle over each section, `local` and `remote` (Andreas,
-/// 2026-11-06), with the dividers through it; the window box carries its
-/// own on its top rule.
+/// 2026-11-06), with the divider through it.
 fn subtitle_row(sections: Sections) -> Line<'static> {
     let style = Style::default().fg(colors::OVERLAY);
     let mut line = pad_spans(
         vec![Span::styled(HEADER_SUBTITLES[0], style)],
         sections.local,
     );
-    if sections.remote > 0 {
-        line.push(section_divider());
-        line.extend(right_spans(
-            vec![Span::styled(HEADER_SUBTITLES[1], style)],
-            sections.remote,
-        ));
-    }
-    if let Some((box_w, _)) = sections.window {
-        line.push(section_divider());
-        line.push(Span::raw(" ".repeat(box_w)));
-    }
+    line.push(section_divider());
+    line.extend(right_spans(
+        vec![Span::styled(HEADER_SUBTITLES[1], style)],
+        sections.remote,
+    ));
     Line::from(line)
 }
 
@@ -2308,15 +2146,14 @@ fn header_lines(app: &App, repo: &RepoStatus, width: usize) -> Vec<Line<'static>
             Style::default().fg(badges::EARLIER_REFRESH),
         )]
     });
-    // Outside the `notes` layout, whose window box sits right of its
-    // divider, fixed sections (FZ-95): local, remote, the window's box.
+    // Outside the `notes` layout, whose header sits left of its divider,
+    // fixed sections (FZ-95): local and remote.
     if let Some(sections) = header_sections(app, width) {
         let mut rows = vec![(row1_left, owner_group), (row2_left, remote_loc)];
         if !row3_left.is_empty() || !row3_right.is_empty() {
             rows.push((row3_left, row3_right));
         }
-        let window = sections.window.map(|(_, short)| window_box(app, short));
-        lines.extend(sectioned_rows(rows, window, sections));
+        lines.extend(sectioned_rows(rows, sections));
         // The fetch failure, its git detail and the earlier-refresh note do
         // not fit a section: one banner row under the block, cut at the
         // pane's edge, no divider on it; `info` has them whole (Andreas,
@@ -7837,23 +7674,24 @@ mod tests {
         let text = header_text(r, 100);
         let rows: Vec<&str> = text.lines().collect();
         // The counts on the block's first row; the failure and git's reason
-        // on one banner row under the block's three rows, cut at the pane's
-        // edge, with no divider crossed: the row holds the frame's two
-        // borders and nothing else.
+        // on one banner row under the block's two rows (this repo has no
+        // third; three while the window box stood beside them), cut at the
+        // pane's edge, with no divider crossed: the row holds the frame's
+        // two borders and nothing else.
         assert!(rows[2].contains("2 behind"), "{text}");
         let failure = format!(
             "⚠ fetch failed: remote unreachable, as of {}",
             at.format("%H:%M")
         );
         let reason = "fatal: unable to access 'https://host.invalid/o/r.git/'";
-        let banner = rows[5];
+        let banner = rows[4];
         assert!(banner.contains(&format!("{failure} · fatal")), "{text}");
         assert!(!banner.contains(reason), "not cut: {banner:?}");
         assert!(banner.trim_end_matches('│').trim_end().ends_with('…'));
         assert_eq!(banner.matches('│').count(), 2, "a divider on {banner:?}");
-        assert!(rows[6].trim_matches('│').trim().is_empty(), "{text}");
+        assert!(rows[5].trim_matches('│').trim().is_empty(), "{text}");
         // Whole, each on its own row, in `info`'s body below the headliner.
-        let body = rows[7..].join("\n");
+        let body = rows[6..].join("\n");
         assert!(body.contains(&failure), "{text}");
         assert!(body.contains(reason), "{text}");
     }
@@ -7957,48 +7795,28 @@ mod tests {
         assert!(row.contains("3abc123"), "hash missing: {row:?}");
     }
 
-    /// FZ-95: the header's sections depend on the pane's width (and the
-    /// window's label) alone, so the dividers stand still between repos:
-    /// the space before the window box is split evenly; on a narrow pane
-    /// the window box shrinks to its short form first, local and remote
-    /// keeping their floors (Andreas, 2026-11-06), then the remote section
-    /// gives way, and below the local floor there are no sections at all
-    /// (his look, 2026-11-05: "static in size, only depending on window
-    /// width").
+    /// FZ-95: the header's two sections depend on the pane's width alone,
+    /// so the divider stands still between repos and windows: the row is
+    /// split in the middle at every width, and below the local floor there
+    /// are no sections at all (his look, 2026-11-05: "static in size, only
+    /// depending on window width"; the window moved to pane 1's border on
+    /// 2026-11-09, so no label length enters them).
     #[test]
     fn the_sections_depend_on_the_pane_width_alone() {
-        let app = crate::app::App::new(Vec::new(), "since 1 week".to_string(), 140, 40);
-        let (full_w, short_w) = (window_box_width(&app, false), window_box_width(&app, true));
-        assert!(short_w < full_w, "{short_w} vs {full_w}");
-        let s = section_widths(&app, 140).expect("sections at 140");
-        assert_eq!(s.window, Some((full_w, false)));
-        assert_eq!(
-            s.local + 3 + s.remote + 3 + full_w,
-            140,
-            "rows fill the pane"
-        );
-        assert!(
-            s.local.abs_diff(s.remote) <= 1,
-            "the first divider in the middle"
-        );
-        let wider = section_widths(&app, 160).expect("sections at 160");
-        assert!(wider.local > s.local, "they grow with the pane");
-        // Halves of one column fewer than the higher floor beside the full
-        // box: the box goes short, both halves keep their floors.
-        let floor = MIN_LOCAL_SECTION.max(MIN_REMOTE_SECTION);
-        let narrow = 2 * (floor - 1) + 3 + 3 + full_w;
-        let n = section_widths(&app, narrow).expect("sections when narrow");
-        assert_eq!(
-            n.window,
-            Some((short_w, true)),
-            "the window box gives way first"
-        );
-        assert!(n.local >= MIN_LOCAL_SECTION && n.remote >= MIN_REMOTE_SECTION);
-        // And beside the short box too: the remote section goes, the box stays.
-        let narrower = 2 * (floor - 1) + 3 + 3 + short_w;
-        let n = section_widths(&app, narrower).expect("sections when narrower");
-        assert_eq!((n.remote, n.window), (0, Some((short_w, true))));
-        assert_eq!(section_widths(&app, MIN_LOCAL_SECTION + 2 + short_w), None);
+        let mut last = 0;
+        for width in [42, 44, 60, 81, 120, 140, 160] {
+            let s = section_widths(width).unwrap_or_else(|| panic!("sections at {width}"));
+            assert_eq!(s.local + 3 + s.remote, width, "rows fill the pane: {s:?}");
+            assert!(
+                s.local >= s.remote && s.local - s.remote <= 1,
+                "the divider in the middle at {width}: {s:?}"
+            );
+            assert!(s.local > last, "they grow with the pane: {s:?}");
+            last = s.local;
+        }
+        // The local half one column under its floor: plain rows.
+        assert_eq!(section_widths(2 * (MIN_LOCAL_SECTION - 1) + 3), None);
+        assert!(section_widths(2 * MIN_LOCAL_SECTION - 1 + 3).is_some());
     }
 
     #[test]
@@ -8127,31 +7945,35 @@ mod tests {
 
     #[test]
     /// Local on the left of every header row, remote in its own section,
-    /// right-aligned against the second divider (FZ-95, on his look of
-    /// 2026-11-05; from the first divider in FZ-93, flush right before). The
-    /// path used to share row one with the sync status, which read as "how
-    /// it is doing" and "where it lives" run together.
-    fn owner_and_url_lean_right_against_the_second_divider() {
+    /// right-aligned against the pane's edge (FZ-95, on his look of
+    /// 2026-11-05, two sections since 2026-11-09; from the first divider
+    /// in FZ-93, flush right before). The path used to share row one with
+    /// the sync status, which read as "how it is doing" and "where it
+    /// lives" run together.
+    fn owner_and_url_lean_right_in_the_remote_section() {
         let (state, location, _) = header_rows(cloned_repo(), 120);
+        // `header_rows` trims the rows' ends: a row ending at the pane's
+        // last column before its padding is this long.
+        let edge = 120 - 3;
 
         // Row one is state only, the owner ending the remote section.
         let (local, remote) = sections(&state);
         assert!(!local.contains("~/repos"), "path left row one: {state:?}");
         assert!(
-            remote.ends_with("Gaurgle "),
-            "owner not against the second divider: {state:?}"
+            remote.ends_with(" Gaurgle") && state.chars().count() == edge,
+            "owner not against the pane's edge: {state:?}"
         );
 
         // Row two is location: local path left, `owner/name` against the
-        // divider, the URL's prefix dropped.
+        // edge, the URL's prefix dropped.
         let (local, remote) = sections(&location);
         assert!(
             local.trim_start().starts_with("~/repos/fleetz"),
             "local path not on the left: {location:?}"
         );
         assert!(
-            remote.ends_with(" Gaurgle/fleetz "),
-            "`owner/name` not against the second divider: {location:?}"
+            remote.ends_with(" Gaurgle/fleetz") && location.chars().count() == edge,
+            "`owner/name` not against the pane's edge: {location:?}"
         );
     }
 
@@ -8183,23 +8005,20 @@ mod tests {
             .collect()
     }
 
-    /// The first two section dividers of a header row: the window box's
-    /// own sides come after them.
-    fn first_dividers(row: &str) -> Vec<usize> {
-        divider_columns(row).into_iter().take(2).collect()
-    }
-
-    /// FZ-95: the header is three sections in order, local, remote and the
-    /// time window's box, with two dividers in the same columns on every
-    /// row, the first in the middle of the space before the box. The box
-    /// spans the three rows, `[t]` on its bottom border.
+    /// FZ-95: the header is two sections, local and remote, with one
+    /// divider in the same column on every row, in the middle of the pane;
+    /// the window is on pane 1's border (2026-11-09), not here.
     #[test]
-    fn the_header_draws_local_remote_and_the_window_box_with_two_dividers() {
+    fn the_header_draws_local_and_remote_with_one_divider() {
         let rows = header_block(140, |_| {});
         let dividers = divider_columns(&rows[0]);
-        assert_eq!(dividers.len(), 2, "two dividers: {:?}", rows[0]);
+        assert_eq!(dividers.len(), 1, "one divider: {:?}", rows[0]);
+        // This repo's block is two rows: state and location.
+        for row in &rows[..2] {
+            assert_eq!(divider_columns(row), dividers, "row {row:?}");
+        }
         for row in &rows {
-            assert_eq!(first_dividers(row), dividers, "row {row:?}");
+            assert!(!row.contains('◷') && !row.contains("[t]"), "{row:?}");
         }
         let at = |row: &str, needle: &str| {
             row.find(needle)
@@ -8207,18 +8026,13 @@ mod tests {
                 .unwrap_or_else(|| panic!("{needle} not on {row:?}"))
         };
         assert!(at(&rows[0], "synced") < dividers[0], "{:?}", rows[0]);
-        let owner = at(&rows[0], "Gaurgle");
-        assert!(dividers[0] < owner && owner < dividers[1], "{:?}", rows[0]);
-        assert!(dividers[1] < at(&rows[0], "╭"), "{:?}", rows[0]);
+        assert!(dividers[0] < at(&rows[0], "Gaurgle"), "{:?}", rows[0]);
         assert!(rows[1].contains("~/repos/fleetz"), "{:?}", rows[1]);
         assert!(rows[1].contains("Gaurgle/fleetz"), "{:?}", rows[1]);
-        assert!(rows[1].contains("◷ since 2 weeks"), "{:?}", rows[1]);
-        assert!(at(&rows[2], "╰") < at(&rows[2], "[t]"), "{:?}", rows[2]);
-        // The first divider halves the space between the frame's padding and
-        // the second divider.
-        let before_box = dividers[1] - 2;
+        // The divider halves the space between the frame's padding columns.
+        let inner_right = rows[0].chars().count() - 3;
         assert!(
-            (dividers[0] - 2).abs_diff(before_box - dividers[0] - 1) <= 2,
+            (dividers[0] - 2).abs_diff(inner_right - dividers[0]) <= 2,
             "not in the middle: {dividers:?} in {:?}",
             rows[0]
         );
@@ -8369,41 +8183,42 @@ mod tests {
 
     #[test]
     fn stacked_identity_shares_its_dividers_on_both_rows() {
-        // Both rows put both dividers in the same columns and end the remote
-        // half against the second, which is the whole point of stacking
-        // them (FZ-95; from the first divider in FZ-93, at the pane's edge
-        // before). The halves differ in length, so this only holds if each
-        // row is padded to its sections independently.
+        // Both rows put the divider in the same column and end the remote
+        // half at the pane's edge, which is the whole point of stacking
+        // them (FZ-95, two sections since 2026-11-09; from the first
+        // divider in FZ-93, at the pane's edge before). The halves differ in
+        // length, so this only holds if each row is padded to its sections
+        // independently.
         let (status, url) = pane_rows(cloned_repo(), 120);
         let columns = |row: &str| -> Vec<usize> {
             row.chars()
                 .enumerate()
                 .filter(|(_, c)| *c == '│')
                 .map(|(x, _)| x)
-                .take(2)
                 .collect()
         };
-        assert_eq!(columns(&status).len(), 2, "two dividers: {status:?}");
+        assert_eq!(columns(&status).len(), 1, "one divider: {status:?}");
         assert_eq!(
             columns(&status),
             columns(&url),
             "rows divide at different columns: {status:?} vs {url:?}"
         );
-        for row in [&status, &url] {
-            let remote = sections(row).1;
-            assert!(
-                remote.ends_with(' ') && remote.chars().rev().nth(1).is_some_and(|c| c != ' '),
-                "the remote half does not end at the divider: {row:?}"
-            );
-        }
+        // The rows are trimmed at the end, so equal lengths mean both remote
+        // halves end in the same column, the pane's last before its padding.
+        assert_eq!(
+            status.chars().count(),
+            url.chars().count(),
+            "the remote halves end in different columns: {status:?} vs {url:?}"
+        );
+        assert_eq!(status.chars().count(), 120 - 3, "{status:?}");
     }
 
     #[test]
     /// On a narrow pane the local half always survives: it is the half you
     /// cannot look up anywhere else. Since FZ-95 the remote section has a
     /// fixed width, so a remote longer than it is cut with `…` at the
-    /// second divider, never run past it (review 1, N1); where the section
-    /// gives way, or the plain rows have no room, it is dropped whole.
+    /// pane's edge, never run past it (review 1, N1); where the sections
+    /// give way and the plain rows have no room, it is dropped whole.
     fn identity_is_dropped_whole_on_a_narrow_pane() {
         let full = "Gaurgle/a-much-longer-repository-name";
         let long = || {
@@ -8431,10 +8246,12 @@ mod tests {
             let chars: Vec<char> = location.chars().collect();
             let start = 1 + s.local + SECTION_DIVIDER.chars().count();
             let remote: String = chars[start..start + s.remote].iter().collect();
+            // `header_rows` trims the row's end, so the remote section's
+            // last column is the row's last.
             assert_eq!(
-                chars.get(start + s.remote + 1),
-                Some(&'│'),
-                "w{width}: the second divider moved: {location:?}"
+                chars.len(),
+                start + s.remote,
+                "w{width}: the remote section moved: {location:?}"
             );
             let shown = remote.trim_start();
             if shown != full {
@@ -8522,7 +8339,7 @@ mod tests {
     /// FZ-95 review 1, B3: at one width the dividers stand in the same
     /// columns for two repos of different path lengths, with and without a
     /// failed fetch; every row of the block, the subtitles' included, draws
-    /// both; the banner under it draws none.
+    /// it; the banner under it draws none.
     #[test]
     fn the_dividers_stand_still_across_repos_and_failures() {
         let short = cloned_repo();
@@ -8538,11 +8355,12 @@ mod tests {
         for repo in [short.clone(), deep.clone(), failing(short), failing(deep)] {
             let failed = repo.fetch.failure().is_some();
             let rows = pane2_rows(repo, 140, |_| {});
-            // The subtitles' row and the block's three.
-            for row in &rows[..4] {
-                columns.push(first_dividers(row));
+            // The subtitles' row and the block's two (three while the window
+            // box stood beside them).
+            for row in &rows[..3] {
+                columns.push(divider_columns(row));
             }
-            let banner = &rows[4];
+            let banner = &rows[3];
             if failed {
                 assert!(banner.contains("fetch failed"), "{rows:#?}");
             }
@@ -8551,25 +8369,25 @@ mod tests {
                 "a divider on {banner:?}"
             );
         }
-        assert_eq!(columns[0].len(), 2, "{columns:?}");
+        assert_eq!(columns[0].len(), 1, "{columns:?}");
         assert!(columns.iter().all(|c| *c == columns[0]), "{columns:?}");
     }
 
     /// FZ-95, Andreas 2026-11-06: a small subtitle over each section,
-    /// `local` and `remote` on the pane's top padding, `window` on the
-    /// window box's top rule.
+    /// `local` and `remote` on the pane's top padding; no `window`, which
+    /// is on pane 1's border since 2026-11-09.
     #[test]
     fn each_header_section_carries_its_subtitle() {
         let rows = pane2_rows(cloned_repo(), 140, |_| {});
-        let dividers = first_dividers(&rows[0]);
-        assert_eq!(dividers.len(), 2, "{:?}", rows[0]);
+        let dividers = divider_columns(&rows[0]);
+        assert_eq!(dividers.len(), 1, "{:?}", rows[0]);
         let cols: Vec<char> = rows[0].chars().collect();
         let between = |a: usize, b: usize| cols[a..b].iter().collect::<String>();
         assert_eq!(between(1, dividers[0]).trim(), "local", "{:?}", rows[0]);
-        let remote = between(dividers[0] + 1, dividers[1]);
+        let remote = between(dividers[0] + 1, cols.len() - 1);
         assert_eq!(remote.trim(), "remote");
         assert!(remote.ends_with("remote "), "not flush right: {remote:?}");
-        assert!(rows[1].contains("╭─ window ─"), "{:?}", rows[1]);
+        assert!(!rows[1].contains("window"), "{:?}", rows[1]);
         // Not while the header scrolls with a short pane's body.
         let short = drawn_rows(140, 9, |f| {
             let app =
@@ -8579,10 +8397,10 @@ mod tests {
         assert!(!short[1].contains("local"), "{short:#?}");
     }
 
-    /// FZ-95: the window box's short form, and an empty label (review 1,
-    /// N6): the box says `◷` alone, its subtitle already names it.
+    /// FZ-95: the window's short form on a narrow pane 1 border, and
+    /// nothing where the border cannot hold that either.
     #[test]
-    fn the_window_box_has_a_short_form() {
+    fn the_border_window_has_a_short_form() {
         for (header, want) in [
             ("since 4 weeks", "4w"),
             ("since 1 week", "1w"),
@@ -8598,37 +8416,32 @@ mod tests {
         assert_eq!(odd.chars().count(), SHORT_WINDOW_MAX, "{odd}");
         assert!(odd.ends_with('…'), "{odd}");
 
-        let mut app = crate::app::App::new(Vec::new(), "since 4 weeks".to_string(), 80, 40);
-        let short: Vec<String> = window_box(&app, true)
-            .into_iter()
-            .map(|s| Line::from(s).to_string())
-            .collect();
-        assert!(short[1].contains("◷ 4w"), "{short:?}");
-        assert!(short[2].contains("[t]"), "{short:?}");
-        assert!(window_box_width(&app, true) < window_box_width(&app, false));
-        app.header = String::new();
-        let empty: Vec<String> = window_box(&app, false)
-            .into_iter()
-            .map(|s| Line::from(s).to_string())
-            .collect();
-        assert!(empty[0].contains("window"), "{empty:?}");
-        assert!(!empty[1].contains("window"), "{empty:?}");
-        assert!(empty[1].contains('◷'), "{empty:?}");
+        let app = crate::app::App::new(Vec::new(), "since 4 weeks".to_string(), 80, 40);
+        let drawn = |budget: usize| Line::from(list_title_window(&app, budget)).to_string();
+        assert_eq!(drawn(80), "· ◷ since 4 weeks [t] ");
+        assert_eq!(drawn(21), "· ◷ 4w [t] ");
+        assert_eq!(drawn(10), "");
     }
 
-    /// FZ-95: on a narrow pane the header keeps local and remote and draws
-    /// the window box short, never dropping it while sections are drawn.
+    /// FZ-95 review 3: before a load names the window, the border draws
+    /// `◷ [t]` with one space between them, not two.
     #[test]
-    fn a_narrow_header_keeps_its_sections_and_shortens_the_window() {
-        let app = crate::app::App::new(Vec::new(), "since 2 weeks".to_string(), 80, 40);
-        let s = section_widths(&app, 60).expect("sections at 60");
-        assert_eq!(s.window.map(|(_, short)| short), Some(true), "{s:?}");
-        assert!(s.remote >= MIN_REMOTE_SECTION, "{s:?}");
+    fn before_a_load_the_border_window_has_one_space() {
+        let app = crate::app::App::new(Vec::new(), String::new(), 80, 40);
+        let drawn = Line::from(list_title_window(&app, 80)).to_string();
+        assert_eq!(drawn, "· ◷ [t] ");
+    }
+
+    /// FZ-95: on a narrow pane the header keeps local and remote, and the
+    /// window stays off it (it is on pane 1's border).
+    #[test]
+    fn a_narrow_header_keeps_its_sections() {
+        let s = section_widths(60).expect("sections at 60");
+        assert!(s.remote >= MIN_LOCAL_SECTION - 1, "{s:?}");
         let rows = pane2_rows(cloned_repo(), 64, |_| {});
-        assert!(rows[2].contains("◷ 2w"), "{rows:#?}");
-        assert!(rows[3].contains("[t]"), "{rows:#?}");
         assert!(rows[2].contains("~/repos/fleetz"), "{rows:#?}");
         assert!(rows[2].contains("Gaurgle/fleetz"), "{rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains('◷')), "{rows:#?}");
     }
 
     /// FZ-95: the long notes join on one banner row, cut at the pane's
@@ -8648,67 +8461,133 @@ mod tests {
         assert!(line.spans.iter().all(|s| s.style.fg == Some(colors::PEACH)));
     }
 
-    /// FZ-95 review 1, N4: the `notes` layout draws the window box whole or
-    /// not at all, and not while the window sits on pane 1's border.
+    /// FZ-95 (Andreas, 2026-11-09): the window on pane 1's top border,
+    /// `[1] repos · ◷ since 2 weeks [t]`, and pane 2's header two sections
+    /// split in the middle, one divider.
     #[test]
-    fn the_notes_window_box_is_whole_or_absent() {
-        let mut app = crate::app::App::new(Vec::new(), "since 2 weeks".to_string(), 80, 40);
-        assert!(!fits_window_box(2, &app));
-        assert!(fits_window_box(3, &app));
-        app.window_in_list = true;
-        assert!(!fits_window_box(3, &app));
-    }
-
-    /// FZ-95, placement 2 (Andreas, 2026-11-07): the window on pane 1's top
-    /// border, `[1] repos · ◷ since 2 weeks [t]`, pane 2's header two
-    /// sections split in the middle with no window box, the toggle's state
-    /// on the footer.
-    #[test]
-    fn placement_two_puts_the_window_on_pane_one() {
-        let s = {
-            let mut app = crate::app::App::new(Vec::new(), "since 2 weeks".to_string(), 80, 40);
-            app.window_in_list = true;
-            section_widths(&app, 120).expect("sections at 120")
-        };
-        assert_eq!(s.window, None);
-        assert_eq!(s.local + 3 + s.remote, 120, "{s:?}");
-        assert!(s.local.abs_diff(s.remote) <= 1, "{s:?}");
-
+    fn the_window_is_on_pane_ones_border_and_pane_two_has_two_sections() {
         let mut app =
             crate::app::App::new(vec![cloned_repo()], "since 2 weeks".to_string(), 160, 30);
         app.view = crate::app::View::Detail;
-        let (rows, keys) = frame_rows(&app, 160, 30);
-        assert!(!keys.contains("[W]"), "{keys:?}");
-        assert!(!rows[1].contains("◷"), "{:?}", rows[1]);
-        app.window_in_list = true;
-        let (rows, keys) = frame_rows(&app, 160, 30);
+        let (rows, _) = frame_rows(&app, 160, 30);
         assert!(
             rows[1].contains("[1] repos · ◷ since 2 weeks [t]"),
             "{:?}",
             rows[1]
         );
-        assert!(keys.contains("[W]"), "{keys:?}");
         let pane2 = rows
             .iter()
             .position(|r| r.contains("Gaurgle/fleetz"))
             .expect("pane 2's location row");
-        assert!(!rows.iter().any(|r| r.contains("╭─ window")), "box drawn");
         // Pane 2's own section divider, once, in the middle of its row.
         let detail = crate::ui::panel_rects(Rect::new(0, 0, 160, 30), &app)
             .detail
             .expect("pane 2");
-        let s2 = section_widths(&app, usize::from(detail.width - 4)).expect("sections");
+        let s2 = section_widths(usize::from(detail.width - 4)).expect("sections");
         assert!(s2.local.abs_diff(s2.remote) <= 1, "{s2:?}");
-        let row: Vec<char> = rows[pane2].chars().collect();
-        let in_pane: Vec<usize> = (usize::from(detail.x) + 1..usize::from(detail.right()) - 1)
-            .filter(|x| row[*x] == '│')
-            .collect();
         assert_eq!(
-            in_pane,
+            pane_two_dividers(&rows[pane2], detail),
             vec![usize::from(detail.x) + 2 + s2.local + 1],
             "{:?}",
             rows[pane2]
         );
+    }
+
+    /// The columns of the `│` inside pane 2's frame on a drawn frame row.
+    fn pane_two_dividers(row: &str, detail: Rect) -> Vec<usize> {
+        let row: Vec<char> = row.chars().collect();
+        (usize::from(detail.x) + 1..usize::from(detail.right()) - 1)
+            .filter(|x| row[*x] == '│')
+            .collect()
+    }
+
+    /// FZ-95: the window box pane 2's header carried during the look is
+    /// gone at every width: the frame draws the window once, on pane 1's
+    /// top border, and never a framed box.
+    #[test]
+    fn pane_two_draws_no_window_box_at_any_width() {
+        for width in [60u16, 80, 100, 120, 140, 160, 200] {
+            let mut app =
+                crate::app::App::new(vec![cloned_repo()], "since 2 weeks".to_string(), width, 30);
+            app.view = crate::app::View::Detail;
+            let (rows, _) = frame_rows(&app, width, 30);
+            let detail = crate::ui::panel_rects(Rect::new(0, 0, width, 30), &app)
+                .detail
+                .expect("pane 2");
+            let pane_rows = usize::from(detail.y)..usize::from(detail.bottom());
+            for (y, row) in rows
+                .iter()
+                .enumerate()
+                .filter(|(y, _)| pane_rows.contains(y))
+            {
+                let pane2: String = row
+                    .chars()
+                    .skip(usize::from(detail.x))
+                    .take(usize::from(detail.width))
+                    .collect();
+                assert!(!pane2.contains("window"), "w{width} row {y}: {pane2:?}");
+                assert!(!pane2.contains('◷'), "w{width} row {y}: {pane2:?}");
+                assert!(!pane2.contains("[t]"), "w{width} row {y}: {pane2:?}");
+            }
+        }
+    }
+
+    /// FZ-95 review 3: the window's label, however long, and its shedding
+    /// on a narrow pane 1 border never move pane 2's divider.
+    #[test]
+    fn the_window_label_never_moves_pane_twos_divider() {
+        for width in [100u16, 160] {
+            let dividers = |header: &str| {
+                let mut app =
+                    crate::app::App::new(vec![cloned_repo()], header.to_string(), width, 30);
+                app.view = crate::app::View::Detail;
+                let (rows, _) = frame_rows(&app, width, 30);
+                let detail = crate::ui::panel_rects(Rect::new(0, 0, width, 30), &app)
+                    .detail
+                    .expect("pane 2");
+                let at = rows
+                    .iter()
+                    .position(|r| r.contains("Gaurgle/fleetz"))
+                    .expect("pane 2's location row");
+                (rows[1].clone(), pane_two_dividers(&rows[at], detail))
+            };
+            let (_, plain) = dividers("since 2 weeks");
+            assert_eq!(plain.len(), 1, "w{width}: {plain:?}");
+            for header in [
+                "",
+                "since 2026-11-09  Work (09-17) (50 of 95 repos)",
+                "since 2 weeks (50 of 95 repos and a long coverage note)",
+            ] {
+                let (border, cols) = dividers(header);
+                assert_eq!(cols, plain, "w{width} {header:?}: {border:?}");
+            }
+        }
+    }
+
+    /// FZ-95 review 3: the glyph form draws every counter in the colour the
+    /// words form draws it in, in the same order, from one table.
+    #[test]
+    fn the_glyph_and_word_summaries_share_one_colour_table() {
+        let summary = crate::model::Summary {
+            behind_count: 3,
+            ahead_count: 2,
+            dirty_count: 1,
+            synced_count: 17,
+            not_cloned_count: 4,
+            pr_count: 8,
+        };
+        let words: Vec<_> = crate::ui::footer::summary_spans(&summary)
+            .into_iter()
+            .filter(|s| s.content.trim() != "·")
+            .map(|s| s.style.fg)
+            .collect();
+        let glyphs: Vec<_> = glyph_counters(&summary)
+            .into_iter()
+            .flatten()
+            .map(|s| s.style.fg)
+            .collect();
+        assert_eq!(words.len(), 6, "{words:?}");
+        assert_eq!(glyphs, words);
     }
 
     /// FZ-95: the summary in words where they fit two rows, as glyphs and
@@ -11248,15 +11127,12 @@ mod tests {
             "{}",
             rows.join("\n")
         );
-        // Right of the divider on those rows only the window's box, row for
-        // row (FZ-95), then `notes preview` on the row above the rule.
+        // Right of the divider on those rows nothing, row for row: the
+        // window sits on pane 1's border (FZ-95, 2026-11-09). Then `notes
+        // preview` on the row above the rule.
         let facts = notes.facts.expect("pinned at 44 rows");
         assert_eq!((facts.y, facts.bottom()), (header.y, rule));
-        let mut want: Vec<String> = window_box(&app, false)
-            .into_iter()
-            .map(|spans| Line::from(spans).to_string().trim().to_string())
-            .collect();
-        want.resize(usize::from(facts.height - 1), String::new());
+        let mut want: Vec<String> = vec![String::new(); usize::from(facts.height - 1)];
         want.push(READER_LABEL.to_string());
         for (i, y) in (header.y..rule).enumerate() {
             let right = span(y, divider + 1, pane2.right() - 1);

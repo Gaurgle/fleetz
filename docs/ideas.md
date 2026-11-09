@@ -700,9 +700,19 @@ section goes. Long notes (a failed fetch, git's reason, the
 earlier-refresh note) leave the sections for one orange banner row under
 them, cut with `…`, and stand whole in `info`; this replaced the 11-05
 ruling that put them whole under the block. Whether the window stays in
-pane 2's header or moves to pane 1's top border (`[1] repos · ◷ since 1
-week [t]`, pane 2's header then two sections) is decided at his look,
+pane 2's header or moves to pane 1's top border was left to his look,
 both built behind a temporary `W` toggle.
+
+**Resolved 2026-11-09 (FZ-95), on his look: pane 1's border.** "i prefer
+it in pane 1 border, i might have more ideas for its placement, but we can
+take that later." The window sits on pane 1's top border between the
+title and the count (`[1] repos · ◷ since 1 week [t] ── 23`), shortened
+to `◷ 1w [t]` where the border is narrow; pane 2's third section, the
+window box, is dropped with its `window` subtitle, its short form and the
+toggle. Pane 2's header is two sections, `local` and `remote`, split in
+the middle by the pane's width alone, so neither the window's label nor
+its shortening moves the divider. In `notes` nothing window-related is
+drawn above `notes preview`. Further placement ideas are his, for later.
 
 Fixing the pulse exposed a latent bug worth recording: `SLOW_REPAINT_TICKS` was
 10 against a `BLINK_TICKS` of 5, so between any two repaints the blink flipped
