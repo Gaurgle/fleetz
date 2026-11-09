@@ -99,8 +99,11 @@ guards them as they resume. Section 7 of `docs/architecture.md` then names
 it as A6's check.
 
 **T1, tests into sibling files.** Every file whose total passes 1200 lines
-moves its `mod tests` body to `<module>/tests.rs` (`src/main.rs` reads
-`src/main/tests.rs`). Test-only helpers outside `mod tests` stay. About
+moves its `mod tests` body to `<module>/tests.rs` (`src/app.rs` reads
+`src/app/tests.rs`; the crate root `src/main.rs` reads `src/tests.rs`,
+`ui/mod.rs` reads `src/ui/tests.rs`). Other test modules go to sibling
+files of their own name, so test paths stay. Test-only helpers outside
+the test modules stay. About
 35k lines leave the code files at no design cost; the reviewer checks the
 moved text is byte-identical apart from one level of indentation. First
 after the gate, so every later diff is readable. Waits on the test
