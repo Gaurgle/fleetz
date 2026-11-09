@@ -30,13 +30,15 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 - Done today, logged with metrics: FZ-91 (`8ac7ff1`), FZ-103
   (`62aeb8f`, the layer test; its `super::` gap is a follow-up on #160,
   to fold into E1's layer-table change or a later ticket).
-- FZ-104 (#161, T1) Done, merged `e831dd1` 18:20, logged with metrics;
-  `main` CI 42655117838 watched; its worktree sweeps when green.
-- FZ-105 (#162, E1) next: worktree `.claude/worktrees/fz-105`, branch
-  `refactor/fz-105-engine-assembly`, base `e831dd1`; `fz-architect`
-  ticket check for E1 and E2 dispatched 18:25 (the move set, engine
-  layout, references); the worker dispatches on `fits` with that list
-  as its pointers. No worker or reviewer running.
+- FZ-104 (#161, T1) Done, merged `e831dd1`, logged, swept.
+- FZ-105 (#162, E1) In progress since 18:50: architect "fits with
+  note", four rulings on the issue (generic progress sender; three
+  `app.rs` types move with re-exports; `cli` to the sources layer, O5
+  flagged). Worktree `.claude/worktrees/fz-105`, branch
+  `refactor/fz-105-engine-assembly`, base `e831dd1`, worker hard tier.
+- FZ-106 (#163) narrowed to E2a (pure fetch types), ruling on the
+  issue; E2b (planning functions under a fetch owner type) joins E3
+  and A1 in the consult queue, filed on his yes (O6).
   Then FZ-105 to FZ-107 (E1, E2, D1), then FZ-108 (#165, U1) and F1
   (filed after D1). No worker or reviewer running.
 - Open from the 11-09 reviews (in the log entries): FZ-83's branch-name
@@ -47,10 +49,9 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 ## Open questions
 
-- To file on his 11-05 13:50 answers (log): ssh README, `fleetz doctor`,
-  `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2. Wall-clock tests
-  flaky under load (#121, #152 review comments): a ticket? Help `y` row
-  still "copy hash" (#116).
+- O5: `cli` as a source (lead's ruling on #162, reversible); O6: E2b
+  as its own ticket. F1 after D1. Older: to file on his 11-05 answers
+  (log); wall-clock tests flaky under load; help `y` row (#116).
 
 ## Next step
 
