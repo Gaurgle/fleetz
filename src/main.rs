@@ -1238,11 +1238,17 @@ fn handle_mouse_input(
     terminal: &Terminal<CrosstermBackend<io::Stdout>>,
     m: MouseEvent,
 ) {
+    let Ok(size) = terminal.size() else { return };
+    let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+    handle_mouse_in(app, area, m);
+}
+
+/// `handle_mouse_input` against a known screen `area`, so a test can drive
+/// the real mouse handling without a terminal.
+fn handle_mouse_in(app: &mut App, area: ratatui::layout::Rect, m: MouseEvent) {
     if !matches!(app.overlay, Overlay::None) || app.search_active {
         return;
     }
-    let Ok(size) = terminal.size() else { return };
-    let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
     let rects = ui::panel_rects(area, app);
 
     // A drag in progress owns every mouse event until the button comes up,
@@ -1359,6 +1365,12 @@ fn handle_mouse_input(
         }
         MouseEventKind::ScrollDown => match panel {
             FocusedPanel::RepoList => app.move_down(),
+            // The notes tree is a list to pick a file from, as pane 1 is a
+            // list to pick a repo from: the wheel walks its cursor and the
+            // view follows with the scrolloff margin (FZ-65). Scrolling the
+            // view alone left the highlight behind, off the drawn rows of a
+            // short tree within one notch.
+            FocusedPanel::Detail if app.notes_layout() => app.wheel_notes_tree(true),
             FocusedPanel::Detail => app.scroll_detail(DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(1),
             FocusedPanel::Reader => app.scroll_reader(1),
@@ -1366,6 +1378,7 @@ fn handle_mouse_input(
         },
         MouseEventKind::ScrollUp => match panel {
             FocusedPanel::RepoList => app.move_up(),
+            FocusedPanel::Detail if app.notes_layout() => app.wheel_notes_tree(false),
             FocusedPanel::Detail => app.scroll_detail(-DETAIL_WHEEL_ROWS),
             FocusedPanel::Inspector => app.scroll_inspector(-1),
             FocusedPanel::Reader => app.scroll_reader(-1),
@@ -11908,6 +11921,124 @@ mod tests {
                 "r did not refresh from {panel:?}"
             );
         }
+    }
+
+    /// An app in the `notes` layout on a `w` by `h` screen, its tree
+    /// holding `n` files under `notez/`.
+    fn notes_tree_app(w: u16, h: u16, n: usize) -> App {
+        let mut app = App::new(Vec::new(), String::new(), w, h);
+        app.repos = vec![RepoStatus {
+            path: Some("/repo".to_string()),
+            ..test_repo()
+        }];
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Notes;
+        let walk = app::NotesWalk {
+            key: "/repo".to_string(),
+            root: "/repo".into(),
+            generation: 0,
+        };
+        let files = (0..n)
+            .map(|i| notes::NoteFile {
+                rel: format!("notez/f{i:02}.md").into(),
+                notez: Some("notez".into()),
+            })
+            .collect();
+        app.apply_notes_walk(walk, Ok(notes::Notes { files }));
+        assert!(app.notes_layout());
+        app
+    }
+
+    /// Draw `app` on a `w` by `h` screen and return the row of `rect`, as a
+    /// screen row, that carries the tree's cursor mark, if any is drawn.
+    fn drawn_cursor_row(app: &App, w: u16, h: u16, rect: ratatui::layout::Rect) -> Option<u16> {
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal.draw(|f| ui::render(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (rect.y..rect.y + rect.height).find(|&y| {
+            (rect.x..rect.x + rect.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .contains("▸ ")
+        })
+    }
+
+    /// FZ-65: the wheel over the `notes` tree keeps the highlighted file
+    /// inside the rows the tree draws, at a narrow, short pane and with his
+    /// terminal's two events per notch. Fails while the wheel only scrolls
+    /// the tree's view and leaves the highlight behind, off the drawn rows
+    /// within one notch.
+    #[test]
+    fn the_notes_tree_wheel_keeps_the_highlight_on_the_drawn_rows() {
+        const W: u16 = 64;
+        const H: u16 = 26;
+        let area = ratatui::layout::Rect::new(0, 0, W, H);
+        let mut app = notes_tree_app(W, H, 40);
+        let tree = ui::panel_rects(area, &app).detail.expect("the tree");
+        // Inside the border: the rows a file can be drawn on.
+        let body =
+            ratatui::layout::Rect::new(tree.x + 1, tree.y + 1, tree.width - 2, tree.height - 2);
+        // The first frame measures the pane the wheel steps against.
+        drawn_cursor_row(&app, W, H, body);
+        let wheel = |kind| MouseEvent {
+            kind,
+            column: tree.x + tree.width / 2,
+            row: tree.y + tree.height / 2,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        for (kind, notches) in [
+            (MouseEventKind::ScrollDown, 20),
+            (MouseEventKind::ScrollUp, 20),
+        ] {
+            for notch in 0..notches {
+                let before = app.detail_selected();
+                // Two events a notch, as his terminal sends them, and one
+                // frame after both.
+                handle_mouse_in(&mut app, area, wheel(kind));
+                handle_mouse_in(&mut app, area, wheel(kind));
+                let row = drawn_cursor_row(&app, W, H, body);
+                assert!(
+                    row.is_some(),
+                    "{kind:?} notch {notch}: the highlight (file {}) left the drawn rows",
+                    app.detail_selected()
+                );
+                assert_ne!(
+                    app.detail_selected(),
+                    before,
+                    "{kind:?} notch {notch} moved nothing"
+                );
+            }
+        }
+        assert_eq!(app.detail_selected(), 0, "the wheel walks back to the top");
+    }
+
+    /// FZ-65 keeps the rule the wheel had before it: on the commit list it
+    /// scrolls the view and leaves the highlighted commit where it is.
+    #[test]
+    fn the_wheel_on_the_commit_list_still_leaves_its_highlight() {
+        const W: u16 = 64;
+        const H: u16 = 26;
+        let area = ratatui::layout::Rect::new(0, 0, W, H);
+        let mut app = notes_tree_app(W, H, 40);
+        app.history_view = app::HistoryView::Commits;
+        app.detail_max_scroll.set(50);
+        let pane = ui::panel_rects(area, &app).detail.expect("pane 2");
+        let wheel = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: pane.x + pane.width / 2,
+            row: pane.y + pane.height / 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_in(&mut app, area, wheel);
+        handle_mouse_in(&mut app, area, wheel);
+        assert_eq!(app.detail_selected(), 0, "the highlight stayed");
+        assert_eq!(
+            app.detail_scroll(),
+            2 * DETAIL_WHEEL_ROWS as u16,
+            "the view scrolled"
+        );
     }
 
     /// The next answer `spawn_note_read` sent, split into its two kinds.
