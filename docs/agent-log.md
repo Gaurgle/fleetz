@@ -305,6 +305,12 @@ it first", then "1 is ok, i trust the shading"; on the M5 milestone:
 "i think this is good"; on F1 and U1: "you choose" (U1 filed as FZ-108
 #165, F1 after D1). Away about 16:00 to 16:30 ("can you manage without
 me for a while?"), then from about 17:05 ("no prompts until completed").
+19:10, on whether the result is clean: "I mean somewhat manageable for
+humans. I want to read and learn from it ... I still think we should
+have a very good code structure and compartmentalization"; 19:20: "We
+can keep on refactoring as we go"; 19:25: "Or just keep on refactoring
+tonight. I'll be at dinner then sleep, so the cleaner it is the sooner,
+the better." Unattended scope recorded in the handoff.
 Lead's failure, the same as the morning lead's: from about 16:30 the
 lead wrote estimated times into comments, the log and the handoff
 without reading the clock, up to 3h20 ahead by 18:48; corrected here
