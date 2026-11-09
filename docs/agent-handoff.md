@@ -31,11 +31,9 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
   `e831dd1`, FZ-105 `8f3a57d`, FZ-106 `cc1ecf5` (E2a; `main` CI
   42667992050 watched, `fz-106` worktree sweeps when green).
 - FZ-107 (#164, D1) Review since 19:18: diff `7da01e770dfd`, the
-  allowlist is empty. Round 2's ruling: `ci`'s types went to the domain
-  (`Pace` in `time`, `carrier_key` and `RemoteKey` in `model`), not the
-  engine, which a source may not import. Worktree
-  `.claude/worktrees/fz-107`, branch `refactor/fz-107-cut-backward-edges`,
-  base `cc1ecf5`; worker done (hard), reviewer running (hard).
+  allowlist is empty (`ci`'s types went to the domain, ruling on the
+  issue). Worktree `.claude/worktrees/fz-107`, branch
+  `refactor/fz-107-cut-backward-edges`, base `cc1ecf5`; reviewer running.
   E2b (planning functions under a fetch owner type) waits with E3 and
   A1 for the consults, filed on his yes (O6).
   Then FZ-105 to FZ-107 (E1, E2, D1), then FZ-108 (#165, U1) and F1
