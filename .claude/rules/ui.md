@@ -64,16 +64,18 @@ how the strip looked for a long time. The three sizes are three icons measured
 in the font (`CellSize::glyph`), each one column wide as ratatui lays it out,
 which the grid's column arithmetic and `slot_at`'s click routing depend on.
 
-**The GitHub strip draws GitHub's `contributionLevel`, not a bucket of the
-count.** github.com trims outliers before scaling each year and the rule is
-not reproducible: measured over three years, a year whose busiest day had 83
-contributions was scaled as if the top were 47, and one with an 86-day as if
-it were 10. Quartiles of the max drew a 38-commit day two shades paler than
-github.com. The field is free (cost 1, nodeCount 0, with and without it). The
-`recent` window's levels are never used: its `from` rotates, so they are on a
-scale that changes every few minutes. Days it overwrites are put on the year
-window's scale by example (`Calendar::derive_missing_levels`), and a payload
-cached before the field was asked for falls back to `intensity`.
+**Both strips shade by the median of their active days, not by GitHub's
+`contributionLevel`.** One function, `Calendar::shade_scale`, steps every day
+of either source by its count: 0 for none, then the 25th, 50th (the median)
+and 75th percentiles of the days with a count above zero as the bounds of
+steps 1 to 3, and 4 above. Fewer than four distinct counts spread over the
+steps in order. Andreas, 2026-09-03 and 2026-11-05 (FZ-91): the heatmap
+"should be dynamically colorful, derived median values rather than threshold
+based", for both sources: "use the same concept? median based, i guess?". It
+replaced quartiles of the busiest day, which let one outlier press the rest
+of the year into the palest step and drew a 38-commit day two shades paler
+than github.com. The payload still carries `contributionLevel` (free: cost 1,
+nodeCount 0), but it is not drawn.
 
 **The inspector's top border carries the resize grip.** `grips::render`
 paints six cells mid-border after the panes, so anything drawn on that
