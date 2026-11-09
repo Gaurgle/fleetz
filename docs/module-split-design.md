@@ -83,9 +83,11 @@ IDs are placeholders; the coordinator assigns FZ numbers when filing.
 architecture;` in `main.rs` with the body in `src/architecture.rs`, that
 reads every `src/**/*.rs`, strips `#[cfg(test)]` items, and fails on:
 - an import from a layer above the importer (A1), using a table of module
-  to layer kept in the test: front ends `main`, `app`, `ui`, `report`,
-  `cli`; engine (none yet); sources `git`, `github`, `ci`, `cache`,
-  `config`, `discovery`, `notes`, `clipboard`, `window_state`; domain
+  to layer kept in the test: front ends `main`, `app`, `ui`, `report`;
+  engine `engine` (from E1); sources `git`, `github`, `ci`, `cache`,
+  `config`, `discovery`, `notes`, `clipboard`, `window_state`, and `cli`
+  (flags, a source like `config`; moved from the front ends in E1 by the
+  lead's ruling on #162, flagged to Andreas); domain
   `model`, `time`, `graph`, `contributions`, `digest`, `fuzzy`;
 - `ratatui` or `crossterm` outside `main`, `app` and `ui` (A2);
 - `report` importing `main`, `app` or `ui` (A3);

@@ -3449,57 +3449,6 @@ fn a_fetch_claim_expires_after_the_stuck_limit() {
     assert!(app.claim_fetch("~/repos/repo-0", t0));
 }
 
-/// FZ-35a (#84), criterion 4: a fetch that waited in the queue past the
-/// stuck limit keeps its claim once its permit is granted, because the
-/// claim is timed from the permit, and progress keeps it alive after.
-#[test]
-fn a_claim_is_timed_from_its_permit_and_kept_alive_by_progress() {
-    let claims = FetchClaims::default();
-    let t0 = std::time::Instant::now();
-    let limit = std::time::Duration::from_secs(180);
-    let token = claims.reserve("~/r", t0).expect("free");
-    // Queued 170 s, then granted its permit.
-    assert!(claims.start("~/r", token, t0 + std::time::Duration::from_secs(170)));
-    claims.expire(limit, t0 + std::time::Duration::from_secs(200));
-    assert!(claims.contains_key("~/r"), "expired while it ran");
-    // Running 160 s more, reporting progress.
-    claims.touch("~/r", token, t0 + std::time::Duration::from_secs(330));
-    claims.expire(limit, t0 + std::time::Duration::from_secs(400));
-    assert!(claims.contains_key("~/r"), "expired while it progressed");
-    // Silent past the limit: the safety net still frees it.
-    claims.expire(limit, t0 + std::time::Duration::from_secs(511));
-    assert!(!claims.contains_key("~/r"));
-}
-
-/// FZ-35a (#84), criterion 4: a queued fetch whose reservation expired
-/// takes the path again at its permit when it is free, and does not run
-/// when a newer claim holds it, so one repo never has two fetches.
-#[test]
-fn a_permit_takes_a_free_path_and_refuses_a_held_one() {
-    let claims = FetchClaims::default();
-    let t0 = std::time::Instant::now();
-    let limit = std::time::Duration::from_secs(180);
-    let old = claims.reserve("~/r", t0).unwrap();
-    claims.expire(limit, t0 + std::time::Duration::from_secs(181));
-    assert!(!claims.contains_key("~/r"));
-    assert!(claims.start("~/r", old, t0 + std::time::Duration::from_secs(182)));
-    assert_eq!(claims.token("~/r"), Some(old));
-
-    let claims = FetchClaims::default();
-    let old = claims.reserve("~/r", t0).unwrap();
-    claims.expire(limit, t0 + std::time::Duration::from_secs(181));
-    let newer = claims
-        .reserve("~/r", t0 + std::time::Duration::from_secs(182))
-        .unwrap();
-    assert_ne!(old, newer, "a token is never reused");
-    assert!(!claims.start("~/r", old, t0 + std::time::Duration::from_secs(183)));
-    assert!(claims.start("~/r", newer, t0 + std::time::Duration::from_secs(183)));
-    // The refused fetch's progress, had it any, would not touch it.
-    claims.touch("~/r", old, t0 + std::time::Duration::from_secs(400));
-    claims.expire(limit, t0 + std::time::Duration::from_secs(364));
-    assert!(!claims.contains_key("~/r"));
-}
-
 /// FZ-35a (#84), the #83 reviewer's follow-up: a late landing from a
 /// claim that expired does not end the newer claim on the same path; the
 /// newer fetch's own landing does.

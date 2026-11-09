@@ -26,20 +26,20 @@ const LAYERS: [(&str, &[&str]); 4] = [
             "notes",
             "clipboard",
             "window_state",
+            "cli",
         ],
     ),
-    ("engine", &[]),
-    ("front ends", &["main", "app", "ui", "report", "cli"]),
+    ("engine", &["engine"]),
+    ("front ends", &["main", "app", "ui", "report"]),
 ];
 
 /// Today's violations. The list may only shrink: an entry that no longer
 /// occurs fails the test, so the fix that removes an edge removes its entry.
-const ALLOWED: [(&str, &str); 6] = [
+const ALLOWED: [(&str, &str); 5] = [
     ("ci", "app"),
     ("config", "app"),
     ("model", "git"),
     ("model", "github"),
-    ("report", "main"),
     ("report", "app"),
 ];
 

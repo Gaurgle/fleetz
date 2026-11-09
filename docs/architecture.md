@@ -58,17 +58,20 @@ the saved time window (`window_state.rs`) and the notes walk (`notes.rs`).
 Production lines exclude `#[cfg(test)]` code, and file counts exclude the
 sibling test files a `#[cfg(test)] mod tests;` reads (FZ-104). "Effects" is
 what the module does beyond computing: `proc` runs a program, `net` talks
-HTTP, `fs` touches the disk, `term` draws or reads the terminal.
+HTTP, `fs` touches the disk, `term` draws or reads the terminal. The
+`main.rs`, `app.rs` and `engine/` rows were re-measured for FZ-105, on its
+base `e831dd1` with the move applied.
 
 | Module | Lines | Owns | Effects |
 |---|---|---|---|
-| `main.rs` | 4,820 | Startup, the event loop, every input handler, task spawning, sweep and fetch planning, GitHub poll scheduling, view assembly (discovery passes, carriers), editor and opener handoff | proc, term |
-| `app.rs` | 5,990 | `App`: all TUI state (109 fields), the overlays, filters and query parsing, API budget and backoff, fetch claims, per-view caches for ci, notes, worktrees and digest | none (holds ratatui types) |
+| `main.rs` | 3,861 | Startup, the event loop, every input handler, task spawning, sweep and fetch planning, GitHub poll scheduling, editor and opener handoff | proc, term |
+| `app.rs` | 6,350 | `App`: all TUI state (109 fields), the overlays, filters and query parsing, API budget and backoff, per-view caches for ci, notes, worktrees and digest | none (holds ratatui types) |
 | `ui/` (18 files) | 12,318 | Drawing every view from `&App`; `detail.rs` alone is 3,984 | term |
 | `git.rs` | 2,245 | Every git read and fetch, fetch outcomes and progress, `WorkKey`, the `changes` read (`changes`, `changed_file_diff`) | proc, fs |
 | `report/` | 2,062 | Print mode: run, render byte for byte as repoz, golden parity harness | proc, fs |
 | `github.rs` | 1,594 | The GraphQL query and its cost, the HTTP client, token lookup, failure kinds | net, proc |
 | `ci.rs` | 1,537 | Workflow runs, jobs and log tails over REST, with ETags; the default branch tip's `TipStatus`, `TipChecks` and `StatusEvent` history, and `tip_verdict` over them | net |
+| `engine/` (6 files) | 1,394 | View assembly (discovery passes, carriers, activity order, the startup fetch baseline), a row's status probe, the load (GitHub dataset or dirty mode), fetches under a claim (`FetchClaims`); progress leaves through `Sink`, which a front end's channel implements (FZ-105) | proc, fs, net |
 | `model.rs` | 1,009 | `RepoStatus` and the row types the views draw | none |
 | `discovery.rs` | 617 | Finding clones under roots and `$HOME`, clone matching (`Wanted`, `CheckoutRank`) | fs |
 | `cache.rs` | 537 | The keyed on-disk API cache | fs |
@@ -90,10 +93,11 @@ the ones a newcomer most needs.
 ## 3. Dependencies as they are
 
 Who uses whom, from `crate::` paths in production code. Arrows point from
-user to used. Dotted arrows are the problem edges: six break the rules in
-section 7 (`report` to `main` and `app`, `ci` and `config` to `app`,
-`model` to `git` and `github`), and two are cycles inside one layer (`app`
-and `ui`, `cache` and `github`). All but `report` to `app` close a cycle.
+user to used. Dotted arrows are the problem edges: five break the rules in
+section 7 (`report` to `app`, `ci` and `config` to `app`, `model` to `git`
+and `github`), and two are cycles inside one layer (`app` and `ui`, `cache`
+and `github`). All but `report` to `app` close a cycle. `report` to `main`
+left with FZ-105: print mode and the TUI both call the engine.
 
 ```mermaid
 flowchart TB
@@ -102,6 +106,9 @@ flowchart TB
     report
     ui
     app
+  end
+  subgraph eng[Engine]
+    engine
   end
   subgraph io[Sources]
     git
@@ -123,7 +130,10 @@ flowchart TB
   main --> app & ui & report
   ui --> app
   app -.-> ui
-  report -.->|assemble_view_held,<br/>carries, unclaimed_local| main
+  main --> engine
+  report --> engine
+  app --> engine
+  engine --> io
   report -.->|FetchClaims, Icons| app
   ci -.->|Pace, RemoteKey,<br/>carrier_key| app
   config -.->|View, Icons,<br/>pane defaults| app
@@ -142,7 +152,6 @@ The edges that matter, with what crosses them:
 
 | Edge | What crosses | Why it is a problem |
 |---|---|---|
-| `report` to `main` | `assemble_view_held`, `carries`, `mark_local_carriers`, `unclaimed_local`, `probe_concurrency`, `RemoteKey` | The core of fleetz (turning discovery, git and GitHub into rows) lives in the binary's root file, so print mode depends on the TUI's entry point |
 | `report` to `app` | `FetchClaims`, `Icons` | Print mode depends on TUI state types |
 | `app` to `ui`, `app` to ratatui | `DetailHits`, `Divider`, `Loading`, colors, layout widths; `Rect`, `Line`, `Color` | State depends on drawing, so neither can change alone |
 | `ci` to `app` | `Pace`, `RemoteKey`, `carrier_key` | A data source depends on TUI state |
@@ -170,9 +179,9 @@ defined order. Sent by functions in `main.rs` unless noted.
 | `YankFrame` | `next_event` (the loop's own wait) | the loop |
 | `LoadingFrame` | `spawn_loading_task` | `on_loading_frame` |
 | `Loaded` | `spawn_load`, `spawn_window_apply`, `spawn_memory_rebuild` | `apply_load_result` |
-| `Progress` | `assemble_view_held` | the loop |
+| `Progress` | `engine::assemble_view_held`, through `engine::Sink` | the loop |
 | `RepoUpdated` | `spawn_sweep` | `apply_repo_updated` |
-| `FetchProgress` | `fetch_under_claim_capped` | the loop |
+| `FetchProgress` | `engine::fetch_under_claim_capped`, through `engine::Sink` | the loop |
 | `SweepDone` | `spawn_sweep` | `apply_sweep_done` |
 | `Github` | `spawn_github_poll` | `apply_github_poll` |
 | `Ci`, `CiDetail` | `spawn_ci_poll`, `spawn_ci_detail` | `App::apply_ci`, `App::apply_ci_detail` |
@@ -207,7 +216,8 @@ As it is, any code holding `&mut App` may change any field, and `ui`
 changes some through `Cell` while it holds only `&App` (22 writes, 18 of
 them in `ui/detail.rs`). What keeps the
 behavior right today is the invariants in `.claude/rules/` and the tests,
-not the types. `ApiBudget`, `GithubBackoff`, `FetchClaims` and
+not the types. `ApiBudget`, `GithubBackoff`, `FetchClaims` (in `engine`
+since FZ-105) and
 `GithubFreshness` are the exception: concerns with their own type, methods
 and tests, and the pattern section 7 builds on.
 

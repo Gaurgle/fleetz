@@ -10,6 +10,7 @@ paths:
   - "src/main.rs"
   - "src/tests.rs"
   - "src/digest_handler_tests.rs"
+  - "src/engine/**"
 ---
 
 # GitHub fetch, budget and cache invariants

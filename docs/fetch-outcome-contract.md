@@ -25,7 +25,7 @@ with git 2.39.3 in a throwaway repository.
 | Manual `r` waiting on fetches | Settles on any requested fetch, failed or not. The spinner stops correctly, but nothing says the fetch failed. | `app.rs::settle_refresh_fetch` 1444 |
 | Counts after a failed fetch | Behind and ahead are recomputed against the old remote refs and drawn as current. | `main.rs::rebuild_repo_status` |
 | "When did this clone last fetch" | `git::last_fetch_at` is the mtime of `FETCH_HEAD`. **A failed fetch truncates `FETCH_HEAD` and advances its mtime** (run: a remote path that does not exist, and a host that does not resolve, both left a 0 byte file with a new mtime). So a failed fetch counts as a fetch. | `git.rs::last_fetch_at` 178 |
-| First poll's fetch decision | `stale_remotes` skips a remote pushed before `last_fetch_at`. After a failed fetch that baseline is wrong, and the repo is skipped as "already in hand". | `main.rs::stale_remotes` 2241 |
+| First poll's fetch decision | `stale_remotes` skips a remote pushed before `last_fetch_at`. After a failed fetch that baseline is wrong, and the repo is skipped as "already in hand". | `engine/assembly.rs::stale_remotes` (`main.rs` 2241 when written) |
 | Credentials in errors | Not shown today, because nothing is shown. git itself printed the URL without its userinfo in the case tried (run). | |
 
 ## State
@@ -184,7 +184,7 @@ userinfo never appearing in the detail.
    the row reads `fetching 312 MB` in the place of the failure marker of
    rule 5 once bytes have arrived; the fetch's landing clears it. The
    one-fetch-per-checkout entry of R5 becomes a claim with a token
-   (`app::FetchClaims`): reserved when a sweep is scheduled, taken when the
+   (`engine::FetchClaims`): reserved when a sweep is scheduled, taken when the
    fetch's permit is granted (a reservation that expired while queued is
    taken again if the path is free, and the fetch does not run if a newer
    claim holds it), kept alive by each update, and ended only by its own

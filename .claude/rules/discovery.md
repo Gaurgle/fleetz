@@ -2,6 +2,7 @@
 paths:
   - "src/discovery.rs"
   - "src/discovery/**"
+  - "src/engine/**"
   - "src/main.rs"
   - "src/tests.rs"
   - "src/digest_handler_tests.rs"
@@ -16,7 +17,7 @@ edited; a loader without path scoping reads this file before changing the
 modules it names. Moved from the root `CLAUDE.md` on 2026-10-30, text
 unchanged.
 
-**Discovery pass order is load-bearing** (`main.rs::assemble_view`). Pass 1
+**Discovery pass order is load-bearing** (`engine/assembly.rs::assemble_view`). Pass 1
 scans the configured roots, pass 2 sweeps `$HOME`, pass 3 picks up local-only
 repos, and only then is anything "not cloned". A local clone wins over that
 fallback only through its exact origin, or through an unambiguous folder name
@@ -25,7 +26,7 @@ clone with no remote does not suppress the not-cloned row: it cannot say which
 repo it is.
 
 **GitHub-owned fields live on one carrier row per remote identity**, chosen at
-load and marked by the row's `owner` (`main.rs::build_repo_status`,
+load and marked by the row's `owner` (`engine/status.rs::build_repo_status`,
 `mark_local_carriers`). The poll, the moved-remote check, the startup fetch
 baseline and the activity sort follow that mark through one predicate
 (`carries`, `names_remote`), keyed by owner and name. A local-only row carries
@@ -58,7 +59,7 @@ shallower path, then path), never by filesystem order
 (`discovery::CheckoutRank`, which assembly reuses for local carriers). Matching
 diverges from repoz on purpose: repoz still matches clones on names only.
 
-**Pass 3 dedupes by canonical path only** (`main.rs::unclaimed_local`, the raw
+**Pass 3 dedupes by canonical path only** (`engine/assembly.rs::unclaimed_local`, the raw
 path when `canonicalize` fails), as repoz does, so one directory reached
 through two root spellings is one row. A dirty extra checkout, or a same-named
 local-only repo, gets its own row, which carries GitHub fields only if it is
