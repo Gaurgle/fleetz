@@ -34,13 +34,13 @@ Read from the code, not executed. Line numbers are at `6c72926` and drift.
 
 | Situation | Today | Where |
 |---|---|---|
-| Background poll, network down or HTTP non-2xx, cache file exists | `fetch_repos` returns `Ok` with `from_cache: true`. `apply_github_poll` ignores `from_cache` ("network data by construction"), clears `github_poll_failing`, and stamps `last_github_poll`. **The header shows nothing. Offline looks healthy.** | `github.rs::fetch_repos` 555-569, `main.rs::apply_github_poll` 1687-1700 |
+| Background poll, network down or HTTP non-2xx, cache file exists | `fetch_repos` returns `Ok` with `from_cache: true`. `apply_github_poll` ignores `from_cache` ("network data by construction"), clears `github_poll_failing`, and stamps `last_github_poll`. **The header shows nothing. Offline looks healthy.** | `github.rs::fetch_repos` 555-569, `poll.rs::apply_github_poll` |
 | Background poll, GraphQL error body (rate limit) | `Err`. `⚠ github` appears in the header and stays until a poll succeeds. The cache file is not overwritten. | `github.rs::accept_response` 600-603, `ui/mod.rs` 810 |
-| Launch with any cached payload | Painted at once, whatever its age. The age is not carried anywhere and nothing on screen says the data is cached. The poll clock is left unset so the first tick polls. | `github.rs::fetch_repos` 528-533, `main.rs::apply_load_result` 539 |
-| Launch with a cached payload and watch off (`--no-watch`, or `watch = false`) | Same paint, but **no poll ever follows**: the only automatic poll is inside the watch branch of the tick. The data stays as old as the cache until `r` or `R`, silently. | `main.rs` 665-675; call sites of `start_github_poll` are 674 and 1511 only |
-| `R` with the network down | Falls back to the cache and reports `Reloaded`. | `main.rs::fetch_dataset` 2212, `apply_load_result` 554 |
-| A poll that never returns | After 60 seconds the in-flight flag is dropped. No failure is recorded, the poll clock is not advanced, so the next tick starts another request while the first is still open. The HTTP client has no timeout. | `main.rs` 658-664, `GITHUB_POLL_STUCK_AFTER`; `github.rs` 543 |
-| Any failing state while a repo's CI is `Pending` | The poll interval stays at the 15 second floor, because the frozen `Pending` keeps asking for it. | `main.rs::github_poll_secs` 1799 |
+| Launch with any cached payload | Painted at once, whatever its age. The age is not carried anywhere and nothing on screen says the data is cached. The poll clock is left unset so the first tick polls. | `github.rs::fetch_repos` 528-533, `load.rs::apply_load_result` |
+| Launch with a cached payload and watch off (`--no-watch`, or `watch = false`) | Same paint, but **no poll ever follows**: the only automatic poll is inside the watch branch of the tick. The data stays as old as the cache until `r` or `R`, silently. | `event.rs::run_event_loop`, the tick; call sites of `start_github_poll` are the tick's watch branch and the `r` key only |
+| `R` with the network down | Falls back to the cache and reports `Reloaded`. | `engine/load.rs::fetch_dataset`, `load.rs::apply_load_result` |
+| A poll that never returns | After 60 seconds the in-flight flag is dropped. No failure is recorded, the poll clock is not advanced, so the next tick starts another request while the first is still open. The HTTP client has no timeout. | `event.rs::run_event_loop`, the tick; `poll.rs::GITHUB_POLL_STUCK_AFTER`; `github.rs` 543 |
+| Any failing state while a repo's CI is `Pending` | The poll interval stays at the 15 second floor, because the frozen `Pending` keeps asking for it. | `poll.rs::github_poll_secs` |
 | No usable cache and the first load fails | The error panel explains it. This case is already right. | `App::load_error`, `ui/mod.rs::render_load_error` |
 
 ## Vocabulary

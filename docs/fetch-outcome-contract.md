@@ -19,11 +19,11 @@ with git 2.39.3 in a throwaway repository.
 
 | Situation | Today | Where |
 |---|---|---|
-| Any fetch result | `git::fetch` returns a `bool` and `spawn_sweep` drops it. | `git.rs::fetch` 222, `main.rs::spawn_sweep` 1937 |
-| The event that lands | `RepoUpdated.fetched` is `do_fetch`: "a fetch was requested", not "a fetch succeeded". | `main.rs::spawn_sweep` 1944 |
+| Any fetch result | `git::fetch` returns a `bool` and `spawn_sweep` drops it. | `git.rs::fetch` 222, `sweep.rs::spawn_sweep` |
+| The event that lands | `RepoUpdated.fetched` is `do_fetch`: "a fetch was requested", not "a fetch succeeded". | `sweep.rs::spawn_sweep` |
 | Failure, timeout, could not start | Indistinguishable: `run_git` returns `None` for a timeout and for a process that could not run, and stderr is never read. | `git.rs::run_git` 32 |
 | Manual `r` waiting on fetches | Settles on any requested fetch, failed or not. The spinner stops correctly, but nothing says the fetch failed. | `app.rs::settle_refresh_fetch` 1444 |
-| Counts after a failed fetch | Behind and ahead are recomputed against the old remote refs and drawn as current. | `main.rs::rebuild_repo_status` |
+| Counts after a failed fetch | Behind and ahead are recomputed against the old remote refs and drawn as current. | `sweep.rs::rebuild_repo_status` |
 | "When did this clone last fetch" | `git::last_fetch_at` is the mtime of `FETCH_HEAD`. **A failed fetch truncates `FETCH_HEAD` and advances its mtime** (run: a remote path that does not exist, and a host that does not resolve, both left a 0 byte file with a new mtime). So a failed fetch counts as a fetch. | `git.rs::last_fetch_at` 178 |
 | First poll's fetch decision | `stale_remotes` skips a remote pushed before `last_fetch_at`. After a failed fetch that baseline is wrong, and the repo is skipped as "already in hand". | `engine/assembly.rs::stale_remotes` (`main.rs` 2241 when written) |
 | Credentials in errors | Not shown today, because nothing is shown. git itself printed the URL without its userinfo in the case tried (run). | |
@@ -137,7 +137,7 @@ userinfo never appearing in the detail.
    watch mode nothing fetched it again, so the marks stayed until `f` or
    `r`. Now the first successful GitHub poll after an `Offline` one fetches
    those repos once, through the moved-remote batch
-   (`main.rs::recovery_refetch`, called from `apply_github_poll_at`), so the
+   (`poll.rs::recovery_refetch`, called from `apply_github_poll_at`), so the
    fetch tally, the per-repo marks and the status line are a moved-remote
    batch's. Of the fetch kinds in [State](#state), `Auth`, `NoRemote` and
    `Other` (a git error) are not refetched. No fetch backoff, no new config key, and `r`, `f`,
@@ -216,7 +216,7 @@ userinfo never appearing in the detail.
      growth. A missing current value, an unknown baseline, or an unchanged
      or shrunken size decide nothing: the fetch runs under the cap.
      `grown` is derived state: recomputed from the dataset and the baseline
-     on every poll apply and every load apply (`main.rs::assess_size_holds`),
+     on every poll apply and every load apply (`load.rs::assess_size_holds`),
      never set by a fetch (a successful one only clears it). A sweep that started before a push and lands
      after the poll that saw it records the new size as its baseline, so the
      pre-check misses that growth once and the in-fetch cap bounds it.
