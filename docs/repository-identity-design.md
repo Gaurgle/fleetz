@@ -93,7 +93,7 @@ cited lines unless noted.
 | `discovery::find_all_local` discovery.rs:215-226 | `PathBuf` as given (not canonicalized), maxdepth 4 against pass 1's 3 | n/a | Byte-exact | Same directory through two root spellings (symlink) yields two candidates; the later name dedupe hides it |
 | `discovery::FoundRepo` discovery.rs:6-9 | `name`, `path` | **No owner field** | n/a | n/a |
 
-### 1.3 Assembly (`main.rs::assemble_view` and helpers)
+### 1.3 Assembly (`main.rs::assemble_view` and helpers, in `src/engine/` since FZ-105)
 
 | Site | Key | Owner-aware | Case | On collision |
 |---|---|---|---|---|

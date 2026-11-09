@@ -2,6 +2,8 @@ use crate::model::{CiStatus, RepoLocation, RepoStatus, Summary};
 use crate::time::{TimeWindow, WINDOW_N_MIN, WindowUnit};
 use chrono::{DateTime, Local};
 
+pub use crate::engine::{ApplyProgress, DatasetSource, FetchClaims};
+
 /// Which TUI view is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -909,42 +911,6 @@ mod settings_intro_tests;
 #[cfg(test)]
 mod settings_icons_tests;
 
-/// Progress of an in-flight time-window apply, shown as a footer gauge.
-/// `Statting` is the determinate phase over the GitHub-matched repos;
-/// `Discovering` and `Finishing` bracket it (their counts are not known).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApplyProgress {
-    Discovering,
-    Statting { done: usize, total: usize },
-    Finishing,
-}
-
-impl ApplyProgress {
-    /// Fill fraction for the gauge, in 0.0..=1.0.
-    pub fn ratio(&self) -> f64 {
-        match self {
-            ApplyProgress::Discovering => 0.0,
-            ApplyProgress::Statting { done, total } => {
-                if *total == 0 {
-                    0.0
-                } else {
-                    (*done as f64 / *total as f64).clamp(0.0, 1.0)
-                }
-            }
-            ApplyProgress::Finishing => 1.0,
-        }
-    }
-
-    /// Gauge label text.
-    pub fn label(&self) -> String {
-        match self {
-            ApplyProgress::Discovering => "discovering…".to_string(),
-            ApplyProgress::Statting { done, total } => format!("{done}/{total} repos"),
-            ApplyProgress::Finishing => "finishing…".to_string(),
-        }
-    }
-}
-
 /// State for the branch overlay (switch + cleanup + preview).
 #[derive(Debug, Clone)]
 pub struct BranchOverlay {
@@ -1194,23 +1160,6 @@ pub enum Outcome {
     NotAttempted,
     Success,
     Failed(crate::github::Failure),
-}
-
-/// Where a load's GitHub dataset came from, which decides what it tells
-/// `GithubFreshness`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DatasetSource {
-    /// No GitHub fetch behind it: a window apply, or `-d`.
-    Local,
-    /// Read off the disk cache, with no attempt made.
-    Cache { written: Option<DateTime<Local>> },
-    /// A successful attempt.
-    Network,
-    /// A failed attempt, with the cache filling in.
-    Fallback {
-        failure: crate::github::Failure,
-        written: Option<DateTime<Local>>,
-    },
 }
 
 /// The three GitHub freshness facts of `docs/freshness-contract.md`: when the
@@ -1764,134 +1713,6 @@ impl FetchBackoff {
     #[cfg(test)]
     pub fn timeouts(&self, path: &str) -> u32 {
         self.timeouts.get(path).map_or(0, |&(n, _)| n)
-    }
-}
-
-/// One fetch's hold on its path: which claim it is, and when it last showed
-/// life (claimed, granted its permit, or reported progress).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FetchClaim {
-    token: u64,
-    at: std::time::Instant,
-}
-
-#[derive(Debug, Default)]
-struct ClaimTable {
-    next_token: u64,
-    claims: std::collections::HashMap<String, FetchClaim>,
-}
-
-/// The paths with a fetch running or queued, one fetch per checkout at a
-/// time (FZ-34 R5, FZ-35a). Shared between `App` and the fetch tasks, so a
-/// fetch can take its claim at the moment it may start.
-///
-/// The life of a claim:
-///
-/// - **Reserved when the sweep is scheduled** (`reserve`, through
-///   `App::claim_fetch`), so the next selection already sweeps the path
-///   without fetching it while the fetch waits for a permit.
-/// - **Taken when the fetch permit is granted** (`start`), in the fetch task,
-///   before git runs. This restamps the claim, so time spent queued behind
-///   `FETCH_CONCURRENCY` other fetches never counts toward its expiry. A
-///   reservation that expired while queued is taken again if the path is
-///   free; if a newer claim holds it, this fetch does not run at all. The
-///   load path (`assemble_view`) takes its claims here too, with no
-///   reservation, since it schedules and starts in one place.
-/// - **Kept alive by every progress update** (`touch`).
-/// - **Ended by its own landing** (`release` with its token): a late landing
-///   from a claim that expired cannot end a newer claim on the same path.
-/// - **Expired** after `SWEEP_STUCK_AFTER` without a sign of life, the
-///   safety net for a result that never lands (`expire`).
-///
-/// Each claim carries a token from a counter, never reused. Cloning shares
-/// the table.
-#[derive(Debug, Clone, Default)]
-pub struct FetchClaims {
-    table: std::sync::Arc<std::sync::Mutex<ClaimTable>>,
-}
-
-impl FetchClaims {
-    fn table(&self) -> std::sync::MutexGuard<'_, ClaimTable> {
-        // A panic while holding the lock leaves the table consistent: every
-        // operation is a single map edit.
-        self.table
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    /// Reserve `path` at `now`, or `None` when another claim holds it.
-    pub fn reserve(&self, path: &str, now: std::time::Instant) -> Option<u64> {
-        let mut table = self.table();
-        if table.claims.contains_key(path) {
-            return None;
-        }
-        table.next_token += 1;
-        let token = table.next_token;
-        table
-            .claims
-            .insert(path.to_string(), FetchClaim { token, at: now });
-        Some(token)
-    }
-
-    /// The fetch holding `token` was granted its permit at `now`: true when
-    /// it may run. Its own claim is restamped; a free path is claimed again
-    /// under the same token; a path another claim holds is refused.
-    pub fn start(&self, path: &str, token: u64, now: std::time::Instant) -> bool {
-        let mut table = self.table();
-        match table.claims.get_mut(path) {
-            Some(claim) if claim.token == token => claim.at = now,
-            Some(_) => return false,
-            None => {
-                table
-                    .claims
-                    .insert(path.to_string(), FetchClaim { token, at: now });
-            }
-        }
-        true
-    }
-
-    /// A progress update from the fetch holding `token`.
-    pub fn touch(&self, path: &str, token: u64, now: std::time::Instant) {
-        if let Some(claim) = self.table().claims.get_mut(path)
-            && claim.token == token
-        {
-            claim.at = now;
-        }
-    }
-
-    /// End the claim on `path`: only the one holding `token`, or whichever
-    /// holds it when `token` is `None`.
-    pub fn release(&self, path: &str, token: Option<u64>) {
-        let mut table = self.table();
-        if token.is_none_or(|t| table.claims.get(path).is_some_and(|c| c.token == t)) {
-            table.claims.remove(path);
-        }
-    }
-
-    /// The token of the claim on `path`.
-    pub fn token(&self, path: &str) -> Option<u64> {
-        self.table().claims.get(path).map(|c| c.token)
-    }
-
-    /// Drop claims with no sign of life for longer than `limit` at `now`.
-    pub fn expire(&self, limit: std::time::Duration, now: std::time::Instant) {
-        self.table()
-            .claims
-            .retain(|_, claim| now.saturating_duration_since(claim.at) <= limit);
-    }
-
-    pub fn contains_key(&self, path: &str) -> bool {
-        self.table().claims.contains_key(path)
-    }
-
-    #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
-        self.table().claims.is_empty()
-    }
-
-    #[cfg(test)]
-    pub fn clear(&self) {
-        self.table().claims.clear();
     }
 }
 
@@ -2904,11 +2725,11 @@ pub fn initial_view(term_width: u16, term_height: u16) -> View {
 
 /// A remote identity as assembly compares it: lowercased owner and name, no
 /// owner for the legacy key of a payload without `login`
-/// (`GithubRepo::identity_key`, the shape of `main.rs::remote_key`).
+/// (`GithubRepo::identity_key`, the shape of `engine::remote_key`).
 pub type RemoteKey = (Option<String>, String);
 
 /// The remote key of the GitHub repo `repo` carries, or None when it carries
-/// none. Follows `main.rs::carries`: a Primary, Elsewhere or NotCloned row is
+/// none. Follows `engine::carries`: a Primary, Elsewhere or NotCloned row is
 /// keyed by its owner and name (name alone for a legacy row without owner);
 /// a LocalOnly row only when the load made it a carrier by giving it an
 /// owner, and then by the name its stored origin names, since its own `name`
@@ -6397,7 +6218,7 @@ impl App {
     fn pushed_at(&self, repo: &RepoStatus) -> Option<DateTime<chrono::Utc>> {
         self.dataset
             .iter()
-            .find(|e| crate::carries(repo, e))
+            .find(|e| crate::engine::carries(repo, e))
             .map(|e| e.pushed_at)
     }
 

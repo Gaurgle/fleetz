@@ -84,7 +84,7 @@ pub async fn print(args: &Args, out: &mut dyn Write) -> io::Result<i32> {
         return Ok(1);
     };
     let active = active_repos(&dataset, cutoff, args).map_err(invalid)?;
-    let (rows, _notes) = crate::assemble_view_held(
+    let (rows, _notes) = crate::engine::assemble_view_held(
         &dataset,
         cutoff,
         header.clone(),
@@ -167,10 +167,14 @@ async fn with_bash_local_changes(
     // Assembly gave each active repo to exactly one of passes 1 and 2, its
     // pass 3 or a not-cloned row; the first are the ones neither replaced
     // row carries.
-    let mut carried: HashSet<crate::RemoteKey> = active
+    let mut carried: HashSet<crate::engine::RemoteKey> = active
         .iter()
-        .filter(|entry| !replaced.iter().any(|row| crate::carries(row, entry)))
-        .map(|entry| crate::remote_key(entry.owner.as_deref(), &entry.name))
+        .filter(|entry| {
+            !replaced
+                .iter()
+                .any(|row| crate::engine::carries(row, entry))
+        })
+        .map(|entry| crate::engine::remote_key(entry.owner.as_deref(), &entry.name))
         .collect();
 
     let claimed: Vec<PathBuf> = shown.iter().map(|row| on_disk(home, row)).collect();
@@ -180,11 +184,14 @@ async fn with_bash_local_changes(
         .iter()
         .map(|(path, row)| (path.as_path(), row.clone()))
         .collect();
-    crate::mark_local_carriers(&mut local, dataset, scan_roots, &mut carried);
+    crate::engine::mark_local_carriers(&mut local, dataset, scan_roots, &mut carried);
     shown.extend(local.into_iter().map(|(_, row)| row));
 
     for entry in active {
-        if carried.contains(&crate::remote_key(entry.owner.as_deref(), &entry.name)) {
+        if carried.contains(&crate::engine::remote_key(
+            entry.owner.as_deref(),
+            &entry.name,
+        )) {
             continue;
         }
         let mut row = bare_row(entry.name.clone(), None, RepoLocation::NotCloned);
@@ -202,12 +209,14 @@ async fn local_with_news(
     scan_roots: &[PathBuf],
     claimed: &HashSet<&Path>,
 ) -> Vec<(PathBuf, RepoStatus)> {
-    let candidates = crate::unclaimed_local(
+    let candidates = crate::engine::unclaimed_local(
         crate::discovery::find_all_local(scan_roots),
         claimed,
         &HashSet::new(),
     );
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::probe_concurrency()));
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(
+        crate::engine::probe_concurrency(),
+    ));
     let mut set = tokio::task::JoinSet::new();
     for (i, (path, name)) in candidates.into_iter().enumerate() {
         let sem = sem.clone();
@@ -349,7 +358,7 @@ async fn target_row(layout: Layout, name: &str, path: &Path, max_bytes: Option<u
         false => symbols,
     };
     let status = render::with_op(op, &noted);
-    let shown = crate::tilde_display(path);
+    let shown = crate::engine::tilde_display(path);
     match status.is_empty() {
         true => layout.row(Glyph::None, name, Some(&shown), "synced", palette::GREEN),
         false => layout.row(
@@ -410,7 +419,7 @@ fn sort_as_git_paths(home: &Path, rows: &mut [RepoStatus]) {
 async fn local_candidate(path: &Path, name: String) -> RepoStatus {
     let mut row = bare_row(
         name,
-        Some(crate::tilde_display(path)),
+        Some(crate::engine::tilde_display(path)),
         RepoLocation::LocalOnly,
     );
     row.dirty = crate::git::dirty_count(path).await;
@@ -498,7 +507,7 @@ fn window(
     mode: &Mode,
     config: &crate::config::Config,
 ) -> Result<(Option<chrono::DateTime<chrono::Utc>>, String), String> {
-    let (cutoff, mut header) = crate::resolve_cutoff(None, mode, config)?;
+    let (cutoff, mut header) = crate::engine::resolve_cutoff(None, mode, config)?;
     if let Mode::Since(since) = mode {
         header = format!("since {}", crate::time::parse_relative_date(since)?);
     }
@@ -671,7 +680,7 @@ impl Report<'_> {
     fn activity_rank(&self, row: &RepoStatus) -> usize {
         self.active
             .iter()
-            .position(|r| crate::names_remote(row.owner.as_deref(), &row.name, r))
+            .position(|r| crate::engine::names_remote(row.owner.as_deref(), &row.name, r))
             .unwrap_or(usize::MAX)
     }
 
@@ -680,7 +689,7 @@ impl Report<'_> {
     fn github_name<'r>(&'r self, row: &'r RepoStatus) -> &'r str {
         self.active
             .iter()
-            .find(|r| crate::names_remote(row.owner.as_deref(), &row.name, r))
+            .find(|r| crate::engine::names_remote(row.owner.as_deref(), &row.name, r))
             .map_or(row.name.as_str(), |r| r.name.as_str())
     }
 
@@ -693,7 +702,7 @@ impl Report<'_> {
         let count = self
             .active
             .iter()
-            .find(|r| crate::names_remote(row.owner.as_deref(), &row.name, r))
+            .find(|r| crate::engine::names_remote(row.owner.as_deref(), &row.name, r))
             .map_or(0, |r| r.pr_count);
         self.counts.open_prs += count;
         count
