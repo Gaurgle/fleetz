@@ -19,7 +19,7 @@ on his "stop after fz-95 is complete". `main` at `ee0ba8b`, CI green.
 | Choose and dispatch tickets from the board | 2026-10-27 11:05, "you, as the lead, have authority to decide what tickets to start on" | two workers plus one `fz-small`; look items stop for him; FZ-52 and the `0.7.0` bump need his explicit word; issues only on his yes | revoked by word |
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
-| Refactor batch from `docs/module-split-design.md` | 2026-11-09 15:14, "refactor only ... File L1, T1, E1, E2 and D1 and run them in order; F1 and U1 after"; about 19:20, "We can keep on refactoring as we go", "just keep on refactoring tonight. I'll be at dinner then sleep" | FZ-103 to FZ-107 (done), then FZ-108 (U1) and F1 (file and run), unattended tonight; the architect's survey and the A1 and E3 consults (reads); A1 and E2b code only after he reads their designs; no feature tickets | the refactor lands or revoked by word |
+| Refactor batch from `docs/module-split-design.md` | 2026-11-09 15:14, "refactor only ... File L1, T1, E1, E2 and D1 and run them in order; F1 and U1 after"; about 19:20, "We can keep on refactoring as we go", "just keep on refactoring tonight. I'll be at dinner then sleep" | FZ-103 to FZ-109 (done), FZ-110 to FZ-112 (running), then `docs/app-split-design.md`'s eight tickets in its order (accepted 21:56, "I accept all changes in the design plan"); no feature tickets | the refactor lands or revoked by word |
 
 Astra is the preferred lead. No `cargo install`, tag or release. His
 FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
@@ -40,8 +40,10 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
   `fz-111`, standard), FZ-112 (#169, `fnv1a_64` to `cache`, `fz-112`,
   `fz-small` light). Records on the issues. Merges one at a time;
   `docs/architecture.md` conflicts resolved by the lead.
-- `docs/app-split-design.md` (`a0b95ab`) is proposed for his reading
-  (artifact sent 21:30): E3 and E2b start on his "accept D1 to D7".
+- `docs/app-split-design.md` accepted 21:56 ("I accept all changes in
+  the design plan"): E3 (`GithubSync`) next, after FZ-110 merges (shares
+  `app.rs`); architect ticket check for E3 dispatched 21:58; then E2b,
+  A1a, A1c to A1i, R2 in the design's order.
 - FZ-100 (#157), FZ-102 (#159), the build label and FZ-97 (#154) wait
   on his word; FZ-83 and FZ-95 follow-ups in the log.
 
