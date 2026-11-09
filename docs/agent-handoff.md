@@ -29,11 +29,11 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 
 - Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f` (layer test;
   `super::` gap on #160), FZ-104 `e831dd1` (tests in sibling files).
-- FZ-105 (#162, E1) In progress since 18:50: architect "fits with
-  note", four rulings on the issue (generic progress sender; three
-  `app.rs` types move with re-exports; `cli` to the sources layer, O5
-  flagged). Worktree `.claude/worktrees/fz-105`, branch
-  `refactor/fz-105-engine-assembly`, base `e831dd1`, worker hard tier.
+- FZ-105 (#162, E1) Review since 19:55: diff `b2b59862cde1`, record
+  and five rulings on the issue (ruling 5: a `Sink` trait replaces the
+  generic sender; `cli` to the sources layer, O5 flagged). Worktree
+  `.claude/worktrees/fz-105`, branch `refactor/fz-105-engine-assembly`,
+  base `e831dd1`; worker done (hard tier), reviewer running (hard).
 - FZ-106 (#163) narrowed to E2a (pure fetch types), ruling on the
   issue; E2b (planning functions under a fetch owner type) joins E3
   and A1 in the consult queue, filed on his yes (O6).
