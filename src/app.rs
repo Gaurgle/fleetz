@@ -5249,6 +5249,26 @@ impl App {
         }
     }
 
+    /// One wheel event over the `notes` tree: step its cursor a file, and
+    /// let the renderer bring it into view with the scrolloff margin; past
+    /// either end, scroll the header or the tail into view instead (FZ-65).
+    ///
+    /// Not `detail_nav_down`/`up`: their re-entry measures the cursor
+    /// against the last frame, and his terminal sends two events a notch
+    /// before the next frame is drawn. The first stepped the cursor past the
+    /// margin the old frame kept, the second re-entered it back, and the
+    /// notch moved nothing.
+    pub fn wheel_notes_tree(&mut self, down: bool) {
+        match down {
+            true if self.detail_selected() + 1 < self.selected_commit_count() => {
+                self.select_commit_down()
+            }
+            false if self.detail_selected() > 0 => self.select_commit_up(),
+            true => self.scroll_detail(1),
+            false => self.scroll_detail(-1),
+        }
+    }
+
     /// Detail-pane up-navigation: step the commit cursor, and let the
     /// renderer bring it into view.
     ///
