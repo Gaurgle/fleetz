@@ -48,7 +48,8 @@ flowchart LR
 
 External systems: `git` as a subprocess (`git.rs`, one `Command::new("git")`
 helper), GitHub over HTTPS with `reqwest` (GraphQL in `github.rs`, REST
-Actions in `ci.rs`) using the token from `gh auth token`, and the disk:
+Actions and the default branch tip's commit statuses, check runs and
+status history in `ci.rs`) using the token from `gh auth token`, and the disk:
 the API cache (`cache.rs`), the config and settings file (`config.rs`),
 the saved time window (`window_state.rs`) and the notes walk (`notes.rs`).
 
@@ -62,11 +63,11 @@ touches the disk, `term` draws or reads the terminal.
 |---|---|---|---|
 | `main.rs` | 4,820 | Startup, the event loop, every input handler, task spawning, sweep and fetch planning, GitHub poll scheduling, view assembly (discovery passes, carriers), editor and opener handoff | proc, term |
 | `app.rs` | 5,990 | `App`: all TUI state (109 fields), the overlays, filters and query parsing, API budget and backoff, fetch claims, per-view caches for ci, notes, worktrees and digest | none (holds ratatui types) |
-| `ui/` (18 files) | 12,075 | Drawing every view from `&App`; `detail.rs` alone is 3,984 | term |
+| `ui/` (18 files) | 12,318 | Drawing every view from `&App`; `detail.rs` alone is 3,984 | term |
 | `git.rs` | 2,245 | Every git read and fetch, fetch outcomes and progress, `WorkKey`, the `changes` read (`changes`, `changed_file_diff`) | proc, fs |
 | `report/` | 2,062 | Print mode: run, render byte for byte as repoz, golden parity harness | proc, fs |
 | `github.rs` | 1,594 | The GraphQL query and its cost, the HTTP client, token lookup, failure kinds | net, proc |
-| `ci.rs` | 1,089 | Workflow runs, jobs and log tails over REST, with ETags | net |
+| `ci.rs` | 1,537 | Workflow runs, jobs and log tails over REST, with ETags; the default branch tip's `TipStatus`, `TipChecks` and `StatusEvent` history, and `tip_verdict` over them | net |
 | `model.rs` | 1,009 | `RepoStatus` and the row types the views draw | none |
 | `discovery.rs` | 617 | Finding clones under roots and `$HOME`, clone matching (`Wanted`, `CheckoutRank`) | fs |
 | `cache.rs` | 537 | The keyed on-disk API cache | fs |
@@ -198,7 +199,7 @@ worktrees, changes and ci. Contracts: `docs/freshness-contract.md`,
 | GitHub sync | `github_freshness`, `api_budget`, `github_backoff`, poll timing fields | poll scheduling and apply in `main.rs`, `App` methods |
 | Local fetch | `fetches_in_flight`, `fetch_backoff`, `manual_fetches`, refresh fields | sweep and fetch planning in `main.rs` |
 | Navigation and view | `view`, `overlay`, `selected`, `focused_panel`, `history_view`, scrolls, pane percentages | input handlers in `main.rs`, `App` methods |
-| Per-view caches | `ci`, `notes`, `note_body`, `worktree_logs`, `digest_logs` | `App::apply_*` |
+| Per-view caches | `ci` (each repo's `CiTip` with it), `notes`, `note_body`, `worktree_logs`, `digest_logs` | `App::apply_*` |
 | Render feedback | 18 `Cell` and `RefCell` fields such as `detail_hits`, `list_hits`, `reader_width` | `ui::render`, while drawing |
 
 As it is, any code holding `&mut App` may change any field, and `ui`

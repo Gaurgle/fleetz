@@ -72,8 +72,8 @@ paints six cells mid-border after the panes, so anything drawn on that
 border (the CI body tabs) budgets around `grips::inspector_grip_span`;
 pane 2's border has no grip and its arithmetic cannot be copied as is.
 
-**`detail::repo_row_spans` is the one repo row, and the slot digest draws
-it too.** A style that keys off the selected row reaches the digest's
+**`detail::repo_row_spans_ci` is the one repo row, drawn with the `RowCi`
+from `App::ci_shown` by every screen, the slot digest too.** A style that keys off the selected row reaches the digest's
 cursor line, whose own slots (count, authors, subject) must follow it:
 FZ-66's band stopped where the pane 1 part ended until
 `digest::render_pane` washed the rest of the line.

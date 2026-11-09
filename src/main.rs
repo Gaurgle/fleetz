@@ -1992,6 +1992,11 @@ async fn handle_normal_input(
             app.invalidate_notes();
             app.invalidate_changes();
         }
+        // On an other context in the `ci` view, its page (FZ-83).
+        KeyCode::Enter if context_url(app).is_some() => {
+            let url = context_url(app).unwrap_or_default();
+            let _ = StdCommand::new(OPENER).arg(&url).status();
+        }
         // On a header, Enter goes to the digest line's repo row (FZ-45).
         KeyCode::Enter if app.on_header().is_some() => {
             app.jump_to_digest_line(chrono::Local::now())
@@ -2393,6 +2398,16 @@ fn resolve_run_handoff(
     }
 }
 
+/// The target url of the other context under the `ci` view's cursor
+/// (FZ-83), which `Enter` and `O` open; `None` off those rows or for a
+/// context without one.
+fn context_url(app: &App) -> Option<String> {
+    if !ci_handoff_applies(app) {
+        return None;
+    }
+    app.highlighted_ci_context()?.url.clone()
+}
+
 /// Run a `ci` view key: `l` shows the run's log in the inspector, the
 /// others hand off. Back from `gh`, the run's repo polls at once
 /// (`ci_poll_after_handoff`) so the rerun or cancel shows.
@@ -2405,6 +2420,12 @@ fn ci_handoff_key(
     let Some(key) = RunKey::from_code(code) else {
         return Ok(());
     };
+    if key == RunKey::Open
+        && let Some(url) = context_url(app)
+    {
+        let _ = StdCommand::new(OPENER).arg(&url).status();
+        return Ok(());
+    }
     let Some((handoff, target)) = resolve_run_handoff(app, key) else {
         return Ok(());
     };
@@ -13021,6 +13042,46 @@ mod tests {
         app
     }
 
+    /// `Enter` and `O` on an other context in the `ci` view (FZ-83) open its
+    /// target url; on a run row, or without pane 2's focus, there is none,
+    /// and both keep their other meanings.
+    #[test]
+    fn enter_and_o_open_an_other_contexts_target_url() {
+        let mut app = ci_app();
+        app.view = app::View::Detail;
+        app.history_view = app::HistoryView::Ci;
+        app.focused_panel = FocusedPanel::Detail;
+        let vercel = ci::Context {
+            name: "Vercel".to_string(),
+            state: model::CiStatus::Failed,
+            description: Some("Aliasing has failed".to_string()),
+            url: Some("https://vercel.com/x".to_string()),
+            actions: false,
+            source: "vercel".to_string(),
+            started: None,
+            completed: None,
+        };
+        app.ci.insert(
+            ci_key(),
+            app::CiState {
+                runs: ci_runs(),
+                tip: Some(app::CiTip {
+                    sha: "cc524b4".to_string(),
+                    statuses: vec![vercel],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        app.detail_selections[app::HistoryView::Ci.index()] = 0;
+        assert_eq!(context_url(&app).as_deref(), Some("https://vercel.com/x"));
+        app.detail_selections[app::HistoryView::Ci.index()] = 1;
+        assert_eq!(context_url(&app), None, "a run row");
+        app.detail_selections[app::HistoryView::Ci.index()] = 0;
+        app.focused_panel = FocusedPanel::RepoList;
+        assert_eq!(context_url(&app), None, "pane 2 not focused");
+    }
+
     /// `Enter` opens the `notes` view's highlighted file while pane 2 or the
     /// inspector has focus, and lazygit everywhere else, a row with no file
     /// included. Fails while `Enter` only ever opens lazygit.
@@ -13557,6 +13618,7 @@ mod tests {
             full_log: None,
             failure: None,
             budget: None,
+            tip: None,
         }
     }
 

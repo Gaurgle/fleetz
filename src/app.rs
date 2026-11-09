@@ -2789,6 +2789,118 @@ pub struct CiState {
     /// from every other repo's, so one repo's failures never delay another
     /// repo's first poll.
     pub backoff: GithubBackoff,
+    /// The default branch's tip and its contexts (FZ-83), read with the runs
+    /// while the `ci` view shows this repo. Memory only.
+    pub tip: Option<CiTip>,
+}
+
+/// The default branch's tip as the `ci` poll last read it (FZ-83).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CiTip {
+    pub sha: String,
+    pub status_etag: Option<String>,
+    pub statuses: Vec<crate::ci::Context>,
+    pub statuses_complete: bool,
+    pub checks_etag: Option<String>,
+    /// `None` until the check runs of this sha answered.
+    pub checks: Option<crate::ci::TipChecks>,
+    /// When both reads last answered for this sha, fresh or 304: the data
+    /// time `App::ci_shown` weighs against the fleet poll's.
+    pub confirmed: Option<DateTime<Local>>,
+    /// Every state change of the tip's commit statuses, which dates their
+    /// rows in the `ci` list.
+    pub history: Vec<crate::ci::StatusEvent>,
+    pub history_etag: Option<String>,
+}
+
+impl CiTip {
+    /// Every context of the tip is held: all its statuses and check runs.
+    pub fn complete(&self) -> bool {
+        self.statuses_complete && self.checks.as_ref().is_some_and(|c| c.complete)
+    }
+
+    /// The statuses, then the check runs.
+    pub fn contexts(&self) -> impl Iterator<Item = &crate::ci::Context> {
+        self.statuses
+            .iter()
+            .chain(self.checks.iter().flat_map(|c| c.runs.iter()))
+    }
+
+    /// Land the tip reads' answer at `now`. A new sha starts over: the old
+    /// tip's contexts say nothing about it.
+    fn land(held: &mut Option<Self>, answer: crate::ci::TipAnswer, now: DateTime<Local>) {
+        use crate::ci::Fetched;
+        if let Fetched::Fresh { data, etag } = answer.status {
+            if held.as_ref().is_none_or(|t| t.sha != data.sha) {
+                *held = Some(Self {
+                    sha: data.sha.clone(),
+                    ..Self::default()
+                });
+            }
+            if let Some(tip) = held.as_mut() {
+                tip.status_etag = etag;
+                tip.statuses = data.statuses;
+                tip.statuses_complete = data.complete;
+            }
+        }
+        let Some(tip) = held.as_mut() else {
+            return;
+        };
+        if let Some((sha, checks)) = answer.checks
+            && tip.sha == sha
+        {
+            if let Fetched::Fresh { data, etag } = checks {
+                tip.checks = Some(data);
+                tip.checks_etag = etag;
+            }
+            if tip.checks.is_some() {
+                tip.confirmed = Some(now);
+            }
+        }
+        if let Some((sha, Fetched::Fresh { data, etag })) = answer.history
+            && tip.sha == sha
+        {
+            tip.history = data;
+            tip.history_etag = etag;
+        }
+    }
+
+    /// The tip's contexts the run list does not already show, as rows of
+    /// it: every commit status, from its history, and every check run of
+    /// an app other than GitHub Actions.
+    pub fn context_runs(&self) -> Vec<crate::ci::ContextRun> {
+        let statuses = self
+            .statuses
+            .iter()
+            .map(|s| crate::ci::status_run(s, &self.history));
+        let checks = self
+            .checks
+            .iter()
+            .flat_map(|c| c.runs.iter())
+            .filter(|c| !c.actions)
+            .map(crate::ci::check_run);
+        statuses.chain(checks).collect()
+    }
+}
+
+/// One row of the `ci` view's list (FZ-83): a workflow run, or another
+/// context of the default branch's tip, sorted together by time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CiEntry<'a> {
+    Run(&'a crate::ci::WorkflowRun),
+    Context(crate::ci::ContextRun),
+}
+
+/// The CI state to show for a repo (FZ-83): what the row lamp, pane 2's
+/// header and the `info` line all draw, from `App::ci_shown`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CiShown {
+    pub status: CiStatus,
+    /// The default branch's name, once a held run on its tip names it.
+    pub branch: Option<String>,
+    /// The context to blame while not passed (`Vercel`, `Vercel +2`), known
+    /// only when the verdict came from the tip's own contexts.
+    pub culprit: Option<String>,
 }
 
 /// One run's jobs as last read.
@@ -2799,15 +2911,21 @@ pub struct CiJobs {
 }
 
 impl CiState {
-    /// What one poll of this repo costs on `core`: the list, plus the
-    /// expanded run's jobs.
+    /// What one poll of this repo costs on `core`: the list, the tip's
+    /// status and check runs (FZ-83), its status history while it has
+    /// commit statuses, plus the expanded run's jobs.
     pub fn poll_cost(&self) -> u32 {
-        crate::ci::CALL_COST * if self.expanded.is_some() { 2 } else { 1 }
+        let history = self.tip.as_ref().is_some_and(|t| !t.statuses.is_empty());
+        crate::ci::CALL_COST * (3 + u32::from(history) + u32::from(self.expanded.is_some()))
     }
 
-    /// Land an applied answer's data. The outcome is `App::apply_ci`'s.
-    fn land(&mut self, answer: crate::ci::CiAnswer) {
+    /// Land an applied answer's data at `now`. The outcome is
+    /// `App::apply_ci`'s.
+    fn land(&mut self, mut answer: crate::ci::CiAnswer, now: DateTime<Local>) {
         use crate::ci::{Fetched, JobsAnswer};
+        if let Some(tip) = answer.tip.take() {
+            CiTip::land(&mut self.tip, tip, now);
+        }
         if let Some(Fetched::Fresh { data, etag }) = answer.runs {
             let gone = std::mem::take(&mut self.gone);
             self.runs = data.into_iter().filter(|r| !gone.contains(&r.id)).collect();
@@ -3302,12 +3420,131 @@ impl App {
         Some((key, state))
     }
 
-    /// The run under the `ci` view's cursor, clamped onto the last run as the
-    /// view draws it; `None` while the selected repo holds no runs.
+    /// The CI state to show for `repo` (FZ-83), the one answer the row
+    /// lamp, pane 2's header and the `info` line draw: the fleet poll's
+    /// `ci_status`, unless every context of the default branch's tip is held
+    /// from the `ci` view and was confirmed after the fleet poll's data time
+    /// (`GithubFreshness::data_time`, `docs/freshness-contract.md`); then the
+    /// verdict of those contexts, with its culprit. The branch is named
+    /// whenever a held run ran on the held tip.
+    pub fn ci_shown(&self, repo: &RepoStatus) -> CiShown {
+        let state = crate::ci::target(repo).and_then(|(key, ..)| self.ci.get(&key));
+        let tip = state.and_then(|s| Some((s, s.tip.as_ref()?)));
+        let branch = tip.and_then(|(s, t)| {
+            s.runs
+                .iter()
+                .find(|r| r.head_sha.as_deref() == Some(t.sha.as_str()))
+                .and_then(|r| r.branch.clone())
+        });
+        let fresher = tip
+            .map(|(_, t)| t)
+            .filter(|t| t.complete() && self.newer_than_fleet(t.confirmed));
+        match fresher {
+            Some(t) => {
+                let (status, culprit) = crate::ci::tip_verdict(t.contexts());
+                CiShown {
+                    status,
+                    branch,
+                    culprit,
+                }
+            }
+            None => CiShown {
+                status: repo.ci_status.clone(),
+                branch,
+                culprit: None,
+            },
+        }
+    }
+
+    /// Whether data confirmed at `at` is newer than the fleet poll's: later
+    /// than its data time, or any time while that is unknown or absent.
+    fn newer_than_fleet(&self, at: Option<DateTime<Local>>) -> bool {
+        let Some(at) = at else {
+            return false;
+        };
+        match self.github_freshness.data_time {
+            DataTime::At(fleet) => at > fleet,
+            DataTime::Unknown | DataTime::NoData => true,
+        }
+    }
+
+    /// Whether `repo`'s row shows the second, dimmer mark (FZ-83): the held
+    /// runs, newer than the fleet poll, have one in progress on a commit
+    /// other than the default branch's held tip. Never while the tip is not
+    /// known, since then no run can be told apart from the default branch's.
+    pub fn ci_side_run(&self, repo: &RepoStatus) -> bool {
+        let Some(state) = crate::ci::target(repo).and_then(|(key, ..)| self.ci.get(&key)) else {
+            return false;
+        };
+        let Some(tip) = &state.tip else {
+            return false;
+        };
+        let runs_at = match state.freshness.data_time {
+            DataTime::At(t) => Some(t),
+            DataTime::Unknown | DataTime::NoData => None,
+        };
+        self.newer_than_fleet(runs_at)
+            && state
+                .runs
+                .iter()
+                .any(|r| r.is_live() && r.head_sha.as_deref() != Some(tip.sha.as_str()))
+    }
+
+    /// The selected repo's `ci` list as the view draws it (FZ-83): the held
+    /// runs and the tip's other contexts (`CiTip::context_runs`), newest
+    /// first by the time each row's age counts from, a run's creation or a
+    /// context's `at`; a context with no time leads. One cursor stop each.
+    pub fn ci_entries(&self) -> Vec<CiEntry<'_>> {
+        let Some(state) = self.selected_ci().and_then(|(_, state)| state) else {
+            return Vec::new();
+        };
+        let mut contexts = state
+            .tip
+            .as_ref()
+            .map(CiTip::context_runs)
+            .unwrap_or_default();
+        contexts.sort_by(|a, b| match (a.at, b.at) {
+            (Some(a), Some(b)) => b.cmp(&a),
+            (a, b) => a.is_some().cmp(&b.is_some()),
+        });
+        let mut contexts = contexts.into_iter().peekable();
+        let mut entries = Vec::new();
+        for run in &state.runs {
+            while let Some(context) = contexts.next_if(|c| c.at.is_none_or(|at| at >= run.created))
+            {
+                entries.push(CiEntry::Context(context));
+            }
+            entries.push(CiEntry::Run(run));
+        }
+        entries.extend(contexts.map(CiEntry::Context));
+        entries
+    }
+
+    /// The entry under the `ci` view's cursor, clamped onto the last as the
+    /// view draws it.
+    fn highlighted_ci_entry(&self) -> Option<CiEntry<'_>> {
+        let mut entries = self.ci_entries();
+        let last = entries.len().checked_sub(1)?;
+        let at = self.detail_selections[HistoryView::Ci.index()].min(last);
+        Some(entries.swap_remove(at))
+    }
+
+    /// The other context under the `ci` view's cursor, if it is on one.
+    pub fn highlighted_ci_context(&self) -> Option<crate::ci::ContextRun> {
+        match self.highlighted_ci_entry()? {
+            CiEntry::Context(context) => Some(context),
+            CiEntry::Run(_) => None,
+        }
+    }
+
+    /// The run under the `ci` view's cursor, clamped onto the last row as
+    /// the view draws it; `None` while the selected repo holds no runs or
+    /// the cursor is on another context's row.
     pub fn highlighted_ci_run(&self) -> Option<&crate::ci::WorkflowRun> {
-        let runs = &self.selected_ci()?.1?.runs;
-        let at = self.detail_selections[HistoryView::Ci.index()];
-        runs.get(at.min(runs.len().saturating_sub(1)))
+        match self.highlighted_ci_entry()? {
+            CiEntry::Run(run) => Some(run),
+            CiEntry::Context(_) => None,
+        }
     }
 
     /// Whether the CI data layer may poll: pane 2 is on screen showing the
@@ -3333,13 +3570,14 @@ impl App {
     }
 
     /// Whether the `ci` view shows a run still moving, whose duration
-    /// ticks and whose lamp pulses: about one repaint a second.
+    /// ticks and whose lamp pulses: about one repaint a second. A pending
+    /// context's row (FZ-83) counts too.
     pub fn ci_view_live(&self) -> bool {
         self.ci_wanted()
-            && self
-                .selected_ci()
-                .and_then(|(_, state)| state)
-                .is_some_and(|s| s.runs.iter().any(crate::ci::WorkflowRun::is_live))
+            && self.ci_entries().iter().any(|entry| match entry {
+                CiEntry::Run(run) => run.is_live(),
+                CiEntry::Context(context) => context.state == CiStatus::Pending,
+            })
     }
 
     /// Give up on CI polls claimed longer than `limit` before `instant` that
@@ -3412,6 +3650,13 @@ impl App {
             attempt,
             runs_etag: state.runs_etag.clone(),
             expanded,
+            tip: Some(crate::ci::TipRequest {
+                sha: state.tip.as_ref().map(|t| t.sha.clone()),
+                status_etag: state.tip.as_ref().and_then(|t| t.status_etag.clone()),
+                checks_etag: state.tip.as_ref().and_then(|t| t.checks_etag.clone()),
+                has_statuses: state.tip.as_ref().is_some_and(|t| !t.statuses.is_empty()),
+                history_etag: state.tip.as_ref().and_then(|t| t.history_etag.clone()),
+            }),
         }
     }
 
@@ -3468,16 +3713,16 @@ impl App {
             }
         }
         let key = answer.key.clone();
-        state.land(answer);
+        state.land(answer, now);
         // A shorter list for the repo on screen pulls the `ci` cursor onto
         // its last run rather than leaving it past the end.
         if self
             .selected_ci()
             .is_some_and(|(selected, _)| selected == key)
         {
-            let runs = self.ci.get(&key).map_or(0, |s| s.runs.len());
+            let rows = self.ci_entries().len();
             let slot = &mut self.detail_selections[HistoryView::Ci.index()];
-            *slot = (*slot).min(runs.saturating_sub(1));
+            *slot = (*slot).min(rows.saturating_sub(1));
             self.sync_ci_inspector(std::time::Instant::now());
         }
     }
@@ -3505,9 +3750,7 @@ impl App {
     /// inspector details: read from the view's own selection slot, so it
     /// holds while another view is on screen.
     pub fn ci_highlighted_run(&self) -> Option<&crate::ci::WorkflowRun> {
-        let runs = &self.selected_ci()?.1?.runs;
-        let last = runs.len().checked_sub(1)?;
-        runs.get(self.detail_selections[HistoryView::Ci.index()].min(last))
+        self.highlighted_ci_run()
     }
 
     /// The highlighted run's jobs, once read.
@@ -4960,11 +5203,9 @@ impl App {
             HistoryView::Graph => graph_commits(),
             // Local branches then remotes, in the order the view draws them.
             HistoryView::Branches => repo.branches.len() + repo.remote_branches.len(),
-            // The runs held for the repo, as the view draws them.
-            HistoryView::Ci => self
-                .selected_ci()
-                .and_then(|(_, state)| state)
-                .map_or(0, |s| s.runs.len()),
+            // The runs held for the repo and the tip's other contexts among
+            // them (FZ-83), as the view draws them.
+            HistoryView::Ci => self.ci_entries().len(),
             // The files the tree lists, in its current mode.
             HistoryView::Notes => self.notes_listed().len(),
             // The main checkout and the linked worktrees.
