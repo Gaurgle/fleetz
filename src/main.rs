@@ -13506,6 +13506,132 @@ mod tests {
         );
     }
 
+    /// A notes tree shaped like his: a `todos` section of three boards,
+    /// `notez/` holding two directories of dated notes, and a second, deep
+    /// notes directory, 36 files in all. Names, a directory and a section
+    /// are long enough to wrap in the tree's column.
+    fn his_notes() -> Vec<notes::NoteFile> {
+        const SLUGS: [&str; 6] = [
+            "repository-identity-design",
+            "cache-invalidation-signature",
+            "api-budget",
+            "freshness-contract-amendments",
+            "notes",
+            "module-split-design-review-of-the-target-layers",
+        ];
+        let board = |rel: &str| notes::NoteFile {
+            rel: rel.into(),
+            notez: None,
+        };
+        let mut files = vec![
+            board("TODO.md"),
+            board("docs/TODO.md"),
+            board("src/ui/TODO.md"),
+        ];
+        for (dir, n) in [("plans", 18), ("design-specs-and-accepted-contracts", 14)] {
+            files.extend((0..n).map(|i| notes::NoteFile {
+                rel: format!("notez/{dir}/2026-10-{:02}-{}.md", i + 1, SLUGS[i % 6]).into(),
+                notez: Some("notez".into()),
+            }));
+        }
+        files.push(notes::NoteFile {
+            rel: "docs/superpowers/archive/notez/old.md".into(),
+            notez: Some("docs/superpowers/archive/notez".into()),
+        });
+        files
+    }
+
+    /// FZ-65 rework 1, his look on the branch build: at his window the
+    /// highlight ran six wheel notches past the tree's last drawn row before
+    /// the tree moved. Long names wrap in the tree's column, and the follow
+    /// counted lines where the tree draws wrapped rows. Walks the tree down
+    /// and back up a notch at a time at two real window sizes and asserts
+    /// the highlight is drawn inside the tree's rows on every notch, and
+    /// inside the `SCROLLOFF` margin while the tree has rows past it.
+    #[test]
+    fn the_notes_tree_wheel_follows_wrapped_rows_at_his_window() {
+        for (w, h) in [(200u16, 50u16), (120, 40), (64, 26), (80, 24), (100, 30)] {
+            let area = ratatui::layout::Rect::new(0, 0, w, h);
+            let mut app = notes_tree_app(w, h, 0);
+            let walk = app::NotesWalk {
+                key: "/repo".to_string(),
+                root: "/repo".into(),
+                generation: 1,
+            };
+            app.apply_notes_walk(walk, Ok(notes::Notes { files: his_notes() }));
+            let pane2 = ui::panel_rects(area, &app).detail.expect("pane 2");
+            let body = ui::detail::notes_pane_body(pane2, &app)
+                .expect("a tree")
+                .body;
+            drawn_cursor_row(&app, w, h, body);
+            let files = app.selected_commit_count();
+            assert_eq!(files, 36, "{w}x{h}: one stop per file");
+            // The rows the tree scrolls in: under the mode line where it is
+            // pinned, the whole body where it is not.
+            let rows = app.detail_view_height.get();
+            let (top, bottom) = (body.bottom() - rows, body.bottom() - 1);
+            let pad = app::scrolloff_for(rows);
+            let wheel = |kind| MouseEvent {
+                kind,
+                column: body.x + body.width / 2,
+                row: body.y + body.height / 2,
+                modifiers: KeyModifiers::NONE,
+            };
+            for kind in [MouseEventKind::ScrollDown, MouseEventKind::ScrollUp] {
+                let mut past = Vec::new();
+                let mut misplaced = Vec::new();
+                let mut in_margin = Vec::new();
+                for notch in 0..files {
+                    let before = app.detail_selected();
+                    handle_mouse_in(&mut app, area, wheel(kind));
+                    handle_mouse_in(&mut app, area, wheel(kind));
+                    let drawn = drawn_cursor_row(&app, w, h, body);
+                    // Past either end the wheel scrolls the header or the
+                    // tail in instead (round 1), which on a pane too short
+                    // to pin the header takes the first file off the foot.
+                    if app.detail_selected() == before {
+                        continue;
+                    }
+                    let Some(row) = drawn else {
+                        past.push(notch);
+                        continue;
+                    };
+                    // Where the follow counted it: its line less the offset.
+                    let line = app.detail_row_tops.borrow()[app.detail_selected()];
+                    if row != top + line - app.detail_scroll() {
+                        misplaced.push(notch);
+                    }
+                    let more_below = app.detail_scroll() < app.detail_max_scroll.get();
+                    let more_above = app.detail_scroll() > 0;
+                    let margin = match kind {
+                        MouseEventKind::ScrollDown => more_below && row > bottom - pad,
+                        _ => more_above && row < top + pad,
+                    };
+                    if margin {
+                        in_margin.push(notch);
+                    }
+                }
+                assert!(
+                    past.is_empty(),
+                    "{w}x{h} {kind:?}: the highlight ran {} notches past the drawn rows \
+                     (notches {past:?})",
+                    past.len()
+                );
+                assert!(
+                    misplaced.is_empty(),
+                    "{w}x{h} {kind:?}: the highlight was drawn off the row the follow \
+                     counted on notches {misplaced:?}"
+                );
+                assert!(
+                    in_margin.is_empty(),
+                    "{w}x{h} {kind:?}: the view did not follow at the margin on notches \
+                     {in_margin:?}"
+                );
+            }
+            assert_eq!(app.detail_selected(), 0, "{w}x{h}: back at the top");
+        }
+    }
+
     /// The next answer `spawn_note_read` sent, split into its two kinds.
     async fn next_note_answer(
         rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
