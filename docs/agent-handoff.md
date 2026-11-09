@@ -22,8 +22,7 @@ on his "stop after fz-95 is complete". `main` at `ee0ba8b`, CI green.
 | Refactor batch from `docs/module-split-design.md` | 2026-11-09 15:14, "refactor only ... File L1, T1, E1, E2 and D1 and run them in order; F1 and U1 after"; about 19:20, "We can keep on refactoring as we go", "just keep on refactoring tonight. I'll be at dinner then sleep" | FZ-103 to FZ-109 (done), FZ-110 to FZ-112 (running), then `docs/app-split-design.md`'s eight tickets in its order (accepted 21:56, "I accept all changes in the design plan"); no feature tickets | the refactor lands or revoked by word |
 
 Astra is the preferred lead. No `cargo install`, tag or release. His
-FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
-`(#n)` (11-07, `00f4ab7`).
+FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## In flight
 
