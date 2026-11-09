@@ -31,30 +31,30 @@ log) apply. Commit subjects end with the ticket, `(#n)` (11-07, `00f4ab7`).
 
 ## In flight
 
-- `main` at the FZ-83 merge `985b682`, CI green. FZ-83 Done 12:45; FZ-38
-  (#88) closed 13:20, both in the log. FZ-83 follow-ups in its log entry.
-- FZ-65 (#121): `af908db` (ticket + merge of `main` + yank-reset order),
-  all reviewed, CI green, combined checks green, gate holds. **Ready to
-  integrate, waiting for his look** (15:30; the wheel selects in the
-  notes tree). On his word: merge `--no-ff`, `Closes #121`. Record: #121.
+- `main` at `cb9987f` (FZ-83 merged `985b682` 10:50, Done; FZ-38 #88
+  closed 11:25; both logged). Comment times before 12:30 drift ahead (log).
+- FZ-65 (#121): his look failed 12:00. Rework 1 (wrapped tree rows
+  clipped, FZ-102 for the notes tree) reviewed, committed `97bb086`, CI
+  green; but its test fails on at-a only (worker investigating the
+  environment dependence, 12:30). Then gate, his look again. Record: #121.
 - FZ-95 (#152, P1): `c3c6830` + merge `5f12f3b` (reviewed), pushed. Fix
-  cycle running (`fz-worker`, fable high, 14:35): B2, B3, N1 to N6, his
-  11-06/11-07 amendments, both window placements behind a temporary `W`
-  toggle for his pick; then review, his look, remove the loser, re-review,
-  gate. FZ-100 (#157, P1) follows it. Record: #152.
-- FZ-102 (#159, P2, wrapped-row follow, after FZ-65 and FZ-95); FZ-101
-  (#158, P2); FZ-97 (#154, P1, docs-only, his word). Ready: FZ-78, 79,
-  58, 84, 87, 89, 90, 92.
+  cycle built (1743 green, both placements behind `W`); review 3 of
+  `fd5b63d0a764` running (12:20). **Asked him 12:20:** may the
+  `badges.rs` hold-text test be rewritten (glyph in pane 1, text in the
+  banner)? Then his look (pick the placement), remove the loser,
+  re-review, gate. FZ-100 (#157, P1) follows it. Record: #152.
+- FZ-102 (#159, P2, wrapped rows in the other views); FZ-101 (#158, P2);
+  FZ-97 (#154, P1, docs-only, his word). Ready: 78, 79, 58, 84, 87, 89, 90, 92.
 
 ## Open questions
 
 - L1's one line in `main.rs` (`mod architecture;`): now (a, lead's pick), after FZ-65 (b), or `tests/` (c)?
-- To file on his 11-05 13:50 answers (log): ssh README paragraph,
-  `fleetz doctor`, `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2.
+- To file on his 11-05 13:50 answers (log): ssh README, `fleetz doctor`,
+  `info` contributors, `AGENTS`/`RELAY` boxes; FZ-77 r2.
 - Wall-clock tests flaky under load (11-09, three named in #121 and #152
   review comments): a ticket? Help `y` row still "copy hash" (#116).
 
 ## Next step
 
-FZ-65 and FZ-95 are running (his 13:15 word); FZ-100 after FZ-95. Then
+FZ-65 and FZ-95 are running (his 11:20 word); FZ-100 after FZ-95. Then
 on his word: FZ-97, the L1 answer, the next Ready ticket. `cargo install`.

@@ -292,25 +292,33 @@ first (from `git log --merges main`).
 ### 2026-11-09
 
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
-need to finish ticket fz-83". His look, 12:40: "allright ooks good to me".
-13:05: "lets look at fz-65 / look at fz-38, could/should it be dropped? /
-then lets go for fz-95 and 100 ? / clean any worktrees?". 13:15, on the
-lead's recommendations: "ok sounds good. 1. i just want the scroll and
+need to finish ticket fz-83". His look, about 10:45: "allright ooks good
+to me". About 11:05: "lets look at fz-65 / look at fz-38, could/should it
+be dropped? / then lets go for fz-95 and 100 ? / clean any worktrees?".
+About 11:20, on the lead's recommendations: "ok sounds good. 1. i just
+want the scroll and
 highlight to not 'go past' the visual. i dont know what youre asking. 2.
 yes close and remove 3. allright". Rulings: FZ-65 reviewed as built (the
 wheel walks the cursor, the view follows); FZ-38 (#88) closed, its parked
 tree and branch removed; FZ-95 at P1 with FZ-100 after it; FZ-102 (#159,
 the wrapped-row follow defect the FZ-65 worker found) filed, Backlog P2.
+About 12:00, his look at FZ-65's branch build: "nope, the list in notes
+dont follow what we see. the selector goes way past what i see before it
+actually starts to scroll. it took me 6 additional 'down clicks' to get
+the list to move." Lead's failure, noted for the method: from about 10:30
+the lead wrote estimated wall-clock times into comments and these notes
+instead of reading the clock (up to 1h50 ahead); corrected 12:30 on the
+issues, the commit and comment timestamps being authoritative.
 
 - **#88 (FZ-38), Nerd Font icons for the fetch markers and `WT`.** Closed
-  13:20 CET on his "yes close and remove", unmerged. Parked 10-20 when the
+  about 11:25 CET on his "yes close and remove", unmerged. Parked 10-20 when the
   worktree glyphs drew as tofu (not in his fonts); the tree sat 277
   commits behind `main`. The design notes and the font finding stay on
   #88 for a fresh ticket if wanted. Remembered: nothing to keep.
   FZ-38: review none; fix cycles 0; owner decisions 3; worker 40; review 0; models claude-opus-5-5:medium/none; usage not read
 
 - **#140 (FZ-83), the CI lamp and the header agree with the `ci` view and
-  name their branch.** Merged `985b682` at 12:45 CET on his look; ticket
+  name their branch.** Merged `985b682` at 10:50 CET on his look; ticket
   commits `85692a5` (the diff built 11-05, base `334e9a6`), `96385c3` (the
   merge of `main` `748b6de`, 60 commits, reviewed) and `ae5b7ae` (test
   times UTC-safe). Worker `fz-worker` 11-05 and today (rework 1, the merge
