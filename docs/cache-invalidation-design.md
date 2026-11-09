@@ -135,7 +135,7 @@ commit gives a key.
 (**Read**)
 
 - **Snapshot taken**: `sweep_targets` (main.rs:1828-1842) clones each row into
-  `SweepTarget::old` (main.rs:1602-1610) when the sweep starts.
+  `SweepTarget::old` (`engine/fetch.rs`) when the sweep starts.
 - **Compared and reused**: `rebuild_repo_status` (main.rs:1962-2054). The cheap
   tier runs first (1972-1978), then the key (1980), then either the six products
   are cloned from `old` (1983-1991) or re-probed (1992-2007). `daily` has its own

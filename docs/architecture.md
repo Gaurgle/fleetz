@@ -60,18 +60,19 @@ sibling test files a `#[cfg(test)] mod tests;` reads (FZ-104). "Effects" is
 what the module does beyond computing: `proc` runs a program, `net` talks
 HTTP, `fs` touches the disk, `term` draws or reads the terminal. The
 `main.rs`, `app.rs` and `engine/` rows were re-measured for FZ-105, on its
-base `e831dd1` with the move applied.
+base `e831dd1` with the move applied, and moved by FZ-106's line deltas
+(`main.rs` 63 out, `app.rs` 88 out, `engine/` 153 in).
 
 | Module | Lines | Owns | Effects |
 |---|---|---|---|
-| `main.rs` | 3,861 | Startup, the event loop, every input handler, task spawning, sweep and fetch planning, GitHub poll scheduling, editor and opener handoff | proc, term |
-| `app.rs` | 6,350 | `App`: all TUI state (109 fields), the overlays, filters and query parsing, API budget and backoff, per-view caches for ci, notes, worktrees and digest | none (holds ratatui types) |
+| `main.rs` | 3,798 | Startup, the event loop, every input handler, task spawning, sweep and fetch planning, GitHub poll scheduling, editor and opener handoff | proc, term |
+| `app.rs` | 6,262 | `App`: all TUI state (109 fields), the overlays, filters and query parsing, API budget and backoff, per-view caches for ci, notes, worktrees and digest | none (holds ratatui types) |
 | `ui/` (18 files) | 12,318 | Drawing every view from `&App`; `detail.rs` alone is 3,984 | term |
 | `git.rs` | 2,245 | Every git read and fetch, fetch outcomes and progress, `WorkKey`, the `changes` read (`changes`, `changed_file_diff`) | proc, fs |
 | `report/` | 2,062 | Print mode: run, render byte for byte as repoz, golden parity harness | proc, fs |
 | `github.rs` | 1,594 | The GraphQL query and its cost, the HTTP client, token lookup, failure kinds | net, proc |
 | `ci.rs` | 1,537 | Workflow runs, jobs and log tails over REST, with ETags; the default branch tip's `TipStatus`, `TipChecks` and `StatusEvent` history, and `tip_verdict` over them | net |
-| `engine/` (6 files) | 1,394 | View assembly (discovery passes, carriers, activity order, the startup fetch baseline), a row's status probe, the load (GitHub dataset or dirty mode), fetches under a claim (`FetchClaims`); progress leaves through `Sink`, which a front end's channel implements (FZ-105) | proc, fs, net |
+| `engine/` (6 files) | 1,547 | View assembly (discovery passes, carriers, activity order, the startup fetch baseline), a row's status probe, the load (GitHub dataset or dirty mode), fetches under a claim (`FetchClaims`), the fetch types the sweep plans with (`SweepTarget`, `FetchAsk`, `FetchTally`, `FetchReport`, FZ-106); progress leaves through `Sink`, which a front end's channel implements (FZ-105) | proc, fs, net |
 | `model.rs` | 1,009 | `RepoStatus` and the row types the views draw | none |
 | `discovery.rs` | 617 | Finding clones under roots and `$HOME`, clone matching (`Wanted`, `CheckoutRank`) | fs |
 | `cache.rs` | 537 | The keyed on-disk API cache | fs |
@@ -134,7 +135,7 @@ flowchart TB
   report --> engine
   app --> engine
   engine --> io
-  report -.->|FetchClaims, Icons| app
+  report -.->|Icons| app
   ci -.->|Pace, RemoteKey,<br/>carrier_key| app
   config -.->|View, Icons,<br/>pane defaults| app
   app --> io
@@ -152,7 +153,7 @@ The edges that matter, with what crosses them:
 
 | Edge | What crosses | Why it is a problem |
 |---|---|---|
-| `report` to `app` | `FetchClaims`, `Icons` | Print mode depends on TUI state types |
+| `report` to `app` | `Icons` | Print mode depends on TUI state types |
 | `app` to `ui`, `app` to ratatui | `DetailHits`, `Divider`, `Loading`, colors, layout widths; `Rect`, `Line`, `Color` | State depends on drawing, so neither can change alone |
 | `ci` to `app` | `Pace`, `RemoteKey`, `carrier_key` | A data source depends on TUI state |
 | `config` to `app` | `View`, `Icons`, pane defaults | Settings depend on TUI state |
@@ -207,7 +208,7 @@ worktrees, changes and ci. Contracts: `docs/freshness-contract.md`,
 |---|---|---|
 | Fleet data | `repos`, `dataset`, `github_meta`, `not_in_last_poll`, `window` | load, sweep and poll handlers in `main.rs` |
 | GitHub sync | `github_freshness`, `api_budget`, `github_backoff`, poll timing fields | poll scheduling and apply in `main.rs`, `App` methods |
-| Local fetch | `fetches_in_flight`, `fetch_backoff`, `manual_fetches`, refresh fields | sweep and fetch planning in `main.rs` |
+| Local fetch | `fetches_in_flight`, `fetch_backoff`, `manual_fetches`, refresh fields | sweep and fetch planning in `main.rs`, over the engine's fetch types (FZ-106) |
 | Navigation and view | `view`, `overlay`, `selected`, `focused_panel`, `history_view`, scrolls, pane percentages | input handlers in `main.rs`, `App` methods |
 | Per-view caches | `ci` (each repo's `CiTip` with it), `notes`, `note_body`, `worktree_logs`, `digest_logs` | `App::apply_*` |
 | Render feedback | 18 `Cell` and `RefCell` fields such as `detail_hits`, `list_hits`, `reader_width` | `ui::render`, while drawing |
