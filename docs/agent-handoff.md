@@ -28,10 +28,8 @@ FZ-45 look rules (10-27, log) apply. Commit subjects end with the ticket,
 ## In flight
 
 - Done today, logged: FZ-91 `8ac7ff1`, FZ-103 `62aeb8f`, FZ-104
-  `e831dd1`, FZ-105 `8f3a57d`, FZ-106 `cc1ecf5` (E2a; `main` CI
-  42667992050 watched, `fz-106` worktree sweeps when green).
-- FZ-107 (#164, D1) Done, merged `270bd71` 20:00, logged; `main` CI
-  42679265479 watched, worktree sweeps when green. The five are in.
+  `e831dd1`, FZ-105 `8f3a57d`, FZ-106 `cc1ecf5`, FZ-107 `270bd71`
+  (20:00; `main` CI 42679265479 watched, worktree sweeps when green).
 - FZ-108 (#165, U1) next: worktree `.claude/worktrees/fz-108`, branch
   `refactor/fz-108-detail-by-pane`, base `270bd71`; the architect's
   survey plus U1 ticket check (writes the map) and the A1 and E3
