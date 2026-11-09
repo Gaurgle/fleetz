@@ -1106,6 +1106,13 @@ mod tests {
             .expect("unambiguous local time")
     }
 
+    // The instant the text names, whatever the machine's zone.
+    fn instant(text: &str) -> DateTime<Local> {
+        DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&Local)
+    }
+
     fn key() -> crate::app::RemoteKey {
         (Some("gaurgle".to_string()), "fleetz".to_string())
     }
@@ -3007,7 +3014,7 @@ mod tests {
     }
 
     fn t0() -> DateTime<Local> {
-        local("2026-11-05T12:30:00+01:00")
+        instant("2026-11-05T12:30:00+01:00")
     }
 
     fn minutes(n: i64) -> chrono::Duration {
@@ -3368,7 +3375,7 @@ mod tests {
         let shown = app.ci_shown(&app.repos[0]);
         assert_eq!(shown.culprit.as_deref(), Some("Vercel"));
         assert_eq!(header_ci(&app).as_deref(), Some("CI ◉ main failed: Vercel"));
-        let now = local("2026-11-05T14:41:00+01:00");
+        let now = instant("2026-11-05T14:41:00+01:00");
         let rows: Vec<String> = run_rows(&app, 160, now, 1, false)
             .iter()
             .map(line_text)
@@ -3456,7 +3463,7 @@ mod tests {
     #[test]
     fn the_source_column_names_and_colours_each_source() {
         let app = portfolio_app();
-        let now = local("2026-11-05T14:41:00+01:00");
+        let now = instant("2026-11-05T14:41:00+01:00");
         let rows = run_rows(&app, 160, now, 9, false);
         let source_span = |line: &Line, word: &str| {
             line.spans
@@ -3500,7 +3507,7 @@ mod tests {
     #[test]
     fn the_source_sheds_after_the_trigger_and_before_the_title() {
         let app = portfolio_app();
-        let now = local("2026-11-05T14:41:00+01:00");
+        let now = instant("2026-11-05T14:41:00+01:00");
         let gone_below = |word: &str| {
             (23..=200)
                 .rev()
