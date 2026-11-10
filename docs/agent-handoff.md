@@ -45,6 +45,10 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
   merges (shares `app.rs`); hard tier. Then E2b, A1a, A1c to A1i, R2.
 - FZ-100 (#157), FZ-102 (#159), the build label and FZ-97 (#154) wait
   on his word; FZ-83 and FZ-95 follow-ups in the log.
+- FZ-114 (#171), filed 2026-11-10 by the resumed FZ-105 worker on his
+  word in its transcript ("put the contributions restore on a ticket"):
+  reverses FZ-91's shading. Not on the board, no milestone or priority;
+  a feature, so it needs his word to run before the refactor lands.
 
 ## Open questions
 
