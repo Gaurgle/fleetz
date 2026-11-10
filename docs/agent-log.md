@@ -499,6 +499,38 @@ comment timestamps are authoritative.
   Remembered: nothing to keep.
   FZ-112: review changes 1; fix cycles 0; owner decisions 0; worker 11; review 5 + 0.3; models sonnet:low/opus:medium; usage worker 29617 tokens, reviewer 33235 + 4167 tokens
 
+- **#168 (FZ-111), the fetch record types from `model.rs` to
+  `model/fetch.rs`.** Dispatched 21:40 on his "Go on as you see fit",
+  merged `500de91` on 2026-11-10 at 10:29 CET on his "do Fz-110 and
+  FZ-111". Base `b870f69`; the worker's first
+  dispatch hit a bare directory (lead's error) and stopped clean. Review
+  1 on `0054cbd4d1f9`: needs change, docs only (module-doc count 22 vs
+  21 listed, fixed by the lead); accepted on `72739c74a7b0`; `main`
+  merged in (`cb85fde`, tree `39a6c5d05a3d`), re-review accepted; CI
+  42702243309 green; combined checks rerun on `29fd8f1` (1757 passed,
+  docs 0) after main moved by docs; gate holds. Observed, out of scope:
+  `docs/repository-identity-design.md:88,120,123,224,233,471,474,477`
+  cite drifted `model.rs` line numbers. Remembered: nothing to keep.
+  FZ-111: review changes 1; fix cycles 0; owner decisions 0; worker 11 + 0.3; review 4 + 1.4 + 0.5; models opus:medium/opus:medium; usage worker 69080 + 19418 tokens, reviewer 33296 + 4170 + 9114 tokens
+
+- **#167 (FZ-110), A1b: overlays and query out of `app.rs`.** Dispatched
+  21:40 on his "Go on as you see fit", merged `7f7275b` on 2026-11-10 at
+  10:35 CET on his "do Fz-110 and FZ-111". Base `b870f69`, commit
+  `13490e6`: `app/overlays.rs` (616) and `app/query.rs` (210) with their
+  tests, `MatchField::tier` to `pub(super)`, no `impl App` method moved
+  (D5); the worker's first dispatch hit a bare directory (lead's error)
+  and stopped clean. Review 1 on `2503a3ccfea7`: accepted, no blockers;
+  branch CI 42701600753 green; `main` (`500de91`) merged in clean
+  (`cf9f7e8`, diff `22eea7886675`), re-review accepted, CI 42791433417
+  green, combined checks 1757 passed, docs 0; gate holds. Observed, out
+  of scope: `src/app/overlays/settings_intro_tests.rs:32,35` asserts
+  against `bool_label` itself; `docs/architecture.md:142,147` cite
+  `src/app.rs` line numbers that moved; the worker used `cd` into the
+  worktree in several commands. Reviewer follow-up: section 2's intro
+  does not say the `app.rs` row was re-measured (next survey).
+  Remembered: nothing to keep.
+  FZ-110: review accepted first; fix cycles 0; owner decisions 0; worker 16 + 0.3; review 6 + 2.4; models opus:medium/opus:medium; usage worker 86064 + 19908 tokens, reviewer 45345 + 20585 tokens
+
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, about 10:45: "allright ooks good
 to me". About 11:05: "lets look at fz-65 / look at fz-38, could/should it
