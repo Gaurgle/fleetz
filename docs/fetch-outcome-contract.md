@@ -88,8 +88,8 @@ at Ready to integrate. The information that must be on screen:
 ## File ownership for FZ-04
 
 `src/git.rs` (a fetch result with kind and sanitized detail; `run_git` keeps
-its signature for other callers), `src/model.rs` (the fetch facts and their
-owner), `src/main.rs` (`spawn_sweep`, `RepoUpdated`, `apply_repo_updated`,
+its signature for other callers), `src/model/fetch.rs` (the fetch facts;
+their owner, `RepoStatus`, is in `src/model.rs`), `src/main.rs` (`spawn_sweep`, `RepoUpdated`, `apply_repo_updated`,
 `stale_remotes`), `src/app.rs` (settling and the refresh summary), the status
 display in `src/ui/`, `README.md`. Serial with FZ-03 and with the FZ-05
 tickets that touch `main.rs`.

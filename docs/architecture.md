@@ -63,7 +63,8 @@ reads are left out entirely: the sibling `tests.rs` files (FZ-104),
 runs a program, `net` talks HTTP, `fs` touches the disk, `term` draws or
 reads the terminal. Every row below was measured on `270bd71` by one
 script over the whole tree, but for the seven `main.rs` rows, measured
-after F1 (FZ-109) split it; rows are in size order.
+after F1 (FZ-109) split it, and the two `model` rows, measured after
+FZ-111 split it; rows are in size order.
 
 | Module | Lines | Owns | Effects |
 |---|---|---|---|
@@ -74,8 +75,8 @@ after F1 (FZ-109) split it; rows are in size order.
 | `github.rs` | 1,567 | The GraphQL query and its cost, the HTTP client, token lookup, failure kinds; parsing the payload into `model::GithubRepo` | net, proc |
 | `engine/` (6 files) | 1,562 | `assembly.rs` 559: view assembly (discovery passes, carriers, activity order, the startup fetch baseline); `fetch.rs` 333: fetches under a claim (`FetchClaims`) and the types the sweep plans with (`SweepTarget`, `FetchAsk`, `FetchTally`, `FetchReport`, FZ-106); `status.rs` 313: a row's status probe; `load.rs` 191: the load (GitHub dataset or dirty mode); `carriers.rs` 126; `mod.rs` 40: `Sink`, which a front end's channel implements (FZ-105) | proc, fs, net |
 | `ci.rs` | 1,538 | Workflow runs, jobs and log tails over REST, with ETags; the default branch tip's `TipStatus`, `TipChecks` and `StatusEvent` history, and `tip_verdict` over them | net |
-| `model.rs` | 1,194 | `RepoStatus` and the row types the views draw; the types the sources fill (fetch outcome and progress, `FetchFacts`, `WorkKey`, `GithubRepo`); remote identity (`identity_key`, `RemoteRef`, `RemoteKey`, `carrier_key`) | none |
 | `input.rs` | 1,081 | Every input handler: keys, mouse, the overlays' keys, the settings overlay, `r`, `R` and `f` | proc, term |
+| `model.rs` | 953 | `RepoStatus` and the row types the views draw; the types the sources fill (`WorkKey`, `GithubRepo`), re-exporting the fetch record from `model/fetch.rs`; remote identity (`identity_key`, `RemoteRef`, `RemoteKey`, `carrier_key`) | none |
 | `poll.rs` | 747 | GitHub poll scheduling and apply, the account rebuild, the CI tick, spawning the background reads (CI, worktree log, notes, changes, digest) | none |
 | `event.rs` | 634 | `AppEvent`, `LoadResult`, the input thread, the tick and loading tasks, the event loop (`run_event_loop`) | term |
 | `discovery.rs` | 611 | Finding clones under roots and `$HOME`, clone matching (`Wanted`, `CheckoutRank`) | fs |
@@ -89,6 +90,7 @@ after F1 (FZ-109) split it; rows are in size order.
 | `handoff.rs` | 347 | Editor, opener, `gh` and lazygit handoffs: suspending and reclaiming the terminal | proc, fs, term |
 | `digest.rs` | 333 | The slot digest model | none |
 | `time.rs` | 249 | Time windows and slots; the poll `Pace` | none |
+| `model/fetch.rs` | 249 | The record of a fetch (FZ-111): `FetchFailureKind`, `FetchFailure`, `FetchOutcome`, `FetchPhase`, `FetchProgress`, `FetchFacts` and `SizeHold` | none |
 | `main.rs` | 217 | Startup and teardown (`main`), the `mod` lines | term |
 | `clipboard.rs` | 137 | Copying a hash to the system clipboard | proc |
 | `cli.rs` | 115 | Flags (`clap`) | none |
@@ -99,10 +101,11 @@ Module docs (`//!`) exist on `engine/`, `report/`, `ci`, `notes`, `graph`,
 `digest`, `contributions`, `fuzzy`, `clipboard` and nine `ui/` files
 (`ci`, `contributions`, `digest`, `grips`, `highlight`, `intro`,
 `markdown`, `scroll`, `todo`), but not on `main`, `app`, `git`, `github`,
-`model`, `discovery`, `cache`, `config`, `cli`, `time`, `window_state`,
+`model`, `model/fetch`, `discovery`, `cache`, `config`, `cli`, `time`,
+`window_state`,
 `ui/mod`, `ui/detail`, `ui/badges`, `ui/branches`, `ui/colors`,
 `ui/compact`, `ui/footer`, `ui/help`, `ui/settings` or `ui/timewindow`:
-21 files, the first nine the ones a newcomer most needs.
+22 files, the first nine the ones a newcomer most needs.
 
 **Structure notes** (measured drift from the limits in `CLAUDE.md`: about
 1200 production lines per file, 150 per function; the seams are tickets in
@@ -112,11 +115,11 @@ Module docs (`//!`) exist on `engine/`, `report/`, `ci`, `notes`, `graph`,
   `github.rs` 1,567, `ui/mod.rs` 1,541, `ci.rs` 1,538, `ui/markdown.rs`
   1,245 (the last four are not planned: revisit if they grow).
   `ui/detail.rs` (U1, FZ-108) and `main.rs` (F1, FZ-109) are split.
-- `model.rs` is at 1,194, six lines under. The seam: the types the sweep
-  fills, `FetchFailureKind` through `FetchFacts`, `SizeHold` and `WorkKey`
-  (`src/model.rs:143-424`, about 290 lines with their docs), into a
-  `model/sweep.rs` that `model` re-exports, so `git` and `main` keep
-  their paths. A pure move inside the domain layer; no edge changes.
+- `model.rs` is split (FZ-111): the fetch record moved to
+  `model/fetch.rs`, which `model` re-exports, so every `model::` path and
+  the `git` re-export keep resolving. `WorkKey` stays in `model.rs`, beside
+  the `RepoStatus` field it fills. A pure move inside the domain layer; no
+  edge changes.
 - Functions over 200 lines, with their homes at `270bd71` (S1, one ticket
   each, after F1 and U1): `ui::detail::render_detail_pane`
   (`src/ui/detail.rs:816-1513`, 698 lines), `main::handle_normal_input`
