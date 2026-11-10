@@ -1,9 +1,10 @@
 # App split design: owned state in the TUI
 
-**Status: proposed 2026-11-09, from the architect's consult (A1, E3, E2b)
-on `main` at `ca8244a`.** Nothing here is authorized until Andreas accepts
-the decisions and files the tickets. Measured facts are `rg` counts; sizes
-marked "est." are estimates.
+**Status: accepted 2026-11-09 21:56 CET by Andreas ("I accept all
+changes in the design plan"): decisions D1 to D7 and owner items O-A to
+O-D as recommended.** From the architect's consult (A1, E3, E2b) on
+`main` at `ca8244a`. Tickets are filed from the table below as they come
+up. Measured facts are `rg` counts; sizes marked "est." are estimates.
 
 ## Why
 

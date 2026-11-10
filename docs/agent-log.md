@@ -317,7 +317,15 @@ not continue refactoring tonight then? 2-3 additional hours I can go
 on". 21:25: "I can read the design later, if you get me an artifact.
 Go on as you see fit." Design artifact published; the pure moves (A1b,
 the `model.rs` seam, the `cache`/`github` hash) run on architect checks;
-E3 and E2b wait for his acceptance of D1 to D7.
+E3 and E2b wait for his acceptance of D1 to D7. 21:56: "I accept all
+changes in the design plan" (`docs/app-split-design.md`, D1 to D7 and
+O-A to O-D as recommended); E3 is next, after FZ-110 frees `app.rs`.
+22:25: "We can start rounding off so that we are finished around
+23:00"; 22:26: "We don't have the relay triggers here do we? We've
+passed 80% context. Round off asap, at a good place." Baton released
+22:27 with FZ-111 and FZ-110 at Ready to integrate (both accepted,
+committed, pushed), FZ-113 Ready, nothing running. The automatic
+context handoff did not fire this session (not started with `relay`).
 Lead's failure, the same as the morning lead's: from about 16:30 the
 lead wrote estimated times into comments, the log and the handoff
 without reading the clock, up to 3h20 ahead by 18:48; corrected here
@@ -476,6 +484,20 @@ comment timestamps are authoritative.
   (the design doc's "Rules for every split", added below): a test that
   reads a source file by path follows the code it reads.
   FZ-109: review accepted first; fix cycles 0; owner decisions 0; worker 32 + 2; review 7 + 2; models opus:high/opus:high; usage worker 292754 + 9300 tokens, reviewer 89694 + 12674 tokens
+
+- **#169 (FZ-112), `fnv1a_64` to `cache.rs`; the `cache`/`github` cycle
+  ends.** Filed 21:35 on his "Go on as you see fit", merged `bae1fca` at
+  22:22 CET. Commit `0d3c770` on base `b870f69`: the function moved
+  unchanged with its vectors test, two call sites, the fingerprint test
+  pins the result. `fz-small` (light) built it; review: changes 1 (a
+  stale "two cycles" sentence in section 3, fixed by the lead), accepted
+  on `4ecdf28e2259`; CI 42697867754 green; combined on `9671d6c` 1757
+  passed; gate holds. Method note: the small agent edited through Python
+  and Bash instead of Edit, citing the auto-mode instruction (second
+  time today). Observed, out of scope: nothing guards the cycle from
+  returning (a narrow assertion on `src/cache.rs` would; not required).
+  Remembered: nothing to keep.
+  FZ-112: review changes 1; fix cycles 0; owner decisions 0; worker 11; review 5 + 0.3; models sonnet:low/opus:medium; usage worker 29617 tokens, reviewer 33235 + 4167 tokens
 
 Lead `6d8fd7f3` (`claude-fable-5-1`) on at-a from 09:49 CET on his "we
 need to finish ticket fz-83". His look, about 10:45: "allright ooks good
