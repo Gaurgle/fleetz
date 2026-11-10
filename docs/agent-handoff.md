@@ -27,9 +27,8 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## In flight
 
-- Done today, logged: FZ-91, FZ-103 to FZ-109, FZ-112 (`bae1fca`
-  22:22, `main` CI green, worktree swept). One lead ruling for his review: F1 changed an existing
-  test's `include_str!("main.rs")` to `"input.rs"` (option A on #166).
+- Done 11-09, logged: FZ-91, FZ-103 to FZ-109, FZ-112. One lead ruling for
+  his review: F1 changed a test's `include_str!("main.rs")` to `"input.rs"` (#166).
 - FZ-111 (#168) Ready to integrate: accepted on `39a6c5d05a3d`, merge
   commit `cb85fde` on the branch (main `bae1fca` merged in), pushed, CI
   42702243309 running at handback; combined checks done on `bae1fca`
@@ -45,10 +44,9 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
   merges (shares `app.rs`); hard tier. Then E2b, A1a, A1c to A1i, R2.
 - FZ-100 (#157), FZ-102 (#159), the build label and FZ-97 (#154) wait
   on his word; FZ-83 and FZ-95 follow-ups in the log.
-- FZ-114 (#171), filed 2026-11-10 by the resumed FZ-105 worker on his
-  word in its transcript ("put the contributions restore on a ticket"):
-  reverses FZ-91's shading. Not on the board, no milestone or priority;
-  a feature, so it needs his word to run before the refactor lands.
+- FZ-114 (#171), filed 11-10 by the resumed FZ-105 worker on his word
+  ("put the contributions restore on a ticket"): reverses FZ-91's shading.
+  Not on the board, no milestone or priority; a feature, needs his word.
 
 ## Open questions
 
