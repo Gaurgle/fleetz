@@ -29,8 +29,7 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 - Done 11-09, logged: FZ-91, FZ-103 to FZ-109, FZ-112. One lead ruling for
   his review: F1 changed a test's `include_str!("main.rs")` to `"input.rs"` (#166).
 - FZ-111 (#168) merged `500de91`, FZ-110 (#167) merged `7f7275b` on
-  11-10, both logged; `main` CI 42792041209 for `7f7275b` was running
-  at release: if green, `scripts/relay-sweep main` clears `fz-110`.
+  11-10, both logged; `main` CI green, worktrees swept, none open.
 - FZ-113 (#170, E3) Ready, body and check on the issue; hard tier.
   Then E2b, A1a, A1c to A1i, R2. Survey note for `fz-architect`: section
   2's intro and rows drifted (app.rs re-measured, github/cache rows).
@@ -47,6 +46,6 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## Next step
 
-The next lead: sweep if `main` CI is green, then FZ-113 under the
+The next lead: FZ-113 under the
 standing authority (he said "stop after those" of FZ-110 and FZ-111 on
 11-10; confirm before dispatching). Suggest `cargo install`.
