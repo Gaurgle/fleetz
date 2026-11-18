@@ -345,7 +345,7 @@ pub fn render_pane(
         frame.render_widget(Paragraph::new(lines), inner);
         return;
     }
-    let selected = app.digest_selected.min(digest.lines.len() - 1);
+    let selected = app.digest.selected.min(digest.lines.len() - 1);
     let columns = Columns::of(digest, width);
     let dim_pending = app.watch_mode && !app.blink_on;
     let body_rows = (inner.height as usize).saturating_sub(lines.len()).max(1);
@@ -660,7 +660,8 @@ pub fn render_inspector(frame: &mut Frame, area: Rect, app: &App, digest: &Diges
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let Some(line) = digest.lines.get(
-        app.digest_selected
+        app.digest
+            .selected
             .min(digest.lines.len().saturating_sub(1)),
     ) else {
         app.drawn.inspector_max_scroll.set(0);

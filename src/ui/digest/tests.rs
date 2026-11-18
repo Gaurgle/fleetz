@@ -514,7 +514,7 @@ fn the_cursor_line_wears_the_band_to_the_pane_edge() {
     beta.repo = 1;
     let repos = vec![repo_for(&alpha), repo_for(&beta)];
     let mut app = App::new(repos, String::new(), 120, 40);
-    app.digest_selected = 0;
+    app.digest.selected = 0;
     let d = digest(Section::GithubActivity, vec![alpha, beta]);
 
     let (w, h) = (100u16, 10u16);
