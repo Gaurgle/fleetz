@@ -289,6 +289,13 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### 2026-11-18
+
+- 12:22 CET, to the lead that asked whether to continue without him:
+  "keep refactoring and let me know when that's done then". Read as the
+  refactor batch of 11-09 (`docs/app-split-design.md`'s eight tickets in
+  order, FZ-113 first), report at the end of the batch; no feature work.
+
 ### 2026-11-09
 
 Lead `19b5ad57` (`claude-fable-5-1`) on at-a from 15:15 CET. His word at
