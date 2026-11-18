@@ -7,10 +7,10 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Session `0dbccbeb` (`claude-fable-5-1`, at-a) took the baton
-2026-11-18 12:20 CET; the previous lead `19b5ad57` released it 11-10
-10:40 after his "stop after those" (FZ-110, FZ-111). No worker or
-reviewer running. `main` at `1a5ce9a` (`7f7275b` plus docs), CI green.
+Baton released 2026-11-18 18:20 CET by session `0dbccbeb`
+(`claude-fable-5-1`, at-a) after his 18:08 "let current ticket finish,
+but dont start any more". No worker or reviewer running. `main` at
+`c0ec3cf` (FZ-121 merged), CI green, no worktrees.
 
 ## Standing authority
 
@@ -29,17 +29,16 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 - Lead ruling for his review: F1's `include_str!` test change (#166).
   The FZ-113, O-E and `refresh_interval` rulings he accepted 11-18
-  about 13:33 (log). FZ-103 to FZ-113 and FZ-116 to FZ-120 are Done and logged.
+  about 13:33 (log). FZ-103 to FZ-113 and FZ-116 to FZ-121 are Done and logged.
 - App-split batch filed 11-18 (architect-checked, bodies on the issues):
   FZ-116 #173 (E2b), FZ-117 #174 (A1a), FZ-118 to FZ-123 #175 to #180
   (A1c to A1h), FZ-124 #181 (A1i), FZ-125 #182 (R2, needs his design
   ruling, not for the unattended run). Strictly in that order, one
   worker at a time (each shares `app.rs` with the next).
-- FZ-121 (#178, A1f `DigestView`) In progress since 18:05, base
-  `f4a0a4f`, branch `refactor/fz-121-app-digest`, worktree
-  `.claude/worktrees/fz-121`; record on the issue (edit by comment id);
-  standard tiers. The usage limit paused the FZ-118 worker 15:00 to
-  17:10; the next reset is five hours on.
+- Next in the batch: FZ-122 (#179, A1g `ContribStrip`), then FZ-123
+  (#180), FZ-124 (#181); each body is architect-checked, its `app.rs`
+  lines re-measured by the worker. Records are edited by comment id.
+  Usage: the five-hour limit hit at 15:00 on 11-18 and reset 17:10.
 - Survey for `fz-architect` after the batch: `docs/architecture.md`
   section 3's `app.rs` lines and section 5's cell counts are stale,
   section 2's intro drifted; `src/ci.rs:11` names `App::ci_budget`.
@@ -55,6 +54,7 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## Next step
 
-Finish FZ-113 (worker running), then the next app-split ticket in
-order under the renewed standing authority; report to him when the
-batch lands. Suggest `cargo install`.
+Stopped on his word after FZ-121. Resume FZ-122 only when he says
+so; then FZ-123, FZ-124, then the architect survey (section 2, 3 and
+5 drift, `src/ci.rs:11`), then FZ-125 needs his design ruling. Suggest
+`cargo install` (seven refactors landed since his last build).

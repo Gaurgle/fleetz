@@ -291,6 +291,24 @@ first (from `git log --merges main`).
 
 ### 2026-11-18
 
+- **#178 (FZ-121), A1f: `DigestView` owns the digest and list stops in
+  `app/digest.rs`.** Dispatched 18:05 under the unattended refactor
+  run, merged `c0ec3cf` at 18:15 CET, the last ticket of the day on his
+  18:08 "let current ticket finish, but dont start any more". Base
+  `f4a0a4f`, commit `aac672d`: `HOVER_DWELL`, `ListHits`, `ListRow`, six
+  fields and the second `impl App` block to `app/digest.rs` (439
+  production lines), the digest log tests moved with their code (nine,
+  not the body's ten); `app.rs` 2,696 to 2,288, 58 fields. Lead ruling
+  (on the issue): `step_list` to `pub(super)` for its `move_up`/
+  `move_down` callers, the token change the design names for A1i;
+  `ListHits`/`ListRow` re-exported, `HOVER_DWELL` under `#[cfg(test)]`.
+  Review 1 on `d7e19116b58f`: accepted, no blockers. Branch CI
+  44356140096 green; combined checks on `ede1221` (1758 passed); gate
+  holds. Observed, out of scope: `docs/architecture.md:74` gives
+  `ui/digest.rs` 699 lines, stale at base (727). Remembered: nothing
+  to keep.
+  FZ-121: review accepted first; fix cycles 0; owner decisions 0; worker 7; review 2; models opus:medium/opus:medium; usage worker 95698 tokens, reviewer 53005 tokens
+
 - **#177 (FZ-120), A1e: `ChangesView` and `WorktreesView` in
   `app/changes.rs` and `app/worktrees.rs`.** Dispatched 17:52 under the
   unattended refactor run, merged `f4a0a4f` at 18:02 CET. Base
