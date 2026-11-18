@@ -295,6 +295,12 @@ first (from `git log --merges main`).
   "keep refactoring and let me know when that's done then". Read as the
   refactor batch of 11-09 (`docs/app-split-design.md`'s eight tickets in
   order, FZ-113 first), report at the end of the batch; no feature work.
+- 13:05 CET, asked whether the remaining app-split tickets (E2b, A1a,
+  A1c to A1h, A1i, R2) may be filed as issues: "yes, im actually sick,
+  so I dont want to work, i just want to keep this running in the
+  background while i rest. can you do that?". Read as: file those
+  issues, run the batch unattended with no questions until it lands or
+  a stop condition hits.
 
 ### 2026-11-09
 
