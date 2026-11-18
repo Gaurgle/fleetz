@@ -38,17 +38,15 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 - FZ-119 (#176, A1d `NotesView`) In progress since 17:25, base
   `9c95060`, branch `refactor/fz-119-app-notes`, worktree
   `.claude/worktrees/fz-119`; record on the issue (edit by comment id);
-  standard tiers. FZ-118 merged `9c95060` 17:21, logged. The usage
-  limit paused the FZ-118 worker 15:00 to 17:10; the next reset is
-  five hours on.
-- Survey for `fz-architect` after the batch: section 3's `app` to `ui`
-  sites and section 5's cell counts are stale (its 11-18 report); section
-  2's intro and rows drifted (app.rs re-measured, github/cache rows).
-- FZ-100 (#157), FZ-102 (#159), the build label and FZ-97 (#154) wait
-  on his word; FZ-83 and FZ-95 follow-ups in the log.
-- FZ-114 (#171), filed 11-10 by the resumed FZ-105 worker on his word
-  ("put the contributions restore on a ticket"): reverses FZ-91's shading.
-  Not on the board, no milestone or priority; a feature, needs his word.
+  standard tiers. The usage limit paused the FZ-118 worker 15:00 to
+  17:10; the next reset is five hours on.
+- Survey for `fz-architect` after the batch: `docs/architecture.md`
+  section 3's `app.rs` lines and section 5's cell counts are stale,
+  section 2's intro drifted; `src/ci.rs:11` names `App::ci_budget`.
+- Wait on his word: FZ-100 (#157), FZ-102 (#159), the build label,
+  FZ-97 (#154); FZ-114 (#171, a feature, not on the board, filed 11-10
+  on his "put the contributions restore on a ticket"); FZ-83 and FZ-95
+  follow-ups in the log.
 
 ## Open questions
 
