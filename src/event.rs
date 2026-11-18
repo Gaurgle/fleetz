@@ -448,7 +448,7 @@ pub(crate) async fn run_event_loop(
                 // animation reads as a slow stutter rather than a spin. A
                 // silent watch sweep draws no spinner, so it buys no repaints
                 // either: it just updates the rows when it lands.
-                let spinning = app.loading || app.is_refreshing() || app.ci_view_loading();
+                let spinning = app.loading || app.fetch.is_refreshing() || app.ci_view_loading();
                 // Everything else that moves on its own (the swept-ago clock,
                 // the CI blink, a running CI run's duration) only needs about
                 // one repaint a second.
@@ -461,14 +461,10 @@ pub(crate) async fn run_event_loop(
                 }
 
                 // A sweep that never reported back must not block watch forever.
-                if let Some(started) = app.sweep_started
-                    && started.elapsed() > SWEEP_STUCK_AFTER
-                {
-                    app.sweep_started = None;
-                }
-                app.expire_refresh_fetches(SWEEP_STUCK_AFTER);
+                app.fetch.expire_sweep(SWEEP_STUCK_AFTER);
+                app.fetch.expire_refresh(SWEEP_STUCK_AFTER);
                 app.expire_fetches_in_flight(SWEEP_STUCK_AFTER, std::time::Instant::now());
-                if app.watch_mode && !app.loading && app.sweep_started.is_none() {
+                if app.watch_mode && !app.loading && !app.fetch.in_sweep() {
                     // A missing timestamp means "due now", so watch can never
                     // silently die the way a Some-only guard could.
                     let due = app.last_refreshed.is_none_or(|t| {

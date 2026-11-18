@@ -1388,7 +1388,7 @@ pub fn fleet_pieces(app: &App, now: chrono::DateTime<chrono::Local>) -> FleetPie
     // sweep runs silently and leaves the timestamp in place, so an interval
     // refresh cannot repaint a moving colored indicator over a dashboard
     // being read.
-    let refreshing = app.refresh_phase().map(|phase| {
+    let refreshing = app.fetch.refresh_phase().map(|phase| {
         let label = match phase {
             crate::app::RefreshPhase::Local => "checking local changes…",
             crate::app::RefreshPhase::Remote => "checking remote…",

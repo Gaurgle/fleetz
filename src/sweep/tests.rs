@@ -236,8 +236,8 @@ fn a_failed_fetch_lands_as_a_failure_and_keeps_the_last_success() {
 #[test]
 fn a_timed_out_fetch_lands_as_timed_out_and_settles() {
     let mut app = app_with_pending_repo();
-    app.refresh_awaits_poll = true;
-    app.settle_refresh_poll([SWEPT_PATH.to_string()]);
+    app.fetch.await_poll(true);
+    app.fetch.settle_refresh_poll([SWEPT_PATH.to_string()]);
     let snapshot = sweep_targets(&app, Some(0)).remove(0).old;
     let timed_out = git::FetchOutcome::Failed(git::FetchFailure {
         kind: git::FetchFailureKind::TimedOut,
@@ -249,7 +249,7 @@ fn a_timed_out_fetch_lands_as_timed_out_and_settles() {
         Some(git::FetchFailureKind::TimedOut)
     );
     assert!(
-        !app.is_refreshing(),
+        !app.fetch.is_refreshing(),
         "a timed-out fetch left the spinner running"
     );
 }
@@ -266,15 +266,21 @@ fn r_during_a_watch_sweep_spins_until_that_sweeps_rows_land() {
 
     answer(&mut app, attempt, ok_with(None));
     assert!(
-        app.is_refreshing(),
+        app.fetch.is_refreshing(),
         "stopped at the poll, before the sweep's rows landed"
     );
     land(&mut app, 0, git::FetchOutcome::Succeeded);
-    assert!(app.is_refreshing(), "stopped before the last row landed");
+    assert!(
+        app.fetch.is_refreshing(),
+        "stopped before the last row landed"
+    );
     land(&mut app, 1, git::FetchOutcome::Succeeded);
     // `spawn_sweep` sends `SweepDone` once every row has been sent.
     app.sweep_landed(chrono::Local::now());
-    assert!(!app.is_refreshing(), "spun on after the last row landed");
+    assert!(
+        !app.fetch.is_refreshing(),
+        "spun on after the last row landed"
+    );
 }
 
 /// FZ-85 (#142): a fetch that fails still ends its part of the refresh,
@@ -298,7 +304,7 @@ async fn r_during_a_watch_sweep_ends_when_a_fetch_fails() {
     ];
     answer(&mut app, attempt, Ok(fetch));
     assert!(
-        app.refresh_fetches.contains(&moved),
+        app.fetch.refresh_fetches().contains(&moved),
         "the push was not fetched"
     );
 
@@ -307,13 +313,13 @@ async fn r_during_a_watch_sweep_ends_when_a_fetch_fails() {
     apply_repo_updated(&mut app, &swept, status, failed.clone());
     app.sweep_landed(chrono::Local::now());
     assert!(
-        app.is_refreshing(),
+        app.fetch.is_refreshing(),
         "stopped before the moved remote's fetch landed"
     );
     let status = app.repos[0].clone();
     apply_repo_updated(&mut app, &moved, status, failed);
     assert!(
-        !app.is_refreshing(),
+        !app.fetch.is_refreshing(),
         "a failed fetch left the spinner running"
     );
 }
@@ -399,14 +405,17 @@ async fn a_row_the_outage_failed_is_fetched_once_when_the_poll_recovers() {
         })
     };
 
-    app.refresh_awaits_poll = true;
+    app.fetch.await_poll(true);
     poll_with(&mut app, offline());
-    assert!(app.refresh_fetches.is_empty(), "an offline poll fetched");
+    assert!(
+        app.fetch.refresh_fetches().is_empty(),
+        "an offline poll fetched"
+    );
 
-    app.refresh_awaits_poll = true;
+    app.fetch.await_poll(true);
     poll_with(&mut app, ok());
     assert_eq!(
-        app.refresh_fetches.iter().collect::<Vec<_>>(),
+        app.fetch.refresh_fetches().iter().collect::<Vec<_>>(),
         vec![&path],
         "the recovering poll did not refetch the failed row"
     );
@@ -414,11 +423,11 @@ async fn a_row_the_outage_failed_is_fetched_once_when_the_poll_recovers() {
     // Its refetch fails again; the next poll leaves it for the next
     // trigger.
     apply_repo_updated(&mut app, &path, status, unreachable());
-    assert!(app.refresh_fetches.is_empty());
-    app.refresh_awaits_poll = true;
+    assert!(app.fetch.refresh_fetches().is_empty());
+    app.fetch.await_poll(true);
     poll_with(&mut app, ok());
     assert!(
-        app.refresh_fetches.is_empty(),
+        app.fetch.refresh_fetches().is_empty(),
         "the recovery refetch repeated"
     );
     assert_eq!(
@@ -460,12 +469,12 @@ fn the_watch_sweep_skips_the_fetch_of_a_row_that_timed_out() {
     // it; a manual one fetches it.
     let automatic = fetch_skips(&mut app, &targets, true, true);
     assert!(automatic.contains("~/repos/repo-0"), "{automatic:?}");
-    assert!(!app.fetches_in_flight.contains_key("~/repos/repo-0"));
-    assert!(app.fetches_in_flight.contains_key("~/repos/repo-1"));
-    app.fetches_in_flight.clear();
+    assert!(!app.fetch.claims().contains_key("~/repos/repo-0"));
+    assert!(app.fetch.claims().contains_key("~/repos/repo-1"));
+    app.fetch.claims().clear();
     let manual = fetch_skips(&mut app, &targets, true, false);
     assert!(!manual.contains("~/repos/repo-0"), "{manual:?}");
-    assert!(app.fetches_in_flight.contains_key("~/repos/repo-0"));
+    assert!(app.fetch.claims().contains_key("~/repos/repo-0"));
     land(&mut app, 0, git::FetchOutcome::Succeeded);
     assert!(held_fetch_paths(&app, &targets, now).is_empty());
 }
@@ -480,7 +489,7 @@ fn a_running_fetch_is_skipped_by_the_next_selection_until_it_lands() {
     let targets = sweep_targets(&app, None);
     assert!(fetch_skips(&mut app, &targets, false, true).is_empty());
     assert!(
-        app.fetches_in_flight.is_empty(),
+        app.fetch.claims().is_empty(),
         "a sweep without fetch claimed"
     );
     assert!(fetch_skips(&mut app, &targets, true, true).is_empty());
@@ -510,14 +519,11 @@ async fn the_watch_timer_sweep_claims_no_fetch_for_a_held_row() {
     let held = timed_out_at(&mut app, 1);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     start_sweep(&mut app, &tx, true, None, false);
-    assert!(
-        !app.fetches_in_flight.contains_key(&held),
-        "held row fetched"
-    );
+    assert!(!app.fetch.claims().contains_key(&held), "held row fetched");
     for i in [0, 2] {
         let path = app.repos[i].path.clone().unwrap();
         assert!(
-            app.fetches_in_flight.contains_key(&path),
+            app.fetch.claims().contains_key(&path),
             "row {i} not fetched"
         );
     }
@@ -531,11 +537,11 @@ fn a_landing_from_an_expired_sweep_leaves_the_newer_claim() {
     let path = app.repos[0].path.clone().unwrap();
     let status = app.repos[0].clone();
     let t0 = std::time::Instant::now();
-    assert!(app.claim_fetch(&path, t0));
-    let old = app.fetches_in_flight.token(&path);
+    assert!(app.fetch.claim(&path, t0));
+    let old = app.fetch.claims().token(&path);
     app.expire_fetches_in_flight(SWEEP_STUCK_AFTER, t0 + SWEEP_STUCK_AFTER * 2);
-    assert!(app.claim_fetch(&path, t0 + SWEEP_STUCK_AFTER * 2));
-    let newer = app.fetches_in_flight.token(&path);
+    assert!(app.fetch.claim(&path, t0 + SWEEP_STUCK_AFTER * 2));
+    let newer = app.fetch.claims().token(&path);
     app.apply_fetch_progress(
         &path,
         git::FetchProgress {
@@ -552,10 +558,10 @@ fn a_landing_from_an_expired_sweep_leaves_the_newer_claim() {
         git::FetchOutcome::Succeeded,
         old,
     );
-    assert_eq!(app.fetches_in_flight.token(&path), newer);
+    assert_eq!(app.fetch.claims().token(&path), newer);
     assert_eq!(app.repos[0].fetch.progress, None, "landing kept progress");
     land_repo_update(&mut app, &path, status, git::FetchOutcome::Succeeded, newer);
-    assert!(!app.fetches_in_flight.contains_key(&path));
+    assert!(!app.fetch.claims().contains_key(&path));
 }
 
 /// FZ-35a (#84), criteria 3 and 4 through a real sweep: the fetch's
@@ -593,7 +599,7 @@ async fn a_sweep_streams_its_fetch_progress_before_it_lands() {
     let start = std::time::Instant::now();
     start_single_sweep(&mut app, &tx, 0, true, false, None);
     let path = clone.display().to_string();
-    let token = app.fetches_in_flight.token(&path).expect("claimed");
+    let token = app.fetch.claims().token(&path).expect("claimed");
     let mut progress = Vec::new();
     let (fetch, claim) = loop {
         match tokio::time::timeout(std::time::Duration::from_secs(20), rx.recv()).await {
@@ -635,16 +641,16 @@ fn f_fetches_a_held_row_uncapped_and_shift_f_and_automatic_do_not() {
     let targets = sweep_targets(&app, None);
     let held: HashSet<String> = ["~/repos/repo-0".to_string(), "~/repos/repo-1".to_string()].into();
     for ask in [FetchAsk::Automatic, FetchAsk::All] {
-        app.fetches_in_flight.clear();
+        app.fetch.claims().clear();
         assert_eq!(
             fetch_skips_for(&mut app, &targets, true, ask),
             held,
             "{ask:?}"
         );
-        assert!(app.fetches_in_flight.contains_key("~/repos/repo-2"));
+        assert!(app.fetch.claims().contains_key("~/repos/repo-2"));
         assert_eq!(ask.cap(Some(200 * MIB)), Some(200 * MIB), "{ask:?}");
     }
-    app.fetches_in_flight.clear();
+    app.fetch.claims().clear();
     assert!(fetch_skips_for(&mut app, &targets, true, FetchAsk::One).is_empty());
     assert_eq!(FetchAsk::One.cap(Some(200 * MIB)), None);
     // `fetch_max_mb = 0`: nothing is capped.
@@ -658,10 +664,10 @@ fn f_fetches_a_held_row_uncapped_and_shift_f_and_automatic_do_not() {
 #[test]
 fn each_sweep_entry_point_plans_its_fetch_cap() {
     let mut app = fleet_app(1);
-    app.fetch_max_bytes = Some(7 * MIB);
+    app.fetch.set_max_bytes(Some(7 * MIB));
     let targets = sweep_targets(&app, None);
     let mut cap_for = |ask: FetchAsk| {
-        app.fetches_in_flight.clear();
+        app.fetch.claims().clear();
         plan_sweep_fetch(&mut app, &targets, true, ask).max_bytes
     };
     assert_eq!(cap_for(FetchAsk::for_single_sweep(false)), None, "f");
@@ -676,8 +682,8 @@ fn each_sweep_entry_point_plans_its_fetch_cap() {
         Some(7 * MIB),
         "watch"
     );
-    app.fetch_max_bytes = None;
-    app.fetches_in_flight.clear();
+    app.fetch.set_max_bytes(None);
+    app.fetch.claims().clear();
     let plan = plan_sweep_fetch(&mut app, &targets, true, FetchAsk::for_full_sweep(true));
     assert_eq!(plan.max_bytes, None, "fetch_max_mb = 0");
 }
@@ -693,17 +699,17 @@ async fn shift_f_skips_a_held_row_and_f_on_it_fetches() {
     for i in [0, 1] {
         let path = app.repos[i].path.clone().unwrap();
         assert!(
-            !app.fetches_in_flight.contains_key(&path),
+            !app.fetch.claims().contains_key(&path),
             "F fetched held row {i}"
         );
     }
     let free = app.repos[2].path.clone().unwrap();
-    assert!(app.fetches_in_flight.contains_key(&free));
+    assert!(app.fetch.claims().contains_key(&free));
     for i in [0, 1] {
         start_single_sweep(&mut app, &tx, i, true, false, None);
         let path = app.repos[i].path.clone().unwrap();
         assert!(
-            app.fetches_in_flight.contains_key(&path),
+            app.fetch.claims().contains_key(&path),
             "f skipped held row {i}"
         );
     }
@@ -765,7 +771,7 @@ async fn a_recovering_poll_skips_a_row_held_after_a_timeout() {
             meta: Default::default(),
         }),
     );
-    app.refresh_awaits_poll = true;
+    app.fetch.await_poll(true);
     poll_with(
         &mut app,
         Ok(Box::new(github::GithubFetch {
@@ -777,7 +783,7 @@ async fn a_recovering_poll_skips_a_row_held_after_a_timeout() {
         })),
     );
     assert!(
-        app.refresh_fetches.is_empty(),
+        app.fetch.refresh_fetches().is_empty(),
         "the recovery refetch fetched a held row"
     );
 }

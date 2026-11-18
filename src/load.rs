@@ -96,7 +96,7 @@ pub(crate) fn spawn_window_apply(
     let args = args.clone();
     let config = config.clone();
     let repo_dir = repo_dir.to_path_buf();
-    let fetch_claims = app.fetches_in_flight.clone();
+    let fetch_claims = app.fetch.claims().clone();
     tokio::spawn(async move {
         let cutoff = w.cutoff(config.work_start, config.work_end);
         let header = w.label(config.work_start, config.work_end);
@@ -139,7 +139,7 @@ pub(crate) fn spawn_memory_rebuild(
     let args = args.clone();
     let config = config.clone();
     let repo_dir = repo_dir.to_path_buf();
-    let fetch_claims = app.fetches_in_flight.clone();
+    let fetch_claims = app.fetch.claims().clone();
     let size_held = size_held_rows(&app.repos);
     tokio::spawn(async move {
         let mode = args.mode();
@@ -237,7 +237,7 @@ pub(crate) fn apply_load_result_saving_to(
             // hold like a sweep's: only such a row has an attempt.
             for repo in &lr.repos {
                 if let (Some(path), Some(at)) = (repo.path.as_deref(), repo.fetch.last_attempt) {
-                    app.fetch_backoff.record(path, &repo.fetch.outcome, at);
+                    app.fetch.record_outcome(path, &repo.fetch.outcome, at);
                 }
             }
             app.repos = carry_fetch_facts(&app.repos, lr.repos);
@@ -269,7 +269,7 @@ pub(crate) fn apply_load_result_saving_to(
             }
             // The rows are new and so may be the dataset: the pre-check
             // reads both (FZ-35b).
-            assess_size_holds(&mut app.repos, &app.dataset, app.fetch_max_bytes);
+            assess_size_holds(&mut app.repos, &app.dataset, app.fetch.max_bytes());
             // Only a load that fetched carries one; a window apply keeps the
             // coverage its dataset came with.
             if let Some(meta) = lr.meta {

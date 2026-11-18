@@ -58,7 +58,7 @@ fn a_successful_fetch_records_the_baseline_and_lifts_the_hold() {
     land(&mut app, 0, git::FetchOutcome::Succeeded);
     assert_eq!(app.repos[0].fetch.size_hold(), None);
     assert_eq!(app.repos[0].fetch.disk_baseline, Some(308_200));
-    assess_size_holds(&mut app.repos, &app.dataset, app.fetch_max_bytes);
+    assess_size_holds(&mut app.repos, &app.dataset, app.fetch.max_bytes());
     assert_eq!(
         app.repos[0].fetch.size_hold(),
         None,
@@ -91,7 +91,7 @@ fn a_load_that_timed_out_holds_the_row() {
         })),
     );
     assert!(
-        app.fetch_held(&path, now),
+        app.fetch.held(&path, now, app.refresh_interval as i64),
         "the load's timeout held nothing"
     );
 }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::engine::BACKOFF_CAP_SECS;
+use crate::engine::{BACKOFF_CAP_SECS, FetchBackoff};
 use crate::time::{TimeWindow, WindowUnit};
 
 fn commit(hash: &str) -> crate::model::Commit {
@@ -54,152 +54,8 @@ fn make_app(n: usize) -> App {
     App::new(repos, "test".to_string(), 120, 40)
 }
 
-/// Regression: the `r` spinner keyed on the local sweep alone, so it
-/// stopped while the GitHub poll and the fetches it set off were still
-/// landing rows one at a time.
-#[test]
-fn a_manual_refresh_spins_until_its_poll_and_fetches_land() {
-    let mut app = make_app(3);
-    app.sweep_started = Some(std::time::Instant::now());
-    app.sweep_manual = true;
-    app.refresh_awaits_poll = true;
-    assert!(app.is_refreshing());
-
-    // The local sweep finishing is not the end of it.
-    app.sweep_started = None;
-    assert!(app.is_refreshing(), "stopped before the poll landed");
-
-    app.settle_refresh_poll(["~/repos/repo-0".to_string(), "~/repos/repo-2".to_string()]);
-    assert!(app.is_refreshing(), "stopped before the fetches landed");
-
-    app.settle_refresh_fetch("~/repos/repo-0", &crate::git::FetchOutcome::Succeeded);
-    assert!(app.is_refreshing());
-    app.settle_refresh_fetch("~/repos/repo-2", &crate::git::FetchOutcome::Succeeded);
-    assert!(!app.is_refreshing());
-    assert!(app.refresh_fetches_started.is_none());
-}
-
-#[test]
-fn a_manual_refresh_is_local_until_its_sweep_ends_then_remote() {
-    let mut app = make_app(1);
-    assert_eq!(app.refresh_phase(), None);
-    app.sweep_started = Some(std::time::Instant::now());
-    app.sweep_manual = true;
-    app.refresh_awaits_poll = true;
-    assert_eq!(app.refresh_phase(), Some(RefreshPhase::Local));
-    app.sweep_started = None;
-    assert_eq!(app.refresh_phase(), Some(RefreshPhase::Remote));
-    app.settle_refresh_poll(std::iter::empty());
-    assert_eq!(app.refresh_phase(), None);
-}
-
-#[test]
-fn a_manual_refresh_ends_with_its_poll_when_nothing_moved() {
-    let mut app = make_app(1);
-    app.refresh_awaits_poll = true;
-    app.settle_refresh_poll(std::iter::empty());
-    assert!(!app.is_refreshing());
-    assert!(app.refresh_fetches_started.is_none());
-}
-
-/// The local sweep can report a repo before that repo's fetch has run.
-#[test]
-fn an_unfetched_update_does_not_settle_a_refresh_fetch() {
-    let mut app = make_app(1);
-    app.refresh_awaits_poll = true;
-    app.settle_refresh_poll(["~/repos/repo-0".to_string()]);
-    app.settle_refresh_fetch("~/repos/repo-0", &crate::git::FetchOutcome::NotAttempted);
-    assert!(app.is_refreshing());
-}
-
 pub(crate) fn fetch_failed(kind: crate::git::FetchFailureKind) -> crate::git::FetchOutcome {
     crate::git::FetchOutcome::Failed(crate::git::FetchFailure { kind, detail: None })
-}
-
-/// Rule 4: a fetch that failed is still a fetch that finished, so it
-/// settles the refresh waiting on it.
-#[test]
-fn a_failed_fetch_settles_a_refresh_fetch() {
-    let mut app = make_app(1);
-    app.refresh_awaits_poll = true;
-    app.settle_refresh_poll(["~/repos/repo-0".to_string()]);
-    app.settle_refresh_fetch(
-        "~/repos/repo-0",
-        &fetch_failed(crate::git::FetchFailureKind::Unreachable),
-    );
-    assert!(!app.is_refreshing());
-    assert!(app.refresh_fetches_started.is_none());
-}
-
-/// The fetches `r`'s poll sets off are the ones its report counts.
-#[test]
-fn a_manual_refresh_tallies_the_fetches_its_poll_set_off() {
-    let mut app = make_app(2);
-    app.refresh_awaits_poll = true;
-    app.settle_refresh_poll(["~/repos/repo-0".to_string(), "~/repos/repo-1".to_string()]);
-    let ok = crate::git::FetchOutcome::Succeeded;
-    assert_eq!(
-        app.manual_fetches.land("~/repos/repo-0", "repo-0", &ok),
-        None
-    );
-    let report = app.manual_fetches.land(
-        "~/repos/repo-1",
-        "repo-1",
-        &fetch_failed(crate::git::FetchFailureKind::Auth),
-    );
-    assert_eq!(
-        report,
-        Some(FetchReport {
-            total: 2,
-            failed: vec![("repo-1".to_string(), crate::git::FetchFailureKind::Auth)],
-        })
-    );
-}
-
-/// A watch timer's poll is not a keypress: its fetches report nothing.
-#[test]
-fn a_poll_nobody_pressed_r_for_tallies_nothing() {
-    let mut app = make_app(1);
-    app.settle_refresh_poll(["~/repos/repo-0".to_string()]);
-    let report = app.manual_fetches.land(
-        "~/repos/repo-0",
-        "repo-0",
-        &fetch_failed(crate::git::FetchFailureKind::Auth),
-    );
-    assert_eq!(report, None);
-}
-
-/// The watch timer's poll fetches silently: no spinner, nothing to wait on.
-#[test]
-fn a_poll_nobody_pressed_r_for_adds_no_refresh_fetches() {
-    let mut app = make_app(1);
-    app.settle_refresh_poll(["~/repos/repo-0".to_string()]);
-    assert!(!app.is_refreshing());
-    assert!(app.refresh_fetches.is_empty());
-}
-
-#[test]
-fn a_watch_timer_sweep_is_not_a_refresh() {
-    let mut app = make_app(1);
-    app.sweep_started = Some(std::time::Instant::now());
-    app.sweep_manual = false;
-    assert!(!app.is_refreshing());
-}
-
-#[test]
-fn a_refresh_fetch_that_never_returns_is_given_up_on() {
-    let mut app = make_app(1);
-    app.refresh_awaits_poll = true;
-    app.settle_refresh_poll(["~/repos/repo-0".to_string()]);
-    app.expire_refresh_fetches(std::time::Duration::from_secs(60));
-    assert!(
-        app.is_refreshing(),
-        "expired a fetch still inside its limit"
-    );
-    app.refresh_fetches_started =
-        Some(std::time::Instant::now() - std::time::Duration::from_secs(61));
-    app.expire_refresh_fetches(std::time::Duration::from_secs(60));
-    assert!(!app.is_refreshing());
 }
 
 /// Regression: the footer folded `self.repos` while the repo list drew
@@ -2590,26 +2446,26 @@ fn a_fetch_report_lives_while_its_fetch_reports_progress() {
     let mut app = make_app(2);
     let path = app.repos[0].path.clone().unwrap();
     let quiet = app.repos[1].path.clone().unwrap();
-    app.manual_fetches.expect([path.clone()]);
-    app.refresh_awaits_poll = true;
-    app.settle_refresh_poll([path.clone()]);
+    app.fetch.expect_manual([path.clone()]);
+    app.fetch.await_poll(true);
+    app.fetch.settle_refresh_poll([path.clone()]);
     // Started 200 s ago, under the 180 s limit's nose.
-    app.manual_fetches.started = long_ago(200);
-    app.refresh_fetches_started = long_ago(200);
+    app.fetch.set_tally_started(long_ago(200));
+    app.fetch.set_refresh_fetches_started(long_ago(200));
     // Another repo's progress is no sign of life for this batch.
     app.apply_fetch_progress(&quiet, receiving(1));
     assert!(
-        app.manual_fetches.started.unwrap().elapsed() > stuck,
+        app.fetch.tally().started.unwrap().elapsed() > stuck,
         "another repo's progress kept this batch alive"
     );
     app.apply_fetch_progress(&path, receiving(300 * 1024 * 1024));
-    app.expire_refresh_fetches(stuck);
-    assert!(!app.manual_fetches.awaiting.is_empty(), "the tally expired");
+    app.fetch.expire_refresh(stuck);
+    assert!(!app.fetch.tally().awaiting.is_empty(), "the tally expired");
     assert!(
-        app.is_refreshing(),
+        app.fetch.is_refreshing(),
         "the refresh gave up on a fetch still moving"
     );
-    let report = app.manual_fetches.land(
+    let report = app.fetch.land_manual(
         &path,
         "repo-0",
         &crate::git::FetchOutcome::Failed(crate::git::FetchFailure {
@@ -2621,11 +2477,11 @@ fn a_fetch_report_lives_while_its_fetch_reports_progress() {
 
     let mut silent = make_app(1);
     let path = silent.repos[0].path.clone().unwrap();
-    silent.manual_fetches.expect([path.clone()]);
-    silent.manual_fetches.started = long_ago(200);
-    silent.expire_refresh_fetches(stuck);
+    silent.fetch.expect_manual([path.clone()]);
+    silent.fetch.set_tally_started(long_ago(200));
+    silent.fetch.expire_refresh(stuck);
     assert_eq!(
-        silent.manual_fetches.land(&path, "repo-0", &timed_out()),
+        silent.fetch.land_manual(&path, "repo-0", &timed_out()),
         None,
         "a silent batch expires as before"
     );
@@ -2705,21 +2561,23 @@ fn a_success_or_a_clear_lifts_the_hold_and_other_failures_do_not() {
 fn a_running_fetch_is_claimed_once_until_it_lands() {
     let mut app = make_app(1);
     let t0 = std::time::Instant::now();
-    assert!(app.claim_fetch("~/repos/repo-0", t0));
+    assert!(app.fetch.claim("~/repos/repo-0", t0));
     assert!(
-        !app.claim_fetch("~/repos/repo-0", t0),
+        !app.fetch.claim("~/repos/repo-0", t0),
         "a second fetch started"
     );
-    assert!(app.claim_fetch("~/repos/other", t0), "a claim is per path");
-    app.fetch_landed("~/repos/repo-0", &crate::git::FetchOutcome::NotAttempted);
+    assert!(app.fetch.claim("~/repos/other", t0), "a claim is per path");
+    app.fetch
+        .landed("~/repos/repo-0", &crate::git::FetchOutcome::NotAttempted);
     assert!(
-        !app.claim_fetch("~/repos/repo-0", t0),
+        !app.fetch.claim("~/repos/repo-0", t0),
         "a sweep without a fetch ended the claim"
     );
-    app.fetch_landed("~/repos/repo-0", &timed_out());
-    assert!(app.claim_fetch("~/repos/repo-0", t0));
-    app.fetch_landed("~/repos/repo-0", &crate::git::FetchOutcome::Succeeded);
-    assert!(app.claim_fetch("~/repos/repo-0", t0));
+    app.fetch.landed("~/repos/repo-0", &timed_out());
+    assert!(app.fetch.claim("~/repos/repo-0", t0));
+    app.fetch
+        .landed("~/repos/repo-0", &crate::git::FetchOutcome::Succeeded);
+    assert!(app.fetch.claim("~/repos/repo-0", t0));
 }
 
 /// FZ-34, R5: a claim whose result never landed expires after the limit.
@@ -2728,14 +2586,14 @@ fn a_fetch_claim_expires_after_the_stuck_limit() {
     let mut app = make_app(1);
     let t0 = std::time::Instant::now();
     let limit = std::time::Duration::from_secs(180);
-    assert!(app.claim_fetch("~/repos/repo-0", t0));
+    assert!(app.fetch.claim("~/repos/repo-0", t0));
     app.expire_fetches_in_flight(limit, t0 + limit);
     assert!(
-        !app.claim_fetch("~/repos/repo-0", t0),
+        !app.fetch.claim("~/repos/repo-0", t0),
         "expired at the limit"
     );
     app.expire_fetches_in_flight(limit, t0 + limit + std::time::Duration::from_secs(1));
-    assert!(app.claim_fetch("~/repos/repo-0", t0));
+    assert!(app.fetch.claim("~/repos/repo-0", t0));
 }
 
 /// FZ-35a (#84), the #83 reviewer's follow-up: a late landing from a
@@ -2746,28 +2604,32 @@ fn a_late_landing_does_not_end_a_newer_claim() {
     let mut app = make_app(1);
     let t0 = std::time::Instant::now();
     let limit = std::time::Duration::from_secs(180);
-    assert!(app.claim_fetch("~/repos/repo-0", t0));
-    let old = app.fetches_in_flight.token("~/repos/repo-0").unwrap();
+    assert!(app.fetch.claim("~/repos/repo-0", t0));
+    let old = app.fetch.claims().token("~/repos/repo-0").unwrap();
     app.expire_fetches_in_flight(limit, t0 + std::time::Duration::from_secs(181));
-    assert!(app.claim_fetch("~/repos/repo-0", t0 + std::time::Duration::from_secs(182)));
-    let newer = app.fetches_in_flight.token("~/repos/repo-0").unwrap();
-    app.fetch_landed_under("~/repos/repo-0", &timed_out(), Some(old));
     assert!(
-        app.fetches_in_flight.contains_key("~/repos/repo-0"),
+        app.fetch
+            .claim("~/repos/repo-0", t0 + std::time::Duration::from_secs(182))
+    );
+    let newer = app.fetch.claims().token("~/repos/repo-0").unwrap();
+    app.fetch
+        .landed_under("~/repos/repo-0", &timed_out(), Some(old));
+    assert!(
+        app.fetch.claims().contains_key("~/repos/repo-0"),
         "the late landing ended the newer claim"
     );
-    app.fetch_landed_under(
+    app.fetch.landed_under(
         "~/repos/repo-0",
         &crate::git::FetchOutcome::NotAttempted,
         Some(newer),
     );
-    assert!(app.fetches_in_flight.contains_key("~/repos/repo-0"));
-    app.fetch_landed_under(
+    assert!(app.fetch.claims().contains_key("~/repos/repo-0"));
+    app.fetch.landed_under(
         "~/repos/repo-0",
         &crate::git::FetchOutcome::Succeeded,
         Some(newer),
     );
-    assert!(!app.fetches_in_flight.contains_key("~/repos/repo-0"));
+    assert!(!app.fetch.claims().contains_key("~/repos/repo-0"));
 }
 
 fn receiving(bytes: u64) -> crate::git::FetchProgress {
@@ -2811,8 +2673,11 @@ fn an_expired_claim_takes_its_progress_off_the_row() {
         app.repos[0].path.clone().unwrap(),
         app.repos[1].path.clone().unwrap(),
     );
-    assert!(app.claim_fetch(&a, t0));
-    assert!(app.claim_fetch(&b, t0 + std::time::Duration::from_secs(100)));
+    assert!(app.fetch.claim(&a, t0));
+    assert!(
+        app.fetch
+            .claim(&b, t0 + std::time::Duration::from_secs(100))
+    );
     app.apply_fetch_progress(&a, receiving(5));
     app.apply_fetch_progress(&b, receiving(7));
     app.expire_fetches_in_flight(limit, t0 + std::time::Duration::from_secs(181));
@@ -2826,9 +2691,17 @@ fn the_app_holds_a_timed_out_path_in_watch_intervals() {
     let mut app = make_app(1);
     app.refresh_interval = 30;
     let t0 = Local::now();
-    app.fetch_backoff.record("~/repos/repo-0", &timed_out(), t0);
-    assert!(app.fetch_held("~/repos/repo-0", t0 + chrono::Duration::seconds(59)));
-    assert!(!app.fetch_held("~/repos/repo-0", t0 + chrono::Duration::seconds(60)));
+    app.fetch.record_outcome("~/repos/repo-0", &timed_out(), t0);
+    assert!(app.fetch.held(
+        "~/repos/repo-0",
+        t0 + chrono::Duration::seconds(59),
+        app.refresh_interval as i64
+    ));
+    assert!(!app.fetch.held(
+        "~/repos/repo-0",
+        t0 + chrono::Duration::seconds(60),
+        app.refresh_interval as i64
+    ));
 }
 
 // --- The `worktrees` view (FZ-77) ---

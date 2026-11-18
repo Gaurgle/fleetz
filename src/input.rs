@@ -1000,7 +1000,7 @@ fn reload_key(
     now: chrono::DateTime<chrono::Local>,
 ) {
     // A manual reload lifts every timeout hold (FZ-34).
-    app.fetch_backoff.clear();
+    app.fetch.clear_holds();
     match reload_action(app, now) {
         ReloadAction::AlreadyRunning => app.set_status(REFRESH_RUNNING.to_string(), false),
         ReloadAction::ResumesOnly(until) => app.set_status(limited_status(until), false),
@@ -1020,7 +1020,7 @@ fn reload_key(
                 app.window,
                 LoadKind::Reload,
                 true,
-                &app.fetches_in_flight,
+                app.fetch.claims(),
                 size_held_rows(&app.repos),
             );
         }
@@ -1037,7 +1037,7 @@ pub(crate) fn refresh_key(
     now: chrono::DateTime<chrono::Local>,
 ) {
     // A manual refresh lifts every timeout hold (FZ-34).
-    app.fetch_backoff.clear();
+    app.fetch.clear_holds();
     let limited = app.github.limit_until(now);
     match limited {
         Some(until) => app.set_status(limited_status(until), false),
@@ -1046,15 +1046,13 @@ pub(crate) fn refresh_key(
     start_sweep(app, tx, false, args.author.clone(), true);
     // A watch sweep already running holds the sweep lock, so none was
     // started: its rows are the ones this refresh waits for (FZ-85).
-    if app.sweep_started.is_some() {
-        app.sweep_manual = true;
-    }
+    app.fetch.mark_manual();
     if limited.is_none() {
         start_github_poll(app, tx, config);
     }
     // Already in flight from the watch timer counts too: its answer
     // is the one this refresh is waiting for.
-    app.refresh_awaits_poll = app.github.inflight();
+    app.fetch.await_poll(app.github.inflight());
 }
 
 /// `f`: fetch the selected repo. Manual, so a timeout hold does not stop it
@@ -1071,7 +1069,7 @@ fn fetch_key(
     {
         app.set_status(format!("\u{27f3} Fetching {}…", repo.name), false);
         start_single_sweep(app, tx, idx, true, false, author);
-        app.manual_fetches.expect(repo.path.clone());
+        app.fetch.expect_manual(repo.path.clone());
     }
 }
 
