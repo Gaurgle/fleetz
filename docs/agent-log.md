@@ -291,9 +291,36 @@ first (from `git log --merges main`).
 
 ### 2026-11-18
 
+- **#173 (FZ-116), E2b: `FetchState` owns the local fetch in the engine.**
+  Dispatched 13:17 under the unattended refactor run, merged `9b5fda2`
+  at 13:58 CET. Base `3ac268d`, commit `88ed32f`: `RefreshPhase` and
+  `FetchBackoff` to `engine/fetch.rs` (746 production lines) with the
+  sweep lock, refresh flags, claims and holds as `FetchState`; the three
+  sweep planning functions joined as `plan`; `refresh_interval` stays on
+  `App` (O-E); ten refresh-phase tests move; `app.rs` 4,793 to 4,585.
+  Lead ruling (on the issue): six test edits beyond setter, query or
+  verb accepted as plumbing (`held` takes the interval at 8 test sites,
+  moved import paths, test-only accessors, one read to a query, the
+  moved tests on `FetchState::new`). Review 1 on `55c67f19445f`:
+  accepted, no blockers; four of seven reviewer mutants survive on the
+  base too (the sweep lock never shown taken, a refused `begin_sweep`
+  writing `sweep_manual`, `expire_sweep` no-op, `F` through a timeout
+  hold): test-only follow-ups for the architect. Branch CI 44307272983
+  green; combined checks on `0c07b53` (1758 passed); gate holds.
+  Observed, out of scope: `docs/app-split-design.md:60` still listed
+  `interval_secs`, `set_interval`, `sweep_manual()` and
+  `interval_secs()` (the lead fixed the row);
+  `docs/repository-identity-design.md:126` still names
+  `App::settle_refresh_fetch` and `refresh_fetches` in `app.rs`;
+  `FetchState::expire_sweep` has no test about sweep expiry;
+  `docs/architecture.md` rows for `poll.rs`, `event.rs`, `input.rs`,
+  `load.rs` and `main.rs` were not re-measured. Remembered: nothing to
+  keep.
+  FZ-116: review accepted first; fix cycles 0; owner decisions 0; worker 21; review 8; models opus:high/opus:high; usage worker 234827 tokens, reviewer 146213 tokens
+
 - **#170 (FZ-113), E3: `GithubSync` owns the GitHub sync in the engine.**
   Dispatched 12:30 on his "keep refactoring and let me know when that's
-  done then", merged `3ac268d` at 13:51 CET. Base `1a5ce9a`, commit
+  done then", merged `3ac268d` at 13:11 CET. Base `1a5ce9a`, commit
   `2b49370`: `engine/github_sync.rs` (851) with its tests, the type block
   byte-identical, the poll decisions as methods without `Config` (D3),
   `main.rs` on `from_config`; `app.rs` 5,372 to 4,793. Lead ruling (on
@@ -326,13 +353,13 @@ first (from `git log --merges main`).
   "keep refactoring and let me know when that's done then". Read as the
   refactor batch of 11-09 (`docs/app-split-design.md`'s eight tickets in
   order, FZ-113 first), report at the end of the batch; no feature work.
-- 13:05 CET, asked whether the remaining app-split tickets (E2b, A1a,
+- About 12:50 CET, asked whether the remaining app-split tickets (E2b, A1a,
   A1c to A1h, A1i, R2) may be filed as issues: "yes, im actually sick,
   so I dont want to work, i just want to keep this running in the
   background while i rest. can you do that?". Read as: file those
   issues, run the batch unattended with no questions until it lands or
   a stop condition hits.
-- 14:20 CET, on the three lead rulings (#170 test plumbing, #173
+- About 13:33 CET, on the three lead rulings (#170 test plumbing, #173
   `refresh_interval` on `App`, #175 O-E `pub(crate)` in the move
   tickets): "Sounds good to me". All three accepted; O-E closed.
 

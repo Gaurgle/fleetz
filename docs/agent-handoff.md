@@ -20,7 +20,7 @@ reviewer running. `main` at `1a5ce9a` (`7f7275b` plus docs), CI green.
 | Choose and dispatch tickets from the board | 2026-10-27 11:05, "you, as the lead, have authority to decide what tickets to start on" | two workers plus one `fz-small`; look items stop for him; FZ-52 and the `0.7.0` bump need his explicit word; issues only on his yes | revoked by word |
 | Small look changes merge without his try | 2026-10-02 | a character, color, label, status line, small row or badge; new screens, keys, config keys and test edits still his | revoked by word |
 | Existing-test exception | validation contract in `agent-workflow.md` | a compile-forced new field with no assertion changed | revoked by word |
-| Refactor batch from `docs/module-split-design.md` | 2026-11-09 15:14, "refactor only ... File L1, T1, E1, E2 and D1 and run them in order; F1 and U1 after"; about 19:20, "We can keep on refactoring as we go", "just keep on refactoring tonight. I'll be at dinner then sleep" | FZ-103 to FZ-112 (done), then `docs/app-split-design.md`'s eight tickets in its order (accepted 21:56, "I accept all changes in the design plan"); renewed 11-18 12:22, "keep refactoring and let me know when that's done then"; 13:05 (sick, resting) yes to filing the remaining app-split issues and running unattended; no feature tickets; stop at a safe-merge failure, red `main`, two failed fix cycles or the usage limit; report when the batch lands | the refactor lands or revoked by word |
+| Refactor batch from `docs/module-split-design.md` | 2026-11-09 15:14, "refactor only ... File L1, T1, E1, E2 and D1 and run them in order; F1 and U1 after"; about 19:20, "We can keep on refactoring as we go", "just keep on refactoring tonight. I'll be at dinner then sleep" | FZ-103 to FZ-112 (done), then `docs/app-split-design.md`'s eight tickets in its order (accepted 21:56, "I accept all changes in the design plan"); renewed 11-18 12:22, "keep refactoring and let me know when that's done then"; about 12:50 (sick, resting) yes to filing the remaining app-split issues and running unattended; no feature tickets; stop at a safe-merge failure, red `main`, two failed fix cycles or the usage limit; report when the batch lands | the refactor lands or revoked by word |
 
 Astra is the preferred lead. No `cargo install`, tag or release. His
 FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
@@ -29,15 +29,15 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 - Lead ruling for his review: F1's `include_str!` test change (#166).
   The FZ-113, O-E and `refresh_interval` rulings he accepted 11-18
-  14:20 (log). FZ-103 to FZ-113 are Done and logged.
+  about 13:33 (log). FZ-103 to FZ-113 and FZ-116 are Done and logged.
 - App-split batch filed 11-18 (architect-checked, bodies on the issues):
   FZ-116 #173 (E2b), FZ-117 #174 (A1a), FZ-118 to FZ-123 #175 to #180
   (A1c to A1h), FZ-124 #181 (A1i), FZ-125 #182 (R2, needs his design
   ruling, not for the unattended run). Strictly in that order, one
   worker at a time (each shares `app.rs` with the next).
-- FZ-116 (#173) In progress since 14:05, base `3ac268d`, branch
-  `refactor/fz-116-engine-fetch-state`, worktree `.claude/worktrees/fz-116`;
-  record on the issue (edit by comment id); hard tiers.
+- FZ-117 (#174, A1a) In progress since 14:05, base `9b5fda2`, branch
+  `refactor/fz-117-app-feedback`, worktree `.claude/worktrees/fz-117`;
+  record on the issue (edit by comment id); standard tiers.
 - Survey for `fz-architect` after the batch: section 3's `app` to `ui`
   sites and section 5's cell counts are stale (its 11-18 report); section
   2's intro and rows drifted (app.rs re-measured, github/cache rows).

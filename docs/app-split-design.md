@@ -57,7 +57,7 @@ read-only for `ui/`.
 | Type | File | Holds (private) | Verbs | `ui/` reads |
 |---|---|---|---|---|
 | `GithubSync` | `engine/github_sync.rs` | `GithubFreshness`, `ApiBudget`, `GithubBackoff`, the jitter, `interval_secs`, `poll_cost`, `inflight: Option<Instant>`, `push_detected` | `observe_budget`, `attempt_failed`, `attempt_succeeded`, `pace`, `slowed`, `limit_until`, `poll_due`, `not_before`, `effective_interval`, `claim_attempt`, `expire_stuck`, `note_push`, `take_push` | `freshness()`, `pace()`, `limit_until()`, `interval_secs()`, `poll_cost()` |
-| `FetchState` | `engine/fetch.rs` (grows to about 650, est.) | `FetchBackoff`, `FetchClaims`, `FetchTally`, `max_bytes`, `interval_secs`, the sweep lock, the refresh flags | `begin_sweep`, `sweep_landed`, `plan` (today `plan_sweep_fetch` + `fetch_skips_for` + `held_fetch_paths`), `expect_manual`, `settle_refresh_*`, `held`, `claim`, `landed_under`, `expire_claims`, `touch`, `expire_refresh`, `refresh_phase`, `record_outcome`, `clear_holds`, `set_interval` | `refresh_phase()`, `is_refreshing()`, `sweep_manual()`, `interval_secs()` |
+| `FetchState` | `engine/fetch.rs` (grows to about 650, est.) | `FetchBackoff`, `FetchClaims`, `FetchTally`, `max_bytes`, the sweep lock, the refresh flags (`interval_secs` dropped under O-E: `refresh_interval` stays on `App` and `held` takes it) | `begin_sweep`, `sweep_landed`, `plan` (today `plan_sweep_fetch` + `fetch_skips_for` + `held_fetch_paths`), `expect_manual`, `settle_refresh_*`, `held`, `claim`, `landed_under`, `expire_claims`, `touch`, `expire_refresh`, `refresh_phase`, `record_outcome`, `clear_holds` | `refresh_phase()`, `is_refreshing()`, `in_sweep()`, `claims()`, `max_bytes()` |
 | `RenderFeedback` | `app/feedback.rs` | the 18 cells, unchanged at first | none at first (D4) | all, as `app.drawn.<cell>` |
 | `CiView`, `NotesView`, `ChangesView`, `WorktreesView`, `DigestView`, `ContribStrip` | `app/ci.rs`, `app/notes.rs`, `app/changes.rs`, `app/worktrees.rs`, `app/digest.rs`, `app/contrib.rs` | the group's fields, `pub(super)` | the group's `impl App` block, moved unchanged (D5) | `app.ci.body` and so on, or the methods as today |
 
@@ -187,7 +187,7 @@ setters.
 - **O-D** Order: E3 and E2b before F1 (the split design's O4), or F1 first
   so they touch smaller files. Same tickets either way; the architect leans
   to the existing ruling.
-- **O-E** Accepted 2026-11-18 14:20 ("Sounds good to me"): D7's `pub(super)`
+- **O-E** Accepted 2026-11-18 about 13:33 ("Sounds good to me"): D7's `pub(super)`
   on the view structs' fields would hide them from `ui/ci.rs`,
   `ui/contributions.rs` and every test outside `app/`, so the move
   tickets (FZ-118 to FZ-123) land them `pub(crate)`, one step narrower
