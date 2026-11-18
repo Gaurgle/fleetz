@@ -1,4 +1,4 @@
-use super::*;
+use crate::app::*;
 use crate::digest::tests::repo;
 
 fn changes_app() -> App {
@@ -25,8 +25,8 @@ fn changes_landed(app: &mut App, uncommitted: &[&str], unpushed: &[&str]) {
     let read = ChangesRead {
         key: "/changes-fixture".to_string(),
         root: "/changes-fixture".into(),
-        generation: app.changes_generation,
-        base: app.changes_base,
+        generation: app.changes.generation,
+        base: app.changes.base,
     };
     let files = |paths: &[&str], status: &str| -> Vec<crate::git::ChangedFile> {
         paths.iter().map(|p| changed_file(status, p)).collect()
@@ -81,7 +81,7 @@ fn a_not_cloned_row_reads_no_changes() {
     app.claim_changes_read(start);
     let later = start + std::time::Duration::from_secs(5);
     assert_eq!(app.claim_changes_read(later), None);
-    assert!(app.changes.is_empty());
+    assert!(app.changes.states.is_empty());
 }
 
 /// Held for the session: leaving the view and coming back reads
@@ -202,8 +202,8 @@ fn a_same_named_file_in_another_repo_draws_no_held_diff() {
         let read = ChangesRead {
             key: key.to_string(),
             root: key.into(),
-            generation: app.changes_generation,
-            base: app.changes_base,
+            generation: app.changes.generation,
+            base: app.changes.base,
         };
         let changes = crate::git::Changes {
             uncommitted: vec![changed_file(" M", "a.txt")],
@@ -245,7 +245,7 @@ fn y_copies_the_changed_path_and_u_toggles_only_in_the_view() {
     let mut app = changes_app();
     app.history_view = HistoryView::Info;
     app.toggle_changes_base();
-    assert_eq!(app.changes_base, crate::git::ChangesBase::Upstream);
+    assert_eq!(app.changes.base, crate::git::ChangesBase::Upstream);
     app.history_view = HistoryView::Changes;
     changes_landed(&mut app, &["src/a b.rs"], &[]);
     let mut copied = String::new();
@@ -259,5 +259,5 @@ fn y_copies_the_changed_path_and_u_toggles_only_in_the_view() {
         Some(std::path::PathBuf::from("/changes-fixture/src/a b.rs"))
     );
     app.toggle_changes_base();
-    assert_eq!(app.changes_base, crate::git::ChangesBase::DefaultBranch);
+    assert_eq!(app.changes.base, crate::git::ChangesBase::DefaultBranch);
 }
