@@ -441,6 +441,11 @@ first (from `git log --merges main`).
 - About 13:33 CET, on the three lead rulings (#170 test plumbing, #173
   `refresh_interval` on `App`, #175 O-E `pub(crate)` in the move
   tickets): "Sounds good to me". All three accepted; O-E closed.
+- 18:08 CET, with FZ-121 in progress: "we can begin closing up for
+  today. let current ticket finish, but dont start any more". Read as:
+  FZ-121 runs to integration, no dispatch after it; the batch resumes
+  on his word (FZ-122 to FZ-124 remain, FZ-125 needs his design
+  ruling).
 
 ### 2026-11-09
 
