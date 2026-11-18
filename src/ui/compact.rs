@@ -423,7 +423,7 @@ mod tests {
         let key = crate::ci::target(&app.repos[0])
             .expect("a GitHub identity")
             .0;
-        app.ci.insert(
+        app.ci.states.insert(
             key,
             crate::app::CiState {
                 tip: Some(crate::app::CiTip {
@@ -489,7 +489,7 @@ mod tests {
                 ..Default::default()
             };
             state.freshness.data_time = crate::app::DataTime::At(now);
-            app.ci.insert(key, state);
+            app.ci.states.insert(key, state);
         }
         assert!(
             app.ci_side_run(&app.repos[0]),

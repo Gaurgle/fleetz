@@ -1463,7 +1463,7 @@ fn the_ci_poll_waits_for_the_ci_view() {
         let instant = start + std::time::Duration::from_millis(ms);
         assert_eq!(ci_poll_request(&mut app, at(12, 0, 0), instant), None);
     }
-    assert!(app.ci.is_empty());
+    assert!(app.ci.states.is_empty());
 }
 
 #[test]
@@ -1532,8 +1532,11 @@ fn a_rate_limited_ci_poll_holds_until_the_reset_and_leaves_the_fleet_alone() {
     let failure = github::Failure::rate_limit("API rate limit exceeded");
     let mut app = ci_failure_lands(failure, Some(budget));
     let resume = reset + secs(7);
-    assert_eq!(app.ci[&ci_key()].backoff.limit_until(60), Some(resume));
-    assert_eq!(app.ci_budget.known(at(12, 0, 10)).unwrap().remaining, 0);
+    assert_eq!(
+        app.ci.states[&ci_key()].backoff.limit_until(60),
+        Some(resume)
+    );
+    assert_eq!(app.ci.budget.known(at(12, 0, 10)).unwrap().remaining, 0);
     app.history_view = app::HistoryView::Ci;
     app.view = app::View::Detail;
     let start = std::time::Instant::now();
@@ -1567,7 +1570,7 @@ fn one_repos_ci_failure_does_not_hold_another_repos_first_poll() {
         };
         app.apply_ci(answer, at(12, 0, n));
     }
-    assert!(app.ci[&ci_key()].backoff.not_before(60).is_some());
+    assert!(app.ci.states[&ci_key()].backoff.not_before(60).is_some());
     let other = app
         .visible_repos()
         .iter()
@@ -1599,7 +1602,7 @@ fn the_ci_tick_polls_only_while_pane_2_shows_ci() {
         ci_tick(&mut app, at(12, 0, 0), start);
         assert_eq!(ci_tick(&mut app, at(12, 0, 1), after(1)), None, "{view:?}");
     }
-    assert!(app.ci.is_empty(), "nothing was claimed outside `ci`");
+    assert!(app.ci.states.is_empty(), "nothing was claimed outside `ci`");
 
     app.history_view = app::HistoryView::Ci;
     app.view = app::View::Compact;
@@ -1620,7 +1623,11 @@ fn the_ci_tick_polls_only_while_pane_2_shows_ci() {
         None,
         "info stops it"
     );
-    assert_eq!(app.ci[&ci_key()].runs, ci_runs(), "held runs survive");
+    assert_eq!(
+        app.ci.states[&ci_key()].runs,
+        ci_runs(),
+        "held runs survive"
+    );
     app.history_view = app::HistoryView::Ci;
     assert!(
         ci_tick(&mut app, at(12, 5, 0), after(300)).is_some(),
@@ -1639,15 +1646,18 @@ fn the_ci_tick_expires_a_stuck_poll_only_in_the_ci_view() {
     app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
     let late = std::time::Instant::now() + CI_POLL_STUCK_AFTER * 2;
     ci_tick(&mut app, at(12, 5, 0), late);
-    assert!(app.ci[&ci_key()].inflight, "info leaves the CI layer alone");
+    assert!(
+        app.ci.states[&ci_key()].inflight,
+        "info leaves the CI layer alone"
+    );
     app.history_view = app::HistoryView::Ci;
     ci_tick(&mut app, at(12, 5, 0), late);
     assert!(
-        app.ci[&ci_key()].freshness.last_attempt.is_some(),
+        app.ci.states[&ci_key()].freshness.last_attempt.is_some(),
         "expired as a failed attempt"
     );
     assert!(matches!(
-        &app.ci[&ci_key()].freshness.outcome,
+        &app.ci.states[&ci_key()].freshness.outcome,
         app::Outcome::Failed(f) if f.kind == github::FailureKind::TimedOut
     ));
 }

@@ -3165,7 +3165,7 @@ fn ci_yank_app(panel: FocusedPanel) -> App {
     app.history_view = app::HistoryView::Ci;
     app.inspector_folded = false;
     app.focused_panel = panel;
-    app.ci.insert(
+    app.ci.states.insert(
         ci_key(),
         app::CiState {
             runs: ci_runs(),
@@ -3193,18 +3193,19 @@ fn the_inspector_on_a_run_copies_the_shown_body_and_the_run_url() {
     let mut app = ci_yank_app(FocusedPanel::Inspector);
     let run = ci_runs()[0].clone();
     let sha = run.head_sha.clone().expect("fixture sha");
-    app.ci.get_mut(&ci_key()).unwrap().runs[0].path = Some(".github/workflows/ci.yml".to_string());
-    app.ci.get_mut(&ci_key()).unwrap().scripts.insert(
+    app.ci.states.get_mut(&ci_key()).unwrap().runs[0].path =
+        Some(".github/workflows/ci.yml".to_string());
+    app.ci.states.get_mut(&ci_key()).unwrap().scripts.insert(
         (sha, ".github/workflows/ci.yml".to_string()),
         ci::Detail::Ready("on: push\njobs: {}\n".to_string()),
     );
-    app.ci_body = app::CiBody::Script;
+    app.ci.body = app::CiBody::Script;
     assert_eq!(chord(&mut app, "yy"), ["on: push\njobs: {}\n"]);
     assert_eq!(yank_status(&app), Some(("copied 18 B".to_string(), false)));
 
     let jobs = ci::parse_jobs(include_str!("ci/fixtures/jobs-failed.json")).unwrap();
     let job = jobs[0].id;
-    let state = app.ci.get_mut(&ci_key()).unwrap();
+    let state = app.ci.states.get_mut(&ci_key()).unwrap();
     state.jobs.insert(run.id, app::CiJobs { etag: None, jobs });
     state.full_logs.insert(
         job,
@@ -3213,9 +3214,9 @@ fn the_inspector_on_a_run_copies_the_shown_body_and_the_run_url() {
     state
         .logs
         .insert(job, ci::LogTail::Lines(vec!["tail".to_string()]));
-    app.ci_body = app::CiBody::Log;
+    app.ci.body = app::CiBody::Log;
     assert_eq!(chord(&mut app, "yy"), ["first\n##[error]boom"]);
-    app.ci_body = app::CiBody::Jobs;
+    app.ci.body = app::CiBody::Jobs;
     assert_eq!(chord(&mut app, "yy"), ["tail"], "the marked job's tail");
 
     assert_eq!(chord(&mut app, "yp"), [run.url]);
@@ -3873,7 +3874,7 @@ fn a_304_keeps_the_runs_and_is_a_successful_attempt() {
         ..ci_answer(&request)
     };
     app.apply_ci(answer, at(12, 0, 10));
-    let state = &app.ci[&ci_key()];
+    let state = &app.ci.states[&ci_key()];
     assert_eq!(state.runs, ci_runs(), "the data is kept");
     assert_eq!(state.runs_etag.as_deref(), Some("W/\"6b13\""));
     assert_eq!(state.freshness.last_attempt, Some(at(12, 0, 10)));
@@ -3913,7 +3914,7 @@ pub(crate) fn ci_failure_lands(
     };
     app.apply_ci(answer, at(12, 0, 10));
     assert_eq!(fleet_snapshot(&app), before, "{failure:?} moved the fleet");
-    let state = &app.ci[&ci_key()];
+    let state = &app.ci.states[&ci_key()];
     assert_eq!(state.runs, ci_runs(), "a failure keeps the data");
     assert_eq!(state.freshness.data_time, app::DataTime::At(at(12, 0, 0)));
     assert_eq!(state.freshness.last_attempt, Some(at(12, 0, 10)));
@@ -3927,7 +3928,7 @@ fn an_offline_ci_poll_keeps_the_runs_and_leaves_the_fleet_alone() {
     let failure = github::Failure::new(github::FailureKind::Offline, "no route");
     let app = ci_failure_lands(failure, None);
     assert_eq!(
-        app.ci[&ci_key()].backoff.not_before(60),
+        app.ci.states[&ci_key()].backoff.not_before(60),
         None,
         "offline counts nothing"
     );
@@ -3938,7 +3939,7 @@ fn a_404_on_a_gone_run_marks_it_until_the_next_list_drops_it() {
     let mut app = ci_app();
     ci_landed(&mut app, at(12, 0, 0));
     let gone = ci_runs()[2].id;
-    app.ci.get_mut(&ci_key()).unwrap().expanded = Some(gone);
+    app.ci.states.get_mut(&ci_key()).unwrap().expanded = Some(gone);
     let before = fleet_snapshot(&app);
     let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
     assert_eq!(request.expanded.as_ref().map(|e| e.run_id), Some(gone));
@@ -3949,7 +3950,7 @@ fn a_404_on_a_gone_run_marks_it_until_the_next_list_drops_it() {
     };
     app.apply_ci(answer, at(12, 0, 10));
     assert_eq!(fleet_snapshot(&app), before);
-    let state = &app.ci[&ci_key()];
+    let state = &app.ci.states[&ci_key()];
     assert!(state.gone.contains(&gone), "the pane can say `run gone`");
     assert_eq!(state.runs.len(), 3, "until the next list");
     assert_eq!(state.freshness.outcome, app::Outcome::Success);
@@ -3960,7 +3961,7 @@ fn a_404_on_a_gone_run_marks_it_until_the_next_list_drops_it() {
         ..ci_answer(&request)
     };
     app.apply_ci(answer, at(12, 0, 20));
-    let state = &app.ci[&ci_key()];
+    let state = &app.ci.states[&ci_key()];
     assert!(state.runs.iter().all(|r| r.id != gone), "dropped");
     assert!(state.gone.is_empty());
     assert_eq!(state.expanded, None, "nothing left to expand");
@@ -3984,7 +3985,7 @@ fn a_late_ci_answer_does_not_move_the_data_backwards() {
         ..ci_answer(&first)
     };
     app.apply_ci(older, at(12, 0, 20));
-    let state = &app.ci[&ci_key()];
+    let state = &app.ci.states[&ci_key()];
     assert_eq!(state.runs_etag.as_deref(), Some("W/\"new\""));
     assert_eq!(state.runs.len(), 3);
     assert_eq!(state.freshness.last_attempt, Some(at(12, 0, 10)));
@@ -3995,7 +3996,7 @@ fn a_failed_log_is_read_once_per_job() {
     let mut app = ci_app();
     ci_landed(&mut app, at(12, 0, 0));
     let run = ci_runs()[2].id;
-    app.ci.get_mut(&ci_key()).unwrap().expanded = Some(run);
+    app.ci.states.get_mut(&ci_key()).unwrap().expanded = Some(run);
     let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
     let jobs = ci::parse_jobs(include_str!("ci/fixtures/jobs-failed.json")).unwrap();
     let answer = ci::CiAnswer {
@@ -4028,10 +4029,10 @@ fn a_stuck_ci_poll_is_given_up_on() {
     let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
     let claimed = std::time::Instant::now();
     app.expire_stuck_ci_polls(CI_POLL_STUCK_AFTER, claimed, at(12, 0, 30));
-    assert!(app.ci[&ci_key()].inflight, "not yet");
+    assert!(app.ci.states[&ci_key()].inflight, "not yet");
     let later = claimed + CI_POLL_STUCK_AFTER + std::time::Duration::from_secs(1);
     app.expire_stuck_ci_polls(CI_POLL_STUCK_AFTER, later, at(12, 2, 1));
-    let state = &app.ci[&ci_key()];
+    let state = &app.ci.states[&ci_key()];
     assert!(!state.inflight);
     assert_eq!(state.started, None);
     assert!(matches!(
@@ -4050,7 +4051,10 @@ fn a_stuck_ci_poll_is_given_up_on() {
         ..ci_answer(&request)
     };
     app.apply_ci(answer, at(12, 2, 5));
-    assert_eq!(app.ci[&ci_key()].freshness.outcome, app::Outcome::Success);
+    assert_eq!(
+        app.ci.states[&ci_key()].freshness.outcome,
+        app::Outcome::Success
+    );
 }
 
 /// The list answered and a later call failed: the runs on screen are
@@ -4060,7 +4064,7 @@ fn a_stuck_ci_poll_is_given_up_on() {
 fn a_fresh_list_advances_the_data_time_when_a_later_call_fails() {
     let mut app = ci_app();
     ci_landed(&mut app, at(12, 0, 0));
-    app.ci.get_mut(&ci_key()).unwrap().expanded = Some(ci_runs()[2].id);
+    app.ci.states.get_mut(&ci_key()).unwrap().expanded = Some(ci_runs()[2].id);
     let request = app.claim_ci_poll(ci_key(), "gaurgle".into(), "fleetz".into());
     let offline = github::Failure::new(github::FailureKind::Offline, "jobs: no route");
     let answer = ci::CiAnswer {
@@ -4069,7 +4073,7 @@ fn a_fresh_list_advances_the_data_time_when_a_later_call_fails() {
         ..ci_answer(&request)
     };
     app.apply_ci(answer, at(12, 0, 10));
-    let state = &app.ci[&ci_key()];
+    let state = &app.ci.states[&ci_key()];
     assert_eq!(state.freshness.data_time, app::DataTime::At(at(12, 0, 10)));
     assert_eq!(state.freshness.outcome, app::Outcome::Failed(offline));
     assert_eq!(state.runs_etag.as_deref(), Some("W/\"next\""));
@@ -4113,6 +4117,7 @@ async fn the_inspector_keys_step_the_bodies_and_the_job_mark() {
     second.id = 7;
     jobs.push(second);
     app.ci
+        .states
         .get_mut(&ci_key())
         .unwrap()
         .jobs
@@ -4138,7 +4143,7 @@ async fn the_inspector_keys_step_the_bodies_and_the_job_mark() {
         Some(7),
         "j moved the mark"
     );
-    assert_eq!(app.ci_body, app::CiBody::Log, "] stepped the body");
+    assert_eq!(app.ci.body, app::CiBody::Log, "] stepped the body");
     assert_eq!(app.history_view, app::HistoryView::Ci, "not the view");
     assert_eq!(app.detail_selected(), 2, "not the run");
 }
@@ -4183,10 +4188,10 @@ fn l_focuses_the_inspector_on_the_runs_log_body() {
     app.inspect_ci_log();
     assert_eq!(app.focused_panel, FocusedPanel::Inspector);
     assert!(!app.inspector_folded, "a folded inspector opens");
-    assert_eq!(app.ci_body, app::CiBody::Log);
+    assert_eq!(app.ci.body, app::CiBody::Log);
     assert!(app.inspects_ci_run());
     assert_eq!(
-        app.ci_inspected.map(|(id, _)| id),
+        app.ci.inspected.map(|(id, _)| id),
         Some(ci_runs()[2].id),
         "the highlighted run"
     );
@@ -4217,7 +4222,7 @@ fn back_from_gh_the_runs_repo_polls_at_once() {
     let request =
         ci_poll_after_handoff(&mut app, target.clone(), at(12, 0, 5)).expect("polled at once");
     assert_eq!(request.key, ci_key());
-    assert!(app.ci[&ci_key()].inflight);
+    assert!(app.ci.states[&ci_key()].inflight);
     assert_eq!(
         ci_poll_after_handoff(&mut app, target, at(12, 0, 6)),
         None,

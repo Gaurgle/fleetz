@@ -185,11 +185,11 @@ fn the_title_carries_the_freshness_mark() {
     let mut app = app();
     assert_eq!(freshness_mark(None, now), None, "nothing before an answer");
     landed(&mut app, runs(), local("2026-10-21T12:02:00+02:00"));
-    let mark = freshness_mark(app.ci.get(&key()), now).unwrap();
+    let mark = freshness_mark(app.ci.states.get(&key()), now).unwrap();
     assert_eq!(mark.content, "as of 12:02");
     let offline = crate::github::Failure::new(crate::github::FailureKind::Offline, "x");
     failed(&mut app, offline, now);
-    let mark = freshness_mark(app.ci.get(&key()), now).unwrap();
+    let mark = freshness_mark(app.ci.states.get(&key()), now).unwrap();
     assert_eq!(mark.content, "⚠ 12:05", "dated by the failed attempt");
     assert_eq!(mark.style.fg, Some(colors::PEACH));
 }
@@ -837,7 +837,7 @@ fn body_text(app: &App) -> Vec<String> {
 }
 
 fn state(app: &App) -> &CiState {
-    &app.ci[&key()]
+    &app.ci.states[&key()]
 }
 
 /// FZ-30f: the `jobs` body from recorded payloads: the run, each job
@@ -847,7 +847,7 @@ fn state(app: &App) -> &CiState {
 #[test]
 fn the_jobs_body_draws_the_jobs_steps_and_the_failing_tail() {
     let app = on_failed_run();
-    assert_eq!(app.ci_body, CiBody::Jobs, "jobs is the first body");
+    assert_eq!(app.ci.body, CiBody::Jobs, "jobs is the first body");
     let text = body_text(&app);
     assert!(text[0].contains("feat: pace GitHub polling"), "{text:#?}");
     let job = text.iter().position(|l| l.contains("check")).unwrap();
@@ -885,7 +885,7 @@ fn the_jobs_body_draws_the_jobs_steps_and_the_failing_tail() {
 fn the_log_body_draws_the_marked_jobs_whole_log() {
     let mut app = on_failed_run();
     app.inspector_pct = 30;
-    app.ci_body = CiBody::Log;
+    app.ci.body = CiBody::Log;
     let text = body_text(&app);
     assert!(text.contains(&"check log".to_string()), "{text:#?}");
     let (job_id, log) = shown_log(&app).expect("the held log");
@@ -912,7 +912,7 @@ fn the_log_body_draws_the_marked_jobs_whole_log() {
 fn the_whole_log_is_wrapped_once_per_job_and_width() {
     let mut app = on_failed_run();
     app.inspector_pct = 30;
-    app.ci_body = CiBody::Log;
+    app.ci.body = CiBody::Log;
     draw(&app, 160, 50);
     let width = {
         let mut kept = app.drawn.ci_log_wrap.borrow_mut();
@@ -950,13 +950,13 @@ fn another_jobs_log_at_the_same_width_is_wrapped_afresh() {
     second.id = 7;
     second.name = "docs".to_string();
     let run_id = runs()[FAILED_RUN].id;
-    let held = app.ci.get_mut(&key()).unwrap();
+    let held = app.ci.states.get_mut(&key()).unwrap();
     held.jobs.get_mut(&run_id).unwrap().jobs.push(second);
     held.full_logs.insert(
         7,
         Detail::Ready(vec!["the second job's own log".to_string()]),
     );
-    app.ci_body = CiBody::Log;
+    app.ci.body = CiBody::Log;
     draw(&app, 160, 50);
     {
         let mut kept = app.drawn.ci_log_wrap.borrow_mut();
@@ -964,7 +964,7 @@ fn another_jobs_log_at_the_same_width_is_wrapped_afresh() {
         assert_eq!(wrap.job_id, FAILED_JOB);
         wrap.lines[0] = Line::from("KEPT ROW");
     }
-    app.ci_job_mark = Some(1);
+    app.ci.job_mark = Some(1);
     assert_eq!(app.ci_marked_job().map(|j| j.id), Some(7));
     let (_, buffer) = draw(&app, 160, 50);
     let rows: Vec<String> = (0..50).map(|y| row_text(&buffer, y)).collect();
@@ -1021,7 +1021,7 @@ fn read_budget(app: &mut App, remaining: u32, now: DateTime<Local>) {
         date: Some(now.with_timezone(&Utc)),
         token_id: "tok".to_string(),
     };
-    app.ci_budget.observe(&reading, true, now, &mut NoJitter);
+    app.ci.budget.observe(&reading, true, now, &mut NoJitter);
 }
 
 #[test]
@@ -1055,10 +1055,10 @@ fn the_inspector_fetches_honour_the_polls_reserve() {
 #[test]
 fn the_script_body_highlights_the_failing_steps_block() {
     let mut app = on_failed_run();
-    app.ci_body = CiBody::Script;
+    app.ci.body = CiBody::Script;
     let sha = runs()[FAILED_RUN].head_sha.clone().unwrap();
     assert!(body_text(&app).contains(&"loading script".to_string()));
-    app.ci.get_mut(&key()).unwrap().scripts.insert(
+    app.ci.states.get_mut(&key()).unwrap().scripts.insert(
         (sha, WORKFLOW.to_string()),
         Detail::Ready(CI_YML.to_string()),
     );
@@ -1077,7 +1077,8 @@ fn the_script_body_highlights_the_failing_steps_block() {
     assert!(marked[0].starts_with("27 ▌"), "{}", marked[0]);
 
     // A passing run highlights nothing.
-    app.ci.get_mut(&key()).unwrap().runs[FAILED_RUN].conclusion = Some("success".to_string());
+    app.ci.states.get_mut(&key()).unwrap().runs[FAILED_RUN].conclusion =
+        Some("success".to_string());
     assert!(body_text(&app).iter().all(|l| !l.contains('▌')));
 }
 
@@ -1088,16 +1089,16 @@ fn brackets_cycle_the_bodies_on_the_focused_inspector_and_the_title_names_it() {
     let mut app = on_failed_run();
     app.focused_panel = FocusedPanel::Inspector;
     app.press_bracket(false);
-    assert_eq!(app.ci_body, CiBody::Log);
+    assert_eq!(app.ci.body, CiBody::Log);
     app.press_bracket(false);
-    assert_eq!(app.ci_body, CiBody::Script);
+    assert_eq!(app.ci.body, CiBody::Script);
     app.press_bracket(false);
-    assert_eq!(app.ci_body, CiBody::Jobs, "wraps forward");
+    assert_eq!(app.ci.body, CiBody::Jobs, "wraps forward");
     app.press_bracket(true);
-    assert_eq!(app.ci_body, CiBody::Script, "wraps backward");
+    assert_eq!(app.ci.body, CiBody::Script, "wraps backward");
     assert_eq!(app.history_view, HistoryView::Ci, "the view held");
 
-    app.ci_body = CiBody::Log;
+    app.ci.body = CiBody::Log;
     let (rects, buffer) = draw(&app, 160, 50);
     let inspector = rects.inspector.expect("inspector laid out");
     let title = row_text(&buffer, inspector.y);
@@ -1110,7 +1111,7 @@ fn brackets_cycle_the_bodies_on_the_focused_inspector_and_the_title_names_it() {
         HistoryView::Notes,
         "pane 2 cycles its views"
     );
-    assert_eq!(app.ci_body, CiBody::Log);
+    assert_eq!(app.ci.body, CiBody::Log);
 }
 
 /// The cell where `needle` starts on row `y`, which must hold it.
@@ -1131,7 +1132,7 @@ fn cell_of<'a>(buffer: &'a Buffer, y: u16, needle: &str) -> &'a ratatui::buffer:
 fn the_inspector_border_names_every_body_with_the_shown_one_lit() {
     let mut app = on_failed_run();
     app.focused_panel = FocusedPanel::Inspector;
-    app.ci_body = CiBody::Log;
+    app.ci.body = CiBody::Log;
     let (rects, buffer) = draw(&app, 160, 50);
     let inspector = rects.inspector.expect("inspector laid out");
     let title = row_text(&buffer, inspector.y);
@@ -1161,7 +1162,7 @@ fn the_inspector_border_names_every_body_with_the_shown_one_lit() {
 fn a_narrow_inspector_border_keeps_the_shown_body_alone() {
     let mut app = on_failed_run();
     app.focused_panel = FocusedPanel::Inspector;
-    app.ci_body = CiBody::Script;
+    app.ci.body = CiBody::Script;
     let (rects, buffer) = draw(&app, 40, 50);
     let inspector = rects.inspector.expect("inspector laid out");
     let title = row_text(&buffer, inspector.y);
@@ -1204,7 +1205,7 @@ fn the_commit_inspector_border_has_no_body_tabs() {
 fn the_inspector_tabs_never_run_under_the_resize_grip() {
     let mut app = on_failed_run();
     app.focused_panel = FocusedPanel::Inspector;
-    app.ci_body = CiBody::Log;
+    app.ci.body = CiBody::Log;
     for width in 44..=56 {
         let (rects, buffer) = draw(&app, width, 50);
         let inspector = rects.inspector.expect("inspector laid out");
@@ -1246,12 +1247,12 @@ fn a_run_change_resets_every_bodys_scroll_and_the_mark() {
     let mut app = on_failed_run();
     app.focused_panel = FocusedPanel::Inspector;
     app.drawn.inspector_max_scroll.set(100);
-    app.ci_body = CiBody::Log;
+    app.ci.body = CiBody::Log;
     app.scroll_inspector(5);
-    app.ci_body = CiBody::Script;
+    app.ci.body = CiBody::Script;
     app.scroll_inspector(2);
     assert_eq!(app.ci_body_scroll(), 2);
-    app.ci_body = CiBody::Log;
+    app.ci.body = CiBody::Log;
     assert_eq!(app.ci_body_scroll(), 5, "kept per body");
     assert_eq!(app.inspector_scroll, 0, "the commit inspector's untouched");
 
@@ -1261,7 +1262,7 @@ fn a_run_change_resets_every_bodys_scroll_and_the_mark() {
     app.detail_nav_down();
     assert_eq!(app.ci_body_scroll(), 0, "and stays reset");
     app.sync_ci_inspector(std::time::Instant::now());
-    assert_eq!(app.ci_body_scrolls, [0, 0, 0]);
+    assert_eq!(app.ci.body_scrolls, [0, 0, 0]);
 }
 
 /// `j`/`k` in the focused `jobs` body move the mark the `log` body
@@ -1274,7 +1275,7 @@ fn j_and_k_move_the_job_mark_in_the_jobs_body() {
     second.name = "docs".to_string();
     second.conclusion = Some("success".to_string());
     let run_id = runs()[FAILED_RUN].id;
-    let held = app.ci.get_mut(&key()).unwrap();
+    let held = app.ci.states.get_mut(&key()).unwrap();
     held.jobs.get_mut(&run_id).unwrap().jobs.insert(0, second);
     assert_eq!(app.ci_marked_job_index(), Some(1), "the first failed job");
     app.focused_panel = FocusedPanel::Inspector;
@@ -1285,7 +1286,7 @@ fn j_and_k_move_the_job_mark_in_the_jobs_body() {
     app.inspector_nav(1);
     app.inspector_nav(1);
     assert_eq!(app.ci_marked_job_index(), Some(1), "clamped at the last");
-    app.ci_body = CiBody::Log;
+    app.ci.body = CiBody::Log;
     app.drawn.inspector_max_scroll.set(100);
     app.inspector_nav(1);
     assert_eq!(app.ci_marked_job_index(), Some(1), "log scrolls instead");
@@ -1322,11 +1323,11 @@ fn each_body_fetches_once_per_job_or_commit_and_path() {
     );
 
     // The poll brought the failed job's whole log: the body never asks.
-    app.ci_body = CiBody::Log;
+    app.ci.body = CiBody::Log;
     assert!(app.claim_ci_details(now, settled).is_empty());
 
     // A run whose jobs no poll read: the jobs body asks once.
-    app.ci_body = CiBody::Jobs;
+    app.ci.body = CiBody::Jobs;
     app.set_detail_selected(1);
     assert!(
         app.claim_ci_details(now, settled).is_empty(),
@@ -1350,7 +1351,7 @@ fn each_body_fetches_once_per_job_or_commit_and_path() {
     // named; a failure is asked again a minute on.
     app.set_detail_selected(FAILED_RUN);
     app.repos[0].path = Some("/tmp/fleetz".to_string());
-    app.ci_body = CiBody::Script;
+    app.ci.body = CiBody::Script;
     let at = later + crate::ci::DWELL * 2;
     let requests = app.claim_ci_details(now, at);
     assert_eq!(requests.len(), 1, "{requests:#?}");
@@ -1399,14 +1400,14 @@ fn a_log_the_body_reads_is_not_read_again_by_the_poll() {
     landed(&mut app, runs(), Local::now());
     app.set_detail_selected(FAILED_RUN);
     let run_id = runs()[FAILED_RUN].id;
-    app.ci.get_mut(&key()).unwrap().jobs.insert(
+    app.ci.states.get_mut(&key()).unwrap().jobs.insert(
         run_id,
         crate::app::CiJobs {
             etag: None,
             jobs: jobs(),
         },
     );
-    app.ci_body = CiBody::Log;
+    app.ci.body = CiBody::Log;
     let t0 = std::time::Instant::now();
     app.claim_ci_details(Local::now(), t0);
     let requests = app.claim_ci_details(Local::now(), t0 + crate::ci::DWELL);
@@ -1450,7 +1451,7 @@ fn j_k_and_the_wheel_scroll_the_log_and_script_bodies() {
     // Draws at the pre-FZ-88 inspector size (40%) it was written for.
     app.inspector_pct = 40;
     let sha = runs()[FAILED_RUN].head_sha.clone().unwrap();
-    app.ci.get_mut(&key()).unwrap().scripts.insert(
+    app.ci.states.get_mut(&key()).unwrap().scripts.insert(
         (sha, WORKFLOW.to_string()),
         Detail::Ready(CI_YML.to_string()),
     );
@@ -1459,7 +1460,7 @@ fn j_k_and_the_wheel_scroll_the_log_and_script_bodies() {
         (CiBody::Log, "Current runner version"),
         (CiBody::Script, "name: ci"),
     ] {
-        app.ci_body = body;
+        app.ci.body = body;
         let at = drawn_row_of(&app, needle).expect("drawn at the top");
         app.inspector_nav(2);
         assert_eq!(drawn_row_of(&app, needle), Some(at - 2), "j: {body:?}");
@@ -1479,7 +1480,7 @@ fn on_failed_run_without_log() -> App {
     landed(&mut app, runs_with_path(), Local::now());
     app.set_detail_selected(FAILED_RUN);
     let run_id = runs()[FAILED_RUN].id;
-    app.ci.get_mut(&key()).unwrap().jobs.insert(
+    app.ci.states.get_mut(&key()).unwrap().jobs.insert(
         run_id,
         crate::app::CiJobs {
             etag: None,
@@ -1556,7 +1557,7 @@ fn the_jobs_body_reads_no_log_for_a_selected_passing_job() {
     passing.id = 7;
     passing.conclusion = Some("success".to_string());
     let run_id = runs()[FAILED_RUN].id;
-    let held = app.ci.get_mut(&key()).unwrap();
+    let held = app.ci.states.get_mut(&key()).unwrap();
     held.jobs.get_mut(&run_id).unwrap().jobs.insert(0, passing);
     app.focused_panel = FocusedPanel::Inspector;
     let t0 = std::time::Instant::now();
@@ -1598,7 +1599,7 @@ fn only_the_selected_job_shows_its_steps() {
     passing.name = "docs".to_string();
     passing.conclusion = Some("success".to_string());
     let run_id = runs()[FAILED_RUN].id;
-    let held = app.ci.get_mut(&key()).unwrap();
+    let held = app.ci.states.get_mut(&key()).unwrap();
     held.jobs.get_mut(&run_id).unwrap().jobs.push(passing);
     let text = body_text(&app);
     let docs = text.iter().position(|l| l.contains("docs")).unwrap();
@@ -1622,7 +1623,7 @@ fn only_the_selected_job_shows_its_steps() {
 fn on_long_run(n: u64) -> App {
     let mut app = on_failed_run();
     let run_id = runs()[FAILED_RUN].id;
-    let held = app.ci.get_mut(&key()).unwrap();
+    let held = app.ci.states.get_mut(&key()).unwrap();
     let list = &mut held.jobs.get_mut(&run_id).unwrap().jobs;
     for i in 0..n {
         let mut passing = jobs()[0].clone();
@@ -1670,7 +1671,7 @@ fn brackets_from_the_inspector_in_branches_cycle_on_through_ci() {
     assert_eq!(app.history_view, HistoryView::Ci);
     app.press_bracket(false);
     assert_eq!(app.history_view, HistoryView::Notes, "on through ci");
-    assert_eq!(app.ci_body, CiBody::Jobs, "no body stepped");
+    assert_eq!(app.ci.body, CiBody::Jobs, "no body stepped");
 }
 
 /// Without a run in the inspector, `]` cycles pane 2's views: there is
@@ -1681,7 +1682,7 @@ fn brackets_cycle_views_while_the_inspector_holds_no_run() {
     app.focused_panel = FocusedPanel::Inspector;
     app.press_bracket(false);
     assert_eq!(app.history_view, HistoryView::Notes);
-    assert_eq!(app.ci_body, CiBody::Jobs);
+    assert_eq!(app.ci.body, CiBody::Jobs);
 }
 
 // --- The `info` section ---
@@ -1780,7 +1781,7 @@ fn info_draws_the_ci_section_and_polls_nothing() {
     assert!(ci < worktrees, "ci precedes worktrees: {rows:#?}");
     assert!(rows[ci + 1].contains("default branch passed"));
     assert!(rows[ci + 2].contains(RUNS_HINT));
-    assert!(app.ci.is_empty(), "nothing claimed");
+    assert!(app.ci.states.is_empty(), "nothing claimed");
 }
 
 // --- The lamp, the header and the `ci` view agree (FZ-83) ---
@@ -2101,7 +2102,14 @@ fn a_tip_without_its_check_runs_does_not_override() {
         vec![build(CiStatus::Passed)],
         t0() + minutes(1),
     );
-    let tip = paged.ci.get_mut(&key()).unwrap().tip.as_mut().unwrap();
+    let tip = paged
+        .ci
+        .states
+        .get_mut(&key())
+        .unwrap()
+        .tip
+        .as_mut()
+        .unwrap();
     tip.checks.as_mut().unwrap().complete = false;
     assert_eq!(paged.ci_shown(&paged.repos[0]).status, CiStatus::Pending);
 }
@@ -2150,7 +2158,7 @@ fn a_moved_tip_forgets_the_old_commits_check_runs() {
         },
         t0() + minutes(2),
     );
-    let tip = app.ci[&key()].tip.clone().unwrap();
+    let tip = app.ci.states[&key()].tip.clone().unwrap();
     assert_eq!((tip.sha.as_str(), tip.checks), ("a1b2c3d", None));
     assert_eq!(app.ci_shown(&app.repos[0]).status, CiStatus::Pending);
 }
@@ -2462,10 +2470,10 @@ fn the_source_sheds_after_the_trigger_and_before_the_title() {
 #[test]
 fn the_next_poll_asks_the_tip_conditionally_and_counts_it() {
     let mut with_statuses = portfolio_app();
-    with_statuses.ci.get_mut(&key()).unwrap().expanded = None;
-    assert_eq!(with_statuses.ci[&key()].poll_cost(), 4);
-    with_statuses.ci.get_mut(&key()).unwrap().expanded = Some(1);
-    assert_eq!(with_statuses.ci[&key()].poll_cost(), 5);
+    with_statuses.ci.states.get_mut(&key()).unwrap().expanded = None;
+    assert_eq!(with_statuses.ci.states[&key()].poll_cost(), 4);
+    with_statuses.ci.states.get_mut(&key()).unwrap().expanded = Some(1);
+    assert_eq!(with_statuses.ci.states[&key()].poll_cost(), 5);
     let request = with_statuses.claim_ci_poll(key(), "gaurgle".into(), "fleetz".into());
     let tip = request.tip.expect("the tip is asked");
     assert!(tip.has_statuses);
@@ -2479,10 +2487,10 @@ fn the_next_poll_asks_the_tip_conditionally_and_counts_it() {
         vec![build(CiStatus::Passed)],
         t0(),
     );
-    app.ci.get_mut(&key()).unwrap().expanded = None;
-    assert_eq!(app.ci[&key()].poll_cost(), 3);
-    app.ci.get_mut(&key()).unwrap().expanded = Some(1);
-    assert_eq!(app.ci[&key()].poll_cost(), 4);
+    app.ci.states.get_mut(&key()).unwrap().expanded = None;
+    assert_eq!(app.ci.states[&key()].poll_cost(), 3);
+    app.ci.states.get_mut(&key()).unwrap().expanded = Some(1);
+    assert_eq!(app.ci.states[&key()].poll_cost(), 4);
     let request = app.claim_ci_poll(key(), "gaurgle".into(), "fleetz".into());
     assert_eq!(
         request.tip,

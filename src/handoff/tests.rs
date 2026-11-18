@@ -80,7 +80,7 @@ fn enter_and_o_open_an_other_contexts_target_url() {
         started: None,
         completed: None,
     };
-    app.ci.insert(
+    app.ci.states.insert(
         ci_key(),
         app::CiState {
             runs: ci_runs(),
@@ -540,7 +540,7 @@ fn an_empty_ci_view_does_nothing() {
     }
     assert_eq!(yank_status(&app), None);
     let mut no_runs = handoff_app(0);
-    no_runs.ci.get_mut(&ci_key()).unwrap().runs.clear();
+    no_runs.ci.states.get_mut(&ci_key()).unwrap().runs.clear();
     assert_eq!(resolve_run_handoff(&mut no_runs, RunKey::Open), None);
 }
 

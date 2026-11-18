@@ -66,13 +66,13 @@ script over the whole tree, but for the seven `main.rs` rows, measured
 after F1 (FZ-109) split it, the two `model` rows, measured after
 FZ-111 split it, the `poll.rs` row, measured after FZ-113 moved the GitHub
 sync, the `engine/` and `sweep.rs` rows, measured after FZ-116 moved the
-local fetch, and the `app.rs` row, measured after FZ-117 moved the render
-cells; rows are in size order.
+local fetch, and the `app.rs` row, measured after FZ-118 moved the ci
+view; rows are in size order.
 
 | Module | Lines | Owns | Effects |
 |---|---|---|---|
 | `ui/` (28 files) | 13,402 | Drawing every view from `&App`; `detail/` is ten files by pane since FZ-108, 4,751 together: `pane.rs` 1,030, `notes.rs` 612, `mod.rs` 530 (the entry `render` and the helpers the panes share), `commits.rs` 501, `header.rs` 482, `list.rs` 403, `inspector.rs` 377, `worktrees.rs` 355, `changes.rs` 301, `layout.rs` 160; then `mod.rs` 1,541, `markdown.rs` 1,245, `ci.rs` 1,072, `digest.rs` 699, the other 14 files 2,992 together | term |
-| `app.rs` | 4,480 | `App`: all TUI state (82 fields, the GitHub sync one of them as `engine::GithubSync` since FZ-113, the local fetch one as `engine::FetchState` since FZ-116 and the 18 render cells one as `drawn` since FZ-117), per-view caches for ci, notes, worktrees, changes and digest; since FZ-110 the overlays and settings rows in `app/overlays.rs` (616) and the filters and query parsing in `app/query.rs` (210), both re-exported; since FZ-117 the render cells in `app/feedback.rs` (135, `RenderFeedback`) | none (holds ratatui types) |
+| `app.rs` | 3,515 | `App`: all TUI state (76 fields, the GitHub sync one of them as `engine::GithubSync` since FZ-113, the local fetch one as `engine::FetchState` since FZ-116, the 18 render cells one as `drawn` since FZ-117 and the ci view's seven one as `ci` since FZ-118), per-view caches for notes, worktrees, changes and digest; since FZ-110 the overlays and settings rows in `app/overlays.rs` (616) and the filters and query parsing in `app/query.rs` (210), both re-exported; since FZ-117 the render cells in `app/feedback.rs` (135, `RenderFeedback`); since FZ-118 the ci view in `app/ci.rs` (1,004: `CiView`, the ci types, re-exported, and the `App` methods that poll, land and read them) | none (holds ratatui types) |
 | `engine/` (7 files) | 2,832 | `github_sync.rs` 851: the GitHub sync (FZ-113), `GithubSync` over `GithubFreshness`, `ApiBudget`, `GithubBackoff`, the jitter, the poll's in-flight lock and push flag, and the decisions on them (`poll_due`, `effective_interval`, `limit_until`, `pace`), taking a `PollContext` the front end builds; `fetch.rs` 746: the local fetch (FZ-116), `FetchState` over the sweep lock, the refresh flags, `FetchBackoff`, the cap, `FetchClaims` and `FetchTally`, and the decisions on them (`begin_sweep`, `plan`, `held`, `claim`, `refresh_phase`), taking the size-held set and the watch interval the front end supplies; fetches under a claim and the types the sweep plans with (`SweepTarget`, `FetchAsk`, `SweepFetchPlan`, `FetchReport`, FZ-106); `assembly.rs` 559: view assembly (discovery passes, carriers, activity order, the startup fetch baseline); `status.rs` 313: a row's status probe; `load.rs` 191: the load (GitHub dataset or dirty mode); `carriers.rs` 126; `mod.rs` 46: `Sink`, which a front end's channel implements (FZ-105) | proc, fs, net |
 | `git.rs` | 2,444 | Every git read and fetch, reading a fetch's outcome and progress and a checkout's `WorkKey` (the types live in `model`), the `changes` read (`changes`, `changed_file_diff`), the note body read | proc, fs |
 | `report/` (3 files) | 2,057 | Print mode: run (`mod.rs` 910), golden parity harness (`parity.rs` 765), render byte for byte as repoz (`render.rs` 382) | proc, fs |
@@ -114,7 +114,7 @@ Module docs (`//!`) exist on `engine/`, `report/`, `ci`, `notes`, `graph`,
 1200 production lines per file, 150 per function; the seams are tickets in
 `docs/module-split-design.md`):
 
-- Files over the limit: `app.rs` 4,585 (A1), `git.rs` 2,444 (G1),
+- Files over the limit: `app.rs` 3,515 (A1, after FZ-118), `git.rs` 2,444 (G1),
   `github.rs` 1,567, `ui/mod.rs` 1,541, `ci.rs` 1,538, `ui/markdown.rs`
   1,245 (the last four are not planned: revisit if they grow).
   `ui/detail.rs` (U1, FZ-108) and `main.rs` (F1, FZ-109) are split.
@@ -148,11 +148,12 @@ drawn dotted, which A1 does not forbid:
   field types (`src/app/feedback.rs:63` `ui::detail::DetailHits`, a
   `RenderFeedback` field since FZ-117; `src/app.rs:1772`
   `ui::intro::Loading`, `:1831` `ui::Divider`), `ui::colors` (`:2640`),
-  `ui::ci::run_status` and `shown_log` (`:4036`, `:5107`),
+  `ui::ci::run_status` (`src/app/ci.rs:940`, with `claim_ci_details`
+  since FZ-118) and `shown_log` (`:5107`),
   `ui::detail::repo_list_width`, `RECENT_COMMIT_COUNT` and `DetailClick`
   (`:4511`, `:4687`, `:5130`) and `ui::contributions::weeks_dragged` and
   `cols_for_weeks` (`:5436`, `:5441`); `app.rs` holds `ratatui` types at
-  four sites. `ui` names `app` in ten of its files (`footer.rs` 22
+  three sites and `app/ci.rs` at one (`CiLogWrap`). `ui` names `app` in ten of its files (`footer.rs` 22
   sites, `mod.rs` 17, `detail.rs` 13, `compact.rs` 13). A4 is the fix
   (the A1 ticket): the view state and render feedback get owned types.
 
@@ -267,7 +268,7 @@ worktrees, changes and ci. Contracts: `docs/freshness-contract.md`,
 | GitHub sync | `github` (`engine::GithubSync`, FZ-113): freshness, budget, backoff, jitter, interval and cost, in-flight lock, push flag, all private | its verbs only, called from `poll.rs`, `load.rs`, `event.rs`, `sweep.rs` and `input.rs`; `ui` reads its queries |
 | Local fetch | `fetch` (`engine::FetchState`, FZ-116): sweep lock, refresh flags, timeout holds, cap, fetch claims, keypress tally, all private | its verbs only, called from `sweep.rs`, `poll.rs`, `load.rs`, `event.rs`, `input.rs` and `main.rs`; `plan` takes the size-held set and the watch interval (`refresh_interval` stays a plain `App` field, a settings copy); `ui` reads `refresh_phase` and `is_refreshing` |
 | Navigation and view | `view`, `overlay`, `selected`, `focused_panel`, `history_view`, scrolls, pane percentages | input handlers in `input.rs`, `App` methods |
-| Per-view caches | `ci` (each repo's `CiTip` with it), `notes`, `note_body`, `worktree_logs`, `digest_logs` | `App::apply_*` |
+| Per-view caches | `ci` (`app::ci::CiView`, FZ-118: `ci.states`, each repo's `CiTip` with it, `ci.budget`, the cursor, the inspector's body, scrolls, job mark and inspected run, all `pub(crate)` per O-E), `notes`, `note_body`, `worktree_logs`, `digest_logs` | `App::apply_*` |
 | Render feedback | `drawn` (`app::feedback::RenderFeedback`, FZ-117): 18 `Cell` and `RefCell` fields such as `app.drawn.detail_hits`, `app.drawn.list_hits`, `app.drawn.reader_width` | `ui::render`, while drawing |
 
 As it is, any code holding `&mut App` may change any field, and `ui`
@@ -283,8 +284,9 @@ not the types. `GithubSync` (in `engine` since FZ-113, owning
 `FetchTally`) are the exception: concerns with their own type, methods and
 tests, and the pattern section 7 builds on. `ApiBudget`,
 `GithubBackoff` and `GithubFreshness` are still also used directly by the
-CI view's state in `app.rs` until it gets its owner (A1c), which shares
-`GithubSync`'s jitter stream until then.
+CI view's state, owned by `CiView` in `app/ci.rs` since FZ-118 (A1c):
+`ci.budget` is its own `ApiBudget` and still shares `GithubSync`'s jitter
+stream through `jitter_mut()`.
 
 ## 6. Where the domain rules live
 

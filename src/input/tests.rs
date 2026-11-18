@@ -688,7 +688,7 @@ async fn j_and_k_walk_the_runs_in_the_ci_view() {
     .unwrap();
     assert_eq!(app.history_view, app::HistoryView::Ci);
     assert!(app.ci_wanted());
-    let runs = app.ci[&ci_key()].runs.len();
+    let runs = app.ci.states[&ci_key()].runs.len();
     assert!(runs >= 3, "fixture has {runs} runs");
     for (key, cursor) in [('j', 1), ('j', 2), ('k', 1)] {
         handle_normal_input(
@@ -740,7 +740,7 @@ async fn a_bracket_streak_cycles_views_through_ci_until_another_key() {
         )
         .await
         .unwrap();
-        views.push((app.history_view, app.ci_body));
+        views.push((app.history_view, app.ci.body));
     }
     use app::{CiBody, HistoryView};
     assert_eq!(
