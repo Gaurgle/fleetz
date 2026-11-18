@@ -341,8 +341,8 @@ async fn u_toggles_the_changes_base_in_its_view_only() {
     app.view = app::View::Detail;
     app.history_view = app::HistoryView::Info;
     press_key(&mut app, KeyCode::Char('u')).await;
-    assert_eq!(app.changes_base, git::ChangesBase::Upstream);
+    assert_eq!(app.changes.base, git::ChangesBase::Upstream);
     app.history_view = app::HistoryView::Changes;
     press_key(&mut app, KeyCode::Char('u')).await;
-    assert_eq!(app.changes_base, git::ChangesBase::DefaultBranch);
+    assert_eq!(app.changes.base, git::ChangesBase::DefaultBranch);
 }

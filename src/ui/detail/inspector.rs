@@ -454,7 +454,7 @@ mod tests {
         let buf = draw(&app);
         assert!(row_of(&buf, "+new line").is_none(), "scrolled past it");
 
-        app.change_diff = None;
+        app.changes.diff = None;
         let read = app.claim_change_diff().expect("again");
         app.apply_change_diff(read, Err("boom".to_string()));
         let buf = draw(&app);

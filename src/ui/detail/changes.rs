@@ -18,7 +18,7 @@ const CHANGES_BASES: [&str; 2] = ["upstream", "default"];
 /// as the `notes` mode line draws its modes: `vs: [upstream] default  (u)`.
 pub(super) fn changes_mode_line(app: &App) -> Line<'static> {
     let on = colors::history_view_color(HistoryView::Changes);
-    let active = usize::from(app.changes_base == crate::git::ChangesBase::DefaultBranch);
+    let active = usize::from(app.changes.base == crate::git::ChangesBase::DefaultBranch);
     let mut spans = vec![Span::styled("vs: ", Style::default().fg(colors::OVERLAY))];
     for (i, base) in CHANGES_BASES.iter().enumerate() {
         if i > 0 {

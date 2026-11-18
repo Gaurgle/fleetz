@@ -2334,7 +2334,7 @@ pub(super) fn changes_view_app(changes: crate::git::Changes) -> crate::app::App 
         root: key.clone().into(),
         key,
         generation: 0,
-        base: app.changes_base,
+        base: app.changes.base,
     };
     app.apply_changes_read(read, Ok(changes));
     app
