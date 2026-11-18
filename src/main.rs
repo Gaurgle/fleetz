@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.refresh_interval = args.interval.unwrap_or(config.refresh_interval);
     app.window = initial_window;
     app.dirty_mode = mode == Mode::Dirty;
-    app.work_hours = (config.work_start, config.work_end);
+    app.digest.work_hours = (config.work_start, config.work_end);
     app.loading = true;
     // The strip's source, or "off" to start it folded, is persisted, so a
     // dashboard set up once comes back that way. `c` and `4` still change it

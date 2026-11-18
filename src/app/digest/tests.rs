@@ -1,4 +1,4 @@
-use super::*;
+use crate::app::*;
 use crate::digest::tests::{commit, fetched, repo, work_key};
 use crate::digest::{DigestWindow, LineBody, Section};
 
@@ -78,7 +78,7 @@ fn a_touched_fetched_clone_is_read_once_per_cutoff_and_refs() {
 
     // A new window is a new cutoff.
     app.apply_digest_log("~/repos/alpha", &second[0].key, vec![]);
-    app.digest_window = DigestWindow::Week;
+    app.digest.window = DigestWindow::Week;
     assert_eq!(app.claim_digest_logs(now).len(), 1);
 }
 

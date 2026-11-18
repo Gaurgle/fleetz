@@ -165,11 +165,11 @@ async fn on_a_header_pane_2_draws_the_digest_and_leaving_restores_its_view() {
 async fn t_cycles_the_digest_window_and_leaves_the_overlay_shut() {
     let mut app = sectioned_app();
     press_key(&mut app, KeyCode::Char('k')).await;
-    let mut seen = vec![app.digest_window];
+    let mut seen = vec![app.digest.window];
     for _ in 0..4 {
         press_key(&mut app, KeyCode::Char('t')).await;
         assert!(matches!(app.overlay, Overlay::None), "t opened the overlay");
-        seen.push(app.digest_window);
+        seen.push(app.digest.window);
     }
     use digest::DigestWindow::*;
     assert_eq!(seen, vec![Slot, Today, Yesterday, Week, Slot]);
@@ -190,7 +190,7 @@ async fn enter_on_a_digest_line_lands_on_its_repo_row() {
     assert_eq!(app.on_header(), Some(digest::Section::AlsoActive));
     app.focused_panel = FocusedPanel::Detail;
     press_key(&mut app, KeyCode::Char('j')).await;
-    assert_eq!(app.digest_selected, 1, "j walks the digest in pane 2");
+    assert_eq!(app.digest.selected, 1, "j walks the digest in pane 2");
     assert_eq!(app.on_header(), Some(digest::Section::AlsoActive));
     press_key(&mut app, KeyCode::Enter).await;
     assert_eq!(app.on_header(), None);
@@ -295,7 +295,7 @@ async fn shift_j_on_a_header_drives_the_digest_panes() {
     app.drawn.detail_max_scroll.set(10);
     app.drawn.inspector_max_scroll.set(10);
     press_key(&mut app, KeyCode::Char('J')).await;
-    assert_eq!(app.digest_selected, 1, "J from the list walks the digest");
+    assert_eq!(app.digest.selected, 1, "J from the list walks the digest");
     assert_eq!(app.detail_scroll(), 0, "the hidden view did not scroll");
     assert_eq!(app.detail_selected(), 0);
 
