@@ -364,7 +364,7 @@ fn focus_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
         FocusedPanel::Inspector if app.inspects_ci_run() => vec![
             (
                 "[j/k]".into(),
-                match app.ci_body {
+                match app.ci.body {
                     crate::app::CiBody::Jobs => "job",
                     _ => "scroll",
                 },
@@ -827,7 +827,7 @@ mod tests {
             text(&focus_hints(&app, true)),
             format!("[j/k] job  [[ ]] body  [+/-] size  [{num}] fold")
         );
-        app.ci_body = crate::app::CiBody::Script;
+        app.ci.body = crate::app::CiBody::Script;
         assert_eq!(
             text(&focus_hints(&app, true)),
             format!("[j/k] scroll  [[ ]] body  [+/-] size  [{num}] fold")

@@ -305,7 +305,7 @@ async fn shift_j_on_a_header_drives_the_digest_panes() {
         app.inspector_scroll, 1,
         "J from pane 2 scrolls the digest inspector"
     );
-    assert_eq!(app.ci_body_scrolls, [0; 3], "not the hidden `ci` bodies");
+    assert_eq!(app.ci.body_scrolls, [0; 3], "not the hidden `ci` bodies");
     press_key(&mut app, KeyCode::Char('K')).await;
     assert_eq!(app.inspector_scroll, 0);
     assert_eq!(app.history_view, app::HistoryView::Ci);

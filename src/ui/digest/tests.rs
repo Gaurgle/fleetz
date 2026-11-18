@@ -403,7 +403,7 @@ fn a_digest_line_shows_the_fresher_verdict() {
     let key = crate::ci::target(&app.repos[0])
         .expect("a GitHub identity")
         .0;
-    app.ci.insert(
+    app.ci.states.insert(
         key,
         crate::app::CiState {
             tip: Some(crate::app::CiTip {
@@ -469,7 +469,7 @@ fn a_digest_card_shows_the_fresher_verdict() {
     let key = crate::ci::target(&app.repos[0])
         .expect("a GitHub identity")
         .0;
-    app.ci.insert(
+    app.ci.states.insert(
         key,
         crate::app::CiState {
             tip: Some(crate::app::CiTip {

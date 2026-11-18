@@ -230,7 +230,7 @@ fn ci_body_switcher(app: &App, focused: bool, budget: usize) -> Line<'static> {
         .collect();
     tab_switcher(
         &labels,
-        app.ci_body.index(),
+        app.ci.body.index(),
         colors::history_view_color(HistoryView::Ci),
         focused,
         budget,

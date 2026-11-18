@@ -192,7 +192,7 @@ pub fn info_rows(
 ) -> Option<Vec<Line<'static>>> {
     let (key, ..) = crate::ci::target(repo)?;
     let mut lines = vec![default_branch_line(app, repo)];
-    let runs = app.ci.get(&key).map_or(&[][..], |s| &s.runs[..]);
+    let runs = app.ci.states.get(&key).map_or(&[][..], |s| &s.runs[..]);
     let latest = latest_per_branch(runs);
     if latest.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -716,7 +716,7 @@ pub fn inspector_body(app: &App, now: DateTime<Local>) -> Vec<Line<'static>> {
 }
 
 /// The inspector's lines for the highlighted run in the shown body
-/// (`App::ci_body`), unwrapped: the pane wraps and scrolls them. A held
+/// (`CiView::body`), unwrapped: the pane wraps and scrolls them. A held
 /// whole log is not among them; `shown_log` hands it over apart. In the
 /// `jobs` body, also the lines the marked job takes (its row, and its steps
 /// and tail beneath), which the pane keeps in view as the job cursor moves.
@@ -733,7 +733,7 @@ pub fn inspector_lines(
     };
     let mut lines = run_masthead(run);
     let head = lines.len();
-    let marked = match app.ci_body {
+    let marked = match app.ci.body {
         CiBody::Jobs => {
             let (body, marked) = jobs_body(app, run, now);
             lines.extend(body);
@@ -952,7 +952,7 @@ fn log_body(app: &App, run: &WorkflowRun) -> Vec<Line<'static>> {
 /// wraps it once per job and width (`App::drawn.ci_log_wrap`) rather than on
 /// every frame.
 pub fn shown_log(app: &App) -> Option<(u64, &[String])> {
-    if app.ci_body != CiBody::Log {
+    if app.ci.body != CiBody::Log {
         return None;
     }
     let job = app.ci_marked_job()?;
