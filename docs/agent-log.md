@@ -291,6 +291,25 @@ first (from `git log --merges main`).
 
 ### 2026-11-18
 
+- **#175 (FZ-118), A1c: `CiView` owns the ci view in `app/ci.rs`.**
+  Dispatched 14:30 under the unattended refactor run, merged `9c95060`
+  at 17:21 CET. Base `4797c47`, commit `3258407`: the ci types, seven
+  fields and the ci `impl App` block to `app/ci.rs` (1,004 production
+  lines, estimate 650), the map named `states`, nothing lifted (D5),
+  `ci.budget` still on `GithubSync`'s jitter; `app.rs` 4,480 to 3,515;
+  no tests moved. The worker was paused by the usage limit (reset
+  17:10) with the checks green and resumed for the docs. Lead ruling
+  (on the issue): three doc comments naming moved paths renamed;
+  `src/ci.rs:11` left out of scope; `shown_log` stays with
+  `ci_shown_text`; `CiJobs` and `CiTip` re-exported under
+  `#[cfg(test)]`. Review 1 on `ff5f376e269b`: accepted, no blockers.
+  Branch CI 44345812875 green; combined checks on `152fe37` (1758
+  passed); gate holds. Observed, out of scope: `src/ci.rs:11` names
+  `App::ci_budget`, now `CiView::budget`; `docs/architecture.md`
+  section 3's `app.rs` line numbers (`:1772`, `:5107`, `:5436` and
+  others) do not match the current file. Remembered: nothing to keep.
+  FZ-118: review accepted first; fix cycles 0; owner decisions 0; worker 25 + 2 (plus a two-hour usage-limit pause); review 4; models opus:medium/opus:medium; usage worker 155368 tokens, reviewer 74195 tokens
+
 - **#174 (FZ-117), A1a: `RenderFeedback` holds the render cells as
   `app.drawn`.** Dispatched 14:05 under the unattended refactor run,
   merged `4797c47` at 14:20 CET. Base `9b5fda2`, commit `e355131`: the
