@@ -291,6 +291,23 @@ first (from `git log --merges main`).
 
 ### 2026-11-18
 
+- **#176 (FZ-119), A1d: `NotesView` owns the notes view and reader in
+  `app/notes.rs`.** Dispatched 17:25 under the unattended refactor run,
+  merged `2e5a291` at 17:48 CET. Base `9c95060`, commit `135e294`: six
+  notes types, eight fields and the 22-method block plus
+  `wheel_notes_tree` to `app/notes.rs` (452 production lines), the map
+  named `states`, nothing lifted (D5); `app.rs` 3,515 to 3,093. Lead
+  ruling (on the issue): no tests move (every notes test touches other
+  `App` state through the shared fixtures); acceptance 4's grep read
+  with the three names the field map keeps; three doc comments
+  reworded; `NotesState` not re-exported (unused). Review 1 on
+  `1efdb2554320`: accepted, no blockers. Branch CI 44348920775 green;
+  combined checks on `76cd89e` (1758 passed); gate holds. Observed,
+  out of scope: `docs/architecture.md:145-156` section 3 `app.rs` line
+  refs stale at base; #176's acceptance 4 grep contradicted its own
+  field map. Remembered: nothing to keep.
+  FZ-119: review accepted first; fix cycles 0; owner decisions 0; worker 8; review 3; models opus:medium/opus:medium; usage worker 119447 tokens, reviewer 48204 tokens
+
 - **#175 (FZ-118), A1c: `CiView` owns the ci view in `app/ci.rs`.**
   Dispatched 14:30 under the unattended refactor run, merged `9c95060`
   at 17:21 CET. Base `4797c47`, commit `3258407`: the ci types, seven

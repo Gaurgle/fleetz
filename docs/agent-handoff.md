@@ -29,17 +29,17 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 - Lead ruling for his review: F1's `include_str!` test change (#166).
   The FZ-113, O-E and `refresh_interval` rulings he accepted 11-18
-  about 13:33 (log). FZ-103 to FZ-113 and FZ-116 to FZ-118 are Done and logged.
+  about 13:33 (log). FZ-103 to FZ-113 and FZ-116 to FZ-119 are Done and logged.
 - App-split batch filed 11-18 (architect-checked, bodies on the issues):
   FZ-116 #173 (E2b), FZ-117 #174 (A1a), FZ-118 to FZ-123 #175 to #180
   (A1c to A1h), FZ-124 #181 (A1i), FZ-125 #182 (R2, needs his design
   ruling, not for the unattended run). Strictly in that order, one
   worker at a time (each shares `app.rs` with the next).
-- FZ-119 (#176, A1d `NotesView`) In progress since 17:25, base
-  `9c95060`, branch `refactor/fz-119-app-notes`, worktree
-  `.claude/worktrees/fz-119`; record on the issue (edit by comment id);
-  standard tiers. The usage limit paused the FZ-118 worker 15:00 to
-  17:10; the next reset is five hours on.
+- FZ-120 (#177, A1e changes and worktrees) In progress since 17:52,
+  base `2e5a291`, branch `refactor/fz-120-app-changes-worktrees`,
+  worktree `.claude/worktrees/fz-120`; record on the issue (edit by
+  comment id); worker light, reviewer standard. The usage limit paused
+  the FZ-118 worker 15:00 to 17:10; the next reset is five hours on.
 - Survey for `fz-architect` after the batch: `docs/architecture.md`
   section 3's `app.rs` lines and section 5's cell counts are stale,
   section 2's intro drifted; `src/ci.rs:11` names `App::ci_budget`.
