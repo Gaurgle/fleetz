@@ -398,7 +398,8 @@ fn a_digest_line_shows_the_fresher_verdict() {
     repo.owner = Some("Gaurgle".to_string());
     let mut app = App::new(vec![repo], String::new(), 120, 40);
     let now = chrono::Local::now();
-    app.github_freshness.data_time = crate::app::DataTime::At(now - chrono::Duration::minutes(1));
+    app.github.freshness_mut().data_time =
+        crate::app::DataTime::At(now - chrono::Duration::minutes(1));
     let key = crate::ci::target(&app.repos[0])
         .expect("a GitHub identity")
         .0;
@@ -463,7 +464,8 @@ fn a_digest_card_shows_the_fresher_verdict() {
     repo.owner = Some("Gaurgle".to_string());
     let mut app = App::new(vec![repo], String::new(), 120, 40);
     let now = chrono::Local::now();
-    app.github_freshness.data_time = crate::app::DataTime::At(now - chrono::Duration::minutes(1));
+    app.github.freshness_mut().data_time =
+        crate::app::DataTime::At(now - chrono::Duration::minutes(1));
     let key = crate::ci::target(&app.repos[0])
         .expect("a GitHub identity")
         .0;

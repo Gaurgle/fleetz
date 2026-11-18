@@ -7,10 +7,7 @@ use crate::input::{
 };
 use crate::load::{apply_load_result, apply_load_result_saving_to, memory_rebuild_result};
 use crate::model::RepoStatus;
-use crate::poll::{
-    CI_POLL_STUCK_AFTER, apply_github_poll, apply_github_poll_at, ci_poll_request,
-    claim_github_poll, github_limit_until, github_poll_due,
-};
+use crate::poll::{CI_POLL_STUCK_AFTER, apply_github_poll, apply_github_poll_at, ci_poll_request};
 use crate::sweep::{ContribProbe, apply_repo_updated, rebuild_repo_status};
 use std::path::PathBuf;
 
@@ -188,7 +185,10 @@ pub(crate) fn poll_with(
     app: &mut App,
     result: Result<Box<github::GithubFetch>, github::FetchError>,
 ) {
-    let attempt = claim_github_poll(app).expect("no poll in flight");
+    let attempt = app
+        .github
+        .claim_attempt(std::time::Instant::now(), app.dirty_mode)
+        .expect("no poll in flight");
     answer(app, attempt, result);
 }
 
@@ -261,14 +261,17 @@ fn offline_with_cache(written: Option<chrono::DateTime<chrono::Local>>) -> githu
 fn a_failed_background_poll_with_a_cache_present_changes_no_row() {
     let mut app = app_with_pending_repo();
     poll(&mut app, poll_says_passed());
-    let data_time = app.github_freshness.data_time;
+    let data_time = app.github.freshness().data_time;
     poll_with(&mut app, Err(offline_with_cache(Some(local(9, 0)))));
 
     assert_poll_fields(&app.repos[0]);
-    assert!(app.github_freshness.is_failing(), "offline looked healthy");
-    assert_eq!(app.github_freshness.data_time, data_time);
     assert!(
-        ui::github_freshness_segment(&app.github_freshness, chrono::Local::now())
+        app.github.freshness().is_failing(),
+        "offline looked healthy"
+    );
+    assert_eq!(app.github.freshness().data_time, data_time);
+    assert!(
+        ui::github_freshness_segment(app.github.freshness(), chrono::Local::now())
             .is_some_and(|(long, _, _)| long.contains("⚠ github offline")),
         "no marker for an offline poll"
     );
@@ -280,23 +283,25 @@ fn a_failed_background_poll_with_a_cache_present_changes_no_row() {
 fn a_successful_poll_after_a_failure_clears_it() {
     let mut app = app_with_pending_repo();
     poll_with(&mut app, Err(offline_with_cache(None)));
-    assert!(app.github_freshness.is_failing());
+    assert!(app.github.freshness().is_failing());
     poll(&mut app, poll_says_passed());
-    assert_eq!(app.github_freshness.outcome, app::Outcome::Success);
+    assert_eq!(app.github.freshness().outcome, app::Outcome::Success);
     assert!(matches!(
-        app.github_freshness.data_time,
+        app.github.freshness().data_time,
         app::DataTime::At(_)
     ));
-    assert!(ui::github_freshness_segment(&app.github_freshness, chrono::Local::now()).is_none());
+    assert!(ui::github_freshness_segment(app.github.freshness(), chrono::Local::now()).is_none());
     assert_poll_fields(&app.repos[0]);
 }
 
-pub(crate) fn watching(app: &mut App) -> config::Config {
+pub(crate) fn watching(app: &mut App) {
     app.watch_mode = true;
-    config::Config {
+    let config = config::Config {
         github_poll_interval: 90,
         ..config::Config::default()
-    }
+    };
+    app.github
+        .set_interval(crate::engine::GithubSync::configured_poll_secs(&config));
 }
 
 pub(crate) fn launch(app: &mut App, kind: LoadKind, source: app::DatasetSource) {
@@ -329,9 +334,9 @@ fn a_launch_from_a_cache_of_planted_age_carries_that_age() {
             written: Some(written),
         },
     );
-    assert_eq!(app.github_freshness.data_time, app::DataTime::At(written));
-    assert_eq!(app.github_freshness.outcome, app::Outcome::NotAttempted);
-    assert!(app.github_freshness.last_attempt.is_none());
+    assert_eq!(app.github.freshness().data_time, app::DataTime::At(written));
+    assert_eq!(app.github.freshness().outcome, app::Outcome::NotAttempted);
+    assert!(app.github.freshness().last_attempt.is_none());
 }
 
 /// A cache whose age cannot be read stays unknown: never the launch time.
@@ -343,7 +348,7 @@ fn a_launch_from_a_cache_of_unreadable_age_leaves_the_age_unknown() {
         LoadKind::Initial,
         app::DatasetSource::Cache { written: None },
     );
-    assert_eq!(app.github_freshness.data_time, app::DataTime::Unknown);
+    assert_eq!(app.github.freshness().data_time, app::DataTime::Unknown);
 }
 
 /// An `R` that went to GitHub, landing over the row `app_with_pending_repo`
@@ -392,9 +397,9 @@ fn a_reload_that_fell_back_to_the_cache_does_not_claim_a_reload() {
     let status = app.status_message.as_ref().map(|m| m.text.clone()).unwrap();
     assert_ne!(status, "Reloaded");
     assert!(status.contains("cache"), "{status:?}");
-    assert!(app.github_freshness.is_failing());
-    assert!(app.github_freshness.last_attempt.is_some());
-    assert_eq!(app.github_freshness.data_time, app::DataTime::At(written));
+    assert!(app.github.freshness().is_failing());
+    assert!(app.github.freshness().last_attempt.is_some());
+    assert_eq!(app.github.freshness().data_time, app::DataTime::At(written));
 
     launch(&mut app, LoadKind::Reload, app::DatasetSource::Network);
     let status = app.status_message.as_ref().map(|m| m.text.clone()).unwrap();
@@ -418,7 +423,10 @@ pub(crate) fn r_during_a_watch_sweep(app: &mut App) -> u64 {
     app.watch_mode = true;
     app.sweep_started = Some(std::time::Instant::now());
     app.sweep_manual = false;
-    let attempt = claim_github_poll(app).expect("no poll in flight");
+    let attempt = app
+        .github
+        .claim_attempt(std::time::Instant::now(), app.dirty_mode)
+        .expect("no poll in flight");
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let args = Args::parse_from(["fleetz"]);
     refresh_key(
@@ -510,8 +518,8 @@ fn a_failed_fetch_schedules_nothing_new() {
         fetch_failed(git::FetchFailureKind::Unreachable),
     );
     assert!(app.sweep_started.is_none());
-    assert!(!app.github_poll_inflight);
-    assert!(!app.push_detected);
+    assert!(!app.github.inflight());
+    assert!(!app.github.push_detected());
     assert_eq!(app.last_refreshed, refreshed);
 }
 
@@ -1261,7 +1269,7 @@ fn a_poll_replaces_the_coverage_and_a_failed_one_keeps_it() {
     assert_eq!(app.github_meta.coverage.as_ref(), Some(&coverage));
 
     poll(&mut app, Err("boom".to_string()));
-    assert!(app.github_freshness.is_failing(), "the failure landed");
+    assert!(app.github.freshness().is_failing(), "the failure landed");
     assert_eq!(app.github_meta.coverage.as_ref(), Some(&coverage));
 }
 
@@ -1988,7 +1996,10 @@ pub(crate) fn land_at(
     result: Result<Box<github::GithubFetch>, github::FetchError>,
     now: chrono::DateTime<chrono::Local>,
 ) {
-    let attempt = claim_github_poll(app).expect("no poll in flight");
+    let attempt = app
+        .github
+        .claim_attempt(std::time::Instant::now(), app.dirty_mode)
+        .expect("no poll in flight");
     answer_at(app, attempt, result, now);
 }
 
@@ -2015,18 +2026,14 @@ pub(crate) fn budget_app(ci: model::CiStatus, factor: f64, resume: i64) -> (App,
         44,
     );
     app.watch_mode = true;
-    app.jitter = Box::new(Planted { factor, resume });
+    app.github.set_jitter(Box::new(Planted { factor, resume }));
     (app, config::Config::default())
 }
 
 /// Seconds after `from` at which the next automatic attempt is first due.
-pub(crate) fn next_due(
-    app: &App,
-    config: &config::Config,
-    from: chrono::DateTime<chrono::Local>,
-) -> i64 {
+pub(crate) fn next_due(app: &App, from: chrono::DateTime<chrono::Local>) -> i64 {
     (0..=4000)
-        .find(|s| github_poll_due(app, config, from + secs(*s)))
+        .find(|s| app.github.poll_due(from + secs(*s), app.poll_context()))
         .expect("never due again")
 }
 
@@ -2056,41 +2063,38 @@ fn s5b_fewer_points_than_one_poll_is_a_known_limit_and_r_sends_nothing() {
     let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
     let budget = reading("A", 2, at(17, 23, 6), at(17, 0, 0));
     land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
-    assert_eq!(
-        github_limit_until(&app, &config, at(17, 10, 0)),
-        Some(at(17, 23, 16))
-    );
+    assert_eq!(app.github.limit_until(at(17, 10, 0)), Some(at(17, 23, 16)));
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let args = Args::parse_from(["fleetz"]);
     // Outside a runtime: a spawned request would panic here.
     refresh_key(&mut app, &tx, &args, &config, at(17, 10, 0));
-    assert!(!app.github_poll_inflight, "a request was sent");
+    assert!(!app.github.inflight(), "a request was sent");
     assert_eq!(status_text(&app), "GitHub rate limited, resumes at 17:23");
 }
 
 #[test]
 fn s8_a_403_with_retry_after_120_holds_120_seconds() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+    let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
     land_at(&mut app, err_with(secondary(Some(120)), None), at(17, 0, 0));
-    assert_eq!(next_due(&app, &config, at(17, 0, 0)), 120);
+    assert_eq!(next_due(&app, at(17, 0, 0)), 120);
 }
 
 #[test]
 fn s9_a_429_without_retry_after_holds_the_later_of_60_s_and_the_backoff() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+    let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
     let mut now = at(17, 0, 0);
     // Steps 1 and 2 of the ladder (30, 60) are under the minute; step 3
     // (120) is over it.
     for expected in [60, 60, 120] {
         land_at(&mut app, err_with(secondary(None), None), now);
-        assert_eq!(next_due(&app, &config, now), expected);
+        assert_eq!(next_due(&app, now), expected);
         now += secs(expected);
     }
 }
 
 #[test]
 fn s10_six_consecutive_502s_climb_to_the_cap() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+    let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
     let mut now = at(17, 0, 0);
     for expected in [30, 60, 120, 240, 480, 600] {
         land_at(
@@ -2098,10 +2102,10 @@ fn s10_six_consecutive_502s_climb_to_the_cap() {
             err_with(failure(github::FailureKind::Server), None),
             now,
         );
-        assert_eq!(next_due(&app, &config, now), expected);
+        assert_eq!(next_due(&app, now), expected);
         now += secs(expected);
     }
-    assert_eq!(app.github_backoff.failures(), 6);
+    assert_eq!(app.github.backoff().failures(), 6);
     // The jitter applies on top of the cap: 480 to 720 there.
     assert_eq!(app::backoff_secs(6, 30, 0.8), 480);
     assert_eq!(app::backoff_secs(6, 30, 1.2), 720);
@@ -2110,15 +2114,15 @@ fn s10_six_consecutive_502s_climb_to_the_cap() {
 #[test]
 fn s10a_step_one_has_no_jitter_and_step_two_does() {
     for factor in [0.8, 1.2] {
-        let (mut app, config) = budget_app(model::CiStatus::Passed, factor, 0);
+        let (mut app, _config) = budget_app(model::CiStatus::Passed, factor, 0);
         land_at(
             &mut app,
             err_with(failure(github::FailureKind::Server), None),
             at(17, 0, 0),
         );
-        assert_eq!(next_due(&app, &config, at(17, 0, 0)), 30, "draw {factor}");
+        assert_eq!(next_due(&app, at(17, 0, 0)), 30, "draw {factor}");
     }
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 0.8, 0);
+    let (mut app, _config) = budget_app(model::CiStatus::Passed, 0.8, 0);
     land_at(
         &mut app,
         err_with(failure(github::FailureKind::Server), None),
@@ -2129,12 +2133,12 @@ fn s10a_step_one_has_no_jitter_and_step_two_does() {
         err_with(failure(github::FailureKind::Server), None),
         at(17, 0, 30),
     );
-    assert_eq!(next_due(&app, &config, at(17, 0, 30)), 48);
+    assert_eq!(next_due(&app, at(17, 0, 30)), 48);
 }
 
 #[test]
 fn s11_a_success_at_step_three_resets_the_count() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+    let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
     let mut now = at(17, 0, 0);
     for wait in [30, 60, 120] {
         land_at(
@@ -2144,11 +2148,11 @@ fn s11_a_success_at_step_three_resets_the_count() {
         );
         now += secs(wait);
     }
-    assert_eq!(app.github_backoff.failures(), 3);
+    assert_eq!(app.github.backoff().failures(), 3);
     land_at(&mut app, ok_with(None), now);
-    assert_eq!(app.github_backoff.failures(), 0);
-    assert_eq!(app.github_backoff.not_before(30), None);
-    assert_eq!(next_due(&app, &config, now), 30);
+    assert_eq!(app.github.backoff().failures(), 0);
+    assert_eq!(app.github.backoff().not_before(30), None);
+    assert_eq!(next_due(&app, now), 30);
 }
 
 /// With O2 accepted `r` sends nothing under the limit, so the success
@@ -2156,22 +2160,22 @@ fn s11_a_success_at_step_three_resets_the_count() {
 /// still pending, which transition 3 clears all the same.
 #[test]
 fn s11a_a_success_inside_a_secondary_limit_clears_it() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+    let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
     land_at(
         &mut app,
         err_with(secondary(Some(120)), None),
         at(17, 10, 0),
     );
-    assert_eq!(app.github_backoff.not_before(30), Some(at(17, 12, 0)));
+    assert_eq!(app.github.backoff().not_before(30), Some(at(17, 12, 0)));
     land_at(&mut app, ok_with(None), at(17, 10, 0));
-    assert_eq!(app.github_backoff.not_before(30), None);
-    assert_eq!(app.github_backoff.failures(), 0);
-    assert_eq!(next_due(&app, &config, at(17, 10, 0)), 30);
+    assert_eq!(app.github.backoff().not_before(30), None);
+    assert_eq!(app.github.backoff().failures(), 0);
+    assert_eq!(next_due(&app, at(17, 10, 0)), 30);
 }
 
 #[test]
 fn s12_three_offline_failures_each_wait_one_interval() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+    let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
     let mut now = at(17, 0, 0);
     for _ in 0..3 {
         land_at(
@@ -2179,15 +2183,15 @@ fn s12_three_offline_failures_each_wait_one_interval() {
             err_with(failure(github::FailureKind::Offline), None),
             now,
         );
-        assert_eq!(next_due(&app, &config, now), 30);
+        assert_eq!(next_due(&app, now), 30);
         now += secs(30);
     }
-    assert_eq!(app.github_backoff.failures(), 0);
+    assert_eq!(app.github.backoff().failures(), 0);
 }
 
 #[test]
 fn s12a_offline_keeps_the_count_between_502s() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+    let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
     let mut now = at(17, 0, 0);
     for (kind, expected) in [
         (github::FailureKind::Server, 30),
@@ -2196,7 +2200,7 @@ fn s12a_offline_keeps_the_count_between_502s() {
         (github::FailureKind::Server, 120),
     ] {
         land_at(&mut app, err_with(failure(kind), None), now);
-        assert_eq!(next_due(&app, &config, now), expected, "after {kind:?}");
+        assert_eq!(next_due(&app, now), expected, "after {kind:?}");
         now += secs(expected);
     }
 }
@@ -2204,7 +2208,7 @@ fn s12a_offline_keeps_the_count_between_502s() {
 #[test]
 fn s12b_an_offline_or_auth_r_during_backoff_leaves_it_in_place() {
     for interrupting in [github::FailureKind::Offline, github::FailureKind::Auth] {
-        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
         let mut now = at(17, 0, 0);
         for wait in [30, 60] {
             land_at(
@@ -2226,9 +2230,9 @@ fn s12b_an_offline_or_auth_r_during_backoff_leaves_it_in_place() {
             err_with(failure(interrupting), None),
             step3 + secs(20),
         );
-        assert_eq!(app.github_backoff.failures(), 3, "{interrupting:?}");
+        assert_eq!(app.github.backoff().failures(), 3, "{interrupting:?}");
         assert_eq!(
-            next_due(&app, &config, step3),
+            next_due(&app, step3),
             120,
             "{interrupting:?} moved the not-before"
         );
@@ -2237,21 +2241,21 @@ fn s12b_an_offline_or_auth_r_during_backoff_leaves_it_in_place() {
 
 #[test]
 fn s13_no_token_retries_after_one_interval_and_a_token_then_polls() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+    let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
     land_at(
         &mut app,
         err_with(failure(github::FailureKind::Auth), None),
         at(17, 0, 0),
     );
-    assert_eq!(next_due(&app, &config, at(17, 0, 0)), 30);
+    assert_eq!(next_due(&app, at(17, 0, 0)), 30);
     land_at(&mut app, ok_with(None), at(17, 0, 30));
-    assert_eq!(app.github_freshness.outcome, app::Outcome::Success);
-    assert_eq!(next_due(&app, &config, at(17, 0, 30)), 30);
+    assert_eq!(app.github.freshness().outcome, app::Outcome::Success);
+    assert_eq!(next_due(&app, at(17, 0, 30)), 30);
 }
 
 #[test]
 fn s14_three_401s_back_off_and_a_success_returns_to_normal() {
-    let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+    let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
     let mut now = at(17, 0, 0);
     for expected in [30, 60, 120] {
         land_at(
@@ -2259,11 +2263,11 @@ fn s14_three_401s_back_off_and_a_success_returns_to_normal() {
             err_with(failure(github::FailureKind::Refused), None),
             now,
         );
-        assert_eq!(next_due(&app, &config, now), expected);
+        assert_eq!(next_due(&app, now), expected);
         now += secs(expected);
     }
     land_at(&mut app, ok_with(None), now);
-    assert_eq!(next_due(&app, &config, now), 30);
+    assert_eq!(next_due(&app, now), 30);
 }
 
 /// A primary limit relative to the real clock, for the paths that read
@@ -2295,11 +2299,11 @@ fn s20_no_automatic_attempt_sooner_than_the_interval_in_force() {
         seed % n
     };
     for _run in 0..20 {
-        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 0);
-        app.jitter = Box::new(Planted {
+        let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, 0);
+        app.github.set_jitter(Box::new(Planted {
             factor: 0.8 + 0.4 * (draw(100) as f64 / 99.0),
             resume: draw(31) as i64,
-        });
+        }));
         let mut now = at(12, 0, 0);
         for _step in 0..40 {
             let budget = match draw(3) {
@@ -2326,10 +2330,10 @@ fn s20_no_automatic_attempt_sooner_than_the_interval_in_force() {
                 0 => model::CiStatus::Pending,
                 _ => model::CiStatus::Passed,
             };
-            app.push_detected = draw(4) == 0;
+            app.github.set_push_detected(draw(4) == 0);
 
-            let failing = app.github_freshness.is_failing();
-            let slowed = match app.api_budget.pace(3, now) {
+            let failing = app.github.freshness().is_failing();
+            let slowed = match app.github.budget().pace(3, now) {
                 app::Pace::Unknown => false,
                 app::Pace::Every(s) => s > 30,
                 app::Pace::Paused { .. } => true,
@@ -2340,16 +2344,16 @@ fn s20_no_automatic_attempt_sooner_than_the_interval_in_force() {
             } else {
                 30
             };
-            let due = next_due(&app, &config, now);
+            let due = next_due(&app, now);
             if due < in_force {
                 assert!(
-                    app.push_detected && !failing && !slowed,
+                    app.github.push_detected() && !failing && !slowed,
                     "due at +{due}, under {in_force}, without the push exception"
                 );
             }
-            assert!(due > 0 || (app.push_detected && !failing && !slowed));
-            app.push_detected = false;
-            now += secs(next_due(&app, &config, now));
+            assert!(due > 0 || (app.github.push_detected() && !failing && !slowed));
+            app.github.set_push_detected(false);
+            now += secs(next_due(&app, now));
         }
     }
 }
@@ -2358,7 +2362,10 @@ fn s20_no_automatic_attempt_sooner_than_the_interval_in_force() {
 fn s22a_a_discarded_answer_on_the_old_token_undoes_nothing() {
     let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
     let now = chrono::Local::now();
-    let a_poll = claim_github_poll(&mut app).unwrap();
+    let a_poll = app
+        .github
+        .claim_attempt(std::time::Instant::now(), app.dirty_mode)
+        .unwrap();
     let b = reading("B", 0, now + secs(600), now);
     apply_load_result(
         &mut app,
@@ -2380,8 +2387,8 @@ fn s22a_a_discarded_answer_on_the_old_token_undoes_nothing() {
             }),
         })),
     );
-    let held = app.api_budget.clone();
-    let not_before = app.github_backoff.clone();
+    let held = app.github.budget().clone();
+    let not_before = app.github.backoff().clone();
     assert_eq!(held.reading(), Some(&b));
     assert!(not_before.limit_until(30).is_some());
 
@@ -2395,18 +2402,18 @@ fn s22a_a_discarded_answer_on_the_old_token_undoes_nothing() {
         ),
         now + secs(1),
     );
-    assert_eq!(app.api_budget, held, "the old token came back");
-    assert_eq!(app.github_backoff, not_before);
+    assert_eq!(*app.github.budget(), held, "the old token came back");
+    assert_eq!(*app.github.backoff(), not_before);
 }
 
 #[test]
 fn s24_two_instances_paused_together_resume_apart() {
     for jitter in [3, 21] {
-        let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, jitter);
+        let (mut app, _config) = budget_app(model::CiStatus::Passed, 1.0, jitter);
         let budget = reading("A", 400, at(17, 23, 6), at(17, 0, 0));
         land_at(&mut app, ok_with(Some(budget)), at(17, 0, 0));
         assert_eq!(
-            next_due(&app, &config, at(17, 0, 0)),
+            next_due(&app, at(17, 0, 0)),
             23 * 60 + 6 + jitter,
             "jitter {jitter}"
         );
@@ -2427,10 +2434,10 @@ fn a_successful_reload_clears_the_backoff_ladder() {
         );
         now += secs(wait);
     }
-    assert_eq!(app.github_backoff.failures(), 5);
+    assert_eq!(app.github.backoff().failures(), 5);
     launch(&mut app, LoadKind::Reload, app::DatasetSource::Network);
-    assert_eq!(app.github_backoff.failures(), 0);
-    assert_eq!(app.github_backoff.not_before(30), None);
+    assert_eq!(app.github.backoff().failures(), 0);
+    assert_eq!(app.github.backoff().not_before(30), None);
 }
 
 /// A launch refused by a rate limit with no cache to fall back on still
@@ -2450,8 +2457,8 @@ fn a_failed_load_carries_its_budget_reading() {
             budget: Some(Box::new(budget.clone())),
         }),
     );
-    assert_eq!(app.api_budget.reading(), Some(&budget));
-    let until = github_limit_until(&app, &config, now).expect("no known limit");
+    assert_eq!(app.github.budget().reading(), Some(&budget));
+    let until = app.github.limit_until(now).expect("no known limit");
     assert!(until >= now + secs(610), "held only until {until}");
     assert!(
         until <= chrono::Local::now() + secs(610),
@@ -2673,7 +2680,7 @@ async fn cv12_a_poll_on_another_account_rebuilds_the_rows_from_its_dataset() {
         &store,
     );
     assert_eq!(app.repos.len(), 2);
-    let attempts_before = app.github_freshness.clone();
+    let attempts_before = app.github.freshness().clone();
 
     poll_with(
         &mut app,
@@ -2686,7 +2693,7 @@ async fn cv12_a_poll_on_another_account_rebuilds_the_rows_from_its_dataset() {
     assert!(app.account_rebuild_due, "no rebuild asked for");
     // The poll itself marks A's rows, until the rebuild lands.
     assert!(app.not_in_last_poll.contains(&remote("alice", "a")));
-    let after_poll = app.github_freshness.clone();
+    let after_poll = app.github.freshness().clone();
     assert_ne!(after_poll, attempts_before);
 
     land_account_rebuild(&mut app, &scratch, &store).await;
@@ -2712,7 +2719,7 @@ async fn cv12_a_poll_on_another_account_rebuilds_the_rows_from_its_dataset() {
     );
     // No request: freshness is what the poll left. No window written,
     // no "Window:" status.
-    assert_eq!(app.github_freshness, after_poll);
+    assert_eq!(*app.github.freshness(), after_poll);
     assert!(!scratch.join("window.toml").exists(), "window.toml written");
     let status = status_text(&app);
     assert!(!status.starts_with("Window:"), "{status}");
@@ -3693,10 +3700,10 @@ pub(crate) fn ci_app() -> App {
         owner: Some("Gaurgle".to_string()),
         ..test_repo()
     }];
-    app.jitter = Box::new(Planted {
+    app.github.set_jitter(Box::new(Planted {
         factor: 1.0,
         resume: 7,
-    });
+    }));
     app
 }
 
@@ -3881,10 +3888,10 @@ fn fleet_snapshot(app: &App) -> String {
     format!(
         "{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}",
         app.repos,
-        app.github_freshness,
-        app.api_budget,
-        app.github_backoff,
-        app.github_poll_inflight,
+        app.github.freshness(),
+        app.github.budget(),
+        app.github.backoff(),
+        app.github.inflight(),
         app.dataset.len(),
         app.github_meta,
         app.not_in_last_poll,

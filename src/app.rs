@@ -2,8 +2,14 @@ use crate::model::{CiStatus, RepoLocation, RepoStatus, Summary};
 use chrono::{DateTime, Local};
 
 pub use crate::config::{DEFAULT_INSPECTOR_PCT, DEFAULT_REPO_LIST_PCT, Icons, View, initial_view};
-pub use crate::engine::{ApplyProgress, DatasetSource, FetchClaims, FetchReport, FetchTally, Pace};
-pub(crate) use crate::engine::{RemoteKey, carrier_key};
+#[cfg(test)]
+pub use crate::engine::Jitter;
+use crate::engine::{ApiBudget, ClockJitter, GithubBackoff, GithubSync, Observed, PollContext};
+pub use crate::engine::{
+    ApplyProgress, DataTime, DatasetSource, FetchClaims, FetchReport, FetchTally, GithubFreshness,
+    Outcome, Pace,
+};
+pub(crate) use crate::engine::{RemoteKey, backoff_secs, carrier_key};
 
 mod overlays;
 mod query;
@@ -286,505 +292,6 @@ pub enum RefreshPhase {
     Remote,
 }
 
-/// How old the GitHub data on screen is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DataTime {
-    /// Nothing from GitHub has been shown yet.
-    NoData,
-    /// Data is shown, but when it left GitHub could not be read. It stays
-    /// unknown: launch time is never used in its place.
-    Unknown,
-    /// When the data on screen left GitHub.
-    At(DateTime<Local>),
-}
-
-/// How the most recent attempt to reach GitHub ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Outcome {
-    NotAttempted,
-    Success,
-    Failed(crate::github::Failure),
-}
-
-/// The three GitHub freshness facts of `docs/freshness-contract.md`: when the
-/// data on screen left GitHub, when fleetz last tried, and how that went.
-///
-/// They used to be one timestamp and one flag, `last_github_poll` and
-/// `github_poll_failing`, and an offline poll answered from the cache set the
-/// one and cleared the other, so offline looked exactly like healthy. Kept
-/// apart, each transition below is a pure function of the event and `now`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GithubFreshness {
-    pub data_time: DataTime,
-    /// When the most recent attempt finished or was given up on. Drives the
-    /// retry clock and the budget's pace, and dates a failure in the header
-    /// (`offline at 12:02`, #79); a cache read never sets it.
-    pub last_attempt: Option<DateTime<Local>>,
-    pub outcome: Outcome,
-    /// The id handed to the newest background poll started.
-    started: u64,
-    /// The id of the newest background poll whose answer was applied.
-    applied: u64,
-}
-
-impl Default for GithubFreshness {
-    fn default() -> Self {
-        Self {
-            data_time: DataTime::NoData,
-            last_attempt: None,
-            outcome: Outcome::NotAttempted,
-            started: 0,
-            applied: 0,
-        }
-    }
-}
-
-impl GithubFreshness {
-    /// A load landed. A cache read is not an attempt (rule 1), so it sets the
-    /// data time and leaves the retry clock unset: the poll is due at once.
-    ///
-    /// A load that went to GitHub (`R`, or a launch with no usable cache) is
-    /// an attempt that rebuilt every row, so it supersedes every poll started
-    /// before it lands: an answer from one of those cannot be ordered against
-    /// the load and must not overwrite it (rule 10). A cache read and a load
-    /// with no GitHub fetch behind it supersede nothing, since they are older
-    /// than any poll still out, which is about to bring newer data.
-    pub fn loaded(&mut self, source: &DatasetSource, now: DateTime<Local>) {
-        match source {
-            DatasetSource::Local => {}
-            DatasetSource::Cache { written } => self.data_time = Self::file_time(*written),
-            DatasetSource::Network => {
-                self.supersede_started();
-                self.succeeded(now);
-            }
-            DatasetSource::Fallback { failure, written } => {
-                self.supersede_started();
-                self.failed(failure.clone(), now);
-                // The rows were rebuilt from the cache, so this is what is on
-                // screen now.
-                self.data_time = Self::file_time(*written);
-            }
-        }
-    }
-
-    /// An attempt came back with data (rule 7).
-    pub fn succeeded(&mut self, now: DateTime<Local>) {
-        self.data_time = DataTime::At(now);
-        self.last_attempt = Some(now);
-        self.outcome = Outcome::Success;
-    }
-
-    /// An attempt failed. The data time stays where it was (rule 3); the
-    /// retry clock advances (rule 6).
-    pub fn failed(&mut self, failure: crate::github::Failure, now: DateTime<Local>) {
-        self.last_attempt = Some(now);
-        self.outcome = Outcome::Failed(failure);
-    }
-
-    /// A background poll outlived `GITHUB_POLL_STUCK_AFTER` (decision D4).
-    pub fn gave_up(&mut self, after: std::time::Duration, now: DateTime<Local>) {
-        let failure = crate::github::Failure::new(
-            crate::github::FailureKind::TimedOut,
-            format!("no answer from GitHub after {}s", after.as_secs()),
-        );
-        self.failed(failure, now);
-    }
-
-    /// Hand out the id for a background poll about to start.
-    pub fn begin_attempt(&mut self) -> u64 {
-        self.started += 1;
-        self.started
-    }
-
-    /// Whether `attempt` is the newest poll started, the one the in-flight
-    /// lock belongs to.
-    pub fn is_latest(&self, attempt: u64) -> bool {
-        attempt == self.started
-    }
-
-    /// Record that `attempt`'s answer is being applied. False when a newer
-    /// attempt's answer was applied already: the caller must discard it, or
-    /// the data time could go backwards (rule 10).
-    pub fn accept_answer(&mut self, attempt: u64) -> bool {
-        if attempt <= self.applied {
-            return false;
-        }
-        self.applied = attempt;
-        true
-    }
-
-    /// Whether one interval of `every_secs` has passed since the last attempt.
-    /// No attempt yet means due.
-    pub fn retry_due(&self, now: DateTime<Local>, every_secs: i64) -> bool {
-        self.last_attempt
-            .is_none_or(|t| (now - t).num_seconds() >= every_secs)
-    }
-
-    pub fn is_failing(&self) -> bool {
-        matches!(self.outcome, Outcome::Failed(_))
-    }
-
-    /// Data is on screen and nothing has tried to confirm it yet: the state a
-    /// cache-served launch leaves, owed one attempt even with watch off
-    /// (rule 8).
-    pub fn awaits_first_attempt(&self) -> bool {
-        self.outcome == Outcome::NotAttempted && self.data_time != DataTime::NoData
-    }
-
-    /// Treat every poll started so far as answered, so their answers are
-    /// discarded when they arrive.
-    fn supersede_started(&mut self) {
-        self.applied = self.started;
-    }
-
-    fn file_time(written: Option<DateTime<Local>>) -> DataTime {
-        written.map_or(DataTime::Unknown, DataTime::At)
-    }
-}
-
-/// Where the randomness in the retry policy comes from, injected so tests can
-/// plant it. See `docs/api-budget-design.md` 4.3 and 4.4: instances that fail
-/// together would otherwise retry together.
-pub trait Jitter {
-    /// A factor for the backoff ladder from step 2 on, in 0.8 to 1.2.
-    fn backoff_factor(&mut self) -> f64;
-    /// Whole seconds added to a resume after a reset, in 0 to 30.
-    fn resume_secs(&mut self) -> i64;
-}
-
-/// The production jitter: a xorshift seeded from the clock and the process id,
-/// so two instances started together still draw apart. Not for anything that
-/// needs to be unpredictable, only spread.
-pub struct ClockJitter {
-    state: u64,
-}
-
-impl ClockJitter {
-    pub fn new() -> Self {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as u64);
-        let seed = nanos ^ (u64::from(std::process::id()) << 32) ^ 0x9E37_79B9_7F4A_7C15;
-        Self { state: seed.max(1) }
-    }
-
-    /// A draw in 0.0 to 1.0.
-    fn unit(&mut self) -> f64 {
-        let mut x = self.state;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.state = x;
-        (x >> 11) as f64 / (1u64 << 53) as f64
-    }
-}
-
-impl Default for ClockJitter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Jitter for ClockJitter {
-    fn backoff_factor(&mut self) -> f64 {
-        BACKOFF_JITTER_MIN + (BACKOFF_JITTER_MAX - BACKOFF_JITTER_MIN) * self.unit()
-    }
-
-    fn resume_secs(&mut self) -> i64 {
-        ((self.unit() * (RESUME_JITTER_MAX_SECS + 1) as f64) as i64).min(RESUME_JITTER_MAX_SECS)
-    }
-}
-
-/// The share of the hourly limit pacing leaves untouched for `r`, `R`, the
-/// board and other clients on the token (A2).
-pub const BUDGET_RESERVE_PERCENT: u64 = 10;
-/// Where the backoff ladder stops doubling, before its jitter (A3).
-pub const BACKOFF_CAP_SECS: i64 = 600;
-/// GitHub's documented minimum wait for a secondary limit that names none.
-pub const SECONDARY_LIMIT_MIN_SECS: i64 = 60;
-const BACKOFF_JITTER_MIN: f64 = 0.8;
-const BACKOFF_JITTER_MAX: f64 = 1.2;
-const RESUME_JITTER_MAX_SECS: i64 = 30;
-/// A rate-limit window lasts at most an hour, which bounds a reset's delay.
-const RESET_WINDOW_SECS: i64 = 3600;
-
-/// The newest budget reading, anchored to the local clock on arrival. Memory
-/// only: a budget is per account and per moment (`docs/api-budget-design.md`
-/// 4.1). Unknown until a reading arrives, and unknown again once its reset
-/// has passed.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ApiBudget {
-    reading: Option<crate::github::BudgetReading>,
-    /// The reading's reset as a local instant (`anchor_reset`).
-    reset_at: Option<DateTime<Local>>,
-    /// Drawn once per window, so a pause and a limit in the same window resume
-    /// at the same moment, and every check of it agrees.
-    resume_jitter_secs: i64,
-}
-
-/// What `ApiBudget::observe` did with a reading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Observed {
-    /// Older than the one held, or from a discarded answer it may not apply.
-    Ignored,
-    /// Replaced the held reading on the same token, or was the first.
-    Updated,
-    /// An applied answer on another token replaced the held reading.
-    Switched,
-}
-
-/// `x-ratelimit-reset` as a local instant. The delay to the reset is taken in
-/// the server's own time (`reset - Date`) and added to the local arrival, so a
-/// skewed local clock neither pauses too long nor resumes into a refused
-/// window; without a `Date` the local clock stands in. Clamped to one window.
-pub fn anchor_reset(
-    reading: &crate::github::BudgetReading,
-    arrival: DateTime<Local>,
-) -> DateTime<Local> {
-    let server_now = reading.date.map_or(arrival.timestamp(), |d| d.timestamp());
-    let delay = (reading.reset - server_now).clamp(0, RESET_WINDOW_SECS);
-    arrival + chrono::Duration::seconds(delay)
-}
-
-impl ApiBudget {
-    /// Take a reading under the order of `docs/api-budget-design.md` 4.1:
-    /// only an applied answer may switch the token; on the same token a later
-    /// reset is a newer window, and within one window the lower `remaining` is
-    /// the newer reading. `applied` is false for an answer `accept_answer`
-    /// discarded.
-    pub fn observe(
-        &mut self,
-        reading: &crate::github::BudgetReading,
-        applied: bool,
-        arrival: DateTime<Local>,
-        jitter: &mut dyn Jitter,
-    ) -> Observed {
-        let Some(held) = &self.reading else {
-            if !applied {
-                return Observed::Ignored;
-            }
-            self.replace(reading, arrival, jitter);
-            return Observed::Updated;
-        };
-        if held.token_id != reading.token_id {
-            if !applied {
-                return Observed::Ignored;
-            }
-            self.replace(reading, arrival, jitter);
-            return Observed::Switched;
-        }
-        match reading.reset.cmp(&held.reset) {
-            std::cmp::Ordering::Greater => {
-                self.replace(reading, arrival, jitter);
-                Observed::Updated
-            }
-            std::cmp::Ordering::Equal if reading.remaining < held.remaining => {
-                // The same window: its reset and jitter stand.
-                self.reading = Some(reading.clone());
-                Observed::Updated
-            }
-            _ => Observed::Ignored,
-        }
-    }
-
-    fn replace(
-        &mut self,
-        reading: &crate::github::BudgetReading,
-        arrival: DateTime<Local>,
-        jitter: &mut dyn Jitter,
-    ) {
-        self.reset_at = Some(anchor_reset(reading, arrival));
-        self.resume_jitter_secs = jitter.resume_secs().clamp(0, RESUME_JITTER_MAX_SECS);
-        self.reading = Some(reading.clone());
-    }
-
-    /// The held reading, whether or not its window is over. Its token decides
-    /// which later readings may apply.
-    #[cfg(test)]
-    pub fn reading(&self) -> Option<&crate::github::BudgetReading> {
-        self.reading.as_ref()
-    }
-
-    /// The reading while its window lasts at `at`; `None` is unknown.
-    pub fn known(&self, at: DateTime<Local>) -> Option<&crate::github::BudgetReading> {
-        let reset_at = self.reset_at?;
-        (reset_at > at).then_some(self.reading.as_ref()?)
-    }
-
-    /// The reset as a local instant.
-    #[cfg(test)]
-    pub fn reset_at(&self) -> Option<DateTime<Local>> {
-        self.reset_at
-    }
-
-    /// When polling resumes after this window: the reset plus its jitter.
-    pub fn resume_at(&self) -> Option<DateTime<Local>> {
-        self.reset_at
-            .map(|t| t + chrono::Duration::seconds(self.resume_jitter_secs))
-    }
-
-    /// Whether the next request would be refused at `at`: fewer points left
-    /// than one poll costs. Treated as a known primary limit until the reset.
-    pub fn exhausted(&self, cost: u32, at: DateTime<Local>) -> bool {
-        self.known(at).is_some_and(|r| r.remaining < cost)
-    }
-
-    /// How far apart automatic polls of `cost` points go, judged at `at` (the
-    /// last attempt): what is left above the reserve spread over the time to
-    /// the reset, never past the resume. At or below the reserve, or with too
-    /// little left for one poll, paused until the resume.
-    pub fn pace(&self, cost: u32, at: DateTime<Local>) -> Pace {
-        let (Some(reading), Some(resume)) = (self.known(at), self.resume_at()) else {
-            return Pace::Unknown;
-        };
-        let reserve = u64::from(reading.limit) * BUDGET_RESERVE_PERCENT / 100;
-        let remaining = u64::from(reading.remaining);
-        if remaining <= reserve || reading.remaining < cost {
-            return Pace::Paused { until: resume };
-        }
-        let to_reset = self.reset_at.map_or(0, |t| (t - at).num_seconds().max(0)) as u64;
-        let spare = remaining - reserve;
-        let secs = (u64::from(cost) * to_reset).div_ceil(spare) as i64;
-        Pace::Every(secs.min((resume - at).num_seconds().max(0)))
-    }
-}
-
-/// When the next automatic attempt may go at the earliest, beside the rule 6
-/// interval. See `GithubBackoff`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Hold {
-    /// A fixed instant: a known reset plus its jitter, or a `retry-after`.
-    At(DateTime<Local>),
-    /// A step of the ladder, counted from the failure at `from`. Resolved
-    /// against the configured interval when asked, which `App` does not hold.
-    Ladder {
-        from: DateTime<Local>,
-        step: u32,
-        factor: f64,
-        at_least_secs: i64,
-    },
-}
-
-/// The not-before and consecutive-failure count of `docs/api-budget-design.md`
-/// 4.3. Kept beside `GithubFreshness`, not inside it, so `retry_due` keeps its
-/// meaning: the not-before is a second condition, checked next to it.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct GithubBackoff {
-    failures: u32,
-    hold: Option<Hold>,
-    /// Whether `hold` is a rate limit's, which a token change drops and which
-    /// holds back `r` and `R`.
-    hold_is_limit: bool,
-}
-
-/// Seconds the ladder waits after the `step`th consecutive failure: exactly
-/// the interval at step 1, then doubling up to the cap, times the jitter
-/// `factor` (applied after the cap), never under the interval.
-pub fn backoff_secs(step: u32, interval_secs: i64, factor: f64) -> i64 {
-    if step <= 1 {
-        return interval_secs;
-    }
-    let doublings = (step - 1).min(32);
-    let base = interval_secs
-        .saturating_mul(1i64 << doublings)
-        .min(BACKOFF_CAP_SECS);
-    let factor = factor.clamp(BACKOFF_JITTER_MIN, BACKOFF_JITTER_MAX);
-    ((base as f64 * factor).round() as i64).max(interval_secs)
-}
-
-impl GithubBackoff {
-    /// The consecutive-failure count.
-    #[cfg(test)]
-    pub fn failures(&self) -> u32 {
-        self.failures
-    }
-
-    /// A success clears both the count and the not-before (transition 3).
-    pub fn succeeded(&mut self) {
-        *self = Self::default();
-    }
-
-    /// An applied failure at `now`. `budget` already holds the reading that
-    /// came with it. `Offline` and `Auth` say nothing about GitHub and leave
-    /// everything as it was (transition 4); every other kind counts and
-    /// replaces the not-before (transition 2).
-    pub fn failed(
-        &mut self,
-        failure: &crate::github::Failure,
-        now: DateTime<Local>,
-        budget: &ApiBudget,
-        jitter: &mut dyn Jitter,
-    ) {
-        use crate::github::{FailureKind, RateLimit};
-        if matches!(failure.kind, FailureKind::Offline | FailureKind::Auth) {
-            return;
-        }
-        self.failures = self.failures.saturating_add(1);
-        let step = self.failures;
-        let mut ladder = |at_least_secs| Hold::Ladder {
-            from: now,
-            step,
-            // Step 1 is exactly the interval: no draw.
-            factor: if step >= 2 {
-                jitter.backoff_factor()
-            } else {
-                1.0
-            },
-            at_least_secs,
-        };
-        let (hold, is_limit) = match failure.limit {
-            None => (ladder(0), false),
-            Some(RateLimit::Primary) => match budget.known(now).and(budget.resume_at()) {
-                Some(resume) => (Hold::At(resume), true),
-                None => (ladder(0), true),
-            },
-            Some(RateLimit::Secondary {
-                retry_after: Some(wait),
-            }) => {
-                let wait = chrono::Duration::from_std(wait)
-                    .unwrap_or_else(|_| chrono::Duration::seconds(RESET_WINDOW_SECS));
-                (Hold::At(now + wait), true)
-            }
-            Some(RateLimit::Secondary { retry_after: None }) => {
-                (ladder(SECONDARY_LIMIT_MIN_SECS), true)
-            }
-        };
-        self.hold = Some(hold);
-        self.hold_is_limit = is_limit;
-    }
-
-    /// An applied answer came on another token: a rate limit belonged to the
-    /// old credential and goes with it. The count describes GitHub and stays.
-    pub fn account_switched(&mut self) {
-        if self.hold_is_limit {
-            self.hold = None;
-            self.hold_is_limit = false;
-        }
-    }
-
-    /// The not-before, resolved against the configured interval.
-    pub fn not_before(&self, interval_secs: i64) -> Option<DateTime<Local>> {
-        Some(match self.hold? {
-            Hold::At(t) => t,
-            Hold::Ladder {
-                from,
-                step,
-                factor,
-                at_least_secs,
-            } => {
-                let secs = backoff_secs(step, interval_secs, factor).max(at_least_secs);
-                from + chrono::Duration::seconds(secs)
-            }
-        })
-    }
-
-    /// The not-before when it is a rate limit's.
-    pub fn limit_until(&self, interval_secs: i64) -> Option<DateTime<Local>> {
-        self.not_before(interval_secs)
-            .filter(|_| self.hold_is_limit)
-    }
-}
-
 /// The per-checkout hold after fetches that timed out (FZ-34, #83; amendment
 /// 2 of `docs/fetch-outcome-contract.md`). A repo too large to fetch within
 /// FZ-34's wall clock used to start the same download on every sweep and
@@ -1058,23 +565,15 @@ pub struct App {
     /// cannot leave the spinner running for the rest of the session while
     /// one still downloading is waited for.
     pub refresh_fetches_started: Option<std::time::Instant>,
-    /// How current the GitHub data is: data time, last attempt and outcome.
-    ///
-    /// A failure has to survive a keypress. It used to live only in a status
-    /// message, which the next key clears, so a poll that had been failing
-    /// for hours looked exactly like one that had just succeeded: the calendar
-    /// and the CI lamps kept their last good values and nothing on screen said
-    /// they had stopped moving. Rate limits are the common case and they last
-    /// an hour. The header reads this.
-    pub github_freshness: GithubFreshness,
-    /// The account's GitHub budget as the newest reading stated it.
-    pub api_budget: ApiBudget,
-    /// The retry ladder and not-before beside `github_freshness`'s clock.
-    pub github_backoff: GithubBackoff,
+    /// The GitHub sync: freshness, budget, retry ladder, the poll's in-flight
+    /// lock and the push shortcut, with the interval and cost they are judged
+    /// against (`engine::GithubSync`). Set from `Config` at startup
+    /// (`GithubSync::from_config`); the header reads it through its queries.
+    pub(crate) github: GithubSync,
     /// Paths the automatic fetches skip after a timeout (`FetchBackoff`).
     pub fetch_backoff: FetchBackoff,
     /// The automatic-fetch cap in bytes, `None` for no cap (`fetch_max_mb`,
-    /// FZ-35b). Copied from `Config` at startup, as `github_poll_secs` is.
+    /// FZ-35b). Copied from `Config` at startup, as the poll interval is.
     pub fetch_max_bytes: Option<u64>,
     /// Paths with a fetch running or queued: one fetch per repo at a time
     /// (FZ-34, R5). Every fetch selection, automatic or manual, skips a path
@@ -1083,25 +582,9 @@ pub struct App {
     /// fetch tasks take the claim at their permit; a launch or `R` load
     /// claims its fetches here too (`FetchClaims`, FZ-35a).
     pub fetches_in_flight: FetchClaims,
-    /// The configured GitHub poll interval in seconds, floored, and what one
-    /// poll costs in points (`github::poll_cost` of `repo_limit`). Copied from
-    /// `Config` at startup, as `contrib_author` is, because the header judges
-    /// the pace and holds an `App`, not a `Config`. Neither changes while
-    /// fleetz runs.
-    pub github_poll_secs: i64,
-    pub github_poll_cost: u32,
-    /// Where the backoff and resume jitter come from; planted in tests.
-    pub jitter: Box<dyn Jitter>,
     /// The fetches a keypress is waiting on (`f`, `F`, and the ones `r`'s
     /// poll sets off), reported as one status line when the last lands.
     pub manual_fetches: FetchTally,
-    /// True while a GitHub re-poll is in flight, so ticks do not stack them.
-    pub github_poll_inflight: bool,
-    /// When the in-flight GitHub poll started, so a request that never returns
-    /// can be given up on. Without this, one hung call leaves
-    /// `github_poll_inflight` true forever and CI status silently stops
-    /// updating for the rest of the session, with nothing on screen to say so.
-    pub github_poll_started: Option<std::time::Instant>,
     /// Why the last full load failed, while it has left nothing to draw.
     ///
     /// A failed initial load used to set only a status message, which the
@@ -1111,11 +594,6 @@ pub struct App {
     /// a fleet that genuinely has no repos in the window. Cleared by the next
     /// load that succeeds.
     pub load_error: Option<String>,
-    /// Set when a sweep sees a repo's unpushed count fall to zero, which means
-    /// you just pushed. That is the one moment CI is about to change and
-    /// nothing is `Pending` yet to poll harder on, so it forces the next poll
-    /// rather than waiting out the interval.
-    pub push_detected: bool,
     /// The last unfiltered GitHub fetch (top repo_limit repos by push date).
     /// The time-window overlay re-filters this in memory, so applying a new
     /// window needs no network round trip.
@@ -1151,7 +629,7 @@ pub struct App {
     /// never written to disk (FZ-30b). See `ci.rs`. Polled only while the
     /// view is on screen (`ci_wanted`); what an earlier visit read stays.
     pub ci: std::collections::HashMap<RemoteKey, CiState>,
-    /// The `core` budget the CI calls bill, apart from `api_budget`, which
+    /// The `core` budget the CI calls bill, apart from `github`'s, which
     /// is the GraphQL one the fleet poll paces on. One per session: the
     /// allowance is the account's, whichever repo spends it.
     pub ci_budget: ApiBudget,
@@ -1247,7 +725,7 @@ pub struct App {
     /// (`digest::HeldLog`). One per path, so it stays the size of the list.
     pub digest_logs: std::collections::HashMap<String, crate::digest::HeldLog>,
     /// The work hours slot boundaries are cut at, copied from `Config` at
-    /// startup as `github_poll_secs` is.
+    /// startup as the GitHub poll interval is.
     pub work_hours: (u8, u8),
     /// Where the repo list's last frame drew its rows, so a click or a hover
     /// resolves against what is on screen. Written by the renderer for the
@@ -1965,20 +1443,16 @@ impl App {
             refresh_awaits_poll: false,
             refresh_fetches: std::collections::HashSet::new(),
             refresh_fetches_started: None,
-            github_freshness: GithubFreshness::default(),
-            api_budget: ApiBudget::default(),
-            github_backoff: GithubBackoff::default(),
+            github: GithubSync::new(
+                crate::config::Config::default().github_poll_interval as i64,
+                crate::github::poll_cost(crate::config::Config::default().repo_limit),
+                Box::new(ClockJitter::new()),
+            ),
             fetch_backoff: FetchBackoff::default(),
             fetch_max_bytes: crate::config::Config::default().fetch_cap_bytes(),
             fetches_in_flight: FetchClaims::default(),
-            github_poll_secs: crate::config::Config::default().github_poll_interval as i64,
-            github_poll_cost: crate::github::poll_cost(crate::config::Config::default().repo_limit),
-            jitter: Box::new(ClockJitter::new()),
             manual_fetches: FetchTally::default(),
-            github_poll_inflight: false,
-            github_poll_started: None,
             load_error: None,
-            push_detected: false,
             dataset: Vec::new(),
             github_meta: crate::github::FetchMeta::default(),
             not_in_last_poll: std::collections::HashSet::new(),
@@ -2135,7 +1609,7 @@ impl App {
         let Some(at) = at else {
             return false;
         };
-        match self.github_freshness.data_time {
+        match self.github.freshness().data_time {
             DataTime::At(fleet) => at > fleet,
             DataTime::Unknown | DataTime::NoData => true,
         }
@@ -2254,7 +1728,7 @@ impl App {
     }
 
     /// Give up on CI polls claimed longer than `limit` before `instant` that
-    /// never answered, as `main.rs::expire_stuck_github_poll` does for the
+    /// never answered, as `GithubSync::expire_stuck` does for the
     /// fleet poll: the lock is released and the attempt recorded as a
     /// timed-out failure on that repo, which climbs its ladder. An answer
     /// that still arrives is applied like any.
@@ -2277,7 +1751,7 @@ impl App {
             if let Outcome::Failed(failure) = state.freshness.outcome.clone() {
                 state
                     .backoff
-                    .failed(&failure, now, &self.ci_budget, self.jitter.as_mut());
+                    .failed(&failure, now, &self.ci_budget, self.github.jitter_mut());
             }
             self.needs_redraw = true;
         }
@@ -2357,7 +1831,7 @@ impl App {
         if let Some(reading) = &answer.budget
             && self
                 .ci_budget
-                .observe(reading, applied, now, self.jitter.as_mut())
+                .observe(reading, applied, now, self.github.jitter_mut())
                 == Observed::Switched
         {
             for state in self.ci.values_mut() {
@@ -2378,7 +1852,7 @@ impl App {
                 }
                 state
                     .backoff
-                    .failed(&failure, now, &self.ci_budget, self.jitter.as_mut());
+                    .failed(&failure, now, &self.ci_budget, self.github.jitter_mut());
             }
             None => {
                 state.freshness.succeeded(now);
@@ -2407,7 +1881,7 @@ impl App {
         if let Some(reading) = &answer.budget
             && self
                 .ci_budget
-                .observe(reading, true, now, self.jitter.as_mut())
+                .observe(reading, true, now, self.github.jitter_mut())
                 == Observed::Switched
         {
             for state in self.ci.values_mut() {
@@ -4867,83 +4341,20 @@ impl App {
         });
     }
 
-    /// A budget reading came with an answer that `applied` or was discarded.
-    /// One on another token, from an applied answer, drops the old token's
-    /// rate limit (transition 7). Call before the answer's outcome, which
-    /// sets the not-before that follows it.
-    pub fn observe_budget(
-        &mut self,
-        reading: Option<&crate::github::BudgetReading>,
-        applied: bool,
-        arrival: DateTime<Local>,
-    ) {
-        let Some(reading) = reading else {
-            return;
-        };
-        if self
-            .api_budget
-            .observe(reading, applied, arrival, self.jitter.as_mut())
-            == Observed::Switched
-        {
-            self.github_backoff.account_switched();
+    /// What the GitHub poll decisions read off the front end (D2).
+    pub(crate) fn poll_context(&self) -> PollContext {
+        // A row the last poll did not return holds a `Pending` frozen at an
+        // earlier refresh, which says nothing about CI now (design 4.7).
+        let any_pending = self
+            .repos
+            .iter()
+            .any(|r| r.ci_status == CiStatus::Pending && !self.is_not_in_last_poll(r));
+        PollContext {
+            watch: self.watch_mode,
+            dirty: self.dirty_mode,
+            loading: self.loading,
+            any_pending,
         }
-    }
-
-    /// An applied attempt failed at `now`: advance the retry ladder.
-    pub fn github_attempt_failed(
-        &mut self,
-        failure: &crate::github::Failure,
-        now: DateTime<Local>,
-    ) {
-        self.github_backoff
-            .failed(failure, now, &self.api_budget, self.jitter.as_mut());
-    }
-
-    /// The budget's pace for polls of `poll_cost` points, judged at the last
-    /// attempt, the moment polls are spaced from. Before any attempt there is
-    /// nothing to space.
-    ///
-    /// The interval and cost are parameters rather than read off
-    /// `github_poll_secs` and `github_poll_cost` so the poll scheduler can
-    /// pass the `Config` it holds; the header passes the copies.
-    pub fn github_pace(&self, poll_cost: u32) -> Pace {
-        match self.github_freshness.last_attempt {
-            Some(at) => self.api_budget.pace(poll_cost, at),
-            None => Pace::Unknown,
-        }
-    }
-
-    /// Whether the budget stretches polling past the configured interval of
-    /// `poll_secs` or pauses it, which suspends the `Pending` floor and the
-    /// push shortcut (A2).
-    pub fn budget_slowed(&self, poll_secs: i64, poll_cost: u32) -> bool {
-        match self.github_pace(poll_cost) {
-            Pace::Unknown => false,
-            Pace::Every(secs) => secs > poll_secs,
-            Pace::Paused { .. } => true,
-        }
-    }
-
-    /// Until when GitHub is known to refuse a request at `now`: a rate limit's
-    /// not-before that has not passed, or too few points left for one poll
-    /// (`docs/api-budget-design.md` 4.3, "Manual refresh"). `r` and `R` send
-    /// nothing while this is `Some`.
-    pub fn github_limit_until(
-        &self,
-        poll_secs: i64,
-        poll_cost: u32,
-        now: DateTime<Local>,
-    ) -> Option<DateTime<Local>> {
-        let limit = self
-            .github_backoff
-            .limit_until(poll_secs)
-            .filter(|t| *t > now);
-        let exhausted = self
-            .api_budget
-            .exhausted(poll_cost, now)
-            .then(|| self.api_budget.resume_at())
-            .flatten();
-        limit.max(exhausted)
     }
 
     pub fn clear_status(&mut self) {

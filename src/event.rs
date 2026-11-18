@@ -5,7 +5,7 @@ use crate::input::{handle_key, handle_mouse_input};
 use crate::load::apply_load_result;
 use crate::model::RepoStatus;
 use crate::poll::{
-    GITHUB_POLL_STUCK_AFTER, apply_github_poll, ci_tick, expire_stuck_github_poll, github_poll_due,
+    GITHUB_POLL_STUCK_AFTER, apply_github_poll, ci_tick, expire_stuck_github_poll,
     spawn_change_diff, spawn_changes_read, spawn_ci_detail, spawn_ci_poll, spawn_digest_log,
     spawn_note_read, spawn_note_render, spawn_notes_walk, spawn_worktree_log,
     start_account_rebuild, start_github_poll,
@@ -480,8 +480,11 @@ pub(crate) async fn run_event_loop(
                     }
                 }
                 expire_stuck_github_poll(app, GITHUB_POLL_STUCK_AFTER, chrono::Local::now());
-                if github_poll_due(app, config, chrono::Local::now()) {
-                    app.push_detected = false;
+                if app
+                    .github
+                    .poll_due(chrono::Local::now(), app.poll_context())
+                {
+                    app.github.take_push();
                     start_github_poll(app, &tx, config);
                 }
                 if let Some(request) = ci_tick(app, chrono::Local::now(), std::time::Instant::now())

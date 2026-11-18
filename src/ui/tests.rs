@@ -665,7 +665,7 @@ fn a_failing_github_poll_is_marked_in_the_header() {
 
 /// A poll that came back an error, as the event loop records one.
 fn fail_github(app: &mut crate::app::App) {
-    app.github_freshness.failed(
+    app.github.freshness_mut().failed(
         crate::github::Failure::new(crate::github::FailureKind::Http, "HTTP 502"),
         chrono::Local::now(),
     );
@@ -985,9 +985,9 @@ impl crate::app::Jitter for NoJitter {
 /// default interval (30 s) and cost (3 points).
 fn polled_app() -> crate::app::App {
     let mut app = crate::app::App::new(Vec::new(), String::new(), 120, 40);
-    app.jitter = Box::new(NoJitter);
+    app.github.set_jitter(Box::new(NoJitter));
     app.watch_mode = true;
-    app.github_freshness.succeeded(at(2026, 10, 1, 14, 2));
+    app.github.freshness_mut().succeeded(at(2026, 10, 1, 14, 2));
     app
 }
 
@@ -1003,7 +1003,7 @@ fn polled_with(app: &mut crate::app::App, remaining: u32) {
         date: Some(arrival.with_timezone(&chrono::Utc)),
         token_id: "t".to_string(),
     };
-    app.observe_budget(Some(&reading), true, arrival);
+    app.github.observe_budget(Some(&reading), true, arrival);
 }
 
 /// FZ-10c, 4.6. Rate limited: today's segment, with when polling resumes.
@@ -1016,9 +1016,7 @@ fn a_rate_limited_header_says_when_polling_resumes() {
         limit: Some(crate::github::RateLimit::Primary),
         ..crate::github::Failure::new(crate::github::FailureKind::Http, "HTTP 403")
     };
-    app.github_attempt_failed(&refused, at(2026, 10, 1, 14, 10));
-    app.github_freshness
-        .failed(refused, at(2026, 10, 1, 14, 10));
+    app.github.attempt_failed(refused, at(2026, 10, 1, 14, 10));
     let (long, short, color) = github_segment(&app, at(2026, 10, 1, 14, 20)).unwrap();
     assert_eq!(long, " ⚠ github rate limited until 15:00, as of 14:02 ");
     assert_eq!(short, " ⚠ github ");
@@ -1035,7 +1033,9 @@ fn a_rate_limited_header_says_when_polling_resumes() {
 fn a_paused_header_says_until_when_and_why() {
     let mut app = polled_app();
     polled_with(&mut app, 400);
-    app.github_freshness.succeeded(at(2026, 10, 1, 14, 10));
+    app.github
+        .freshness_mut()
+        .succeeded(at(2026, 10, 1, 14, 10));
     let (long, short, color) = github_segment(&app, at(2026, 10, 1, 14, 20)).unwrap();
     assert_eq!(long, " github paused until 15:00, allowance nearly used ");
     assert_eq!(short, " github paused ");
@@ -1052,7 +1052,9 @@ fn a_paused_header_says_until_when_and_why() {
 fn a_slowed_header_says_the_allowance_is_low() {
     let mut app = polled_app();
     polled_with(&mut app, 600);
-    app.github_freshness.succeeded(at(2026, 10, 1, 14, 10));
+    app.github
+        .freshness_mut()
+        .succeeded(at(2026, 10, 1, 14, 10));
     let (long, short, color) = github_segment(&app, at(2026, 10, 1, 14, 20)).unwrap();
     assert_eq!(long, " github slowed, allowance low ");
     assert_eq!(short, " github slowed ");
@@ -1060,7 +1062,10 @@ fn a_slowed_header_says_the_allowance_is_low() {
 
     let mut healthy = polled_app();
     polled_with(&mut healthy, 4000);
-    healthy.github_freshness.succeeded(at(2026, 10, 1, 14, 10));
+    healthy
+        .github
+        .freshness_mut()
+        .succeeded(at(2026, 10, 1, 14, 10));
     assert_eq!(github_segment(&healthy, at(2026, 10, 1, 14, 20)), None);
 }
 
@@ -1073,8 +1078,7 @@ fn a_backing_off_header_keeps_the_failure_and_its_age() {
     for minute in [10, 11, 13] {
         let now = at(2026, 10, 1, 14, minute);
         let failed = failure(crate::github::FailureKind::Server, "HTTP 502");
-        app.github_attempt_failed(&failed, now);
-        app.github_freshness.failed(failed, now);
+        app.github.attempt_failed(failed, now);
     }
     let (long, _, color) = github_segment(&app, at(2026, 10, 1, 14, 14)).unwrap();
     assert_eq!(long, " ⚠ github server error at 14:13, as of 14:02 ");
@@ -1120,7 +1124,7 @@ fn fresh_or_no_github_data_draws_no_segment() {
 #[test]
 fn the_cached_segment_shortens_rather_than_disappears() {
     let cached = |app: &mut crate::app::App| {
-        app.github_freshness.loaded(
+        app.github.freshness_mut().loaded(
             &crate::app::DatasetSource::Cache { written: None },
             chrono::Local::now(),
         )
@@ -1135,7 +1139,7 @@ fn the_cached_segment_shortens_rather_than_disappears() {
 #[test]
 fn a_healthy_github_poll_leaves_the_header_clean() {
     let row = header_row_with("", 80, |app| {
-        app.github_freshness.succeeded(chrono::Local::now())
+        app.github.freshness_mut().succeeded(chrono::Local::now())
     });
     assert!(!row.contains("⚠"), "spurious failure marker in: {row:?}");
 }
@@ -1291,7 +1295,7 @@ fn the_github_lamp_says_connected_issue_or_error() {
     assert!(long.contains("github off"), "{long:?}");
 
     let mut app = fresh();
-    app.github_freshness.succeeded(now);
+    app.github.freshness_mut().succeeded(now);
     let (health, long, short) = github_status(&app, now);
     assert_eq!(health, GithubHealth::Connected);
     assert_eq!(health.color(), colors::GREEN);
@@ -1306,7 +1310,7 @@ fn the_github_lamp_says_connected_issue_or_error() {
     assert!(long.contains("⚠ github"), "{long:?}");
 
     let mut app = fresh();
-    app.github_freshness.failed(
+    app.github.freshness_mut().failed(
         crate::github::Failure::rate_limit("API rate limit exceeded"),
         now,
     );
@@ -1320,7 +1324,7 @@ fn the_github_lamp_says_connected_issue_or_error() {
 #[test]
 fn a_healthy_github_poll_says_connected_in_green() {
     let row = header_row_with("", 100, |app| {
-        app.github_freshness.succeeded(chrono::Local::now())
+        app.github.freshness_mut().succeeded(chrono::Local::now())
     });
     assert!(row.contains("● github connected"), "{row:?}");
 }
@@ -1634,13 +1638,15 @@ fn an_http_rate_limit_load_says_it_clears_on_its_own() {
             limit: Some(RateLimit::Primary),
             ..Failure::new(FailureKind::Http, message)
         };
-        app.github_freshness.failed(limited, at(2026, 10, 9, 14, 2));
+        app.github
+            .freshness_mut()
+            .failed(limited, at(2026, 10, 9, 14, 2));
         app.load_error = Some(message.to_string());
     });
     assert!(out.contains("clears on its own"), "no reassurance:\n{out}");
     // The same message without the flag is an ordinary refusal.
     let other = screen(80, 24, |app| {
-        app.github_freshness.failed(
+        app.github.freshness_mut().failed(
             Failure::new(FailureKind::Refused, message),
             at(2026, 10, 9, 14, 2),
         );

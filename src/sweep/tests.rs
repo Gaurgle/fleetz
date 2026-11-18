@@ -69,7 +69,7 @@ fn a_failed_poll_mid_sweep_leaves_github_fields_and_lands_the_sweep() {
         rebuilt_from(&snapshot),
         git::FetchOutcome::Succeeded,
     );
-    assert!(app.github_freshness.is_failing());
+    assert!(app.github.freshness().is_failing());
     let repo = &app.repos[0];
     assert_poll_fields(repo);
     assert_sweep_fields(repo);

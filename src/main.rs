@@ -38,6 +38,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use engine::{ClockJitter, GithubSync};
 pub use event::AppEvent;
 #[cfg(test)]
 use event::SLOW_REPAINT_TICKS;
@@ -49,7 +50,6 @@ use load::spawn_load;
 use model::RepoLocation;
 #[cfg(test)]
 use poll::GITHUB_POLL_STUCK_AFTER;
-use poll::configured_poll_secs;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::collections::HashSet;
@@ -109,8 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(app::DEFAULT_CONTRIBUTIONS),
     ));
     app.contrib_author = config.contributions_author.clone();
-    app.github_poll_secs = configured_poll_secs(&config);
-    app.github_poll_cost = github::poll_cost(config.repo_limit);
+    app.github = GithubSync::from_config(&config, Box::new(ClockJitter::new()));
     app.fetch_max_bytes = config.fetch_cap_bytes();
     app.contrib_cell = config
         .contributions_cell_size

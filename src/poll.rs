@@ -5,12 +5,12 @@ use crate::event::AppEvent;
 use crate::load::{assess_size_holds, spawn_memory_rebuild};
 use crate::model::RepoStatus;
 use crate::sweep::{order_rows_by_activity, start_single_sweep};
-use crate::{app, cache, ci, config, digest, git, github, model, notes, ui};
+use crate::{app, cache, ci, config, digest, git, github, notes, ui};
 use std::path::Path;
 
 /// Same idea for the GitHub poll. The HTTP client has no timeout (`gh` only
 /// supplies the token), so a black-holed request would otherwise hold
-/// `github_poll_inflight` for the rest of the session and no poll could start.
+/// the in-flight lock for the rest of the session and no poll could start.
 /// Past this the poll is given up on and recorded as a timed-out failure,
 /// which the header shows (`expire_stuck_github_poll`).
 pub(crate) const GITHUB_POLL_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
@@ -20,15 +20,6 @@ pub(crate) const GITHUB_POLL_STUCK_AFTER: std::time::Duration = std::time::Durat
 /// each bounded at 30 s by the shared client, after a token lookup bounded at
 /// 10 s: past this one is wedged, not slow.
 pub(crate) const CI_POLL_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// Floor on the GitHub poll interval, whatever the config says, and the
-/// interval while a repo is `Pending`. One poll at `repo_limit` 50 costs 3
-/// points, so one instance at the floor spends 720 of the 5000-point hour:
-/// comfortable for one instance, not for several on one account, which reach
-/// the limit at seven (`docs/api-budget-design.md` section 3). The floor
-/// stops a typo; the budget pacing (`app::ApiBudget::pace`) is what slows
-/// polling when the account runs low.
-const GITHUB_POLL_MIN: u64 = 15;
 
 /// Whether a sweep result means the repo moved in a way CI might care about,
 /// and the next GitHub poll should not wait out its interval.
@@ -88,32 +79,27 @@ pub(crate) fn apply_github_poll_at(
     // The in-flight lock belongs to the newest attempt. A late answer from
     // one given up on must not release it, or a second request stacks; the
     // newest one's answer always does, even when it is discarded below.
-    let is_latest = app.github_freshness.is_latest(attempt);
-    if is_latest {
-        app.github_poll_inflight = false;
-        app.github_poll_started = None;
-    }
+    let is_latest = app.github.answer_arrived(attempt);
     // An attempt given up on can still answer, and an `R` can land while a
     // poll is out. Once a newer answer has landed, applying this one would
     // move the data backwards (rule 10).
-    if !app.github_freshness.accept_answer(attempt) {
+    if !app.github.accept_answer(attempt) {
         // Its reading may still lower `remaining` on the held token, never
         // switch it; its outcome changes no count and no not-before.
-        app.observe_budget(reading.as_ref(), false, now);
+        app.github.observe_budget(reading.as_ref(), false, now);
         if is_latest {
             // A refresh waiting on this request is over all the same.
             app.settle_refresh_poll(std::iter::empty());
         }
         return;
     }
-    app.observe_budget(reading.as_ref(), true, now);
+    app.github.observe_budget(reading.as_ref(), true, now);
     // Read before the outcome below replaces it: a recovery from `Offline`
     // refetches the rows the outage failed (fetch contract rule 6).
-    let previous_outcome = app.github_freshness.outcome.clone();
+    let previous_outcome = app.github.freshness().outcome.clone();
     match result {
         Ok(fetch) => {
-            app.github_freshness.succeeded(now);
-            app.github_backoff.succeeded();
+            app.github.attempt_succeeded(now);
             let github::GithubFetch {
                 repos: dataset,
                 calendar,
@@ -166,9 +152,11 @@ pub(crate) fn apply_github_poll_at(
             // blanket sweep to fetch all of them.
             let mut moved = remotes_that_moved(&app.dataset, &dataset, &app.repos);
             // The outage's failures ride the same batch, each row once.
-            for idx in
-                recovery_refetch(&previous_outcome, &app.github_freshness.outcome, &app.repos)
-            {
+            for idx in recovery_refetch(
+                &previous_outcome,
+                &app.github.freshness().outcome,
+                &app.repos,
+            ) {
                 if !moved.contains(&idx) {
                     moved.push(idx);
                 }
@@ -205,8 +193,7 @@ pub(crate) fn apply_github_poll_at(
                 format!("GitHub refresh failed: {}", e.failure.message),
                 true,
             );
-            app.github_attempt_failed(&e.failure, now);
-            app.github_freshness.failed(e.failure, now);
+            app.github.attempt_failed(e.failure, now);
         }
     }
     // A failed poll fetched nothing, so a refresh waiting on it
@@ -279,97 +266,17 @@ pub(crate) fn start_account_rebuild(
     spawn_memory_rebuild(tx, app, args, config, repo_dir, false);
 }
 
-/// Give up on a background poll that has not answered within `limit`.
-///
-/// Recorded as a timed-out failure, which also advances the retry clock: the
-/// in-flight flag used to be dropped with nothing else changed, so the next
-/// tick started a second request while the first was still open (decision
-/// D4). The request itself is not cancelled; that is FZ-11.
+/// Give up on a background poll that has not answered within `limit`
+/// (`GithubSync::expire_stuck`), and stop a refresh waiting on it.
 pub(crate) fn expire_stuck_github_poll(
     app: &mut App,
     limit: std::time::Duration,
     now: chrono::DateTime<chrono::Local>,
 ) {
-    if let Some(started) = app.github_poll_started
-        && started.elapsed() > limit
-    {
-        app.github_poll_inflight = false;
-        app.github_poll_started = None;
+    if app.github.expire_stuck(limit, now) {
         app.refresh_awaits_poll = false;
-        app.github_freshness.gave_up(limit, now);
-        // A give-up is a `TimedOut` failure and climbs the ladder like one
-        // (transition 5).
-        if let app::Outcome::Failed(failure) = app.github_freshness.outcome.clone() {
-            app.github_attempt_failed(&failure, now);
-        }
         app.needs_redraw = true;
     }
-}
-
-/// Whether the tick should start a background GitHub poll now.
-///
-/// With watch on, once per `github_poll_secs` after the last attempt,
-/// whatever it ended in, or sooner for a detected push while polls succeed.
-/// With watch off, only the one attempt a cache-served launch is owed
-/// (decision D2): the data on screen came off the disk and nothing has
-/// confirmed it yet.
-pub(crate) fn github_poll_due(
-    app: &App,
-    config: &config::Config,
-    now: chrono::DateTime<chrono::Local>,
-) -> bool {
-    if app.dirty_mode || app.loading || app.github_poll_inflight {
-        return false;
-    }
-    let freshness = &app.github_freshness;
-    if !app.watch_mode {
-        return freshness.awaits_first_attempt();
-    }
-    // Beside the interval, not inside it: a rate limit's reset, a
-    // `retry-after`, a backoff step or a pause at the reserve.
-    let held = github_not_before(app, config).is_some_and(|t| now < t);
-    // A detected push jumps the queue: it is the one moment CI is about to
-    // change with nothing `Pending` yet to notice. Not while polls fail, where
-    // the next attempt waits out at least a full interval (rule 6), nor while
-    // the budget slows polling; the next due poll serves it then.
-    let slowed = app.budget_slowed(
-        configured_poll_secs(config),
-        github::poll_cost(config.repo_limit),
-    );
-    let push = app.push_detected && !freshness.is_failing() && !slowed;
-    !held && (push || freshness.retry_due(now, github_poll_secs(app, config)))
-}
-
-/// The configured poll interval, floored.
-pub(crate) fn configured_poll_secs(config: &config::Config) -> i64 {
-    config.github_poll_interval.max(GITHUB_POLL_MIN) as i64
-}
-
-/// The earliest the next automatic attempt may go besides the interval: the
-/// later of the retry ladder's not-before and a pause at the reserve.
-fn github_not_before(
-    app: &App,
-    config: &config::Config,
-) -> Option<chrono::DateTime<chrono::Local>> {
-    let ladder = app.github_backoff.not_before(configured_poll_secs(config));
-    let pause = match app.github_pace(github::poll_cost(config.repo_limit)) {
-        app::Pace::Paused { until } => Some(until),
-        _ => None,
-    };
-    ladder.max(pause)
-}
-
-/// `App::github_limit_until` under `config`.
-pub(crate) fn github_limit_until(
-    app: &App,
-    config: &config::Config,
-    now: chrono::DateTime<chrono::Local>,
-) -> Option<chrono::DateTime<chrono::Local>> {
-    app.github_limit_until(
-        configured_poll_secs(config),
-        github::poll_cost(config.repo_limit),
-        now,
-    )
 }
 
 /// The status line for a refresh that sent nothing because of a known limit.
@@ -433,41 +340,6 @@ fn remotes_that_moved(
         })
 }
 
-/// Seconds to wait before the next GitHub poll.
-///
-/// Drops to the floor while any repo is `Pending`, which is exactly when a
-/// human is watching the screen for a run to finish, and relaxes to the
-/// configured interval when nothing is in flight. Costs nothing at idle.
-///
-/// Not while polls fail (decision D3): a `Pending` frozen by a failing poll
-/// says nothing about what CI is doing now, and the floor would only retry a
-/// dead network four times a minute. Nor while the budget slows polling
-/// (A2): then the pace, when longer than the configured interval, is the
-/// wait. A backoff step, a limit and a pause are not here but in
-/// `github_not_before`, which `github_poll_due` checks beside this.
-fn github_poll_secs(app: &App, config: &config::Config) -> i64 {
-    let configured = configured_poll_secs(config);
-    let cost = github::poll_cost(config.repo_limit);
-    let pace = match app.github_pace(cost) {
-        app::Pace::Every(secs) => secs,
-        app::Pace::Unknown | app::Pace::Paused { .. } => 0,
-    };
-    // A row the last poll did not return holds a `Pending` frozen at an
-    // earlier refresh, which says nothing about CI now (design 4.7).
-    let any_pending = app
-        .repos
-        .iter()
-        .any(|r| r.ci_status == model::CiStatus::Pending && !app.is_not_in_last_poll(r));
-    let floored =
-        any_pending && !app.github_freshness.is_failing() && !app.budget_slowed(configured, cost);
-    let interval = if floored {
-        GITHUB_POLL_MIN as i64
-    } else {
-        configured
-    };
-    interval.max(pace)
-}
-
 /// Kick off a GitHub re-poll, taking the in-flight lock. No-op if one is
 /// already running, so mashing `r` cannot stack polls. `R` does not come
 /// through here: it is a full load, and `reload_action` ignores it while a
@@ -477,7 +349,10 @@ pub(crate) fn start_github_poll(
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     config: &config::Config,
 ) {
-    if let Some(attempt) = claim_github_poll(app) {
+    if let Some(attempt) = app
+        .github
+        .claim_attempt(std::time::Instant::now(), app.dirty_mode)
+    {
         spawn_github_poll(tx, config, attempt);
     }
 }
@@ -712,17 +587,6 @@ pub(crate) fn spawn_digest_log(
             commits,
         });
     });
-}
-
-/// Take the in-flight lock and an attempt id for a new poll, or `None` when
-/// one is already running or `-d` has no GitHub to poll.
-pub(crate) fn claim_github_poll(app: &mut App) -> Option<u64> {
-    if app.github_poll_inflight || app.dirty_mode {
-        return None;
-    }
-    app.github_poll_inflight = true;
-    app.github_poll_started = Some(std::time::Instant::now());
-    Some(app.github_freshness.begin_attempt())
 }
 
 /// Re-poll GitHub for PR and CI data in the background, so badges stop being

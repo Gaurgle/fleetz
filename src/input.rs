@@ -7,7 +7,7 @@ use crate::handoff::{
     note_to_open, on_path, suspend_and_run, suspend_and_run_in_dir,
 };
 use crate::load::{spawn_load, spawn_memory_rebuild, spawn_window_apply};
-use crate::poll::{github_limit_until, limited_status, start_github_poll};
+use crate::poll::{limited_status, start_github_poll};
 use crate::sweep::{start_single_sweep, start_sweep};
 use crate::{app, clipboard, config, git, ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -972,20 +972,16 @@ pub(crate) enum ReloadAction {
     ResumesOnly(chrono::DateTime<chrono::Local>),
 }
 
-pub(crate) fn reload_action(
-    app: &App,
-    config: &config::Config,
-    now: chrono::DateTime<chrono::Local>,
-) -> ReloadAction {
+pub(crate) fn reload_action(app: &App, now: chrono::DateTime<chrono::Local>) -> ReloadAction {
     if app.loading {
         return ReloadAction::AlreadyRunning;
     }
-    let Some(until) = github_limit_until(app, config, now) else {
+    let Some(until) = app.github.limit_until(now) else {
         return ReloadAction::Load;
     };
     // A poll started before the limit was known can land newer rows; a
     // rebuild from the older memory copy must not land after it.
-    if app.github_poll_inflight {
+    if app.github.inflight() {
         ReloadAction::AlreadyRunning
     } else if app.dataset.is_empty() {
         ReloadAction::ResumesOnly(until)
@@ -1005,7 +1001,7 @@ fn reload_key(
 ) {
     // A manual reload lifts every timeout hold (FZ-34).
     app.fetch_backoff.clear();
-    match reload_action(app, config, now) {
+    match reload_action(app, now) {
         ReloadAction::AlreadyRunning => app.set_status(REFRESH_RUNNING.to_string(), false),
         ReloadAction::ResumesOnly(until) => app.set_status(limited_status(until), false),
         ReloadAction::FromMemory => {
@@ -1042,7 +1038,7 @@ pub(crate) fn refresh_key(
 ) {
     // A manual refresh lifts every timeout hold (FZ-34).
     app.fetch_backoff.clear();
-    let limited = github_limit_until(app, config, now);
+    let limited = app.github.limit_until(now);
     match limited {
         Some(until) => app.set_status(limited_status(until), false),
         None => app.set_status("Refreshing…".to_string(), false),
@@ -1058,7 +1054,7 @@ pub(crate) fn refresh_key(
     }
     // Already in flight from the watch timer counts too: its answer
     // is the one this refresh is waiting for.
-    app.refresh_awaits_poll = app.github_poll_inflight;
+    app.refresh_awaits_poll = app.github.inflight();
 }
 
 /// `f`: fetch the selected repo. Manual, so a timeout hold does not stop it

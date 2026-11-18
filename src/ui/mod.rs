@@ -283,11 +283,11 @@ pub fn github_segment(
     now: chrono::DateTime<chrono::Local>,
 ) -> Option<(String, String, Color)> {
     use crate::app::{Outcome, Pace};
-    let freshness = &app.github_freshness;
-    let (poll_secs, poll_cost) = (app.github_poll_secs, app.github_poll_cost);
+    let freshness = app.github.freshness();
+    let poll_secs = app.github.interval_secs();
     if let Outcome::Failed(failure) = &freshness.outcome {
         if failure.rate_limited
-            && let Some(until) = app.github_limit_until(poll_secs, poll_cost, now)
+            && let Some(until) = app.github.limit_until(now)
         {
             let label = format!(
                 "{} until {}",
@@ -301,7 +301,7 @@ pub fn github_segment(
         return github_freshness_segment(freshness, now);
     }
     if app.watch_mode {
-        match app.github_pace(poll_cost) {
+        match app.github.pace() {
             Pace::Paused { until } if until > now => {
                 return Some((
                     format!(
@@ -1143,7 +1143,7 @@ fn render_load_error(frame: &mut Frame, area: Rect, app: &App) {
     // The typed flag catches a 403 or 429 limit, whose message names only the
     // status; the word match stays for a message with no attempt behind it.
     let typed_limit = matches!(
-        &app.github_freshness.outcome,
+        &app.github.freshness().outcome,
         crate::app::Outcome::Failed(failure) if failure.rate_limited
     );
     if typed_limit || reason.contains("rate limit") || reason.contains("RATE_LIMIT") {
@@ -1291,7 +1291,7 @@ pub fn github_status(
         );
     }
     let Some((long, short, _)) = github_segment(app, now) else {
-        return match app.github_freshness.outcome {
+        return match app.github.freshness().outcome {
             Outcome::Success => (
                 GithubHealth::Connected,
                 " ● github connected ".to_string(),
@@ -1304,13 +1304,13 @@ pub fn github_status(
             ),
         };
     };
-    let health = match &app.github_freshness.outcome {
+    let health = match &app.github.freshness().outcome {
         Outcome::Failed(failure) if failure.rate_limited => GithubHealth::Issue,
         Outcome::Failed(_) => GithubHealth::Error,
         Outcome::Success => GithubHealth::Issue,
         Outcome::NotAttempted => GithubHealth::Unknown,
     };
-    if matches!(app.github_freshness.outcome, Outcome::Failed(_)) {
+    if matches!(app.github.freshness().outcome, Outcome::Failed(_)) {
         return (health, long, short);
     }
     let lamp = if health == GithubHealth::Unknown {

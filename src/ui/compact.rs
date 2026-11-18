@@ -418,7 +418,7 @@ mod tests {
         let mut app = App::new(repos, "t".to_string(), width, 20);
         app.view = crate::app::View::Compact;
         let now = chrono::Local::now();
-        app.github_freshness.data_time =
+        app.github.freshness_mut().data_time =
             crate::app::DataTime::At(now - chrono::Duration::minutes(1));
         let key = crate::ci::target(&app.repos[0])
             .expect("a GitHub identity")
@@ -471,7 +471,7 @@ mod tests {
         let repos = fleet(12);
         let mut app = App::new(repos, "t".to_string(), 200, 40);
         let now = chrono::Local::now();
-        app.github_freshness.data_time =
+        app.github.freshness_mut().data_time =
             crate::app::DataTime::At(now - chrono::Duration::minutes(1));
         let mut run = crate::ci::parse_runs(include_str!("../ci/fixtures/runs.json"))
             .unwrap()
