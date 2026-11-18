@@ -187,11 +187,11 @@ setters.
 - **O-D** Order: E3 and E2b before F1 (the split design's O4), or F1 first
   so they touch smaller files. Same tickets either way; the architect leans
   to the existing ruling.
-- **O-E** Added 2026-11-18 by the lead, for his review: D7's `pub(super)`
+- **O-E** Accepted 2026-11-18 14:20 ("Sounds good to me"): D7's `pub(super)`
   on the view structs' fields would hide them from `ui/ci.rs`,
   `ui/contributions.rs` and every test outside `app/`, so the move
   tickets (FZ-118 to FZ-123) land them `pub(crate)`, one step narrower
   than today; tightening to `pub(super)` with queries follows R2. The
   same rule keeps `refresh_interval` on `App` in E2b (a settings copy the
   overlay writes live), so `FetchState` has no `interval_secs` or
-  `set_interval`. Ruled on #175 and #173; he may overrule.
+  `set_interval`. Ruled on #175 and #173.

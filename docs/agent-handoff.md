@@ -27,10 +27,9 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## In flight
 
-- Lead rulings for his review: F1's `include_str!` test change (#166);
-  FZ-113's test edits (#170); O-E, `pub(crate)` in the move tickets and
-  `refresh_interval` staying on `App` (#175, #173). FZ-103 to FZ-113
-  are Done and logged.
+- Lead ruling for his review: F1's `include_str!` test change (#166).
+  The FZ-113, O-E and `refresh_interval` rulings he accepted 11-18
+  14:20 (log). FZ-103 to FZ-113 are Done and logged.
 - App-split batch filed 11-18 (architect-checked, bodies on the issues):
   FZ-116 #173 (E2b), FZ-117 #174 (A1a), FZ-118 to FZ-123 #175 to #180
   (A1c to A1h), FZ-124 #181 (A1i), FZ-125 #182 (R2, needs his design

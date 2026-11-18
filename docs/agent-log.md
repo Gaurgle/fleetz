@@ -332,6 +332,9 @@ first (from `git log --merges main`).
   background while i rest. can you do that?". Read as: file those
   issues, run the batch unattended with no questions until it lands or
   a stop condition hits.
+- 14:20 CET, on the three lead rulings (#170 test plumbing, #173
+  `refresh_interval` on `App`, #175 O-E `pub(crate)` in the move
+  tickets): "Sounds good to me". All three accepted; O-E closed.
 
 ### 2026-11-09
 
