@@ -546,7 +546,7 @@ fn the_wheel_on_the_commit_list_still_leaves_its_highlight() {
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     let mut app = notes_tree_app(W, H, 40);
     app.history_view = app::HistoryView::Commits;
-    app.detail_max_scroll.set(50);
+    app.drawn.detail_max_scroll.set(50);
     let pane = ui::panel_rects(area, &app).detail.expect("pane 2");
     let wheel = MouseEvent {
         kind: MouseEventKind::ScrollDown,
@@ -591,7 +591,7 @@ fn the_notes_tree_wheel_follows_wrapped_rows_at_his_window() {
         assert_eq!(files, 36, "{w}x{h}: one stop per file");
         // The rows the tree scrolls in: under the mode line where it is
         // pinned, the whole body where it is not.
-        let rows = app.detail_view_height.get();
+        let rows = app.drawn.detail_view_height.get();
         let (top, bottom) = (body.bottom() - rows, body.bottom() - 1);
         let pad = app::scrolloff_for(rows);
         let wheel = |kind| MouseEvent {
@@ -620,11 +620,11 @@ fn the_notes_tree_wheel_follows_wrapped_rows_at_his_window() {
                     continue;
                 };
                 // Where the follow counted it: its line less the offset.
-                let line = app.detail_row_tops.borrow()[app.detail_selected()];
+                let line = app.drawn.detail_row_tops.borrow()[app.detail_selected()];
                 if row != top + line - app.detail_scroll() {
                     misplaced.push(notch);
                 }
-                let more_below = app.detail_scroll() < app.detail_max_scroll.get();
+                let more_below = app.detail_scroll() < app.drawn.detail_max_scroll.get();
                 let more_above = app.detail_scroll() > 0;
                 let margin = match kind {
                     MouseEventKind::ScrollDown => more_below && row > bottom - pad,

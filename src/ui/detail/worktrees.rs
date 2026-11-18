@@ -36,7 +36,7 @@ pub(super) fn render_worktree_inspector(frame: &mut Frame, area: Rect, app: &App
         .flat_map(|l| wrap_line(l, inner.width as usize))
         .collect();
     let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
-    app.inspector_max_scroll.set(max_scroll);
+    app.drawn.inspector_max_scroll.set(max_scroll);
     let scroll = app.inspector_scroll.min(max_scroll);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), inner);

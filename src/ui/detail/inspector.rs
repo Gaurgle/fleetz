@@ -212,7 +212,7 @@ pub(super) fn render_inspector(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(rect, lines)| (lines.len() as u16).saturating_sub(rect.height))
         .max()
         .unwrap_or(0);
-    app.inspector_max_scroll.set(max_scroll);
+    app.drawn.inspector_max_scroll.set(max_scroll);
     let scroll = app.inspector_scroll.min(max_scroll);
     frame.render_widget(block, area);
     for (rect, lines) in wrapped {
@@ -285,7 +285,7 @@ fn render_ci_inspector(frame: &mut Frame, area: Rect, app: &App) {
     // A held whole log is wrapped once per job and width and kept, and only
     // the rows on screen are handed to the paragraph: up to 5000 lines
     // (`ci::LOG_LINE_CAP`) were re-wrapped and copied on every frame.
-    let mut cache = app.ci_log_wrap.borrow_mut();
+    let mut cache = app.drawn.ci_log_wrap.borrow_mut();
     let log: &[Line<'static>] = match crate::ui::ci::shown_log(app) {
         Some((job_id, log)) => {
             let fresh = cache
@@ -310,13 +310,15 @@ fn render_ci_inspector(frame: &mut Frame, area: Rect, app: &App) {
     let max_scroll = u16::try_from(total)
         .unwrap_or(u16::MAX)
         .saturating_sub(inner.height);
-    app.inspector_max_scroll.set(max_scroll);
+    app.drawn.inspector_max_scroll.set(max_scroll);
     if let Some(lines) = marked
-        && app.ci_job_follow.get() == crate::app::JobFollow::Due
+        && app.drawn.ci_job_follow.get() == crate::app::JobFollow::Due
     {
         let rows = row_starts[lines.start]..row_starts[lines.end];
         let followed = follow_rows(app.ci_body_scroll(), rows, inner.height).min(max_scroll);
-        app.ci_job_follow.set(crate::app::JobFollow::At(followed));
+        app.drawn
+            .ci_job_follow
+            .set(crate::app::JobFollow::At(followed));
     }
     let scroll = app.ci_body_scroll().min(max_scroll);
     let visible: Vec<Line> = head

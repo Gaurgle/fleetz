@@ -289,7 +289,7 @@ pub(super) fn render_changes_inspector(frame: &mut Frame, area: Rect, app: &App)
     let max_scroll = u16::try_from(lines.len())
         .unwrap_or(u16::MAX)
         .saturating_sub(inner.height);
-    app.inspector_max_scroll.set(max_scroll);
+    app.drawn.inspector_max_scroll.set(max_scroll);
     let scroll = app.inspector_scroll.min(max_scroll);
     let visible: Vec<Line> = lines
         .into_iter()

@@ -663,7 +663,7 @@ pub fn render_inspector(frame: &mut Frame, area: Rect, app: &App, digest: &Diges
         app.digest_selected
             .min(digest.lines.len().saturating_sub(1)),
     ) else {
-        app.inspector_max_scroll.set(0);
+        app.drawn.inspector_max_scroll.set(0);
         frame.render_widget(
             Paragraph::new(dim(format!("nothing moved {}", digest.label))),
             inner,
@@ -673,7 +673,8 @@ pub fn render_inspector(frame: &mut Frame, area: Rect, app: &App, digest: &Diges
     let facts = facts(app, line);
     let list = list_entries(app, digest, line);
     let entries = list.as_ref().map_or(0, |(_, e)| e.len());
-    app.inspector_max_scroll
+    app.drawn
+        .inspector_max_scroll
         .set(u16::try_from(entries.saturating_sub(1)).unwrap_or(u16::MAX));
     let offset = usize::from(app.inspector_scroll).min(entries.saturating_sub(1));
 

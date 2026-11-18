@@ -95,7 +95,7 @@ pub(super) fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         lines.extend(summary);
         frame.render_widget(Paragraph::new(lines), box_area);
         // The footer, drawn after, leaves the summary and the message out.
-        app.fleet_drawn.set(true);
+        app.drawn.fleet_drawn.set(true);
     }
     let rows = Layout::vertical([
         Constraint::Length(1),
@@ -119,7 +119,7 @@ pub(super) fn render_repo_list(frame: &mut Frame, area: Rect, app: &App) {
     state.select(selected_display_idx);
     frame.render_stateful_widget(list, rows[2], &mut state);
     // Where the rows landed, for clicks and hovers (FZ-45).
-    app.list_hits.set(crate::app::ListHits {
+    app.drawn.list_hits.set(crate::app::ListHits {
         area: rows[2],
         offset: state.offset(),
     });
@@ -631,7 +631,7 @@ mod tests {
         let pane1 = crate::ui::panel_rects(Rect::new(0, 0, 120, 50), &app).repo_list;
         let inner = Rect::new(pane1.x + 2, pane1.y + 1, pane1.width - 4, pane1.height - 2);
         let box_h = summary_box_lines(&app, inner.width as usize).len() as u16 + 1;
-        let list = app.list_hits.get();
+        let list = app.drawn.list_hits.get();
         assert_eq!(list.area.y, inner.y + 2, "under the strip and its divider");
         assert_eq!(list.area.bottom() + box_h, inner.bottom(), "{list:?}");
         let divider: String = rows[usize::from(list.area.bottom())]

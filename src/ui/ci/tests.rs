@@ -479,7 +479,7 @@ fn a_click_on_a_run_row_selects_it() {
     let y = (0..50)
         .find(|&y| row_text(&buffer, y).contains(title.as_str()))
         .expect("third run drawn");
-    let hits = app.detail_hits.borrow().clone();
+    let hits = app.drawn.detail_hits.borrow().clone();
     let click = hits.at(hits.body.x + 4, y).expect("a run row");
     app.click_detail(&click);
     assert_eq!(app.detail_selected(), 2);
@@ -915,7 +915,7 @@ fn the_whole_log_is_wrapped_once_per_job_and_width() {
     app.ci_body = CiBody::Log;
     draw(&app, 160, 50);
     let width = {
-        let mut kept = app.ci_log_wrap.borrow_mut();
+        let mut kept = app.drawn.ci_log_wrap.borrow_mut();
         let wrap = kept.as_mut().expect("wrapped on the first frame");
         assert_eq!(wrap.job_id, FAILED_JOB);
         wrap.lines[0] = Line::from("KEPT ROW");
@@ -933,7 +933,10 @@ fn the_whole_log_is_wrapped_once_per_job_and_width() {
         rows.iter().all(|r| !r.contains("KEPT ROW")),
         "a new width wraps again"
     );
-    assert_ne!(app.ci_log_wrap.borrow().as_ref().unwrap().width, width);
+    assert_ne!(
+        app.drawn.ci_log_wrap.borrow().as_ref().unwrap().width,
+        width
+    );
 }
 
 /// Another job's log at the same width is wrapped afresh, never drawn
@@ -956,7 +959,7 @@ fn another_jobs_log_at_the_same_width_is_wrapped_afresh() {
     app.ci_body = CiBody::Log;
     draw(&app, 160, 50);
     {
-        let mut kept = app.ci_log_wrap.borrow_mut();
+        let mut kept = app.drawn.ci_log_wrap.borrow_mut();
         let wrap = kept.as_mut().expect("wrapped on the first frame");
         assert_eq!(wrap.job_id, FAILED_JOB);
         wrap.lines[0] = Line::from("KEPT ROW");
@@ -970,7 +973,7 @@ fn another_jobs_log_at_the_same_width_is_wrapped_afresh() {
         "the first job's rows are gone: {rows:#?}"
     );
     assert!(rows.iter().any(|r| r.contains("the second job's own log")));
-    assert_eq!(app.ci_log_wrap.borrow().as_ref().unwrap().job_id, 7);
+    assert_eq!(app.drawn.ci_log_wrap.borrow().as_ref().unwrap().job_id, 7);
 }
 
 /// An app whose next `claim_ci_details` claims the second run's jobs
@@ -1242,7 +1245,7 @@ fn the_inspector_border_has_no_tabs_without_a_highlighted_run() {
 fn a_run_change_resets_every_bodys_scroll_and_the_mark() {
     let mut app = on_failed_run();
     app.focused_panel = FocusedPanel::Inspector;
-    app.inspector_max_scroll.set(100);
+    app.drawn.inspector_max_scroll.set(100);
     app.ci_body = CiBody::Log;
     app.scroll_inspector(5);
     app.ci_body = CiBody::Script;
@@ -1283,7 +1286,7 @@ fn j_and_k_move_the_job_mark_in_the_jobs_body() {
     app.inspector_nav(1);
     assert_eq!(app.ci_marked_job_index(), Some(1), "clamped at the last");
     app.ci_body = CiBody::Log;
-    app.inspector_max_scroll.set(100);
+    app.drawn.inspector_max_scroll.set(100);
     app.inspector_nav(1);
     assert_eq!(app.ci_marked_job_index(), Some(1), "log scrolls instead");
     assert_eq!(app.ci_body_scroll(), 1);

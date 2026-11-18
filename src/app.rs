@@ -11,6 +11,7 @@ pub use crate::engine::{
 };
 pub(crate) use crate::engine::{RemoteKey, carrier_key};
 
+mod feedback;
 mod overlays;
 mod query;
 
@@ -306,17 +307,9 @@ pub struct App {
     /// They are four answers to different questions, so they take turns
     /// instead of queueing.
     pub history_view: HistoryView,
-    /// Scroll offset per history view, indexed by `HistoryView::index`.
-    ///
-    /// Per view rather than shared, because a shared offset is wrong the
-    /// moment you switch back to something you had already scrolled.
-    ///
-    /// `Cell` for the same reason `contrib_scroll` is one: the render pass is
-    /// the only place that knows which screen row the selection landed on, so
-    /// it is the only place that can scroll to keep it visible. Walking a
-    /// cursor through two hundred rows the pane never followed is what made
-    /// the view look frozen.
-    pub detail_scrolls: [std::cell::Cell<u16>; HistoryView::COUNT],
+    /// What the last frame measured and drew, written by the renderer
+    /// through `&App` (`app::feedback::RenderFeedback`).
+    pub(crate) drawn: feedback::RenderFeedback,
     /// Index of the row highlighted in each history view, whose commit the
     /// inspector shows. Reset to 0 when the selected repo changes.
     ///
@@ -326,56 +319,11 @@ pub struct App {
     pub detail_selections: [usize; HistoryView::COUNT],
     /// Scroll offset for the inspector pane (long commit bodies).
     pub inspector_scroll: u16,
-    /// Largest useful scroll offset for each pane, measured by the renderer,
-    /// which is the only place content length and pane height are both known.
-    /// The scroll handlers clamp against these instead of a fixed cap.
-    ///
-    /// `Cell` because rendering takes `&App`: this is the render pass reporting
-    /// a measurement back, not state the input layer owns. Both start at 0 and
-    /// are written on the first frame, which is always drawn before any input
-    /// is processed.
-    pub detail_max_scroll: std::cell::Cell<u16>,
-    /// Whether this frame drew the fleet's summary and activity in pane 1's
-    /// summary box (FZ-95; pane 2's fleet column in FZ-93). Reset
-    /// at the start of every frame and read by the footer, drawn after the
-    /// panes, which carries the summary and the message itself when nothing
-    /// else did (a pane 1 too short for the box), so an action never ends
-    /// in silence.
-    pub fleet_drawn: std::cell::Cell<bool>,
-    /// Set when the cursor moves, cleared once the renderer has scrolled to
-    /// show it.
-    ///
-    /// Without it the renderer re-centred on the selection every frame, which
-    /// fought free scrolling to a standstill: `k` decremented the offset and
-    /// the next frame put it straight back, so the pane looked frozen. The
-    /// pane should chase the cursor when the cursor moves, and otherwise go
-    /// where it is told.
-    pub follow_selection: std::cell::Cell<bool>,
-    /// Body row of every selectable entry in the *active* history view, in
-    /// list order, recorded by the renderer.
-    ///
-    /// The graph's entries are its commit blocks, whose height depends on the
-    /// message, the pane width and the wrap; the other views' are their list
-    /// rows, which sit under however many sections the repo happened to draw.
-    /// Either way the render pass is the only place that knows, which is why
-    /// this is a `RefCell` for the same reason the scroll offsets are `Cell`s:
-    /// the renderer reporting a measurement back, not state the input layer
-    /// owns. Only the active view is drawn, so only its rows are held.
-    pub detail_row_tops: std::cell::RefCell<Vec<u16>>,
-    /// Where the detail pane's last frame drew its rows and their hashes, so
-    /// a click resolves against what is on screen (FZ-37). Recorded by the
-    /// renderer for the reason `detail_row_tops` is.
-    pub detail_hits: std::cell::RefCell<crate::ui::detail::DetailHits>,
     /// Body row the graph view highlights. The graph's cursor is a *row*, not
     /// a commit: its blocks run twenty rows and more, so a commit-granular
     /// cursor could only jump a whole block at a time and left the highlight
     /// nowhere while you read through one.
     pub graph_cursor: u16,
-    /// Height of the detail pane's scrolling body, measured by the renderer.
-    /// The scrolloff arithmetic needs it, and the renderer is the only place
-    /// the pane's height and the header's are both known.
-    pub detail_view_height: std::cell::Cell<u16>,
-    pub inspector_max_scroll: std::cell::Cell<u16>,
     /// Repaint on the next loop pass. Set by every state change; ticks also
     /// force a paint while a spinner is visible, and every
     /// `SLOW_REPAINT_TICKS` ticks in watch mode or while applying, so the
@@ -426,14 +374,6 @@ pub struct App {
     /// move seeds the cursor on today, and the title falls back to
     /// `ui::contributions::period_total`.
     pub contrib_cursor: Option<usize>,
-    /// Leftmost visible week. The grid is wider than any terminal at the
-    /// square size we draw, so it scrolls instead of shrinking. Written by
-    /// the renderer (which is the only place the visible width is known) as
-    /// well as by input, hence the `Cell`.
-    pub contrib_scroll: std::cell::Cell<usize>,
-    /// Weeks the last frame could actually fit, measured by the renderer so
-    /// the scroll keys and the cursor have something real to clamp against.
-    pub contrib_visible_weeks: std::cell::Cell<usize>,
     /// Mirror of the `persist_pane_sizes` config key: write the two above back
     /// on exit and restore them next launch.
     pub persist_pane_sizes: bool,
@@ -455,10 +395,6 @@ pub struct App {
     /// about how you want `info` to read, not a fact about one repo. Resets on
     /// launch, like the pane sizes.
     pub expand_remote_branches: bool,
-    /// `expand_remote_branches` as the detail pane last drew it, so the frame
-    /// that sees it flip on is the one that reveals the opened rows (FZ-55).
-    /// A `Cell` because the renderer records it, as `detail_view_height`.
-    pub remotes_drawn_expanded: std::cell::Cell<bool>,
     /// Screen column the in-progress contribution-strip pan is measured from,
     /// or None when no drag is underway. Separate from `dragging`, which owns
     /// pane resizing: a pan moves content inside a pane rather than moving
@@ -535,10 +471,6 @@ pub struct App {
     /// The job the `jobs` body marks, which the `log` body shows, once `j`
     /// or `k` moved it; `None` is the first failed job, else the first.
     pub ci_job_mark: Option<usize>,
-    /// Whether the `jobs` body's next frame brings the marked job into
-    /// view, and the offset it chose (`JobFollow`). Written by the renderer,
-    /// which alone knows where the job's rows fall.
-    pub ci_job_follow: std::cell::Cell<JobFollow>,
     /// `[`/`]` pressed on the focused inspector cycled pane 2's views, and
     /// no other key came since: the streak keeps cycling views on arriving
     /// in `ci` rather than stepping the run bodies there.
@@ -552,10 +484,6 @@ pub struct App {
     /// The run the scrolls and the mark belong to, and since when it is
     /// highlighted, for the dwell before the inspector fetches anything.
     pub ci_inspected: Option<(u64, std::time::Instant)>,
-    /// The `log` body's whole log as last wrapped, written by the renderer
-    /// (`RefCell` for the reason `detail_row_tops` is one). A held log never
-    /// changes, so its job id and the width are the whole key.
-    pub ci_log_wrap: std::cell::RefCell<Option<CiLogWrap>>,
     /// The `worktrees` view's newest commits per worktree, keyed by the
     /// worktree's path as the row holds it, for the session (FZ-77). Read
     /// only while the view is on screen (`worktrees_wanted`).
@@ -588,19 +516,6 @@ pub struct App {
     /// The reader's scroll offset (FZ-62), its own rather than the
     /// inspector's. Reset when the file changes.
     pub reader_scroll: u16,
-    /// Largest useful reader offset, measured by the renderer for the
-    /// reason `inspector_max_scroll` is.
-    pub reader_max_scroll: std::cell::Cell<u16>,
-    /// Rows the reader's body drew on the last frame: one `H`/`L` page.
-    pub reader_view_height: std::cell::Cell<u16>,
-    /// Columns the reader's body drew on the last frame: the width a
-    /// markdown body is rendered at (FZ-59), off the UI thread.
-    pub reader_width: std::cell::Cell<u16>,
-    /// Columns of the main area the repo list and the right column split,
-    /// as the key handler last measured it; 0 before it has. `<` and `>`
-    /// step from the list width this draws (FZ-69), which differs from
-    /// `repo_list_pct` where the default yields to the cap.
-    pub main_area_width: std::cell::Cell<u16>,
     /// `p` in the `notes` layout: the reader shows markdown as its source.
     /// One flag for the session, not per file; other kinds are always raw.
     pub reader_raw: bool,
@@ -618,10 +533,6 @@ pub struct App {
     /// The work hours slot boundaries are cut at, copied from `Config` at
     /// startup as the GitHub poll interval is.
     pub work_hours: (u8, u8),
-    /// Where the repo list's last frame drew its rows, so a click or a hover
-    /// resolves against what is on screen. Written by the renderer for the
-    /// reason `detail_hits` is.
-    pub list_hits: std::cell::Cell<ListHits>,
     /// The section header under the resting pointer and since when; the
     /// tick lands on it after `HOVER_DWELL` (`settle_hover`).
     pub hover_pending: Option<(crate::digest::Section, std::time::Instant)>,
@@ -1293,17 +1204,10 @@ impl App {
             active_group: None,
             focused_panel: FocusedPanel::RepoList,
             history_view: HistoryView::default(),
-            detail_scrolls: std::array::from_fn(|_| std::cell::Cell::new(0)),
+            drawn: feedback::RenderFeedback::new(),
             detail_selections: [0; HistoryView::COUNT],
             inspector_scroll: 0,
-            detail_max_scroll: std::cell::Cell::new(0),
-            fleet_drawn: std::cell::Cell::new(false),
-            follow_selection: std::cell::Cell::new(false),
-            detail_row_tops: std::cell::RefCell::new(Vec::new()),
-            detail_hits: std::cell::RefCell::new(Default::default()),
             graph_cursor: 0,
-            detail_view_height: std::cell::Cell::new(0),
-            inspector_max_scroll: std::cell::Cell::new(0),
             needs_redraw: true,
             spinner_frame: 0,
             blink_on: true,
@@ -1318,15 +1222,10 @@ impl App {
             contrib_author: None,
             contrib_cell: CellSize::default(),
             contrib_cursor: None,
-            // Out of range on purpose: the renderer clamps it down to
-            // "newest week at the right edge", which is where the grid opens.
-            contrib_scroll: std::cell::Cell::new(crate::contributions::WEEKS),
-            contrib_visible_weeks: std::cell::Cell::new(crate::contributions::WEEKS),
             persist_pane_sizes: false,
             show_pr_detail: false,
             dragging: None,
             expand_remote_branches: false,
-            remotes_drawn_expanded: std::cell::Cell::new(false),
             contrib_drag: None,
             loading: false,
             fetch: FetchState::new(crate::config::Config::default().fetch_cap_bytes()),
@@ -1349,12 +1248,10 @@ impl App {
             ci_body: CiBody::default(),
             ci_body_scrolls: [0; 3],
             ci_job_mark: None,
-            ci_job_follow: std::cell::Cell::new(JobFollow::Free),
             brackets_cycling_views: false,
             pending_yank: false,
             yank_flash: YankFlash::default(),
             ci_inspected: None,
-            ci_log_wrap: std::cell::RefCell::new(None),
             worktree_logs: std::collections::HashMap::new(),
             worktree_logs_generation: 0,
             worktrees_cursor: None,
@@ -1365,17 +1262,12 @@ impl App {
             note_body: None,
             todoz_fallback_said: false,
             reader_scroll: 0,
-            reader_max_scroll: std::cell::Cell::new(0),
-            reader_view_height: std::cell::Cell::new(0),
-            reader_width: std::cell::Cell::new(0),
-            main_area_width: std::cell::Cell::new(0),
             reader_raw: false,
             list_stop: None,
             digest_window: crate::digest::DigestWindow::default(),
             digest_selected: 0,
             digest_logs: std::collections::HashMap::new(),
             work_hours: (9, 18),
-            list_hits: std::cell::Cell::new(ListHits::default()),
             hover_pending: None,
             changes: std::collections::HashMap::new(),
             changes_generation: 0,
@@ -1824,7 +1716,7 @@ impl App {
         if !self.ci_run_is_inspected() {
             return 0;
         }
-        match (self.ci_body, self.ci_job_follow.get()) {
+        match (self.ci_body, self.drawn.ci_job_follow.get()) {
             (CiBody::Jobs, JobFollow::At(followed)) => followed,
             _ => self.ci_body_scrolls[self.ci_body.index()],
         }
@@ -1841,7 +1733,7 @@ impl App {
             self.ci_inspected = run.map(|id| (id, instant));
             self.ci_body_scrolls = [0; 3];
             self.ci_job_mark = None;
-            self.ci_job_follow.set(JobFollow::Due);
+            self.drawn.ci_job_follow.set(JobFollow::Due);
         }
         if !self.ci_wanted() {
             return;
@@ -2309,7 +2201,7 @@ impl App {
     /// drawn width, when the file is markdown and the reader has drawn.
     /// Rendered whatever `reader_raw` says, so `p` flips at once.
     fn markdown_render_width(&self) -> Option<u16> {
-        let width = self.reader_width.get();
+        let width = self.drawn.reader_width.get();
         let markdown = self
             .notes_highlighted_file()
             .is_some_and(|f| f.kind().is_markdown());
@@ -2414,7 +2306,7 @@ impl App {
     /// Scroll the reader by `delta` lines, clamped to what the last frame
     /// measured.
     pub fn scroll_reader(&mut self, delta: i32) {
-        let max = i32::from(self.reader_max_scroll.get());
+        let max = i32::from(self.drawn.reader_max_scroll.get());
         self.reader_scroll = (i32::from(self.reader_scroll) + delta).clamp(0, max) as u16;
         self.needs_redraw = true;
     }
@@ -2433,7 +2325,7 @@ impl App {
     /// `H` (`-1`) or `L` (`1`): scroll the reader one page of the height its
     /// last frame drew, focus unmoved.
     pub fn page_reader(&mut self, pages: i32) {
-        let page = i32::from(self.reader_view_height.get().max(1));
+        let page = i32::from(self.drawn.reader_view_height.get().max(1));
         self.scroll_reader(pages * page);
     }
 
@@ -2526,7 +2418,7 @@ impl App {
         // The follow starts from where the body stands, not where it was
         // last scrolled by hand.
         self.ci_body_scrolls[CiBody::Jobs.index()] = self.ci_body_scroll();
-        self.ci_job_follow.set(JobFollow::Due);
+        self.drawn.ci_job_follow.set(JobFollow::Due);
         self.needs_redraw = true;
     }
 
@@ -2676,11 +2568,11 @@ impl App {
         let weeks = ((calendar.start() - before).num_days() / 7) as usize;
         if weeks > 0 {
             self.contrib_cursor = self.contrib_cursor.map(|c| c.saturating_sub(7 * weeks));
-            let newest_edge =
-                crate::contributions::WEEKS.saturating_sub(self.contrib_visible_weeks.get().max(1));
-            let scroll = self.contrib_scroll.get();
+            let newest_edge = crate::contributions::WEEKS
+                .saturating_sub(self.drawn.contrib_visible_weeks.get().max(1));
+            let scroll = self.drawn.contrib_scroll.get();
             if scroll < newest_edge {
-                self.contrib_scroll.set(scroll.saturating_sub(weeks));
+                self.drawn.contrib_scroll.set(scroll.saturating_sub(weeks));
             }
         }
         self.needs_redraw = true;
@@ -2877,7 +2769,7 @@ impl App {
         self.contrib_cursor = Some(self.contrib_last_slot(today));
         // Out of range on purpose, as in `open_contributions`: the renderer
         // clamps it to "newest week at the right edge", which holds today.
-        self.contrib_scroll.set(crate::contributions::WEEKS);
+        self.drawn.contrib_scroll.set(crate::contributions::WEEKS);
     }
 
     pub fn visible_repos(&self) -> Vec<(usize, &RepoStatus)> {
@@ -2953,7 +2845,7 @@ impl App {
     /// drawn, and stepping it blind made `<` widen the list.
     pub fn resize_repo_list(&mut self, delta: i16) {
         use crate::ui::detail::repo_list_width;
-        let area = self.main_area_width.get();
+        let area = self.drawn.main_area_width.get();
         let pct = self.repo_list_pct;
         let drawn = repo_list_width(area, pct);
         // The percentage that draws `drawn`, rounded up as a drag converts
@@ -3587,13 +3479,13 @@ impl App {
     /// frame actually measured.
     /// On a run (`inspects_ci_run`) it scrolls the shown body's own offset.
     pub fn scroll_inspector(&mut self, delta: i32) {
-        let max = self.inspector_max_scroll.get() as i32;
+        let max = self.drawn.inspector_max_scroll.get() as i32;
         if self.inspects_ci_run() {
             self.sync_ci_inspector(std::time::Instant::now());
             let from = i32::from(self.ci_body_scroll());
             self.ci_body_scrolls[self.ci_body.index()] = (from + delta).clamp(0, max) as u16;
             if self.ci_body == CiBody::Jobs {
-                self.ci_job_follow.set(JobFollow::Free);
+                self.drawn.ci_job_follow.set(JobFollow::Free);
             }
             return;
         }
@@ -3807,7 +3699,7 @@ impl App {
         // "newest week at the right edge". Computing it here from the last
         // measured width would anchor on the oldest weeks the first time,
         // before any frame has been drawn.
-        self.contrib_scroll.set(crate::contributions::WEEKS);
+        self.drawn.contrib_scroll.set(crate::contributions::WEEKS);
     }
 
     /// The last selectable grid slot for `today`: the grid stops at today,
@@ -3859,12 +3751,12 @@ impl App {
 
     /// Scroll the grid the minimum amount that brings `week` back on screen.
     fn scroll_cursor_into_view(&self, week: usize) {
-        let visible = self.contrib_visible_weeks.get().max(1);
-        let first = self.contrib_scroll.get();
+        let visible = self.drawn.contrib_visible_weeks.get().max(1);
+        let first = self.drawn.contrib_scroll.get();
         if week < first {
-            self.contrib_scroll.set(week);
+            self.drawn.contrib_scroll.set(week);
         } else if week >= first + visible {
-            self.contrib_scroll.set(week + 1 - visible);
+            self.drawn.contrib_scroll.set(week + 1 - visible);
         }
     }
 
@@ -3888,10 +3780,10 @@ impl App {
 
     /// Scroll the grid by whole weeks without moving the cursor.
     pub fn scroll_contributions(&mut self, delta: i32) {
-        let visible = self.contrib_visible_weeks.get().max(1);
+        let visible = self.drawn.contrib_visible_weeks.get().max(1);
         let max = crate::contributions::WEEKS.saturating_sub(visible);
-        let next = (self.contrib_scroll.get() as i32 + delta).clamp(0, max as i32) as usize;
-        self.contrib_scroll.set(next);
+        let next = (self.drawn.contrib_scroll.get() as i32 + delta).clamp(0, max as i32) as usize;
+        self.drawn.contrib_scroll.set(next);
         self.needs_redraw = true;
     }
 
@@ -3923,7 +3815,7 @@ impl App {
         if self.history_view == HistoryView::Graph {
             return self.move_graph_cursor(delta);
         }
-        let max = self.detail_max_scroll.get() as i32;
+        let max = self.drawn.detail_max_scroll.get() as i32;
         let current = self.detail_scroll() as i32;
         self.set_detail_scroll((current + delta).clamp(0, max) as u16);
     }
@@ -3950,7 +3842,7 @@ impl App {
     /// Deliberately does not set `follow_selection`: that would ask the next
     /// frame to scroll the entry into view, undoing the scroll that chose it.
     fn reenter_selection(&mut self) -> bool {
-        let height = self.detail_view_height.get();
+        let height = self.drawn.detail_view_height.get();
         if height == 0 {
             return false;
         }
@@ -3962,13 +3854,13 @@ impl App {
         let first = scroll + if scroll > 0 { pad } else { 0 };
         let last = scroll + height
             - 1
-            - if scroll < self.detail_max_scroll.get() {
+            - if scroll < self.drawn.detail_max_scroll.get() {
                 pad
             } else {
                 0
             };
 
-        let tops = self.detail_row_tops.borrow();
+        let tops = self.drawn.detail_row_tops.borrow();
         let Some(&row) = tops.get(self.detail_selected()) else {
             return false;
         };
@@ -4009,7 +3901,7 @@ impl App {
     /// Rows in the detail pane's scrolling body, as the last frame measured
     /// it: the largest useful offset plus the height it leaves on screen.
     fn graph_body_rows(&self) -> u16 {
-        self.detail_max_scroll.get() + self.detail_view_height.get()
+        self.drawn.detail_max_scroll.get() + self.drawn.detail_view_height.get()
     }
 
     /// Nudge the scroll offset so the cursor sits at least `SCROLLOFF`
@@ -4017,7 +3909,7 @@ impl App {
     /// that "otherwise" is what makes the highlight, not the text, move
     /// through the middle of the pane.
     fn keep_graph_cursor_in_view(&mut self) {
-        let height = self.detail_view_height.get();
+        let height = self.drawn.detail_view_height.get();
         if height == 0 {
             return;
         }
@@ -4031,7 +3923,7 @@ impl App {
         let scroll = self
             .detail_scroll()
             .clamp(lowest, highest)
-            .min(self.detail_max_scroll.get());
+            .min(self.drawn.detail_max_scroll.get());
         self.set_detail_scroll(scroll);
     }
 
@@ -4043,7 +3935,7 @@ impl App {
     /// below the fold. A row already comfortably on screen is left alone, so
     /// stepping through commits that share a screen does not jerk the view.
     fn show_graph_cursor_from_top(&mut self) {
-        let height = self.detail_view_height.get();
+        let height = self.drawn.detail_view_height.get();
         if height == 0 {
             return;
         }
@@ -4051,7 +3943,9 @@ impl App {
         let scroll = self.detail_scroll();
         let cursor = self.graph_cursor;
         if cursor < scroll + pad || cursor > scroll + height - 1 - pad {
-            let top = cursor.saturating_sub(pad).min(self.detail_max_scroll.get());
+            let top = cursor
+                .saturating_sub(pad)
+                .min(self.drawn.detail_max_scroll.get());
             self.set_detail_scroll(top);
         }
     }
@@ -4064,6 +3958,7 @@ impl App {
     fn sync_graph_selection(&mut self) {
         let cursor = self.graph_cursor;
         let block = self
+            .drawn
             .detail_row_tops
             .borrow()
             .iter()
@@ -4161,12 +4056,12 @@ impl App {
     /// caller wants the current one; the arrays exist so switching views does
     /// not lose where you were in the one you left.
     pub fn detail_scroll(&self) -> u16 {
-        self.detail_scrolls[self.history_view.index()].get()
+        self.drawn.detail_scrolls[self.history_view.index()].get()
     }
 
     /// Takes `&self` because the renderer sets it too -- see the field.
     pub fn set_detail_scroll(&self, value: u16) {
-        self.detail_scrolls[self.history_view.index()].set(value);
+        self.drawn.detail_scrolls[self.history_view.index()].set(value);
     }
 
     pub fn detail_selected(&self) -> usize {
@@ -4185,7 +4080,7 @@ impl App {
         // edge, which the very next scroll would undo by pulling the scrolloff
         // margin back.
         if self.history_view == HistoryView::Graph {
-            let top = self.detail_row_tops.borrow().get(value).copied();
+            let top = self.drawn.detail_row_tops.borrow().get(value).copied();
             if let Some(top) = top {
                 self.graph_cursor = top;
                 self.show_graph_cursor_from_top();
@@ -4194,7 +4089,7 @@ impl App {
         }
         // Any cursor move asks the pane to follow. Scrolling does not, which
         // is what keeps the two from fighting each other to a standstill.
-        self.follow_selection.set(true);
+        self.drawn.follow_selection.set(true);
     }
 
     /// Step to the next history view, wrapping, or the previous one.
@@ -4374,7 +4269,7 @@ impl App {
         if self.view != View::Detail {
             return None;
         }
-        let i = self.list_hits.get().at(col, row)?;
+        let i = self.drawn.list_hits.get().at(col, row)?;
         let hit = self.list_rows().get(i).copied()?;
         self.is_stop(hit).then_some(hit)
     }
@@ -4537,7 +4432,7 @@ impl App {
     /// Scroll the inspector's digest line detail. Not `scroll_inspector`,
     /// which in the `ci` view scrolls a run body the digest hides.
     pub fn scroll_digest_inspector(&mut self, delta: i32) {
-        let max = self.inspector_max_scroll.get() as i32;
+        let max = self.drawn.inspector_max_scroll.get() as i32;
         self.inspector_scroll = (self.inspector_scroll as i32 + delta).clamp(0, max) as u16;
         self.needs_redraw = true;
     }

@@ -655,6 +655,7 @@ fn a_wide_worktree_row_stays_one_row_and_the_commit_tops_hold() {
             .position(|l| l.trim().is_empty())
             .expect("a blank row closes the branches block");
     let first_top = *app
+        .drawn
         .detail_row_tops
         .borrow()
         .first()
@@ -1597,13 +1598,13 @@ fn the_graph_highlight_is_a_drawn_row_at_every_offset() {
 
     let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
     term.draw(|f| crate::ui::render(f, &app)).unwrap();
-    assert!(app.detail_max_scroll.get() > 0, "nothing to scroll");
+    assert!(app.drawn.detail_max_scroll.get() > 0, "nothing to scroll");
     let pane = crate::ui::panel_rects(term.get_frame().area(), &app)
         .detail
         .expect("the graph view draws a detail pane");
 
     let mut rows_seen = std::collections::BTreeSet::new();
-    for _ in 0..app.detail_max_scroll.get() {
+    for _ in 0..app.drawn.detail_max_scroll.get() {
         app.scroll_detail(1);
         term.draw(|f| crate::ui::render(f, &app)).unwrap();
         let buf = term.backend().buffer().clone();
@@ -1707,7 +1708,7 @@ fn the_inspector_scrolls_to_the_end_of_a_long_body() {
 
     let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
     term.draw(|f| crate::ui::render(f, &app)).unwrap();
-    let max = app.inspector_max_scroll.get();
+    let max = app.drawn.inspector_max_scroll.get();
     assert!(max > 0, "the body did not overflow the inspector");
 
     app.scroll_inspector(max as i32);
@@ -1916,7 +1917,7 @@ fn a_step_after_scrolling_brings_the_selection_back_onto_the_pane() {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         term.draw(|f| crate::ui::render(f, &app)).unwrap();
         assert!(
-            app.detail_max_scroll.get() > 0,
+            app.drawn.detail_max_scroll.get() > 0,
             "{} has nothing to scroll",
             view.label()
         );
@@ -1930,7 +1931,7 @@ fn a_step_after_scrolling_brings_the_selection_back_onto_the_pane() {
         };
 
         let before = app.detail_selected();
-        for _ in 0..app.detail_max_scroll.get() {
+        for _ in 0..app.drawn.detail_max_scroll.get() {
             app.scroll_detail(1);
         }
         term.draw(|f| crate::ui::render(f, &app)).unwrap();
@@ -1986,7 +1987,7 @@ fn rendering_the_graph_view_reports_where_each_block_starts() {
     let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
     term.draw(|f| crate::ui::render(f, &app)).unwrap();
 
-    let tops = app.detail_row_tops.borrow().clone();
+    let tops = app.drawn.detail_row_tops.borrow().clone();
     assert_eq!(tops.len(), 20, "one top per commit block");
     assert!(tops.windows(2).all(|w| w[0] < w[1]), "tops must ascend");
 
@@ -2451,16 +2452,20 @@ fn the_rendered_reader_scrolls_by_rendered_rows() {
     let body: Vec<String> = (1..=40).map(|i| format!("line {i}")).collect();
     let body = body.join("\n");
     land_rendered(&mut app, &body);
-    let rows = crate::ui::markdown::render_markdown(&body, app.reader_width.get()).len();
+    let rows = crate::ui::markdown::render_markdown(&body, app.drawn.reader_width.get()).len();
     reader_buffer(&app);
-    let height = app.reader_view_height.get();
+    let height = app.drawn.reader_view_height.get();
     let want = u16::try_from(rows).unwrap().saturating_sub(height);
-    assert_eq!(app.reader_max_scroll.get(), want, "{rows} rendered rows");
+    assert_eq!(
+        app.drawn.reader_max_scroll.get(),
+        want,
+        "{rows} rendered rows"
+    );
     assert!(rows < 40, "one paragraph, {rows} rows");
 
     app.toggle_reader_raw();
     reader_buffer(&app);
-    assert_eq!(app.reader_max_scroll.get(), 40 - height, "raw rows");
+    assert_eq!(app.drawn.reader_max_scroll.get(), 40 - height, "raw rows");
 }
 
 /// The `notes` layout as painted and as hit-tested agree: a click inside
@@ -2662,12 +2667,17 @@ fn a_click_on_the_second_file_selects_it_inside_pane_2() {
         })
         .expect("b.md drawn in the tree");
     assert_eq!(app.detail_selected(), 0);
-    let body = app.detail_hits.borrow().body;
+    let body = app.drawn.detail_hits.borrow().body;
     assert!(
         body.right() < reader.x,
         "the hit map is the tree's, left of the preview: {body:?}, {reader:?}"
     );
-    let click = app.detail_hits.borrow().at(x, y).expect("a hit on b.md");
+    let click = app
+        .drawn
+        .detail_hits
+        .borrow()
+        .at(x, y)
+        .expect("a hit on b.md");
     app.click_detail(&click);
     assert_eq!(app.detail_selected(), 1, "the second file is selected");
     assert_eq!(
@@ -2724,7 +2734,7 @@ fn a_short_notes_pane_scrolls_the_header_with_the_tree() {
     let mode = left(tree.y + header_rows);
     assert!(mode.contains("notes: [notez]"), "{}", rows.join("\n"));
 
-    let body = app.detail_hits.borrow().body;
+    let body = app.drawn.detail_hits.borrow().body;
     assert!(body.right() < reader.x, "{body:?}, {reader:?}");
 }
 

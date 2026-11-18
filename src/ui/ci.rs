@@ -949,7 +949,7 @@ fn log_body(app: &App, run: &WorkflowRun) -> Vec<Line<'static>> {
 
 /// The whole log the `log` body shows under `inspector_body`'s lines, and
 /// its job id: the marked, finished job's held log. Kept apart so the pane
-/// wraps it once per job and width (`App::ci_log_wrap`) rather than on
+/// wraps it once per job and width (`App::drawn.ci_log_wrap`) rather than on
 /// every frame.
 pub fn shown_log(app: &App) -> Option<(u64, &[String])> {
     if app.ci_body != CiBody::Log {

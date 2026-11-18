@@ -44,7 +44,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // (a pane 1 too short for the box), the footer carries
     // it, as it always did: a manual refresh's spinner, then the last
     // action's message or the summary. Otherwise the keys have the row.
-    let left = if crate::ui::uses_status_line(app) || app.fleet_drawn.get() {
+    let left = if crate::ui::uses_status_line(app) || app.drawn.fleet_drawn.get() {
         Vec::new()
     } else {
         fallback_spans(app)
@@ -1024,7 +1024,7 @@ mod tests {
     #[test]
     fn beside_a_drawn_fleet_column_the_footer_is_keys_only() {
         let app = app_with_glyph_summary();
-        app.fleet_drawn.set(true);
+        app.drawn.fleet_drawn.set(true);
         let full = text(&keybind_hints(&app, true));
         let segment = text(&focus_hints(&app, true));
         let width = snug_width("", &format!("{segment}{SEGMENT_GAP}{full}"));
@@ -1048,7 +1048,7 @@ mod tests {
             !row.contains("synced"),
             "the message takes its place: {row:?}"
         );
-        app.fleet_drawn.set(true);
+        app.drawn.fleet_drawn.set(true);
         assert!(!footer_row(&app, 200).contains("Already refreshing"));
     }
 

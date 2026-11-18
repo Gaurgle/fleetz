@@ -48,7 +48,7 @@ fn screen(app: &App) -> Vec<String> {
 /// The pane 1 row the renderer marks as the cursor's, trimmed.
 fn marked_row(app: &App) -> (usize, String) {
     let rows = screen(app);
-    let list = app.list_hits.get().area;
+    let list = app.drawn.list_hits.get().area;
     let found: Vec<(usize, String)> = rows
         .iter()
         .enumerate()
@@ -202,7 +202,7 @@ async fn enter_on_a_digest_line_lands_on_its_repo_row() {
 fn a_click_or_a_hover_on_a_header_lands_on_it() {
     let mut app = sectioned_app();
     let rows = screen(&app);
-    let list = app.list_hits.get().area;
+    let list = app.drawn.list_hits.get().area;
     let y_of = |label: &str| {
         rows.iter()
             .position(|r| r.contains(label))
@@ -235,7 +235,7 @@ fn a_click_or_a_hover_on_a_header_lands_on_it() {
 fn a_hover_lands_on_a_header_only_after_the_pointer_rests() {
     let mut app = sectioned_app();
     let rows = screen(&app);
-    let x = app.list_hits.get().area.x + 2;
+    let x = app.drawn.list_hits.get().area.x + 2;
     let y_of = |label: &str| rows.iter().position(|r| r.contains(label)).unwrap() as u16;
     let ms = std::time::Duration::from_millis;
     let t0 = std::time::Instant::now();
@@ -272,7 +272,7 @@ fn a_hover_lands_on_a_header_only_after_the_pointer_rests() {
 fn a_click_in_compact_after_a_detail_frame_leaves_the_selection() {
     let mut app = sectioned_app();
     let rows = screen(&app);
-    let x = app.list_hits.get().area.x + 2;
+    let x = app.drawn.list_hits.get().area.x + 2;
     let y = rows.iter().position(|r| r.contains("echo")).unwrap() as u16;
     app.toggle_view();
     assert_eq!(app.view, app::View::Compact);
@@ -292,8 +292,8 @@ async fn shift_j_on_a_header_drives_the_digest_panes() {
     app.history_view = app::HistoryView::Ci;
     press_key(&mut app, KeyCode::Char('k')).await;
     assert!(app.on_header().is_some());
-    app.detail_max_scroll.set(10);
-    app.inspector_max_scroll.set(10);
+    app.drawn.detail_max_scroll.set(10);
+    app.drawn.inspector_max_scroll.set(10);
     press_key(&mut app, KeyCode::Char('J')).await;
     assert_eq!(app.digest_selected, 1, "J from the list walks the digest");
     assert_eq!(app.detail_scroll(), 0, "the hidden view did not scroll");

@@ -174,8 +174,8 @@ pub fn cols_for_weeks(weeks: i32) -> i32 {
 /// and yanking the view back to it would make panning impossible.
 fn first_week(app: &App, visible: usize) -> usize {
     let max = WEEKS.saturating_sub(visible);
-    let scroll = app.contrib_scroll.get();
-    let previous = app.contrib_visible_weeks.get();
+    let scroll = app.drawn.contrib_scroll.get();
+    let previous = app.drawn.contrib_visible_weeks.get();
     if previous == visible {
         return scroll.min(max);
     }
@@ -341,8 +341,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // the last one to tell a resize from a pan, so reporting the new width
     // first would hide every resize from it.
     let first = first_week(app, visible);
-    app.contrib_visible_weeks.set(visible.max(1));
-    app.contrib_scroll.set(first);
+    app.drawn.contrib_visible_weeks.set(visible.max(1));
+    app.drawn.contrib_scroll.set(first);
 
     let cursor = app.contrib_cursor.map(|c| c.min(calendar.today_slot()));
     // Where the cursor sits in the drawn window, if it is in it at all.

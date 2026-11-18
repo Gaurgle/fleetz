@@ -187,7 +187,7 @@ pub(super) fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // views keep their state underneath and come back when the cursor
     // leaves the header.
     if let Some(digest) = app.digest(chrono::Local::now()) {
-        *app.detail_hits.borrow_mut() = DetailHits::default();
+        *app.drawn.detail_hits.borrow_mut() = DetailHits::default();
         crate::ui::digest::render_pane(frame, area, panel, app, &digest, focused);
         return;
     }
@@ -195,7 +195,7 @@ pub(super) fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     let repo = match app.selected_repo() {
         Some(r) => r,
         None => {
-            *app.detail_hits.borrow_mut() = DetailHits::default();
+            *app.drawn.detail_hits.borrow_mut() = DetailHits::default();
             let empty = Paragraph::new("No repos to display")
                 .style(Style::default().fg(colors::OVERLAY))
                 .block(panel.title_top(crate::ui::panel_title(2, "detail", focused)));
@@ -803,16 +803,16 @@ pub(super) fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // header was actually split off.
     let shed = if pin_header { pinned } else { 0 };
     let body_tops: Vec<Option<usize>> = block_tops.iter().map(|t| t.checked_sub(shed)).collect();
-    *app.detail_row_tops.borrow_mut() = block_tops
+    *app.drawn.detail_row_tops.borrow_mut() = block_tops
         .into_iter()
         .map(|t| t.saturating_sub(shed) as u16)
         .collect();
 
     let max_scroll = wrapped_row_count(&lines, area.width).saturating_sub(area.height);
-    app.detail_max_scroll.set(max_scroll);
+    app.drawn.detail_max_scroll.set(max_scroll);
     // The scrolloff arithmetic needs the body's height, and this is the only
     // place the pane's height and the pinned header's are both known.
-    app.detail_view_height.set(area.height);
+    app.drawn.detail_view_height.set(area.height);
     let mut scroll = app.detail_scroll().min(max_scroll);
 
     // Follow the cursor. This is the only place that knows which row the
@@ -822,21 +822,23 @@ pub(super) fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
     // Without it the cursor walked rows that were off screen and the pane sat
     // still, so `j` looked like it did nothing at all -- survivable at six
     // commits, and the whole view at two hundred.
-    if app.follow_selection.get()
+    if app.drawn.follow_selection.get()
         && let Some((top, bottom)) = selected_block
     {
         scroll = bring_into_view((top as u16, bottom as u16), scroll, area.height);
         scroll = scroll.min(max_scroll);
         app.set_detail_scroll(scroll);
-        app.follow_selection.set(false);
+        app.drawn.follow_selection.set(false);
     }
 
     // Reveal on expand: on the frame `B` opens the remote-only names, scroll
     // just far enough to show them (`scroll::reveal_offset`). Only the frame
     // the flag flips, so scrolling back up afterwards is left alone, and only
     // when the expand opened rows in the scrolling body.
-    let opened = app.expand_remote_branches && !app.remotes_drawn_expanded.get();
-    app.remotes_drawn_expanded.set(app.expand_remote_branches);
+    let opened = app.expand_remote_branches && !app.drawn.remotes_drawn_expanded.get();
+    app.drawn
+        .remotes_drawn_expanded
+        .set(app.expand_remote_branches);
     if opened && let Some((first, count)) = expanded_remotes {
         let first = first.saturating_sub(shed);
         let row = |range: std::ops::Range<usize>| -> u16 {
@@ -857,7 +859,7 @@ pub(super) fn render_detail_pane(frame: &mut Frame, area: Rect, app: &App) {
         mark_cursor_row(&mut lines, app.graph_cursor, area.width as usize);
     }
 
-    *app.detail_hits.borrow_mut() = DetailHits::measure(
+    *app.drawn.detail_hits.borrow_mut() = DetailHits::measure(
         &lines,
         &body_tops,
         |entry| app.entry_hash(entry),

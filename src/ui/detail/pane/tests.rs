@@ -650,7 +650,7 @@ fn a_click_on_a_worktree_row_moves_the_cursor() {
             row.contains(".claude/worktrees/feat")
         })
         .expect("the linked row");
-    let click = app.detail_hits.borrow().at(10, y).expect("a hit");
+    let click = app.drawn.detail_hits.borrow().at(10, y).expect("a hit");
     app.click_detail(&click);
     assert_eq!(app.detail_selected(), 1);
     assert_eq!(
@@ -1736,9 +1736,9 @@ fn long_lists_repo(n: usize) -> RepoStatus {
 /// either way, as the renderer measured them.
 fn detail_cursor_margins(app: &crate::app::App, height: u16) -> (u16, u16, u16, u16) {
     let body = draw_detail(app, height);
-    let top = app.detail_row_tops.borrow()[app.detail_selected()];
+    let top = app.drawn.detail_row_tops.borrow()[app.detail_selected()];
     let pos = top - app.detail_scroll();
-    let content = app.detail_max_scroll.get() + body;
+    let content = app.drawn.detail_max_scroll.get() + body;
     (pos, body - 1 - pos, top, content - 1 - top)
 }
 
@@ -1750,7 +1750,7 @@ fn draw_detail(app: &crate::app::App, height: u16) -> u16 {
 
     let mut term = Terminal::new(TestBackend::new(96, height)).unwrap();
     term.draw(|f| render_detail_pane(f, f.area(), app)).unwrap();
-    app.detail_view_height.get()
+    app.drawn.detail_view_height.get()
 }
 
 /// Steps pane 2's cursor down `steps` entries and back with `j` and `k`,
@@ -1817,7 +1817,7 @@ fn every_history_view_parks_its_cursor_on_the_shared_margin() {
             draw_detail(&app, 24);
         }
         let (_, below, _, _) = detail_cursor_margins(&app, 24);
-        let body = app.detail_view_height.get();
+        let body = app.drawn.detail_view_height.get();
         assert_eq!(below, crate::app::scrolloff_for(body), "{view:?}");
         walk_detail(view, 24, 50);
     }
@@ -1883,8 +1883,10 @@ fn a_reveal_taller_than_the_pane_stops_at_the_top_margin() {
     app.expand_remote_branches = true;
     let after = info_text(&app, REVEAL_HEIGHT);
     assert!(app.detail_scroll() > 0, "the pane did not move:\n{after}");
-    let body_top = usize::from(REVEAL_HEIGHT - app.detail_view_height.get() - 1);
-    let margin = usize::from(crate::app::scrolloff_for(app.detail_view_height.get()));
+    let body_top = usize::from(REVEAL_HEIGHT - app.drawn.detail_view_height.get() - 1);
+    let margin = usize::from(crate::app::scrolloff_for(
+        app.drawn.detail_view_height.get(),
+    ));
     assert_eq!(
         text_row_of(&after, "spare-0 "),
         Some(body_top + margin),
@@ -2043,7 +2045,11 @@ fn the_notes_view_draws_sections_and_marks_the_file() {
         "caret on the nested file:\n{text}"
     );
     assert!(!text.contains("guide.md"), "docs only under the toggle");
-    assert_eq!(app.detail_row_tops.borrow().len(), 3, "one stop per file");
+    assert_eq!(
+        app.drawn.detail_row_tops.borrow().len(),
+        3,
+        "one stop per file"
+    );
 
     app.toggle_notes_markdown();
     let text = notes_pane_text(&app);
