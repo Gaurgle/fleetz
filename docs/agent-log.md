@@ -291,6 +291,29 @@ first (from `git log --merges main`).
 
 ### 2026-11-18
 
+- **#177 (FZ-120), A1e: `ChangesView` and `WorktreesView` in
+  `app/changes.rs` and `app/worktrees.rs`.** Dispatched 17:52 under the
+  unattended refactor run, merged `f4a0a4f` at 18:02 CET. Base
+  `2e5a291`, commit `fe06ad2`: the changes and worktrees types, eight
+  fields and both blocks to the two files (292 and 159 production
+  lines), the changes tests moved with their code (seven, not the
+  body's ten); `app.rs` 3,093 to 2,696, 63 fields. Light-tier worker
+  (sonnet, low) on the architect's recommendation. Lead ruling (on the
+  issue): the moved test file's `use super::*` to `use crate::app::*`
+  accepted; counts corrected; doc rewordings and the partial
+  re-exports accepted. Review 1 on `1c3d609beeff`: needs change, docs
+  only (the `app.rs` row said 2,700 and 69 fields, counted 2,696 and
+  63, the worker's count skipped the non-trailing `#[cfg(test)]`
+  items; fixed by the lead); re-review on `1a3d7e02f545` accepted.
+  Branch CI 44353171113 green; combined checks on `1727b9c` (1758
+  passed); gate holds. Observed, out of scope: `app/notes.rs` has no
+  `worktree_logs_generation` read (the body said one);
+  `docs/architecture.md:263` "99 fields, all `pub` but `github` and
+  `fetch`" is stale. Remembered: nothing to keep (the light worker's
+  one miss, the line-count method, is now spelled out in every
+  dispatch).
+  FZ-120: review changes 1; fix cycles 0; owner decisions 0; worker 5; review 2 + 3; models sonnet:low/opus:medium; usage worker 59230 tokens, reviewer 57870 + 2445 tokens
+
 - **#176 (FZ-119), A1d: `NotesView` owns the notes view and reader in
   `app/notes.rs`.** Dispatched 17:25 under the unattended refactor run,
   merged `2e5a291` at 17:48 CET. Base `9c95060`, commit `135e294`: six
