@@ -6,10 +6,10 @@ pub use crate::config::{DEFAULT_INSPECTOR_PCT, DEFAULT_REPO_LIST_PCT, Icons, Vie
 pub use crate::engine::Jitter;
 use crate::engine::{ApiBudget, ClockJitter, GithubBackoff, GithubSync, Observed, PollContext};
 pub use crate::engine::{
-    ApplyProgress, DataTime, DatasetSource, FetchClaims, FetchReport, FetchTally, GithubFreshness,
-    Outcome, Pace,
+    ApplyProgress, DataTime, DatasetSource, FetchClaims, FetchReport, FetchState, GithubFreshness,
+    Outcome, Pace, RefreshPhase,
 };
-pub(crate) use crate::engine::{RemoteKey, backoff_secs, carrier_key};
+pub(crate) use crate::engine::{RemoteKey, carrier_key};
 
 mod overlays;
 mod query;
@@ -281,80 +281,6 @@ pub struct StatusMessage {
     pub created: std::time::Instant,
 }
 
-/// The two halves of a manual `r`, named apart in the header because they
-/// cost very different amounts: the local sweep lands in well under a second,
-/// the GitHub poll takes 6-7s before its fetches even start.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefreshPhase {
-    /// Re-reading the local clones.
-    Local,
-    /// Waiting on the GitHub poll, then on the fetches it set off.
-    Remote,
-}
-
-/// The per-checkout hold after fetches that timed out (FZ-34, #83; amendment
-/// 2 of `docs/fetch-outcome-contract.md`). A repo too large to fetch within
-/// FZ-34's wall clock used to start the same download on every sweep and
-/// leave a temp pack behind each time; since FZ-35a a timeout is a fetch
-/// that stalled for `git::FETCH_STALL_LIMIT`.
-///
-/// Keyed by the row's path, as the fetch facts are. After the `n`th
-/// consecutive `TimedOut` fetch the path is held for
-/// `backoff_secs(n + 1, interval_secs, 1.0)` seconds from that timeout: two
-/// intervals, then four, doubling up to `BACKOFF_CAP_SECS`, with no jitter
-/// (one clone has nothing to desynchronise from). Only the automatic fetches
-/// honour it (the watch sweep, the poll's moved remotes, the recovery
-/// refetch); `f` and `F` fetch as before and their outcome counts like any.
-/// A success clears the path; `r` and `R` clear every path. Any other failure
-/// kind fails fast, costs nothing, and leaves the count as it was. That
-/// includes `TooBig` (FZ-35b): a fetch cut at the cap holds its repo
-/// explicitly, until `f` or a success (`model::FetchFacts::size_hold`), not
-/// on a doubling timer.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct FetchBackoff {
-    /// Consecutive timeouts and when the last one landed, per path.
-    timeouts: std::collections::HashMap<String, (u32, DateTime<Local>)>,
-}
-
-impl FetchBackoff {
-    /// A fetch for `path` finished at `at`. A timeout older than the one
-    /// already counted (a load's fetch landing after a sweep's) is ignored,
-    /// so one timeout is never counted twice.
-    pub fn record(&mut self, path: &str, outcome: &crate::git::FetchOutcome, at: DateTime<Local>) {
-        use crate::git::{FetchFailureKind, FetchOutcome};
-        match outcome {
-            FetchOutcome::Succeeded => {
-                self.timeouts.remove(path);
-            }
-            FetchOutcome::Failed(f) if f.kind == FetchFailureKind::TimedOut => {
-                let entry = self.timeouts.entry(path.to_string()).or_insert((0, at));
-                if entry.0 == 0 || at > entry.1 {
-                    *entry = (entry.0.saturating_add(1), at);
-                }
-            }
-            FetchOutcome::Failed(_) | FetchOutcome::NotAttempted => {}
-        }
-    }
-
-    /// Whether an automatic fetch of `path` must wait at `now`.
-    pub fn holds(&self, path: &str, now: DateTime<Local>, interval_secs: i64) -> bool {
-        self.timeouts.get(path).is_some_and(|&(n, at)| {
-            now < at + chrono::Duration::seconds(backoff_secs(n + 1, interval_secs, 1.0))
-        })
-    }
-
-    /// A manual `r` or `R`: every path may fetch again.
-    pub fn clear(&mut self) {
-        self.timeouts.clear();
-    }
-
-    /// The consecutive timeouts counted for `path`.
-    #[cfg(test)]
-    pub fn timeouts(&self, path: &str) -> u32 {
-        self.timeouts.get(path).map_or(0, |&(n, _)| n)
-    }
-}
-
 /// Main application state.
 pub struct App {
     pub repos: Vec<RepoStatus>,
@@ -540,51 +466,16 @@ pub struct App {
     pub contrib_drag: Option<u16>,
     /// True while the initial load or an R reload is in flight.
     pub loading: bool,
-    /// When the in-flight watch sweep started, or None when idle. Doubles as
-    /// the "one sweep at a time" lock and as the stuck-sweep timer.
-    pub sweep_started: Option<std::time::Instant>,
-    /// Whether the in-flight sweep was asked for by a keypress rather than by
-    /// the watch timer. Only a manual one announces itself in the header: a
-    /// background refresh firing on an interval should not repaint a big
-    /// colored indicator over a dashboard you are reading. An `r` pressed
-    /// while a watch sweep runs marks that sweep manual: it starts none of
-    /// its own, so the running one's rows are the ones it waits for.
-    ///
-    /// Only meaningful while `sweep_started` is `Some`.
-    pub sweep_manual: bool,
-    /// True while a manual `r` waits on its GitHub poll. The local sweep is
-    /// only half of a refresh: the poll lands later and fetches the remotes
-    /// that moved, so a spinner keyed on the sweep alone stopped while rows
-    /// were still changing under it.
-    pub refresh_awaits_poll: bool,
-    /// Display paths of the fetches that poll set off for a manual `r`, each
-    /// cleared by that repo's fetched update. See `is_refreshing`.
-    pub refresh_fetches: std::collections::HashSet<String>,
-    /// When `refresh_fetches` was filled, or one of its fetches last made
-    /// progress (`apply_fetch_progress`), so a fetch that never returns
-    /// cannot leave the spinner running for the rest of the session while
-    /// one still downloading is waited for.
-    pub refresh_fetches_started: Option<std::time::Instant>,
+    /// The local fetch: the sweep lock, the manual refresh's two halves, the
+    /// timeout holds, the cap, the fetch claims and the keypress tally
+    /// (`engine::FetchState`). The cap is set from `Config` at startup
+    /// (`FetchState::set_max_bytes`); the header reads its queries.
+    pub(crate) fetch: FetchState,
     /// The GitHub sync: freshness, budget, retry ladder, the poll's in-flight
     /// lock and the push shortcut, with the interval and cost they are judged
     /// against (`engine::GithubSync`). Set from `Config` at startup
     /// (`GithubSync::from_config`); the header reads it through its queries.
     pub(crate) github: GithubSync,
-    /// Paths the automatic fetches skip after a timeout (`FetchBackoff`).
-    pub fetch_backoff: FetchBackoff,
-    /// The automatic-fetch cap in bytes, `None` for no cap (`fetch_max_mb`,
-    /// FZ-35b). Copied from `Config` at startup, as the poll interval is.
-    pub fetch_max_bytes: Option<u64>,
-    /// Paths with a fetch running or queued: one fetch per repo at a time
-    /// (FZ-34, R5). Every fetch selection, automatic or manual, skips a path
-    /// listed here and only sweeps it (`App::claim_fetch`). Two fetches of
-    /// one repo each wrote their own temp pack. Sweeps reserve here and the
-    /// fetch tasks take the claim at their permit; a launch or `R` load
-    /// claims its fetches here too (`FetchClaims`, FZ-35a).
-    pub fetches_in_flight: FetchClaims,
-    /// The fetches a keypress is waiting on (`f`, `F`, and the ones `r`'s
-    /// poll sets off), reported as one status line when the last lands.
-    pub manual_fetches: FetchTally,
     /// Why the last full load failed, while it has left nothing to draw.
     ///
     /// A failed initial load used to set only a status message, which the
@@ -1438,20 +1329,12 @@ impl App {
             remotes_drawn_expanded: std::cell::Cell::new(false),
             contrib_drag: None,
             loading: false,
-            sweep_started: None,
-            sweep_manual: false,
-            refresh_awaits_poll: false,
-            refresh_fetches: std::collections::HashSet::new(),
-            refresh_fetches_started: None,
+            fetch: FetchState::new(crate::config::Config::default().fetch_cap_bytes()),
             github: GithubSync::new(
                 crate::config::Config::default().github_poll_interval as i64,
                 crate::github::poll_cost(crate::config::Config::default().repo_limit),
                 Box::new(ClockJitter::new()),
             ),
-            fetch_backoff: FetchBackoff::default(),
-            fetch_max_bytes: crate::config::Config::default().fetch_cap_bytes(),
-            fetches_in_flight: FetchClaims::default(),
-            manual_fetches: FetchTally::default(),
             load_error: None,
             dataset: Vec::new(),
             github_meta: crate::github::FetchMeta::default(),
@@ -2576,7 +2459,7 @@ impl App {
     /// A sweep finished: close its books, stamp the refresh time and have
     /// the notes walked again. The `SweepDone` arm of the event loop calls it.
     pub fn sweep_landed(&mut self, at: chrono::DateTime<chrono::Local>) {
-        self.sweep_started = None;
+        self.fetch.sweep_landed();
         self.last_refreshed = Some(at);
         self.invalidate_notes();
         self.invalidate_changes();
@@ -2803,89 +2686,6 @@ impl App {
         self.needs_redraw = true;
     }
 
-    /// Which half of a manual `r` is running, or None when none is: first its
-    /// local sweep, then the GitHub poll it started and the fetches that poll
-    /// set off. The spinner and the lit `[r]` key both read this, so neither
-    /// stops before the last row lands. A watch-timer sweep does not count; it
-    /// runs silently, unless an `r` pressed during it marked it manual.
-    pub fn refresh_phase(&self) -> Option<RefreshPhase> {
-        if self.sweep_started.is_some() && self.sweep_manual {
-            Some(RefreshPhase::Local)
-        } else if self.refresh_awaits_poll || !self.refresh_fetches.is_empty() {
-            Some(RefreshPhase::Remote)
-        } else {
-            None
-        }
-    }
-
-    /// Whether a manual `r` is still in flight, in either half.
-    pub fn is_refreshing(&self) -> bool {
-        self.refresh_phase().is_some()
-    }
-
-    /// Hand the fetches a GitHub poll set off to the manual refresh waiting
-    /// on that poll, if there is one. A poll nobody pressed `r` for (the
-    /// watch timer) fetches silently and adds nothing.
-    pub fn settle_refresh_poll(&mut self, fetched_paths: impl IntoIterator<Item = String>) {
-        if !std::mem::take(&mut self.refresh_awaits_poll) {
-            return;
-        }
-        let fetched_paths: Vec<String> = fetched_paths.into_iter().collect();
-        self.manual_fetches.expect(fetched_paths.iter().cloned());
-        self.refresh_fetches.extend(fetched_paths);
-        if !self.refresh_fetches.is_empty() {
-            self.refresh_fetches_started = Some(std::time::Instant::now());
-        }
-    }
-
-    /// A repo's update landed. Only one whose fetch finished settles a
-    /// pending refresh fetch, whether it succeeded or failed: the local sweep
-    /// can report the same repo before its fetch has run, and that update does
-    /// not carry the remote's news yet.
-    pub fn settle_refresh_fetch(&mut self, path: &str, fetch: &crate::git::FetchOutcome) {
-        let finished = *fetch != crate::git::FetchOutcome::NotAttempted;
-        if finished && self.refresh_fetches.remove(path) && self.refresh_fetches.is_empty() {
-            self.refresh_fetches_started = None;
-        }
-    }
-
-    /// Whether an automatic fetch (watch sweep, moved remote, recovery
-    /// refetch) skips `path` at `now`: a recent timeout holds it, measured in
-    /// watch intervals (`FetchBackoff`).
-    pub fn fetch_held(&self, path: &str, now: DateTime<Local>) -> bool {
-        self.fetch_backoff
-            .holds(path, now, self.refresh_interval as i64)
-    }
-
-    /// Claim `path` for a fetch starting at `now`. False when a fetch of it is
-    /// already running: the caller sweeps the repo without fetching, and the
-    /// running fetch's outcome is the one that lands (R5).
-    pub fn claim_fetch(&mut self, path: &str, now: std::time::Instant) -> bool {
-        self.fetches_in_flight.reserve(path, now).is_some()
-    }
-
-    /// A sweep's result for `path` landed. Only one that fetched ends the
-    /// claim: a sweep that skipped the fetch reports `NotAttempted` while the
-    /// claimed fetch is still running.
-    #[cfg(test)]
-    pub fn fetch_landed(&mut self, path: &str, fetch: &crate::git::FetchOutcome) {
-        self.fetch_landed_under(path, fetch, None);
-    }
-
-    /// `fetch_landed` for the fetch that held `claim`: it ends that claim
-    /// only, so a landing that outlived its claim leaves a newer one alone
-    /// (`FetchClaims::release`). `None` ends whichever claim holds the path.
-    pub fn fetch_landed_under(
-        &mut self,
-        path: &str,
-        fetch: &crate::git::FetchOutcome,
-        claim: Option<u64>,
-    ) {
-        if *fetch != crate::git::FetchOutcome::NotAttempted {
-            self.fetches_in_flight.release(path, claim);
-        }
-    }
-
     /// Drop claims with no sign of life for longer than `limit` at `now`, the
     /// safety net for a fetch whose result never landed
     /// (`SWEEP_STUCK_AFTER`). A row whose claim went this way stops showing
@@ -2895,13 +2695,13 @@ impl App {
         limit: std::time::Duration,
         now: std::time::Instant,
     ) {
-        self.fetches_in_flight.expire(limit, now);
+        self.fetch.expire_claims(limit, now);
         for repo in &mut self.repos {
             if repo.fetch.progress.is_some()
                 && !repo
                     .path
                     .as_deref()
-                    .is_some_and(|p| self.fetches_in_flight.contains_key(p))
+                    .is_some_and(|p| self.fetch.claims().contains_key(p))
             {
                 repo.fetch.progress = None;
                 self.needs_redraw = true;
@@ -2916,10 +2716,7 @@ impl App {
     /// their start, as the fetch's claim does (FZ-35b, criterion 7).
     pub fn apply_fetch_progress(&mut self, path: &str, progress: crate::git::FetchProgress) {
         let now = std::time::Instant::now();
-        self.manual_fetches.touch(path, now);
-        if self.refresh_fetches.contains(path) {
-            self.refresh_fetches_started = Some(now);
-        }
+        self.fetch.touch(path, now);
         if let Some(repo) = self
             .repos
             .iter_mut()
@@ -2928,19 +2725,6 @@ impl App {
             repo.fetch.progress = Some(progress);
             self.needs_redraw = true;
         }
-    }
-
-    /// Give up on refresh fetches with no sign of life for longer than
-    /// `limit`, and on a fetch report silent for as long.
-    pub fn expire_refresh_fetches(&mut self, limit: std::time::Duration) {
-        if self
-            .refresh_fetches_started
-            .is_some_and(|t| t.elapsed() > limit)
-        {
-            self.refresh_fetches.clear();
-            self.refresh_fetches_started = None;
-        }
-        self.manual_fetches.expire(limit);
     }
 
     /// After the repo list is replaced by a reload, keep the selection in

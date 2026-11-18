@@ -210,7 +210,7 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
         View::Detail => "compact",
         View::Compact => "detail",
     };
-    let refreshing = app.is_refreshing();
+    let refreshing = app.fetch.is_refreshing();
 
     let mut hints = vec![Span::styled("[enter]", key_style)];
     if with_desc {
@@ -573,11 +573,11 @@ mod tests {
     fn a_manual_refresh_lights_the_r_key_while_it_runs() {
         let mut app = app_in(View::Detail);
         assert_eq!(key_color(&app, "[r]"), Some(colors::TEXT));
-        app.sweep_started = Some(std::time::Instant::now());
-        app.sweep_manual = true;
+        app.fetch.set_sweep_started(Some(std::time::Instant::now()));
+        app.fetch.set_sweep_manual(true);
         assert_eq!(key_color(&app, "[r]"), Some(colors::GREEN));
         // A watch-timer sweep is not something the user switched on.
-        app.sweep_manual = false;
+        app.fetch.set_sweep_manual(false);
         assert_eq!(key_color(&app, "[r]"), Some(colors::TEXT));
     }
 

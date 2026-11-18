@@ -89,7 +89,7 @@ pub(crate) fn apply_github_poll_at(
         app.github.observe_budget(reading.as_ref(), false, now);
         if is_latest {
             // A refresh waiting on this request is over all the same.
-            app.settle_refresh_poll(std::iter::empty());
+            app.fetch.settle_refresh_poll(std::iter::empty());
         }
         return;
     }
@@ -162,7 +162,7 @@ pub(crate) fn apply_github_poll_at(
                 }
             }
             // The new sizes against each row's baseline, before choosing.
-            assess_size_holds(&mut app.repos, &dataset, app.fetch_max_bytes);
+            assess_size_holds(&mut app.repos, &dataset, app.fetch.max_bytes());
             // A row held after a timeout waits out its hold (FZ-34), and one
             // the fetch cap holds waits for `f` (FZ-35b).
             moved.retain(|&idx| {
@@ -171,7 +171,7 @@ pub(crate) fn apply_github_poll_at(
                     && repo
                         .path
                         .as_deref()
-                        .is_none_or(|path| !app.fetch_held(path, now))
+                        .is_none_or(|path| !app.fetch.held(path, now, app.refresh_interval as i64))
             });
             for &idx in &moved {
                 start_single_sweep(app, tx, idx, true, true, author.clone());
@@ -182,7 +182,7 @@ pub(crate) fn apply_github_poll_at(
                 .filter_map(|&idx| app.repos[idx].path.clone())
                 .collect();
             if is_latest {
-                app.settle_refresh_poll(fetched_paths);
+                app.fetch.settle_refresh_poll(fetched_paths);
             }
             app.dataset = dataset;
             // After the indices above are spent: this moves rows.
@@ -199,7 +199,7 @@ pub(crate) fn apply_github_poll_at(
     // A failed poll fetched nothing, so a refresh waiting on it
     // is over. No-op when the Ok arm already settled it.
     if is_latest {
-        app.settle_refresh_poll(std::iter::empty());
+        app.fetch.settle_refresh_poll(std::iter::empty());
     }
     app.needs_redraw = true;
 }
@@ -274,7 +274,7 @@ pub(crate) fn expire_stuck_github_poll(
     now: chrono::DateTime<chrono::Local>,
 ) {
     if app.github.expire_stuck(limit, now) {
-        app.refresh_awaits_poll = false;
+        app.fetch.await_poll(false);
         app.needs_redraw = true;
     }
 }

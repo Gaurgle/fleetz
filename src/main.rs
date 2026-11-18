@@ -110,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     app.contrib_author = config.contributions_author.clone();
     app.github = GithubSync::from_config(&config, Box::new(ClockJitter::new()));
-    app.fetch_max_bytes = config.fetch_cap_bytes();
+    app.fetch.set_max_bytes(config.fetch_cap_bytes());
     app.contrib_cell = config
         .contributions_cell_size
         .as_deref()
@@ -174,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         initial_window,
         LoadKind::Initial,
         false,
-        &app.fetches_in_flight,
+        app.fetch.claims(),
         HashSet::new(),
     );
 

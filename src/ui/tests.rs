@@ -245,19 +245,21 @@ fn the_window_key_goes_with_the_label_it_annotates() {
 #[test]
 fn a_manual_refresh_names_the_half_it_is_on() {
     let local = header_row_with("h", 120, |app| {
-        app.sweep_started = Some(std::time::Instant::now());
-        app.sweep_manual = true;
-        app.refresh_awaits_poll = true;
+        app.fetch.set_sweep_started(Some(std::time::Instant::now()));
+        app.fetch.set_sweep_manual(true);
+        app.fetch.await_poll(true);
     });
     assert!(local.contains("checking local changes"), "{local}");
     assert!(!local.contains("checking remote"), "{local}");
 
-    let remote = header_row_with("h", 120, |app| app.refresh_awaits_poll = true);
+    let remote = header_row_with("h", 120, |app| app.fetch.await_poll(true));
     assert!(remote.contains("checking remote"), "{remote}");
     assert!(!remote.contains("checking local"), "{remote}");
 
     let fetching = header_row_with("h", 120, |app| {
-        app.refresh_fetches.insert("~/repos/a".to_string());
+        app.fetch
+            .refresh_fetches_mut()
+            .insert("~/repos/a".to_string());
     });
     assert!(fetching.contains("checking remote"), "{fetching}");
 }

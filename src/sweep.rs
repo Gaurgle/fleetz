@@ -1,7 +1,7 @@
 use crate::app::App;
 use crate::engine::{
-    FETCH_CONCURRENCY, FetchAsk, HISTORY_COUNT, SweepTarget, activity_position, disk_usage_of,
-    fetch_under_claim_capped, probe_concurrency, size_held_rows,
+    FETCH_CONCURRENCY, FetchAsk, HISTORY_COUNT, SweepFetchPlan, SweepTarget, activity_position,
+    disk_usage_of, fetch_under_claim_capped, probe_concurrency, size_held_rows,
 };
 use crate::event::AppEvent;
 use crate::model::{RepoLocation, RepoStatus};
@@ -35,7 +35,7 @@ pub(crate) fn apply_repo_updated(
 }
 
 /// `apply_repo_updated` for the sweep that held fetch claim `claim`: its
-/// landing ends that claim only (`App::fetch_landed_under`), so a sweep
+/// landing ends that claim only (`FetchState::landed_under`), so a sweep
 /// whose claim expired cannot end a newer one on the same path.
 pub(crate) fn land_repo_update(
     app: &mut App,
@@ -44,9 +44,9 @@ pub(crate) fn land_repo_update(
     fetch: git::FetchOutcome,
     claim: Option<u64>,
 ) {
-    app.settle_refresh_fetch(path, &fetch);
-    app.fetch_landed_under(path, &fetch, claim);
-    app.fetch_backoff.record(path, &fetch, chrono::Local::now());
+    app.fetch.settle_refresh_fetch(path, &fetch);
+    app.fetch.landed_under(path, &fetch, claim);
+    app.fetch.record_outcome(path, &fetch, chrono::Local::now());
     let mut name = None;
     if let Some(repo) = app
         .repos
@@ -66,7 +66,7 @@ pub(crate) fn land_repo_update(
         name = Some(repo.name.clone());
     }
     let name = name.unwrap_or_else(|| path.to_string());
-    if let Some(report) = app.manual_fetches.land(path, &name, &fetch) {
+    if let Some(report) = app.fetch.land_manual(path, &name, &fetch) {
         app.set_status(ui::fetch_report_label(&report), true);
     }
     app.needs_redraw = true;
@@ -122,15 +122,10 @@ pub(crate) fn start_sweep(
     author: Option<String>,
     manual: bool,
 ) {
-    if app.sweep_started.is_some() {
-        return;
-    }
     let targets = sweep_targets(app, None);
-    if targets.is_empty() {
+    if targets.is_empty() || !app.fetch.begin_sweep(std::time::Instant::now(), manual) {
         return;
     }
-    app.sweep_started = Some(std::time::Instant::now());
-    app.sweep_manual = manual;
     // `F`: report its fetches when the last one lands. A watch sweep fetches
     // silently, and `r` does not fetch here at all. A row the fetch cap
     // holds is only rebuilt and lands `NotAttempted`, so it is not awaited
@@ -138,7 +133,7 @@ pub(crate) fn start_sweep(
     // lands with a real outcome.
     if do_fetch && manual {
         let held = size_held_paths(app, &targets);
-        app.manual_fetches.expect(
+        app.fetch.expect_manual(
             targets
                 .iter()
                 .map(|t| t.display_path.clone())
@@ -155,43 +150,41 @@ pub(crate) fn start_sweep(
         author,
         true,
         probe,
-        &app.fetches_in_flight,
+        app.fetch.claims(),
     );
 }
 
-/// What a sweep hands `spawn_sweep` about fetching: the targets it rebuilds
-/// without a fetch, and the byte cap the rest run under (FZ-35b).
-struct SweepFetchPlan {
-    no_fetch: HashSet<String>,
-    max_bytes: Option<u64>,
-}
-
-/// The fetch half of a sweep asked for by `ask`: claims the targets it
-/// fetches (`fetch_skips_for`) and picks the cap (`FetchAsk::cap`).
+/// The fetch half of a sweep asked for by `ask` (`FetchState::plan`), with
+/// the inputs only `App` has: the targets the fetch cap holds, the watch
+/// interval a timeout hold is measured in, and the clock.
 fn plan_sweep_fetch(
     app: &mut App,
     targets: &[SweepTarget],
     do_fetch: bool,
     ask: FetchAsk,
 ) -> SweepFetchPlan {
-    SweepFetchPlan {
-        no_fetch: fetch_skips_for(app, targets, do_fetch, ask),
-        max_bytes: ask.cap(app.fetch_max_bytes),
-    }
+    let size_held = size_held_paths(app, targets);
+    app.fetch.plan(
+        targets,
+        do_fetch,
+        ask,
+        &size_held,
+        app.refresh_interval as i64,
+        chrono::Local::now(),
+        std::time::Instant::now(),
+    )
 }
 
 /// The targets an automatic sweep rebuilds without fetching at `now`: those
-/// a recent fetch timeout holds (`App::fetch_held`, FZ-34).
+/// a recent fetch timeout holds (`FetchState::held_paths`, FZ-34).
+#[cfg(test)]
 fn held_fetch_paths(
     app: &App,
     targets: &[SweepTarget],
     now: chrono::DateTime<chrono::Local>,
 ) -> std::collections::HashSet<String> {
-    targets
-        .iter()
-        .filter(|t| app.fetch_held(&t.display_path, now))
-        .map(|t| t.display_path.clone())
-        .collect()
+    app.fetch
+        .held_paths(targets, now, app.refresh_interval as i64)
 }
 
 /// The targets whose row the fetch cap holds until `f` (FZ-35b).
@@ -221,36 +214,15 @@ fn fetch_skips(
 }
 
 /// The targets a sweep rebuilds without fetching, claiming the rest for a
-/// fetch (FZ-34). Every fetching sweep skips a path whose fetch is still
-/// running (R5); an automatic one (the watch timer, a moved remote, the
-/// recovery refetch) also skips a path held after a timeout (R3), where `f`
-/// and `F` fetch it as asked. Every one but `f` skips a repo the fetch cap
-/// holds (FZ-35b). A sweep that does not fetch claims nothing.
+/// fetch (`FetchState::plan`, FZ-34).
+#[cfg(test)]
 fn fetch_skips_for(
     app: &mut App,
     targets: &[SweepTarget],
     do_fetch: bool,
     ask: FetchAsk,
 ) -> std::collections::HashSet<String> {
-    if !do_fetch {
-        return std::collections::HashSet::new();
-    }
-    let mut skips = if ask == FetchAsk::Automatic {
-        held_fetch_paths(app, targets, chrono::Local::now())
-    } else {
-        std::collections::HashSet::new()
-    };
-    if ask != FetchAsk::One {
-        skips.extend(size_held_paths(app, targets));
-    }
-    let started = std::time::Instant::now();
-    for target in targets {
-        if !skips.contains(&target.display_path) && !app.claim_fetch(&target.display_path, started)
-        {
-            skips.insert(target.display_path.clone());
-        }
-    }
-    skips
+    plan_sweep_fetch(app, targets, do_fetch, ask).no_fetch
 }
 
 /// Sweep a single repo (the `f` fetch and the refresh after a branch switch
@@ -283,7 +255,7 @@ pub(crate) fn start_single_sweep(
         author,
         false,
         contrib_probe(app),
-        &app.fetches_in_flight,
+        app.fetch.claims(),
     );
 }
 

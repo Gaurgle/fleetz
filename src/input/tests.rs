@@ -14,11 +14,14 @@ use clap::Parser;
 async fn f_fetches_a_row_held_after_a_timeout() {
     let mut app = missing_paths_app(1, "fkey");
     let held = timed_out_at(&mut app, 0);
-    assert!(app.fetch_held(&held, chrono::Local::now()));
+    assert!(
+        app.fetch
+            .held(&held, chrono::Local::now(), app.refresh_interval as i64)
+    );
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     fetch_key(&mut app, &tx, None);
     assert!(
-        app.fetches_in_flight.contains_key(&held),
+        app.fetch.claims().contains_key(&held),
         "f skipped the held row"
     );
 }
@@ -33,14 +36,24 @@ fn r_and_shift_r_lift_the_timeout_holds() {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let args = Args::parse_from(["fleetz"]);
 
-    app.fetch_backoff.record("~/a", &timed_out, at(17, 9, 0));
-    assert!(app.fetch_held("~/a", at(17, 10, 0)));
+    app.fetch.record_outcome("~/a", &timed_out, at(17, 9, 0));
+    assert!(
+        app.fetch
+            .held("~/a", at(17, 10, 0), app.refresh_interval as i64)
+    );
     // Under a known limit `r` sends nothing, so no runtime is needed.
     refresh_key(&mut app, &tx, &args, &config, at(17, 10, 0));
-    assert!(!app.fetch_held("~/a", at(17, 10, 0)), "r kept the hold");
+    assert!(
+        !app.fetch
+            .held("~/a", at(17, 10, 0), app.refresh_interval as i64),
+        "r kept the hold"
+    );
 
-    app.fetch_backoff.record("~/a", &timed_out, at(17, 9, 30));
-    assert!(app.fetch_held("~/a", at(17, 10, 0)));
+    app.fetch.record_outcome("~/a", &timed_out, at(17, 9, 30));
+    assert!(
+        app.fetch
+            .held("~/a", at(17, 10, 0), app.refresh_interval as i64)
+    );
     // A load already running: `R` starts nothing new.
     app.loading = true;
     reload_key(
@@ -51,7 +64,11 @@ fn r_and_shift_r_lift_the_timeout_holds() {
         Path::new("/nonexistent"),
         at(17, 10, 0),
     );
-    assert!(!app.fetch_held("~/a", at(17, 10, 0)), "R kept the hold");
+    assert!(
+        !app.fetch
+            .held("~/a", at(17, 10, 0), app.refresh_interval as i64),
+        "R kept the hold"
+    );
 }
 
 /// `4` is the strip's key (back from `5`, FZ-30d). From another pane it

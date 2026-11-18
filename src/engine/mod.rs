@@ -12,7 +12,9 @@ mod status;
 
 pub use crate::time::Pace;
 pub use assembly::ApplyProgress;
-pub use fetch::{FetchClaims, FetchReport, FetchTally};
+#[cfg(test)]
+pub use fetch::{FetchBackoff, FetchTally};
+pub use fetch::{FetchClaims, FetchReport, FetchState, RefreshPhase, SweepFetchPlan};
 #[cfg(test)]
 pub use github_sync::Jitter;
 pub use github_sync::{

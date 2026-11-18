@@ -421,8 +421,8 @@ pub(crate) fn fetch_failed(kind: git::FetchFailureKind) -> git::FetchOutcome {
 /// needed. Returns the poll's attempt, for its answer.
 pub(crate) fn r_during_a_watch_sweep(app: &mut App) -> u64 {
     app.watch_mode = true;
-    app.sweep_started = Some(std::time::Instant::now());
-    app.sweep_manual = false;
+    app.fetch.set_sweep_started(Some(std::time::Instant::now()));
+    app.fetch.set_sweep_manual(false);
     let attempt = app
         .github
         .claim_attempt(std::time::Instant::now(), app.dirty_mode)
@@ -436,7 +436,7 @@ pub(crate) fn r_during_a_watch_sweep(app: &mut App) -> u64 {
         &config::Config::default(),
         chrono::Local::now(),
     );
-    assert!(app.is_refreshing(), "r did not start the spinner");
+    assert!(app.fetch.is_refreshing(), "r did not start the spinner");
     attempt
 }
 
@@ -464,8 +464,8 @@ pub(crate) fn land(app: &mut App, i: usize, fetch: git::FetchOutcome) {
 #[test]
 fn a_mixed_sweep_reports_how_many_fetches_failed() {
     let mut app = fleet_app(3);
-    app.manual_fetches
-        .expect((0..3).map(|i| format!("~/repos/repo-{i}")));
+    app.fetch
+        .expect_manual((0..3).map(|i| format!("~/repos/repo-{i}")));
     land(&mut app, 0, git::FetchOutcome::Succeeded);
     land(&mut app, 1, fetch_failed(git::FetchFailureKind::Auth));
     assert!(
@@ -489,8 +489,8 @@ fn a_mixed_sweep_reports_how_many_fetches_failed() {
 #[test]
 fn a_sweep_whose_fetches_all_worked_reports_nothing() {
     let mut app = fleet_app(2);
-    app.manual_fetches
-        .expect((0..2).map(|i| format!("~/repos/repo-{i}")));
+    app.fetch
+        .expect_manual((0..2).map(|i| format!("~/repos/repo-{i}")));
     land(&mut app, 0, git::FetchOutcome::Succeeded);
     land(&mut app, 1, git::FetchOutcome::Succeeded);
     assert!(app.status_message.is_none());
@@ -500,7 +500,7 @@ fn a_sweep_whose_fetches_all_worked_reports_nothing() {
 #[test]
 fn a_single_fetch_that_fails_names_the_repo() {
     let mut app = fleet_app(1);
-    app.manual_fetches.expect(["~/repos/repo-0".to_string()]);
+    app.fetch.expect_manual(["~/repos/repo-0".to_string()]);
     land(&mut app, 0, fetch_failed(git::FetchFailureKind::NoRemote));
     let status = app.status_message.as_ref().expect("a report");
     assert_eq!(status.text, "fetch failed: repo-0, remote not found");
@@ -517,7 +517,7 @@ fn a_failed_fetch_schedules_nothing_new() {
         0,
         fetch_failed(git::FetchFailureKind::Unreachable),
     );
-    assert!(app.sweep_started.is_none());
+    assert!(!app.fetch.in_sweep());
     assert!(!app.github.inflight());
     assert!(!app.github.push_detected());
     assert_eq!(app.last_refreshed, refreshed);
@@ -600,7 +600,7 @@ async fn a_moved_remote_grown_past_the_cap_is_held_not_fetched() {
     for repo in &mut app.repos {
         repo.fetch.disk_baseline = Some(1_000);
     }
-    app.refresh_awaits_poll = true;
+    app.fetch.await_poll(true);
     poll_with(
         &mut app,
         Ok(Box::new(github::GithubFetch {
@@ -623,13 +623,13 @@ async fn a_moved_remote_grown_past_the_cap_is_held_not_fetched() {
         Some(model::SizeHold::Grown(300 * MIB))
     );
     assert!(
-        !app.refresh_fetches.contains(&grown),
+        !app.fetch.refresh_fetches().contains(&grown),
         "fetched the grown remote"
     );
-    assert!(!app.fetches_in_flight.contains_key(&grown));
+    assert!(!app.fetch.claims().contains_key(&grown));
     assert_eq!(app.repos[1].fetch.size_hold(), None);
     assert!(
-        app.refresh_fetches.contains(&quiet),
+        app.fetch.refresh_fetches().contains(&quiet),
         "the small push was not fetched"
     );
 }
@@ -2107,8 +2107,8 @@ fn s10_six_consecutive_502s_climb_to_the_cap() {
     }
     assert_eq!(app.github.backoff().failures(), 6);
     // The jitter applies on top of the cap: 480 to 720 there.
-    assert_eq!(app::backoff_secs(6, 30, 0.8), 480);
-    assert_eq!(app::backoff_secs(6, 30, 1.2), 720);
+    assert_eq!(crate::engine::backoff_secs(6, 30, 0.8), 480);
+    assert_eq!(crate::engine::backoff_secs(6, 30, 1.2), 720);
 }
 
 #[test]

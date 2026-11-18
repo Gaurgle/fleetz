@@ -453,9 +453,9 @@ mod tests {
         let message =
             |app: &mut crate::app::App| app.set_status("copied 1abc123".to_string(), false);
         let refresh = |app: &mut crate::app::App| {
-            app.sweep_started = Some(std::time::Instant::now());
-            app.sweep_manual = true;
-            app.refresh_awaits_poll = true;
+            app.fetch.set_sweep_started(Some(std::time::Instant::now()));
+            app.fetch.set_sweep_manual(true);
+            app.fetch.await_poll(true);
         };
         let idle = box_rows(&quiet);
         let busy_message = box_rows(&message);

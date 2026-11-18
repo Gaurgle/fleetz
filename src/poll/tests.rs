@@ -258,7 +258,7 @@ fn a_poll_in_flight_when_a_reload_lands_is_superseded_but_releases_its_lock() {
         .github
         .claim_attempt(std::time::Instant::now(), app.dirty_mode)
         .unwrap();
-    app.refresh_awaits_poll = true;
+    app.fetch.await_poll(true);
     reload_lands(&mut app, app::DatasetSource::Network);
     let after_reload = app.github.freshness().clone();
     assert!(
@@ -276,7 +276,7 @@ fn a_poll_in_flight_when_a_reload_lands_is_superseded_but_releases_its_lock() {
     assert_eq!(*app.github.freshness(), after_reload);
     assert!(!app.github.inflight(), "lock left set");
     assert!(app.github.inflight_since().is_none());
-    assert!(!app.refresh_awaits_poll, "the waiting r never settled");
+    assert!(!app.fetch.awaits_poll(), "the waiting r never settled");
     assert!(
         app.github
             .claim_attempt(std::time::Instant::now(), app.dirty_mode)
