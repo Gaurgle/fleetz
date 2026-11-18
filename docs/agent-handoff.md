@@ -27,13 +27,10 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## In flight
 
-- Done 11-09, logged: FZ-91, FZ-103 to FZ-109, FZ-112. One lead ruling for
-  his review: F1 changed a test's `include_str!("main.rs")` to `"input.rs"` (#166).
-- FZ-111 (#168) merged `500de91`, FZ-110 (#167) merged `7f7275b` on
-  11-10, both logged; `main` CI green, worktrees swept, none open.
-- FZ-113 (#170) merged `3ac268d` 11-18 13:51, logged, swept. Lead
-  rulings for his review: the test edits on #170; O-E (`pub(crate)` in
-  the move tickets, `refresh_interval` stays on `App`) on #175 and #173.
+- Lead rulings for his review: F1's `include_str!` test change (#166);
+  FZ-113's test edits (#170); O-E, `pub(crate)` in the move tickets and
+  `refresh_interval` staying on `App` (#175, #173). FZ-103 to FZ-113
+  are Done and logged.
 - App-split batch filed 11-18 (architect-checked, bodies on the issues):
   FZ-116 #173 (E2b), FZ-117 #174 (A1a), FZ-118 to FZ-123 #175 to #180
   (A1c to A1h), FZ-124 #181 (A1i), FZ-125 #182 (R2, needs his design
