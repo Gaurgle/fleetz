@@ -291,6 +291,37 @@ first (from `git log --merges main`).
 
 ### 2026-11-18
 
+- **#170 (FZ-113), E3: `GithubSync` owns the GitHub sync in the engine.**
+  Dispatched 12:30 on his "keep refactoring and let me know when that's
+  done then", merged `3ac268d` at 13:51 CET. Base `1a5ce9a`, commit
+  `2b49370`: `engine/github_sync.rs` (851) with its tests, the type block
+  byte-identical, the poll decisions as methods without `Config` (D3),
+  `main.rs` on `from_config`; `app.rs` 5,372 to 4,793. Lead ruling (on
+  the issue, for his review): the worker's test edits beyond setters
+  (interval passed by `set_interval`, dropped `config` parameters, two
+  call pairs merged into `attempt_failed`) accepted as D3 plumbing; the
+  worker made them before asking, against its handoff. Nine tests move,
+  not the body's eleven. Pre-review fix: the D3 test's `repo_limit` to a
+  non-default value so the default-pricing mutant dies. Review 1 on
+  `be64536a87e8`: accepted, no blockers; five of six reviewer mutants
+  survive (the `dirty`/`loading` split in `PollContext`, the slowed
+  floor; two survive on the base too), a test-only follow-up for the
+  architect. Branch CI 44300255783 green; combined checks on `474117a`
+  (1758 passed); gate holds. Method note: `gh issue comment --edit-last`
+  overwrote the ruling comment posted after the record; the record is
+  now edited by comment id. Observed, out of scope: the push shortcut is
+  never tested on the positive side (`push_detected &&` to `false &&` in
+  `poll_due` passes all 1758 tests); `src/app/overlays.rs:129` says
+  "mirroring `main::GITHUB_POLL_MIN`", stale twice over;
+  `docs/api-budget-design.md:131-140, 609, 615, 884-906` cite old
+  `app.rs`, `main.rs` and `poll.rs` lines and moved function names;
+  `Hold::Ladder`'s doc says "which `App` does not hold", kept
+  byte-identical though `GithubSync` holds the interval now. Remembered:
+  the `--edit-last` note, to the practical notes (longer list).
+  FZ-113: review accepted first; fix cycles 0; owner decisions 0; worker 27 + 1.6; review 11; models opus:high/opus:high; usage worker 303994 tokens, reviewer 124602 tokens
+
+### 2026-11-18
+
 - 12:22 CET, to the lead that asked whether to continue without him:
   "keep refactoring and let me know when that's done then". Read as the
   refactor batch of 11-09 (`docs/app-split-design.md`'s eight tickets in
@@ -3082,6 +3113,10 @@ Earlier:
 - Split long commands: a compound commit, push and merge was refused by the
   permission check; one step at a time went through. A foreground `sleep` is
   refused too: wait with `gh run watch <id> --exit-status`.
+- Edit the ticket record by its comment id (`gh api -X PATCH
+  repos/Gaurgle/fleetz/issues/comments/<id> -F body=@file`), never with
+  `gh issue comment --edit-last`: that edits whatever the lead posted last,
+  and on FZ-113 it overwrote a ruling posted after the record.
 - `git rev-parse` with two revisions fails under the `rtk` hook; ask for one.
   Use `rtk proxy rg` when the full output of a search is needed.
 - `scripts/check-docs.sh` only scans tracked files: check a new document's

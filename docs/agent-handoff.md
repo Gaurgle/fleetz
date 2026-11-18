@@ -31,12 +31,19 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
   his review: F1 changed a test's `include_str!("main.rs")` to `"input.rs"` (#166).
 - FZ-111 (#168) merged `500de91`, FZ-110 (#167) merged `7f7275b` on
   11-10, both logged; `main` CI green, worktrees swept, none open.
-- FZ-113 (#170, E3) In progress since 11-18 12:30, base `1a5ce9a`,
-  branch `refactor/fz-113-engine-github-sync`, worktree
-  `.claude/worktrees/fz-113`; record comment 6977104134 (edit by id,
-  not `--edit-last`); in Review, diff `be64536a87e8`, hard tiers.
-  Then E2b, A1a, A1c to A1i, R2: issues to file from FZ-116 (his yes
-  13:05), architect drafting the move sets. Survey note for `fz-architect`: section
+- FZ-113 (#170) merged `3ac268d` 11-18 13:51, logged, swept. Lead
+  rulings for his review: the test edits on #170; O-E (`pub(crate)` in
+  the move tickets, `refresh_interval` stays on `App`) on #175 and #173.
+- App-split batch filed 11-18 (architect-checked, bodies on the issues):
+  FZ-116 #173 (E2b), FZ-117 #174 (A1a), FZ-118 to FZ-123 #175 to #180
+  (A1c to A1h), FZ-124 #181 (A1i), FZ-125 #182 (R2, needs his design
+  ruling, not for the unattended run). Strictly in that order, one
+  worker at a time (each shares `app.rs` with the next).
+- FZ-116 (#173) In progress since 14:05, base `3ac268d`, branch
+  `refactor/fz-116-engine-fetch-state`, worktree `.claude/worktrees/fz-116`;
+  record on the issue (edit by comment id); hard tiers.
+- Survey for `fz-architect` after the batch: section 3's `app` to `ui`
+  sites and section 5's cell counts are stale (its 11-18 report); section
   2's intro and rows drifted (app.rs re-measured, github/cache rows).
 - FZ-100 (#157), FZ-102 (#159), the build label and FZ-97 (#154) wait
   on his word; FZ-83 and FZ-95 follow-ups in the log.
