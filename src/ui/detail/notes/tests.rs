@@ -102,7 +102,11 @@ fn the_reader_titles_the_file_and_scrolls_its_body() {
     let rows = draw(&app);
     assert!(rows[2].contains("line 1 "), "{}", rows[2]);
 
-    assert_eq!(app.reader_view_height.get(), 9, "one H/L page measured");
+    assert_eq!(
+        app.drawn.reader_view_height.get(),
+        9,
+        "one H/L page measured"
+    );
     app.scroll_reader(10);
     let rows = draw(&app);
     assert!(rows[2].contains("line 11"), "{}", rows.join("\n"));

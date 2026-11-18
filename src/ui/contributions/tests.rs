@@ -341,8 +341,8 @@ fn shrinking_the_pane_drops_the_oldest_weeks_not_the_newest() {
     let app = App::new(vec![], "test".to_string(), 120, 40);
     // Settle at the wide size, as a real first frame would.
     let first = first_week(&app, was);
-    app.contrib_visible_weeks.set(was);
-    app.contrib_scroll.set(first);
+    app.drawn.contrib_visible_weeks.set(was);
+    app.drawn.contrib_scroll.set(first);
     let right_edge = first + was;
 
     let after = first_week(&app, now);
@@ -366,8 +366,8 @@ fn growing_the_pane_reaches_further_back_not_forward() {
 
     let app = App::new(vec![], "test".to_string(), 70, 40);
     let first = first_week(&app, was);
-    app.contrib_visible_weeks.set(was);
-    app.contrib_scroll.set(first);
+    app.drawn.contrib_visible_weeks.set(was);
+    app.drawn.contrib_scroll.set(first);
     let right_edge = first + was;
 
     let after = first_week(&app, now);
@@ -389,8 +389,8 @@ fn a_resize_keeps_the_marked_day_in_view() {
 
     let mut app = App::new(vec![], "test".to_string(), 120, 40);
     let first = first_week(&app, was);
-    app.contrib_visible_weeks.set(was);
-    app.contrib_scroll.set(first);
+    app.drawn.contrib_visible_weeks.set(was);
+    app.drawn.contrib_scroll.set(first);
     // Park the cursor on the oldest week currently drawn.
     app.contrib_cursor = Some(first * 7);
 
@@ -469,16 +469,16 @@ fn the_grid_opens_anchored_on_the_newest_weeks() {
     // `contrib_scroll` is a Cell, so the app need not be mut here.
     let app = app_with_calendar(1);
     // Whatever the app asked for, the first frame pins today to the right.
-    app.contrib_scroll.set(crate::contributions::WEEKS);
+    app.drawn.contrib_scroll.set(crate::contributions::WEEKS);
     let strip = Rect::new(0, 0, 120, CONTRIB_HEIGHT);
     let _ = drawn(120, &app);
     let visible = visible_weeks(strip);
     assert_eq!(
-        app.contrib_scroll.get(),
+        app.drawn.contrib_scroll.get(),
         WEEKS - visible,
         "oldest weeks hide off to the left"
     );
-    assert_eq!(app.contrib_visible_weeks.get(), visible);
+    assert_eq!(app.drawn.contrib_visible_weeks.get(), visible);
 }
 
 /// No row may spill past the strip's right edge, at any width.
@@ -569,14 +569,14 @@ fn an_opened_strip_marks_today_in_view_at_every_width() {
     let today = chrono::Local::now().date_naive();
     for width in [40u16, 80, 120, 260] {
         let mut app = app_with_calendar(1);
-        app.contrib_scroll.set(0);
+        app.drawn.contrib_scroll.set(0);
         app.apply_contributions_setting(ContributionsMode::Github);
         let last = app.contrib_last_slot(today);
         assert_eq!(app.contrib_cursor, Some(last), "width {width}");
 
         let lines = drawn(width, &app);
         let area = Rect::new(0, 0, width, CONTRIB_HEIGHT);
-        let first = app.contrib_scroll.get();
+        let first = app.drawn.contrib_scroll.get();
         let visible = visible_weeks(area);
         let week = last / 7;
         assert!(
@@ -620,7 +620,7 @@ fn assert_unfolds_onto_today(unfold: impl Fn(&mut App), path: &str) {
         "{path}: premise, folded at launch"
     );
     assert_eq!(app.contrib_cursor, None, "{path}: premise, never opened");
-    app.contrib_scroll.set(0);
+    app.drawn.contrib_scroll.set(0);
 
     unfold(&mut app);
     assert!(!app.contributions_folded, "{path}: unfolded");
@@ -630,7 +630,7 @@ fn assert_unfolds_onto_today(unfold: impl Fn(&mut App), path: &str) {
     let width = 120;
     let lines = drawn(width, &app);
     let area = Rect::new(0, 0, width, CONTRIB_HEIGHT);
-    let first = app.contrib_scroll.get();
+    let first = app.drawn.contrib_scroll.get();
     let week = last / 7;
     assert!(
         week >= first && week < first + visible_weeks(area),
@@ -676,13 +676,13 @@ fn unfolding_onto_today_scrolls_today_into_view_without_a_resize() {
     let visible = visible_weeks(area);
     let mut app = app_with_calendar(1);
     app.apply_contributions_setting(ContributionsMode::Off);
-    app.contrib_visible_weeks.set(visible);
-    app.contrib_scroll.set(0);
+    app.drawn.contrib_visible_weeks.set(visible);
+    app.drawn.contrib_scroll.set(0);
 
     app.toggle_fold(FocusedPanel::Contributions);
     let lines = drawn(width, &app);
     let last = app.contrib_last_slot(chrono::Local::now().date_naive());
-    let (first, week) = (app.contrib_scroll.get(), last / 7);
+    let (first, week) = (app.drawn.contrib_scroll.get(), last / 7);
     assert!(
         week >= first && week < first + visible,
         "today's week {week} outside [{first}, {})",
@@ -824,7 +824,7 @@ fn the_marked_day_is_painted_in_a_colour_no_ladder_uses() {
 
     let mut app = app_with_calendar(4);
     app.focused_panel = FocusedPanel::Contributions;
-    app.contrib_scroll.set(0);
+    app.drawn.contrib_scroll.set(0);
     app.contrib_cursor = Some(3 * 7); // week 3, a Sunday
 
     let mut t = Terminal::new(TestBackend::new(120, CONTRIB_HEIGHT)).unwrap();

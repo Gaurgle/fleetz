@@ -557,8 +557,8 @@ pub(super) fn render_reader(frame: &mut Frame, inner: Rect, app: &App) {
     // One `H`/`L` page and the render width, which only this pass can
     // measure.
     let board = held_board(app);
-    app.reader_view_height.set(inner.height);
-    app.reader_width.set(inner.width);
+    app.drawn.reader_view_height.set(inner.height);
+    app.drawn.reader_width.set(inner.width);
     if let Some(rendered) = reader_render(app) {
         let rows: std::borrow::Cow<[Line<'static>]> = match rendered.width == inner.width {
             true => std::borrow::Cow::Borrowed(&rendered.lines),
@@ -577,7 +577,7 @@ pub(super) fn render_reader(frame: &mut Frame, inner: Rect, app: &App) {
             inner,
             &rows,
             app.reader_scroll,
-            &app.reader_max_scroll,
+            &app.drawn.reader_max_scroll,
         );
         return;
     }
@@ -609,6 +609,6 @@ pub(super) fn render_reader(frame: &mut Frame, inner: Rect, app: &App) {
         inner,
         &lines,
         app.reader_scroll,
-        &app.reader_max_scroll,
+        &app.drawn.reader_max_scroll,
     );
 }

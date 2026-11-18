@@ -1251,7 +1251,7 @@ fn with_no_fleet_column_the_frame_shows_the_message_in_the_footer() {
     let (w, h) = (160u16, 30u16);
     let mut app = crate::app::App::new(Vec::new(), String::new(), w, h);
     app.view = View::Detail;
-    app.fleet_drawn.set(true);
+    app.drawn.fleet_drawn.set(true);
     app.set_status("Already refreshing".to_string(), true);
     let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
     terminal.draw(|f| render(f, &app)).unwrap();

@@ -979,7 +979,7 @@ pub fn render_at(frame: &mut Frame, app: &App, now: std::time::Instant) {
 
     // Pane 1's summary box sets it when drawn; the footer, drawn after it,
     // reads it.
-    app.fleet_drawn.set(false);
+    app.drawn.fleet_drawn.set(false);
     let chunks = frame_chunks(area, app);
     render_header(frame, chunks.header, app);
     if let Some(status) = chunks.status {

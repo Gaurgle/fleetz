@@ -70,19 +70,23 @@ pub(crate) fn fetch_failed(kind: crate::git::FetchFailureKind) -> crate::git::Fe
 #[test]
 fn the_wheel_scrolls_the_grid_both_ways() {
     let mut app = make_app(1);
-    app.contrib_visible_weeks.set(20);
+    app.drawn.contrib_visible_weeks.set(20);
     let max = crate::contributions::WEEKS - 20;
-    app.contrib_scroll.set(max);
+    app.drawn.contrib_scroll.set(max);
 
     // Newer, from the right edge: already there, nothing to give.
     app.scroll_contributions(3);
-    assert_eq!(app.contrib_scroll.get(), max, "clamped at the newest week");
+    assert_eq!(
+        app.drawn.contrib_scroll.get(),
+        max,
+        "clamped at the newest week"
+    );
 
     // Older must actually move, which is the half that was missing.
     app.scroll_contributions(-3);
-    assert_eq!(app.contrib_scroll.get(), max - 3);
+    assert_eq!(app.drawn.contrib_scroll.get(), max - 3);
     app.scroll_contributions(3);
-    assert_eq!(app.contrib_scroll.get(), max, "and back again");
+    assert_eq!(app.drawn.contrib_scroll.get(), max, "and back again");
 
     // Neither direction disturbs the day cursor.
     assert_eq!(app.contrib_cursor, None);
@@ -94,23 +98,27 @@ fn the_wheel_scrolls_the_grid_both_ways() {
 #[test]
 fn dragging_pans_the_grid_and_banks_the_remainder() {
     let mut app = make_app(1);
-    app.contrib_visible_weeks.set(20);
+    app.drawn.contrib_visible_weeks.set(20);
     let start = crate::contributions::WEEKS - 20;
-    app.contrib_scroll.set(start);
+    app.drawn.contrib_scroll.set(start);
 
     // One column is less than a week: nothing moves, anchor unchanged.
     let anchor = app.pan_contributions(50, 51);
     assert_eq!(anchor, 50, "sub-week drag keeps its anchor");
-    assert_eq!(app.contrib_scroll.get(), start);
+    assert_eq!(app.drawn.contrib_scroll.get(), start);
 
     // Dragging right pulls older weeks in from the left.
     let anchor = app.pan_contributions(50, 58);
-    assert_eq!(app.contrib_scroll.get(), start - 4, "8 columns = 4 weeks");
+    assert_eq!(
+        app.drawn.contrib_scroll.get(),
+        start - 4,
+        "8 columns = 4 weeks"
+    );
     assert_eq!(anchor, 58, "anchor advances by what was consumed");
 
     // And back the other way.
     app.pan_contributions(58, 50);
-    assert_eq!(app.contrib_scroll.get(), start);
+    assert_eq!(app.drawn.contrib_scroll.get(), start);
 }
 
 /// One key steps through every view and comes back where it started.
@@ -791,7 +799,7 @@ fn scrolling_stops_at_the_measured_end_of_content() {
     // regardless of content, so scrolling back needed one dead keypress
     // per step of overshoot before the view moved at all.
     let mut app = make_app(1);
-    app.detail_max_scroll.set(12);
+    app.drawn.detail_max_scroll.set(12);
 
     for _ in 0..100 {
         app.scroll_detail(1);
@@ -807,7 +815,7 @@ fn scrolling_stops_at_the_measured_end_of_content() {
 #[test]
 fn scrolling_up_stops_at_the_top() {
     let mut app = make_app(1);
-    app.inspector_max_scroll.set(5);
+    app.drawn.inspector_max_scroll.set(5);
     app.scroll_inspector(3);
     assert_eq!(app.inspector_scroll, 3);
 
@@ -824,7 +832,7 @@ fn a_pane_with_no_overflow_does_not_scroll() {
     // Content shorter than the pane: max is 0, so every scroll is a no-op
     // rather than silently accumulating offset.
     let mut app = make_app(1);
-    app.detail_max_scroll.set(0);
+    app.drawn.detail_max_scroll.set(0);
     app.scroll_detail(10);
     assert_eq!(app.detail_scroll(), 0);
 }
@@ -832,7 +840,7 @@ fn a_pane_with_no_overflow_does_not_scroll() {
 #[test]
 fn page_scrolling_clamps_the_same_way() {
     let mut app = make_app(1);
-    app.detail_max_scroll.set(4);
+    app.drawn.detail_max_scroll.set(4);
     app.scroll_detail(10); // one PageDown
     assert_eq!(app.detail_scroll(), 4);
     app.scroll_detail(-10); // one PageUp
@@ -879,7 +887,7 @@ fn resize_keys_step_from_the_capped_width_on_screen() {
     let w = 180;
     let at_default = || {
         let app = make_app(1);
-        app.main_area_width.set(w);
+        app.drawn.main_area_width.set(w);
         app
     };
 
@@ -912,7 +920,7 @@ fn resize_keys_never_move_the_list_the_wrong_way_at_any_width() {
     for w in 60..=400 {
         for delta in [-1i16, 1] {
             let mut app = make_app(1);
-            app.main_area_width.set(w);
+            app.drawn.main_area_width.set(w);
             for press in 0..10 {
                 let before = drawn_list_width(&app, w);
                 let pct = app.repo_list_pct;
@@ -936,7 +944,7 @@ fn resize_keys_never_move_the_list_the_wrong_way_at_any_width() {
 fn resize_keys_step_five_percent_where_the_cap_does_not_bite() {
     let w = 100;
     let mut app = make_app(1);
-    app.main_area_width.set(w);
+    app.drawn.main_area_width.set(w);
     assert_eq!(drawn_list_width(&app, w), 35);
     app.resize_repo_list(-1);
     assert_eq!(app.repo_list_pct, DEFAULT_REPO_LIST_PCT - 5);
@@ -1128,15 +1136,19 @@ fn observe_day_keeps_the_cursor_on_its_date() {
 
     let mut app = make_app(1);
     // Scrolled back from the newest edge, so the scroll has to follow.
-    app.contrib_visible_weeks.set(20);
+    app.drawn.contrib_visible_weeks.set(20);
     let tuesday = d("2026-08-18");
     app.github_calendar = Some(Box::new(Calendar::new(tuesday, Source::Github)));
     let old_today = app.github_calendar.as_ref().unwrap().today_slot();
     app.contrib_cursor = Some(old_today);
-    app.contrib_scroll.set(40);
+    app.drawn.contrib_scroll.set(40);
     app.observe_day(tuesday + chrono::Duration::days(1));
     assert_eq!(app.contrib_cursor, Some(old_today), "weekday: unchanged");
-    assert_eq!(app.contrib_scroll.get(), 40, "weekday: same weeks shown");
+    assert_eq!(
+        app.drawn.contrib_scroll.get(),
+        40,
+        "weekday: same weeks shown"
+    );
     assert_eq!(
         app.github_calendar.as_ref().unwrap().today_slot(),
         old_today + 1
@@ -1152,24 +1164,28 @@ fn observe_day_keeps_the_cursor_on_its_date() {
         Some(old_today - 7),
         "sunday: a week back"
     );
-    assert_eq!(app.contrib_scroll.get(), 39, "sunday: same weeks shown");
+    assert_eq!(
+        app.drawn.contrib_scroll.get(),
+        39,
+        "sunday: same weeks shown"
+    );
 
     app.contrib_cursor = Some(3);
-    app.contrib_scroll.set(0);
+    app.drawn.contrib_scroll.set(0);
     app.observe_day(saturday + chrono::Duration::days(8));
     assert_eq!(app.contrib_cursor, Some(0), "clamped at the first slot");
-    assert_eq!(app.contrib_scroll.get(), 0);
+    assert_eq!(app.drawn.contrib_scroll.get(), 0);
 }
 
 #[test]
 fn observe_day_without_a_github_calendar_changes_nothing() {
     let mut app = make_app(1);
     app.contrib_cursor = Some(12);
-    app.contrib_scroll.set(40);
+    app.drawn.contrib_scroll.set(40);
     app.observe_day(today() + chrono::Duration::days(1));
     assert!(app.github_calendar.is_none());
     assert_eq!(app.contrib_cursor, Some(12));
-    assert_eq!(app.contrib_scroll.get(), 40);
+    assert_eq!(app.drawn.contrib_scroll.get(), 40);
 }
 
 /// A strip showing the newest weeks keeps showing them across a Sunday:
@@ -1181,10 +1197,10 @@ fn observe_day_keeps_a_strip_pinned_to_the_newest_week() {
     let saturday = chrono::NaiveDate::from_ymd_opt(2026, 8, 22).unwrap();
     let mut app = make_app(1);
     app.github_calendar = Some(Box::new(Calendar::new(saturday, Source::Github)));
-    app.contrib_visible_weeks.set(20);
-    app.contrib_scroll.set(WEEKS - 20);
+    app.drawn.contrib_visible_weeks.set(20);
+    app.drawn.contrib_scroll.set(WEEKS - 20);
     app.observe_day(saturday + chrono::Duration::days(1));
-    assert_eq!(app.contrib_scroll.get(), WEEKS - 20);
+    assert_eq!(app.drawn.contrib_scroll.get(), WEEKS - 20);
 }
 
 /// The grid reads as columns of weeks and rows of weekdays, so the keys
@@ -1243,11 +1259,11 @@ fn an_unopened_strip_marks_today_on_the_first_move_and_a_source_change_returns_t
 fn opening_the_strip_stands_on_today() {
     let mut app = make_app(1);
     app.contrib_cursor = Some(0);
-    app.contrib_scroll.set(0);
+    app.drawn.contrib_scroll.set(0);
     app.open_contributions(ContributionsMode::Github, today());
     assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(today())));
     assert!(
-        app.contrib_scroll.get() >= crate::contributions::WEEKS,
+        app.drawn.contrib_scroll.get() >= crate::contributions::WEEKS,
         "still asks for the newest weeks, which holds today's column"
     );
 }
@@ -1345,31 +1361,43 @@ fn home_and_end_jump_to_the_ends_keeping_the_weekday() {
 #[test]
 fn moving_off_the_window_scrolls_the_grid() {
     let mut app = make_app(1);
-    app.contrib_visible_weeks.set(10);
-    app.contrib_scroll.set(40);
+    app.drawn.contrib_visible_weeks.set(10);
+    app.drawn.contrib_scroll.set(40);
     app.contrib_cursor = Some(40 * 7);
 
     app.move_contrib_cursor(-1, 0, today());
-    assert_eq!(app.contrib_scroll.get(), 39, "scrolled one column left");
+    assert_eq!(
+        app.drawn.contrib_scroll.get(),
+        39,
+        "scrolled one column left"
+    );
 
-    app.contrib_scroll.set(0);
+    app.drawn.contrib_scroll.set(0);
     app.contrib_cursor = Some(9 * 7);
     app.move_contrib_cursor(1, 0, today());
-    assert_eq!(app.contrib_scroll.get(), 1, "scrolled one column right");
+    assert_eq!(
+        app.drawn.contrib_scroll.get(),
+        1,
+        "scrolled one column right"
+    );
 }
 
 #[test]
 fn scrolling_clamps_to_the_ends_of_the_year() {
     let mut app = make_app(1);
-    app.contrib_visible_weeks.set(10);
-    app.contrib_scroll.set(0);
+    app.drawn.contrib_visible_weeks.set(10);
+    app.drawn.contrib_scroll.set(0);
 
     app.scroll_contributions(-5);
-    assert_eq!(app.contrib_scroll.get(), 0, "cannot scroll before the year");
+    assert_eq!(
+        app.drawn.contrib_scroll.get(),
+        0,
+        "cannot scroll before the year"
+    );
 
     app.scroll_contributions(1000);
     assert_eq!(
-        app.contrib_scroll.get(),
+        app.drawn.contrib_scroll.get(),
         crate::contributions::WEEKS - 10,
         "cannot scroll past the newest week"
     );
@@ -1382,10 +1410,10 @@ fn scrolling_clamps_to_the_ends_of_the_year() {
 #[test]
 fn switching_the_source_asks_for_the_newest_weeks() {
     let mut app = make_app(1);
-    app.contrib_scroll.set(0);
+    app.drawn.contrib_scroll.set(0);
     app.cycle_contributions_source();
     assert!(
-        app.contrib_scroll.get() >= crate::contributions::WEEKS,
+        app.drawn.contrib_scroll.get() >= crate::contributions::WEEKS,
         "an out-of-range request is what anchors the grid right"
     );
 }
@@ -1460,7 +1488,7 @@ fn a_failed_reload_keeps_a_populated_fleet_on_screen() {
 fn scrolling_the_detail_pane_leaves_the_selection_alone() {
     let mut app = make_app(3);
     app.history_view = HistoryView::Commits;
-    app.detail_max_scroll.set(20);
+    app.drawn.detail_max_scroll.set(20);
     app.set_detail_selected(2);
     let before = app.detail_selected();
     app.scroll_detail(5);
@@ -1475,9 +1503,9 @@ fn scrolling_the_detail_pane_leaves_the_selection_alone() {
 fn graph_app() -> App {
     let mut app = make_app(1);
     app.history_view = HistoryView::Graph;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
-    *app.detail_row_tops.borrow_mut() = vec![0, 10, 25, 60];
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
+    *app.drawn.detail_row_tops.borrow_mut() = vec![0, 10, 25, 60];
     app
 }
 
@@ -1589,11 +1617,11 @@ fn stepping_a_commit_shows_its_block_from_the_top() {
 #[test]
 fn moving_the_graph_cursor_does_not_request_follow() {
     let mut app = graph_app();
-    app.follow_selection.set(false);
+    app.drawn.follow_selection.set(false);
     app.scroll_detail(12);
     assert_eq!(app.detail_selected(), 1);
     assert!(
-        !app.follow_selection.get(),
+        !app.drawn.follow_selection.get(),
         "the cursor asked the renderer to follow, which would undo it"
     );
 }
@@ -1622,10 +1650,10 @@ fn shift_scroll_from_the_repo_list_steps_the_detail_cursor() {
     app.view = View::Detail;
     app.focused_panel = FocusedPanel::RepoList;
     app.history_view = HistoryView::Info;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
     // Six commits, as `info` shows.
-    *app.detail_row_tops.borrow_mut() = (0..6).collect();
+    *app.drawn.detail_row_tops.borrow_mut() = (0..6).collect();
 
     app.scroll_next_panel(1);
     assert_eq!(app.detail_selected(), 1, "the inspector was told nothing");
@@ -1643,9 +1671,9 @@ fn shift_scroll_past_the_last_commit_scrolls_instead() {
     app.view = View::Detail;
     app.focused_panel = FocusedPanel::RepoList;
     app.history_view = HistoryView::Info;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
-    *app.detail_row_tops.borrow_mut() = (0..6).collect();
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
+    *app.drawn.detail_row_tops.borrow_mut() = (0..6).collect();
 
     // `make_app` builds repos with no commits, so the cursor is already at
     // the end of the list and every step is a scroll.
@@ -1667,9 +1695,9 @@ fn shift_scroll_from_the_detail_pane_drives_the_inspector() {
     app.view = View::Detail;
     app.focused_panel = FocusedPanel::Detail;
     app.history_view = HistoryView::Commits;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
-    *app.detail_row_tops.borrow_mut() = (0..40).collect();
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
+    *app.drawn.detail_row_tops.borrow_mut() = (0..40).collect();
     assert!(app.shows_inspector(), "no inspector to aim at");
     assert_eq!(
         app.shift_scroll_target(),
@@ -1679,7 +1707,7 @@ fn shift_scroll_from_the_detail_pane_drives_the_inspector() {
 
     // The inspector's own offset is clamped against its content, so give
     // it something to scroll before asking whether it moved.
-    app.inspector_max_scroll.set(10);
+    app.drawn.inspector_max_scroll.set(10);
     let scroll_before = app.detail_scroll();
     app.scroll_next_panel(1);
     assert_eq!(app.inspector_scroll, 1, "the inspector did not scroll");
@@ -1700,8 +1728,8 @@ fn shift_scroll_walks_graph_rows_one_line_at_a_time() {
     app.view = View::Detail;
     app.focused_panel = FocusedPanel::Detail;
     app.history_view = HistoryView::Graph;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
 
     assert_eq!(
         app.shift_scroll_target(),
@@ -1727,8 +1755,8 @@ fn shift_scroll_in_the_graph_leaves_the_repo_list_alone() {
     app.view = View::Detail;
     app.focused_panel = FocusedPanel::Detail;
     app.history_view = HistoryView::Graph;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
 
     let repo_before = app.selected;
     app.scroll_next_panel(1);
@@ -1783,10 +1811,10 @@ fn shift_scroll_has_no_target_in_compact() {
 fn scrolling_does_not_move_the_selection() {
     let mut app = make_app(1);
     app.history_view = HistoryView::Commits;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
     // One row per commit, as the list draws them.
-    *app.detail_row_tops.borrow_mut() = (0..40).collect();
+    *app.drawn.detail_row_tops.borrow_mut() = (0..40).collect();
 
     let before = app.detail_selected();
     app.scroll_detail(10);
@@ -1817,9 +1845,9 @@ fn scrolling_does_not_move_the_selection() {
 fn the_first_step_after_a_scroll_re_enters_the_pane() {
     let mut app = make_app(1);
     app.history_view = HistoryView::Commits;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
-    *app.detail_row_tops.borrow_mut() = (0..40).collect();
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
+    *app.drawn.detail_row_tops.borrow_mut() = (0..40).collect();
 
     app.scroll_detail(10);
     assert_eq!(app.detail_selected(), 0, "the wheel moved the selection");
@@ -1838,9 +1866,9 @@ fn the_first_step_after_a_scroll_re_enters_the_pane() {
 fn a_step_after_scrolling_up_re_enters_from_the_bottom() {
     let mut app = make_app(1);
     app.history_view = HistoryView::Commits;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
-    *app.detail_row_tops.borrow_mut() = (0..40).collect();
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
+    *app.drawn.detail_row_tops.borrow_mut() = (0..40).collect();
 
     app.set_detail_selected(30);
     app.scroll_detail(0_i32.saturating_sub(0));
@@ -1859,9 +1887,9 @@ fn a_step_after_scrolling_up_re_enters_from_the_bottom() {
 fn a_visible_selection_steps_without_re_entering() {
     let mut app = make_app(1);
     app.history_view = HistoryView::Commits;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
-    *app.detail_row_tops.borrow_mut() = (0..40).collect();
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
+    *app.drawn.detail_row_tops.borrow_mut() = (0..40).collect();
 
     // `Commits` counts graph rows, and a step past the last one falls
     // through to scrolling, so the list has to be long enough to step in.
@@ -1891,9 +1919,9 @@ fn a_visible_selection_steps_without_re_entering() {
 fn the_first_entry_is_reachable_at_the_top_of_the_content() {
     let mut app = make_app(1);
     app.history_view = HistoryView::Commits;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
-    *app.detail_row_tops.borrow_mut() = (0..40).collect();
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
+    *app.drawn.detail_row_tops.borrow_mut() = (0..40).collect();
 
     app.set_detail_selected(0);
     app.scroll_detail(0);
@@ -1908,10 +1936,10 @@ fn the_first_entry_is_reachable_at_the_top_of_the_content() {
 fn scrolling_past_a_list_leaves_its_selection_alone() {
     let mut app = make_app(1);
     app.history_view = HistoryView::Info;
-    app.detail_view_height.set(20);
-    app.detail_max_scroll.set(100);
+    app.drawn.detail_view_height.set(20);
+    app.drawn.detail_max_scroll.set(100);
     // Six commits at the top, then sections that own no commit.
-    *app.detail_row_tops.borrow_mut() = (0..6).collect();
+    *app.drawn.detail_row_tops.borrow_mut() = (0..6).collect();
     app.set_detail_selected(5);
 
     app.scroll_detail(60);
@@ -3022,7 +3050,7 @@ fn shift_scroll_walks_tree_and_reader_in_the_notes_layout() {
 
     app.focused_panel = FocusedPanel::Detail;
     assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
-    app.reader_max_scroll.set(20);
+    app.drawn.reader_max_scroll.set(20);
     app.scroll_next_panel(3);
     assert_eq!(app.reader_scroll, 3, "J from the tree scrolls the reader");
     assert_eq!(app.inspector_scroll, 0, "not the inspector");
@@ -3067,8 +3095,8 @@ fn h_and_l_page_the_reader_from_the_tree() {
     let mut app = notes_app();
     app.history_view = HistoryView::Notes;
     walked(&mut app, &["notez/a.md", "notez/b.md"]);
-    app.reader_max_scroll.set(100);
-    app.reader_view_height.set(18);
+    app.drawn.reader_max_scroll.set(100);
+    app.drawn.reader_view_height.set(18);
 
     app.focused_panel = FocusedPanel::Detail;
     assert!(app.reader_pages());
@@ -3105,7 +3133,7 @@ fn the_reader_scrolls_on_its_own_and_resets_on_a_new_file() {
     app.history_view = HistoryView::Notes;
     walked(&mut app, &["notez/a.md", "notez/b.md"]);
     app.claim_note_read().expect("a");
-    app.reader_max_scroll.set(30);
+    app.drawn.reader_max_scroll.set(30);
     app.scroll_reader(12);
     assert_eq!(app.reader_scroll, 12);
     assert_eq!(app.detail_selected(), 0, "the cursor stayed");
@@ -3136,7 +3164,7 @@ fn a_markdown_read_asks_for_a_render_at_the_reader_width() {
     walked(&mut app, &["notez/a.md", "notez/b.txt", "notez/TODO.md"]);
     assert_eq!(app.claim_note_read().unwrap().render_width, None, "undrawn");
 
-    app.reader_width.set(48);
+    app.drawn.reader_width.set(48);
     app.invalidate_notes();
     let mut asked = Vec::new();
     for _ in 0..3 {
@@ -3175,7 +3203,7 @@ fn a_new_reader_width_claims_one_render_of_the_held_body() {
     app.apply_note_read(read.clone(), Ok("# A".to_string()));
     assert_eq!(app.claim_note_render(), None, "the reader never drew");
 
-    app.reader_width.set(40);
+    app.drawn.reader_width.set(40);
     let render = app.claim_note_render().expect("a render at 40");
     assert_eq!((render.width, render.text.as_str()), (40, "# A"));
     assert_eq!(app.claim_note_render(), None, "in flight");
@@ -3185,7 +3213,7 @@ fn a_new_reader_width_claims_one_render_of_the_held_body() {
     assert_eq!(app.note_body.as_ref().unwrap().rendered, Some(rendered));
     assert_eq!(app.claim_note_render(), None, "held at this width");
 
-    app.reader_width.set(60);
+    app.drawn.reader_width.set(60);
     assert_eq!(app.claim_note_render().map(|r| r.width), Some(60));
 
     app.select_commit_down();
@@ -3207,7 +3235,7 @@ fn a_render_from_an_older_generation_of_the_same_file_is_dropped() {
     let mut app = notes_app();
     app.history_view = HistoryView::Notes;
     walked(&mut app, &["notez/a.md"]);
-    app.reader_width.set(40);
+    app.drawn.reader_width.set(40);
     let old = app.claim_note_read().expect("a");
     assert_eq!(old.render_width, Some(40));
 

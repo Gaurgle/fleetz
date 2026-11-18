@@ -162,8 +162,12 @@ fn handle_mouse_in(app: &mut App, area: ratatui::layout::Rect, m: MouseEvent) {
             // A click inside the strip both focuses it and picks the day under
             // the cursor, so the readout answers what you actually pointed at.
             if let Some(strip) = rects.contributions
-                && let Some(slot) =
-                    ui::contributions::slot_at(strip, app.contrib_scroll.get(), m.column, m.row)
+                && let Some(slot) = ui::contributions::slot_at(
+                    strip,
+                    app.drawn.contrib_scroll.get(),
+                    m.column,
+                    m.row,
+                )
             {
                 app.contrib_cursor = Some(slot);
                 app.needs_redraw = true;
@@ -241,7 +245,7 @@ pub(crate) fn click_detail(
     row: u16,
     copy: impl FnOnce(&str) -> Result<(), String>,
 ) {
-    let Some(click) = app.detail_hits.borrow().at(col, row) else {
+    let Some(click) = app.drawn.detail_hits.borrow().at(col, row) else {
         return;
     };
     app.click_detail(&click);
@@ -864,7 +868,8 @@ pub(crate) async fn handle_normal_input(
             // depends on the main area's width.
             if let Ok(size) = terminal.size() {
                 let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
-                app.main_area_width
+                app.drawn
+                    .main_area_width
                     .set(ui::panel_rects(area, app).body.width);
             }
             let delta = if key.code == KeyCode::Char('<') {
