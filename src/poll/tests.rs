@@ -1342,7 +1342,7 @@ async fn spawn_note_read_reads_the_body_and_facts_off_the_ui_thread() {
         panic!("commit");
     };
     app.apply_note_commit(&read, last);
-    let held = app.note_body.as_ref().expect("held");
+    let held = app.notes.body.as_ref().expect("held");
     assert_eq!(held.path, other.path);
     assert_eq!(
         (&held.text, &held.facts, &held.last_commit),
@@ -1351,7 +1351,7 @@ async fn spawn_note_read_reads_the_body_and_facts_off_the_ui_thread() {
     );
     app.apply_note_commit(&other, notes::LastCommit::Untracked);
     assert_eq!(
-        app.note_body.as_ref().and_then(|b| b.last_commit.clone()),
+        app.notes.body.as_ref().and_then(|b| b.last_commit.clone()),
         Some(notes::LastCommit::Untracked)
     );
     let _ = std::fs::remove_dir_all(&scratch);

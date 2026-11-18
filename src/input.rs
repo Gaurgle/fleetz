@@ -763,8 +763,8 @@ pub(crate) async fn handle_normal_input(
             }
             app.invalidate_notes();
             app.invalidate_changes();
-            if opener.is_some_and(|o| o.fell_back) && !app.todoz_fallback_said {
-                app.todoz_fallback_said = true;
+            if opener.is_some_and(|o| o.fell_back) && !app.notes.todoz_fallback_said {
+                app.notes.todoz_fallback_said = true;
                 app.set_status(
                     "todoz not on PATH: board opened in $EDITOR".to_string(),
                     false,

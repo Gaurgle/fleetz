@@ -2838,7 +2838,7 @@ fn walked(app: &mut App, files: &[&str]) {
     let walk = NotesWalk {
         key: "/notes-fixture".to_string(),
         root: "/notes-fixture".into(),
-        generation: app.notes_generation,
+        generation: app.notes.generation,
     };
     let notes = crate::notes::Notes {
         files: files.iter().map(|f| note(f)).collect(),
@@ -2872,7 +2872,7 @@ fn the_notes_walk_waits_for_its_view_and_the_dwell() {
     let walk = app.claim_notes_walk(after(3300)).expect("walks");
     assert_eq!(walk.root, std::path::PathBuf::from("/notes-fixture"));
     assert_eq!(app.claim_notes_walk(after(4000)), None, "one at a time");
-    assert!(app.notes.values().all(|s| s.walking));
+    assert!(app.notes.states.values().all(|s| s.walking));
 }
 
 /// A not-cloned row has nothing to walk.
@@ -2885,7 +2885,7 @@ fn a_not_cloned_row_is_never_walked() {
     app.claim_notes_walk(start);
     let later = start + std::time::Duration::from_secs(5);
     assert_eq!(app.claim_notes_walk(later), None);
-    assert!(app.notes.is_empty());
+    assert!(app.notes.states.is_empty());
 }
 
 /// The walk is held for the session: leaving the view and coming back
@@ -2956,10 +2956,10 @@ fn only_the_highlighted_file_is_read() {
     app.select_commit_up();
     let b = app.claim_note_read().expect("b");
     app.apply_note_read(read, Ok("c".to_string()));
-    assert_eq!(app.note_body.as_ref().and_then(|b| b.text.clone()), None);
+    assert_eq!(app.notes.body.as_ref().and_then(|b| b.text.clone()), None);
     app.apply_note_read(b, Ok("b".to_string()));
     assert_eq!(
-        app.note_body.as_ref().and_then(|b| b.text.clone()),
+        app.notes.body.as_ref().and_then(|b| b.text.clone()),
         Some(Ok("b".to_string()))
     );
 
@@ -2982,7 +2982,7 @@ fn the_markdown_toggle_widens_the_tree_and_keeps_the_file() {
     assert_eq!(app.selected_commit_count(), 1);
 
     app.toggle_notes_markdown();
-    assert!(app.notes_all_markdown);
+    assert!(app.notes.all_markdown);
     assert_eq!(app.selected_commit_count(), 3);
     assert_eq!(
         app.notes_highlighted(),
@@ -2992,7 +2992,7 @@ fn the_markdown_toggle_widens_the_tree_and_keeps_the_file() {
 
     app.history_view = HistoryView::Info;
     app.toggle_notes_markdown();
-    assert!(app.notes_all_markdown, "not the view");
+    assert!(app.notes.all_markdown, "not the view");
 }
 
 /// In the `notes` layout Tab walks repo list, tree, reader, strip and
@@ -3052,7 +3052,10 @@ fn shift_scroll_walks_tree_and_reader_in_the_notes_layout() {
     assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
     app.drawn.reader_max_scroll.set(20);
     app.scroll_next_panel(3);
-    assert_eq!(app.reader_scroll, 3, "J from the tree scrolls the reader");
+    assert_eq!(
+        app.notes.reader_scroll, 3,
+        "J from the tree scrolls the reader"
+    );
     assert_eq!(app.inspector_scroll, 0, "not the inspector");
 
     assert_eq!(app.focused_panel, FocusedPanel::Detail, "focus unmoved");
@@ -3060,7 +3063,7 @@ fn shift_scroll_walks_tree_and_reader_in_the_notes_layout() {
     app.focused_panel = FocusedPanel::Reader;
     assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
     app.scroll_next_panel(-1);
-    assert_eq!(app.reader_scroll, 2, "J/K on the reader scroll it");
+    assert_eq!(app.notes.reader_scroll, 2, "J/K on the reader scroll it");
     app.inspector_folded = true;
     assert_eq!(app.shift_scroll_target(), Some(FocusedPanel::Reader));
     app.focused_panel = FocusedPanel::Detail;
@@ -3101,18 +3104,18 @@ fn h_and_l_page_the_reader_from_the_tree() {
     app.focused_panel = FocusedPanel::Detail;
     assert!(app.reader_pages());
     app.page_reader(1);
-    assert_eq!(app.reader_scroll, 18, "L: one page down");
+    assert_eq!(app.notes.reader_scroll, 18, "L: one page down");
     app.page_reader(1);
-    assert_eq!(app.reader_scroll, 36);
+    assert_eq!(app.notes.reader_scroll, 36);
     app.page_reader(-1);
-    assert_eq!(app.reader_scroll, 18, "H: one page up");
+    assert_eq!(app.notes.reader_scroll, 18, "H: one page up");
     assert_eq!(app.focused_panel, FocusedPanel::Detail, "focus unmoved");
     assert_eq!(app.detail_selected(), 0, "the tree's cursor stayed");
 
     app.focused_panel = FocusedPanel::Reader;
     assert!(app.reader_pages(), "from the reader too");
     app.page_reader(-5);
-    assert_eq!(app.reader_scroll, 0, "clamped at the top");
+    assert_eq!(app.notes.reader_scroll, 0, "clamped at the top");
 
     for panel in [FocusedPanel::RepoList, FocusedPanel::Inspector] {
         app.focused_panel = panel;
@@ -3135,23 +3138,23 @@ fn the_reader_scrolls_on_its_own_and_resets_on_a_new_file() {
     app.claim_note_read().expect("a");
     app.drawn.reader_max_scroll.set(30);
     app.scroll_reader(12);
-    assert_eq!(app.reader_scroll, 12);
+    assert_eq!(app.notes.reader_scroll, 12);
     assert_eq!(app.detail_selected(), 0, "the cursor stayed");
     assert_eq!(app.inspector_scroll, 0, "the card did not scroll");
 
     app.invalidate_notes();
     app.claim_note_read().expect("re-read of a");
-    assert_eq!(app.reader_scroll, 12, "same file keeps its place");
+    assert_eq!(app.notes.reader_scroll, 12, "same file keeps its place");
 
     app.select_commit_down();
-    assert_eq!(app.reader_scroll, 12, "the cursor does not scroll it");
+    assert_eq!(app.notes.reader_scroll, 12, "the cursor does not scroll it");
     app.claim_note_read().expect("b");
-    assert_eq!(app.reader_scroll, 0, "a new file starts at the top");
+    assert_eq!(app.notes.reader_scroll, 0, "a new file starts at the top");
 
     app.scroll_reader(-5);
-    assert_eq!(app.reader_scroll, 0, "clamped at the top");
+    assert_eq!(app.notes.reader_scroll, 0, "clamped at the top");
     app.scroll_reader(1000);
-    assert_eq!(app.reader_scroll, 30, "clamped to what was measured");
+    assert_eq!(app.notes.reader_scroll, 30, "clamped to what was measured");
 }
 
 /// FZ-59: a markdown read carries the reader's width so the body is
@@ -3210,7 +3213,7 @@ fn a_new_reader_width_claims_one_render_of_the_held_body() {
     let lines = crate::ui::markdown::render_markdown(&render.text, 40);
     let rendered = RenderedNote { width: 40, lines };
     app.apply_note_rendered(&render.path, render.generation, rendered.clone());
-    assert_eq!(app.note_body.as_ref().unwrap().rendered, Some(rendered));
+    assert_eq!(app.notes.body.as_ref().unwrap().rendered, Some(rendered));
     assert_eq!(app.claim_note_render(), None, "held at this width");
 
     app.drawn.reader_width.set(60);
@@ -3223,7 +3226,7 @@ fn a_new_reader_width_claims_one_render_of_the_held_body() {
         lines: Vec::new(),
     };
     app.apply_note_rendered(&read.path, read.generation, stale);
-    assert_eq!(app.note_body.as_ref().unwrap().rendered, None, "dropped");
+    assert_eq!(app.notes.body.as_ref().unwrap().rendered, None, "dropped");
 }
 
 /// FZ-59 review: a render of the same file from an older generation,
@@ -3248,7 +3251,7 @@ fn a_render_from_an_older_generation_of_the_same_file_is_dropped() {
         lines: crate::ui::markdown::render_markdown("# old", 40),
     };
     app.apply_note_rendered(&old.path, old.generation, stale);
-    let body = app.note_body.as_ref().unwrap();
+    let body = app.notes.body.as_ref().unwrap();
     assert_eq!(body.rendered, None, "the old text's render is dropped");
     assert_eq!(body.render_asked, Some(40), "the re-read's is still owed");
 
@@ -3257,7 +3260,7 @@ fn a_render_from_an_older_generation_of_the_same_file_is_dropped() {
         lines: crate::ui::markdown::render_markdown("# new", 40),
     };
     app.apply_note_rendered(&new.path, new.generation, fresh.clone());
-    assert_eq!(app.note_body.as_ref().unwrap().rendered, Some(fresh));
+    assert_eq!(app.notes.body.as_ref().unwrap().rendered, Some(fresh));
 }
 
 /// FZ-59: `p` flips the reader between rendered and raw for the
@@ -3267,15 +3270,15 @@ fn the_raw_toggle_flips_for_the_session_in_the_notes_layout_only() {
     let mut app = notes_app();
     app.history_view = HistoryView::Info;
     app.toggle_reader_raw();
-    assert!(!app.reader_raw, "not the notes view");
+    assert!(!app.notes.reader_raw, "not the notes view");
     app.history_view = HistoryView::Notes;
     walked(&mut app, &["notez/a.md", "notez/b.md"]);
     app.toggle_reader_raw();
-    assert!(app.reader_raw);
+    assert!(app.notes.reader_raw);
     app.select_commit_down();
-    assert!(app.reader_raw, "one flag, not per file");
+    assert!(app.notes.reader_raw, "one flag, not per file");
     app.toggle_reader_raw();
-    assert!(!app.reader_raw);
+    assert!(!app.notes.reader_raw);
 }
 
 /// Facts land beside the body they were read with, and an answer for a
@@ -3294,7 +3297,7 @@ fn note_facts_land_only_on_their_file() {
     app.select_commit_down();
     app.claim_note_read().expect("b");
     app.apply_note_facts(&a, facts.clone());
-    assert_eq!(app.note_body.as_ref().and_then(|b| b.facts.clone()), None);
+    assert_eq!(app.notes.body.as_ref().and_then(|b| b.facts.clone()), None);
 }
 
 // FZ-81: the copy flash, as pure functions of an injected instant.

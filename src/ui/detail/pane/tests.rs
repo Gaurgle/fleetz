@@ -2066,7 +2066,7 @@ fn the_notes_view_says_why_it_lists_nothing() {
     assert!(notes_pane_text(&app).contains("no notez/ or .notez/ directory"));
 
     let mut app = notes_view_app(&[]);
-    app.notes.clear();
+    app.notes.states.clear();
     assert!(notes_pane_text(&app).contains("reading notes…"));
 
     app.repos[0].path = None;

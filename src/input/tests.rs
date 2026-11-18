@@ -464,7 +464,7 @@ async fn p_flips_the_notes_reader_and_r_still_refreshes() {
         )
         .await
         .unwrap();
-        assert_eq!(app.reader_raw, raw, "p from {panel:?}");
+        assert_eq!(app.notes.reader_raw, raw, "p from {panel:?}");
 
         app.status_message = None;
         handle_normal_input(
@@ -478,7 +478,10 @@ async fn p_flips_the_notes_reader_and_r_still_refreshes() {
         )
         .await
         .unwrap();
-        assert_eq!(app.reader_raw, raw, "r flipped the reader from {panel:?}");
+        assert_eq!(
+            app.notes.reader_raw, raw,
+            "r flipped the reader from {panel:?}"
+        );
         let status = app.status_message.as_ref().map(|m| m.text.as_str());
         assert_eq!(
             status,
