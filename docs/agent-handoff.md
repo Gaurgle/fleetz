@@ -29,15 +29,16 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 - Lead ruling for his review: F1's `include_str!` test change (#166).
   The FZ-113, O-E and `refresh_interval` rulings he accepted 11-18
-  about 13:33 (log). FZ-103 to FZ-113 and FZ-116 are Done and logged.
+  about 13:33 (log). FZ-103 to FZ-113, FZ-116 and FZ-117 are Done and logged.
 - App-split batch filed 11-18 (architect-checked, bodies on the issues):
   FZ-116 #173 (E2b), FZ-117 #174 (A1a), FZ-118 to FZ-123 #175 to #180
   (A1c to A1h), FZ-124 #181 (A1i), FZ-125 #182 (R2, needs his design
   ruling, not for the unattended run). Strictly in that order, one
   worker at a time (each shares `app.rs` with the next).
-- FZ-117 (#174, A1a) In progress since 14:05, base `9b5fda2`, branch
-  `refactor/fz-117-app-feedback`, worktree `.claude/worktrees/fz-117`;
-  record on the issue (edit by comment id); standard tiers.
+- FZ-118 (#175, A1c `CiView`) In progress since 14:30, base `4797c47`,
+  branch `refactor/fz-118-app-ci`, worktree `.claude/worktrees/fz-118`;
+  record on the issue (edit by comment id); standard tiers. FZ-117
+  merged `4797c47` 14:20, logged.
 - Survey for `fz-architect` after the batch: section 3's `app` to `ui`
   sites and section 5's cell counts are stale (its 11-18 report); section
   2's intro and rows drifted (app.rs re-measured, github/cache rows).

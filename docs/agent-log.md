@@ -291,6 +291,26 @@ first (from `git log --merges main`).
 
 ### 2026-11-18
 
+- **#174 (FZ-117), A1a: `RenderFeedback` holds the render cells as
+  `app.drawn`.** Dispatched 14:05 under the unattended refactor run,
+  merged `4797c47` at 14:20 CET. Base `9b5fda2`, commit `e355131`: the
+  18 `Cell`/`RefCell` fields to `app/feedback.rs` (135 lines) with
+  their docs and initial values, every other change the `drawn.`
+  prefix; `app.rs` 4,585 to 4,480. Lead ruling (on the issue): about 30
+  lines reflowed by rustfmt, so acceptance 3 is judged by a token
+  comparison, not a line check. Review 1 on `3140fb32d6b9`: needs
+  change, docs only (the `app.rs` row said 4,487, counted 4,480; fixed
+  by the lead with the measurement note); re-review on `1e7b9790a7bd`
+  accepted. Branch CI 44311251779 green; combined checks on `86eced0`
+  (1758 passed); gate holds. Observed, out of scope:
+  `docs/architecture.md:147-153` cite stale `src/app.rs` lines for the
+  other `app` to `ui` sites (about 339, 390, 1106 now);
+  `src/app/overlays.rs:1` has no `//!` module doc; the `ui/` row counts
+  drifted by rustfmt reflow (+5 lines over three files);
+  `App::set_detail_scroll`'s doc says "see the field", now in
+  `app/feedback.rs`. Remembered: nothing to keep.
+  FZ-117: review changes 1; fix cycles 0; owner decisions 0; worker 7; review 2 + 3; models opus:medium/opus:medium; usage worker 107624 tokens, reviewer 58409 + 4655 tokens
+
 - **#173 (FZ-116), E2b: `FetchState` owns the local fetch in the engine.**
   Dispatched 13:17 under the unattended refactor run, merged `9b5fda2`
   at 13:58 CET. Base `3ac268d`, commit `88ed32f`: `RefreshPhase` and
