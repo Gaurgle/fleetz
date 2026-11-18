@@ -137,7 +137,9 @@ E2b, the planning functions under a fetch owner type, is pending.
 `GithubFreshness`, `ApiBudget`, `GithubBackoff` and the due and backoff
 decisions. Unlike E1 and E2 this separates decisions from `App` mutation,
 so it starts with an `fz-architect` consult and a short design, then moves.
-`.claude/rules/github.md` follows.
+`.claude/rules/github.md` follows. The design is E3 in
+`docs/app-split-design.md`; FZ-113 moved the types and decisions into
+`engine/github_sync.rs`, under the owner type `GithubSync` that `App` holds.
 
 **D1, cut the remaining backward edges.** Small tickets, one edge each:
 `model` to `git` and `github` (the shared types move down into the domain),

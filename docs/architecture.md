@@ -63,22 +63,23 @@ reads are left out entirely: the sibling `tests.rs` files (FZ-104),
 runs a program, `net` talks HTTP, `fs` touches the disk, `term` draws or
 reads the terminal. Every row below was measured on `270bd71` by one
 script over the whole tree, but for the seven `main.rs` rows, measured
-after F1 (FZ-109) split it, and the two `model` rows, measured after
-FZ-111 split it; rows are in size order.
+after F1 (FZ-109) split it, the two `model` rows, measured after
+FZ-111 split it, and the `app.rs`, `engine/` and `poll.rs` rows, measured
+after FZ-113 moved the GitHub sync; rows are in size order.
 
 | Module | Lines | Owns | Effects |
 |---|---|---|---|
 | `ui/` (28 files) | 13,402 | Drawing every view from `&App`; `detail/` is ten files by pane since FZ-108, 4,751 together: `pane.rs` 1,030, `notes.rs` 612, `mod.rs` 530 (the entry `render` and the helpers the panes share), `commits.rs` 501, `header.rs` 482, `list.rs` 403, `inspector.rs` 377, `worktrees.rs` 355, `changes.rs` 301, `layout.rs` 160; then `mod.rs` 1,541, `markdown.rs` 1,245, `ci.rs` 1,072, `digest.rs` 699, the other 14 files 2,992 together | term |
-| `app.rs` | 5,372 | `App`: all TUI state (115 fields), API budget and backoff, per-view caches for ci, notes, worktrees, changes and digest; since FZ-110 the overlays and settings rows in `app/overlays.rs` (616) and the filters and query parsing in `app/query.rs` (210), both re-exported | none (holds ratatui types) |
+| `app.rs` | 4,793 | `App`: all TUI state (107 fields, the GitHub sync one of them as `engine::GithubSync` since FZ-113), per-view caches for ci, notes, worktrees, changes and digest; since FZ-110 the overlays and settings rows in `app/overlays.rs` (616) and the filters and query parsing in `app/query.rs` (210), both re-exported | none (holds ratatui types) |
 | `git.rs` | 2,444 | Every git read and fetch, reading a fetch's outcome and progress and a checkout's `WorkKey` (the types live in `model`), the `changes` read (`changes`, `changed_file_diff`), the note body read | proc, fs |
+| `engine/` (7 files) | 2,419 | `github_sync.rs` 851: the GitHub sync (FZ-113), `GithubSync` over `GithubFreshness`, `ApiBudget`, `GithubBackoff`, the jitter, the poll's in-flight lock and push flag, and the decisions on them (`poll_due`, `effective_interval`, `limit_until`, `pace`), taking a `PollContext` the front end builds; `assembly.rs` 559: view assembly (discovery passes, carriers, activity order, the startup fetch baseline); `fetch.rs` 333: fetches under a claim (`FetchClaims`) and the types the sweep plans with (`SweepTarget`, `FetchAsk`, `FetchTally`, `FetchReport`, FZ-106); `status.rs` 313: a row's status probe; `load.rs` 191: the load (GitHub dataset or dirty mode); `carriers.rs` 126; `mod.rs` 46: `Sink`, which a front end's channel implements (FZ-105) | proc, fs, net |
 | `report/` (3 files) | 2,057 | Print mode: run (`mod.rs` 910), golden parity harness (`parity.rs` 765), render byte for byte as repoz (`render.rs` 382) | proc, fs |
 | `github.rs` | 1,567 | The GraphQL query and its cost, the HTTP client, token lookup, failure kinds; parsing the payload into `model::GithubRepo` | net, proc |
-| `engine/` (6 files) | 1,562 | `assembly.rs` 559: view assembly (discovery passes, carriers, activity order, the startup fetch baseline); `fetch.rs` 333: fetches under a claim (`FetchClaims`) and the types the sweep plans with (`SweepTarget`, `FetchAsk`, `FetchTally`, `FetchReport`, FZ-106); `status.rs` 313: a row's status probe; `load.rs` 191: the load (GitHub dataset or dirty mode); `carriers.rs` 126; `mod.rs` 40: `Sink`, which a front end's channel implements (FZ-105) | proc, fs, net |
 | `ci.rs` | 1,538 | Workflow runs, jobs and log tails over REST, with ETags; the default branch tip's `TipStatus`, `TipChecks` and `StatusEvent` history, and `tip_verdict` over them | net |
 | `input.rs` | 1,081 | Every input handler: keys, mouse, the overlays' keys, the settings overlay, `r`, `R` and `f` | proc, term |
 | `model.rs` | 953 | `RepoStatus` and the row types the views draw; the types the sources fill (`WorkKey`, `GithubRepo`), re-exporting the fetch record from `model/fetch.rs`; remote identity (`identity_key`, `RemoteRef`, `RemoteKey`, `carrier_key`) | none |
-| `poll.rs` | 747 | GitHub poll scheduling and apply, the account rebuild, the CI tick, spawning the background reads (CI, worktree log, notes, changes, digest) | none |
 | `event.rs` | 634 | `AppEvent`, `LoadResult`, the input thread, the tick and loading tasks, the event loop (`run_event_loop`) | term |
+| `poll.rs` | 611 | Starting and applying the GitHub poll (its scheduling is `engine::GithubSync` since FZ-113), the account rebuild, the CI tick, spawning the background reads (CI, worktree log, notes, changes, digest) | none |
 | `discovery.rs` | 611 | Finding clones under roots and `$HOME`, clone matching (`Wanted`, `CheckoutRank`) | fs |
 | `cache.rs` | 517 | The keyed on-disk API cache | fs |
 | `sweep.rs` | 511 | The local sweep: targets, fetch planning and claims, spawning it, landing a repo's result, the activity order | none |
@@ -111,7 +112,7 @@ Module docs (`//!`) exist on `engine/`, `report/`, `ci`, `notes`, `graph`,
 1200 production lines per file, 150 per function; the seams are tickets in
 `docs/module-split-design.md`):
 
-- Files over the limit: `app.rs` 5,372 (A1), `git.rs` 2,444 (G1),
+- Files over the limit: `app.rs` 4,793 (A1), `git.rs` 2,444 (G1),
   `github.rs` 1,567, `ui/mod.rs` 1,541, `ci.rs` 1,538, `ui/markdown.rs`
   1,245 (the last four are not planned: revisit if they grow).
   `ui/detail.rs` (U1, FZ-108) and `main.rs` (F1, FZ-109) are split.
@@ -228,7 +229,7 @@ defined order. Sent by functions in `event.rs`, `load.rs`, `sweep.rs` and
 | `AppEvent` | Sent by | Applied by |
 |---|---|---|
 | `Input` | `event::spawn_input_thread` | `handle_key`, `handle_mouse_input` and the handlers they call |
-| `Tick` | `event::spawn_tick_task` | the loop: `App::on_tick`, status expiry, the watch sweep and GitHub poll when due |
+| `Tick` | `event::spawn_tick_task` | the loop: `App::on_tick`, status expiry, the watch sweep when due, and the GitHub poll when `GithubSync::poll_due` says so over `App::poll_context` |
 | `YankFrame` | `event::next_event` (the loop's own wait) | the loop |
 | `LoadingFrame` | `event::spawn_loading_task` | `on_loading_frame` |
 | `Loaded` | `load::spawn_load`, `spawn_window_apply`, `spawn_memory_rebuild` | `apply_load_result` |
@@ -254,12 +255,13 @@ worktrees, changes and ci. Contracts: `docs/freshness-contract.md`,
 
 ## 5. State and who changes it
 
-`App` is the whole TUI state: 115 fields, all `pub`. Grouped by concern:
+`App` is the whole TUI state: 107 fields, all `pub` but `github`
+(`pub(crate)`). Grouped by concern:
 
 | Group | Examples | Changed by |
 |---|---|---|
 | Fleet data | `repos`, `dataset`, `github_meta`, `not_in_last_poll`, `window` | load, sweep and poll handlers in `load.rs`, `sweep.rs` and `poll.rs` |
-| GitHub sync | `github_freshness`, `api_budget`, `github_backoff`, poll timing fields | poll scheduling and apply in `poll.rs`, `App` methods |
+| GitHub sync | `github` (`engine::GithubSync`, FZ-113): freshness, budget, backoff, jitter, interval and cost, in-flight lock, push flag, all private | its verbs only, called from `poll.rs`, `load.rs`, `event.rs`, `sweep.rs` and `input.rs`; `ui` reads its queries |
 | Local fetch | `fetches_in_flight`, `fetch_backoff`, `manual_fetches`, refresh fields | sweep and fetch planning in `sweep.rs`, over the engine's fetch types (FZ-106) |
 | Navigation and view | `view`, `overlay`, `selected`, `focused_panel`, `history_view`, scrolls, pane percentages | input handlers in `input.rs`, `App` methods |
 | Per-view caches | `ci` (each repo's `CiTip` with it), `notes`, `note_body`, `worktree_logs`, `digest_logs` | `App::apply_*` |
@@ -272,10 +274,13 @@ changes some through `Cell` while it holds only `&App` (27 `.set(` and
 `changes.rs`, `mod.rs` and `worktrees.rs`; then two each in
 `contributions.rs`, `digest.rs` and `footer.rs`). What keeps the
 behavior right today is the invariants in `.claude/rules/` and the tests,
-not the types. `ApiBudget`, `GithubBackoff`, `FetchClaims` (in `engine`
-since FZ-105) and
-`GithubFreshness` are the exception: concerns with their own type, methods
-and tests, and the pattern section 7 builds on.
+not the types. `GithubSync` (in `engine` since FZ-113, owning
+`GithubFreshness`, `ApiBudget` and `GithubBackoff`) and `FetchClaims` (in
+`engine` since FZ-105) are the exception: concerns with their own type,
+methods and tests, and the pattern section 7 builds on. `ApiBudget`,
+`GithubBackoff` and `GithubFreshness` are still also used directly by the
+CI view's state in `app.rs` until it gets its owner (A1c), which shares
+`GithubSync`'s jitter stream until then.
 
 ## 6. Where the domain rules live
 

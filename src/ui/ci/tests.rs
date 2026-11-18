@@ -94,7 +94,7 @@ fn app() -> App {
     app.repos = vec![repo()];
     app.view = View::Detail;
     app.history_view = HistoryView::Ci;
-    app.jitter = Box::new(NoJitter);
+    app.github.set_jitter(Box::new(NoJitter));
     app
 }
 
@@ -1860,7 +1860,7 @@ fn vercel_history() -> Vec<crate::ci::StatusEvent> {
 /// The fleet poll left `status`, with its data time at `at`.
 fn fleet(app: &mut App, status: CiStatus, at: DateTime<Local>) {
     app.repos[0].ci_status = status;
-    app.github_freshness.data_time = DataTime::At(at);
+    app.github.freshness_mut().data_time = DataTime::At(at);
 }
 
 /// Land one `ci` poll at `now` that read `runs` and the tip at `TIP`,

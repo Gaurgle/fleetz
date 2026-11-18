@@ -24,9 +24,12 @@ fn a_launch_with_no_usable_cache_records_the_failed_attempt() {
         }),
     );
     assert_eq!(app.load_error.as_deref(), Some("not authenticated"));
-    assert_eq!(app.github_freshness.outcome, app::Outcome::Failed(failure));
-    assert!(app.github_freshness.last_attempt.is_some());
-    assert_eq!(app.github_freshness.data_time, app::DataTime::NoData);
+    assert_eq!(
+        app.github.freshness().outcome,
+        app::Outcome::Failed(failure)
+    );
+    assert!(app.github.freshness().last_attempt.is_some());
+    assert_eq!(app.github.freshness().data_time, app::DataTime::NoData);
 }
 
 /// A reload replaces every row; the session's fetch facts go across by
@@ -151,7 +154,7 @@ fn a_cache_served_launch_leaves_the_poll_due_immediately() {
         })),
     );
     assert!(
-        app.github_freshness.last_attempt.is_none(),
+        app.github.freshness().last_attempt.is_none(),
         "a cached payload started the re-poll clock, delaying the first \
          real poll by a whole interval"
     );
@@ -177,7 +180,7 @@ fn a_network_served_launch_starts_the_poll_clock() {
         })),
     );
     assert!(
-        app.github_freshness.last_attempt.is_some(),
+        app.github.freshness().last_attempt.is_some(),
         "fresh data should not re-poll at once"
     );
 }
@@ -268,10 +271,10 @@ fn s16_r_under_a_rate_limit_rebuilds_from_memory_and_names_the_resume() {
     app.dataset = poll_says_passed().ok().unwrap().repos;
     let resume = limited_now(&mut app);
     assert_eq!(
-        reload_action(&app, &config, chrono::Local::now()),
+        reload_action(&app, chrono::Local::now()),
         ReloadAction::FromMemory
     );
-    let before = app.github_freshness.clone();
+    let before = app.github.freshness().clone();
     let notes = ViewNotes {
         header: "h".to_string(),
         ambiguity: None,
@@ -281,14 +284,14 @@ fn s16_r_under_a_rate_limit_rebuilds_from_memory_and_names_the_resume() {
         &config,
         Ok(Box::new(memory_rebuild_result(vec![test_repo()], notes))),
     );
-    assert_eq!(app.github_freshness, before, "freshness moved");
+    assert_eq!(*app.github.freshness(), before, "freshness moved");
     let status = status_text(&app);
     assert_ne!(status, "Reloaded");
     assert!(
         status.contains(&resume.format("%H:%M").to_string()),
         "{status:?}"
     );
-    assert!(!app.github_poll_inflight);
+    assert!(!app.github.inflight());
     assert!(!app.loading);
 }
 

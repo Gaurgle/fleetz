@@ -372,7 +372,8 @@ reading. A cache-served load carries none.
 and when it arrived. Not in the cache file: a budget is per account and per
 moment, the cache is neither (FZ-09). It starts unknown and stays unknown
 until a reading arrives. A reset instant in the past makes it unknown again,
-since the window it described is over.
+since the window it described is over. Since FZ-113 it lives in
+`engine/github_sync.rs`, held with the freshness by `GithubSync`.
 
 #### Clocks
 
@@ -484,7 +485,9 @@ Rule 6 (every finished attempt advances the clock, no immediate retry) stays,
 amended to "at least one interval". On top of it, each applied failure yields
 a **not-before** instant, and the next automatic attempt is the latest of:
 the rule 6 interval in force (the configured one while failing, rule 9), the
-pace (4.2), and the not-before.
+pace (4.2), and the not-before. Since FZ-113 the count and the not-before
+(`GithubBackoff`) and the decision over all three (`GithubSync::poll_due`)
+live in `engine/github_sync.rs`.
 
 #### Classification (FZ-10a)
 

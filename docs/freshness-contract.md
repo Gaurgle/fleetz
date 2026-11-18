@@ -168,6 +168,8 @@ One worker, serial with FZ-04 because both change the refresh state in
 | `src/ui/mod.rs` | The header segment |
 | `README.md` | The visible behaviour |
 
+Since FZ-113 the freshness type lives in `src/engine/github_sync.rs`, held by `GithubSync`; `app.rs` re-exports it.
+
 Required regressions, all with controlled results and no network or sleeps:
 launch from a cache of a planted age; launch from a cache whose age cannot be
 read; background fallback with a cache present (the case that is invisible

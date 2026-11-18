@@ -6,12 +6,19 @@
 mod assembly;
 mod carriers;
 mod fetch;
+mod github_sync;
 mod load;
 mod status;
 
 pub use crate::time::Pace;
 pub use assembly::ApplyProgress;
 pub use fetch::{FetchClaims, FetchReport, FetchTally};
+#[cfg(test)]
+pub use github_sync::Jitter;
+pub use github_sync::{
+    ApiBudget, ClockJitter, DataTime, GithubBackoff, GithubFreshness, GithubSync, Observed,
+    Outcome, PollContext,
+};
 pub use load::{DatasetSource, LoadError};
 
 pub(crate) use assembly::{
@@ -22,6 +29,7 @@ pub(crate) use carriers::{
     RemoteKey, carrier_key, carries, mark_local_carriers, names_remote, remote_key,
 };
 pub(crate) use fetch::{FetchAsk, SweepTarget, fetch_under_claim_capped, size_held_rows};
+pub(crate) use github_sync::backoff_secs;
 pub(crate) use load::load_repos;
 pub(crate) use status::{HISTORY_COUNT, disk_usage_of, tilde_display};
 
@@ -29,6 +37,8 @@ pub(crate) use status::{HISTORY_COUNT, disk_usage_of, tilde_display};
 pub(crate) use assembly::{assemble_view_in, with_coverage_note};
 #[cfg(test)]
 pub(crate) use fetch::PROGRESS_EVENT_GAP;
+#[cfg(test)]
+pub(crate) use github_sync::{BACKOFF_CAP_SECS, GITHUB_POLL_MIN};
 
 /// Where the engine sends progress: a front end's event channel, through
 /// that front end's `From` impl for its own event type.

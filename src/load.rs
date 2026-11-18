@@ -5,7 +5,7 @@ use crate::engine::{
 };
 use crate::event::{AppEvent, LoadKind, LoadResult};
 use crate::model::RepoStatus;
-use crate::poll::{github_limit_until, limited_status};
+use crate::poll::limited_status;
 use crate::{app, config, github, model, time, ui, window_state};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -255,7 +255,7 @@ pub(crate) fn apply_load_result_saving_to(
             app.header = lr.header;
             if let Some(ds) = lr.dataset {
                 let reading = lr.meta.as_ref().and_then(|m| m.budget.as_ref());
-                record_load_attempt(app, &lr.source, reading, now);
+                app.github.load_attempted(&lr.source, reading, now);
                 app.dataset = ds;
                 // Only an attempt may start the re-poll clock. Startup serves
                 // any cached payload however old (`CacheMode::AnyCached`), and
@@ -265,7 +265,7 @@ pub(crate) fn apply_load_result_saving_to(
                 // seconds, with nothing on screen to say the numbers were not
                 // current. A cache read leaves it unset, so the poll is due on
                 // the first tick instead.
-                app.github_freshness.loaded(&lr.source, now);
+                app.github.loaded(&lr.source, now);
             }
             // The rows are new and so may be the dataset: the pre-check
             // reads both (FZ-35b).
@@ -301,7 +301,7 @@ pub(crate) fn apply_load_result_saving_to(
                 // `R` under a known limit: nothing was sent, so the status
                 // says when GitHub resumes instead of `Reloaded` (A6).
                 LoadKind::FromMemory => {
-                    let status = match github_limit_until(app, config, now) {
+                    let status = match app.github.limit_until(now) {
                         Some(until) => format!("Rebuilt locally: {}", limited_status(until)),
                         None => "Rebuilt locally".to_string(),
                     };
@@ -323,37 +323,13 @@ pub(crate) fn apply_load_result_saving_to(
         Err(e) => {
             if let Some(failure) = e.github_failure {
                 // An applied attempt: its reading first, then its outcome.
-                app.observe_budget(e.budget.as_deref(), true, now);
-                app.github_attempt_failed(&failure, now);
-                app.github_freshness.failed(failure, now);
+                app.github.observe_budget(e.budget.as_deref(), true, now);
+                app.github.attempt_failed(failure, now);
             }
             // The status message says it once; `load_error` keeps saying it
             // for as long as there is nothing on screen to say it instead.
             app.set_status(format!("Load failed: {}", e.message), true);
             app.load_error = Some(e.message);
-        }
-    }
-}
-
-/// What a landed load tells the budget and the retry ladder. A load that went
-/// to GitHub is an applied attempt (it supersedes every poll out), so its
-/// reading applies and its outcome counts; a cache read and a load with no
-/// fetch behind it tell them nothing.
-fn record_load_attempt(
-    app: &mut App,
-    source: &app::DatasetSource,
-    reading: Option<&github::BudgetReading>,
-    now: chrono::DateTime<chrono::Local>,
-) {
-    match source {
-        app::DatasetSource::Local | app::DatasetSource::Cache { .. } => {}
-        app::DatasetSource::Network => {
-            app.observe_budget(reading, true, now);
-            app.github_backoff.succeeded();
-        }
-        app::DatasetSource::Fallback { failure, .. } => {
-            app.observe_budget(reading, true, now);
-            app.github_attempt_failed(failure, now);
         }
     }
 }

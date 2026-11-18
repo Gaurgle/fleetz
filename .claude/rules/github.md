@@ -78,7 +78,8 @@ on disk (`cache.rs`); `r` is a local sweep plus a poll, `R` a full reload that
 bypasses the cache, and under a known rate limit both send nothing (`r` sweeps,
 `R` rebuilds from the dataset in memory; FZ-10b, `docs/api-budget-design.md`
 4.3). Polls pace themselves on the budget headers and back off on failures
-(`ApiBudget`, `GithubBackoff` in `app.rs`); never add an unconditional retry.
+(`ApiBudget`, `GithubBackoff` in `engine/github_sync.rs`, held by `GithubSync`);
+never add an unconditional retry.
 A field with no `first:` is free, which is how the contribution calendars ride
 along at no cost; one with a `first:` is not, and a request never is.
 

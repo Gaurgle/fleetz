@@ -54,7 +54,7 @@ pub(crate) fn land_repo_update(
         .find(|r| r.path.as_deref() == Some(path))
     {
         if repo_moved(repo, &status) {
-            app.push_detected = true;
+            app.github.note_push();
         }
         repo.apply_local_sweep(status);
         repo.fetch.record(&fetch, chrono::Local::now());

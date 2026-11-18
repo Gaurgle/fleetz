@@ -1,5 +1,4 @@
 use super::*;
-use crate::poll::claim_github_poll;
 use crate::tests::{
     RestoreIcons, answer_at, app_for_icons, apply_open_settings, at, budget_app, chord, ci_app,
     ci_key, ci_landed, drawn_cursor_row, drawn_icon_marks, drawn_icons_row, err_with, fetch_failed,
@@ -225,14 +224,14 @@ fn the_overlay_opens_on_the_icon_set_in_force() {
 fn s15_r_under_a_rate_limit_sweeps_and_sends_nothing() {
     let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
     land_primary_limit(&mut app);
-    let before = app.github_freshness.clone();
+    let before = app.github.freshness().clone();
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let args = Args::parse_from(["fleetz"]);
     // Outside a runtime: a spawned request would panic here.
     refresh_key(&mut app, &tx, &args, &config, at(17, 10, 0));
-    assert!(!app.github_poll_inflight, "a request was sent");
+    assert!(!app.github.inflight(), "a request was sent");
     assert!(status_text(&app).contains("17:23"), "{}", status_text(&app));
-    assert_eq!(app.github_freshness, before);
+    assert_eq!(*app.github.freshness(), before);
 }
 
 #[test]
@@ -252,7 +251,7 @@ fn s16a_r_under_a_rate_limit_with_nothing_in_memory_only_names_the_resume() {
     );
     assert_eq!(status_text(&app), "GitHub rate limited, resumes at 17:23");
     assert!(!app.loading);
-    assert!(!app.github_poll_inflight);
+    assert!(!app.github.inflight());
 }
 
 #[test]
@@ -260,7 +259,10 @@ fn s16b_r_under_a_rate_limit_with_a_poll_in_flight_waits_for_it() {
     let (mut app, config) = budget_app(model::CiStatus::Passed, 1.0, 10);
     app.dataset = poll_says_passed().ok().unwrap().repos;
     land_primary_limit(&mut app);
-    let in_flight = claim_github_poll(&mut app).unwrap();
+    let in_flight = app
+        .github
+        .claim_attempt(std::time::Instant::now(), app.dirty_mode)
+        .unwrap();
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let args = Args::parse_from(["fleetz"]);
     reload_key(
@@ -284,10 +286,7 @@ fn s16b_r_under_a_rate_limit_with_a_poll_in_flight_waits_for_it() {
         ),
         at(17, 10, 5),
     );
-    assert_eq!(
-        reload_action(&app, &config, at(17, 10, 6)),
-        ReloadAction::FromMemory
-    );
+    assert_eq!(reload_action(&app, at(17, 10, 6)), ReloadAction::FromMemory);
 }
 
 #[test]
@@ -306,7 +305,7 @@ fn s18_r_while_a_load_runs_is_ignored() {
         at(17, 0, 0),
     );
     assert_eq!(status_text(&app), REFRESH_RUNNING);
-    assert!(!app.github_poll_inflight);
+    assert!(!app.github.inflight());
 }
 
 /// The key handler hands keys to the chord: `y` on the compact grid
