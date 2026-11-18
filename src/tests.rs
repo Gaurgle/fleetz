@@ -3265,7 +3265,7 @@ fn the_notes_view_copies_the_file_and_its_path() {
     let walk = app::NotesWalk {
         key: root.clone(),
         root: scratch.clone(),
-        generation: app.notes_generation,
+        generation: app.notes.generation,
     };
     let files = vec![notes::NoteFile {
         rel: "notez/a.md".into(),
@@ -3478,7 +3478,7 @@ fn the_flash_fades_on_a_notes_tree_row() {
     let walk = app::NotesWalk {
         key: root,
         root: scratch,
-        generation: app.notes_generation,
+        generation: app.notes.generation,
     };
     let files = vec![notes::NoteFile {
         rel: "notez/a.md".into(),
@@ -3548,7 +3548,7 @@ fn notes_flash_app(panel: FocusedPanel) -> App {
     let walk = app::NotesWalk {
         key: root,
         root: scratch,
-        generation: app.notes_generation,
+        generation: app.notes.generation,
     };
     let files = vec![notes::NoteFile {
         rel: "notez/a.md".into(),

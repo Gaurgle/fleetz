@@ -242,7 +242,7 @@ fn notes_mode_mark_style() -> Style {
 /// active one bracketed and lit as the tab strip lights its view, the other
 /// dim, and the key that flips them (FZ-57): `notes: [notez] markdown  (m)`.
 pub(super) fn notes_mode_line(app: &App) -> Line<'static> {
-    notes_mode_line_for(app.notes_all_markdown)
+    notes_mode_line_for(app.notes.all_markdown)
 }
 
 /// `notes_mode_line` for either mode, so the tree's width floor can measure
@@ -296,10 +296,10 @@ pub(super) fn notes_rows(
         Some(Err(e)) => return say(format!("could not read the repo: {e}")),
         Some(Ok(notes)) => notes,
     };
-    let rows = notes.rows(app.notes_all_markdown);
+    let rows = notes.rows(app.notes.all_markdown);
     if rows.is_empty() {
         // Named by the mode it belongs to, in the mode line's words.
-        return say(match app.notes_all_markdown {
+        return say(match app.notes.all_markdown {
             false => format!("{}: no notez/ or .notez/ directory", NOTES_MODES[0]),
             true => format!("{}: no markdown files", NOTES_MODES[1]),
         });
@@ -371,7 +371,7 @@ pub(super) fn notes_rows(
 /// The highlighted note's body as last read, when it is that file's.
 fn held_note_body(app: &App) -> Option<&crate::app::NoteBody> {
     let path = app.notes_highlighted()?;
-    app.note_body.as_ref().filter(|b| b.path == path)
+    app.notes.body.as_ref().filter(|b| b.path == path)
 }
 
 /// A file time as the facts write it, the local date: the facts share a
@@ -438,7 +438,7 @@ fn notes_fact_pieces(app: &App) -> Vec<(u8, Vec<Span<'static>>)> {
     }
     // A board is drawn as one whatever `p` says, so it names no mode.
     if file.kind().is_markdown() && file.kind() != crate::notes::NoteKind::Todo {
-        let mode = match app.reader_raw {
+        let mode = match app.notes.reader_raw {
             true => "raw",
             false => "rendered",
         };
@@ -535,7 +535,7 @@ fn reader_render(app: &App) -> Option<&crate::app::RenderedNote> {
     let markdown = app
         .notes_highlighted_file()
         .is_some_and(|f| f.kind().is_markdown() && f.kind() != crate::notes::NoteKind::Todo);
-    if !markdown || app.reader_raw {
+    if !markdown || app.notes.reader_raw {
         return None;
     }
     let body = held_note_body(app)?;
@@ -546,7 +546,7 @@ fn reader_render(app: &App) -> Option<&crate::app::RenderedNote> {
 
 /// The `notes` layout's reader, right of the tree in pane 2 (FZ-62): the
 /// highlighted file's body, wrapped to the pane, with its own scroll
-/// (`App::reader_scroll`). A markdown file is drawn rendered
+/// (`NotesView::reader_scroll`). A markdown file is drawn rendered
 /// (`ui::markdown`, FZ-59), its rows laid out off the UI thread at the
 /// width this pass records; `p` shows its source, which every other kind
 /// always shows, raw as `notes::read_body` delivers it. A cut body says so
@@ -576,7 +576,7 @@ pub(super) fn render_reader(frame: &mut Frame, inner: Rect, app: &App) {
             frame,
             inner,
             &rows,
-            app.reader_scroll,
+            app.notes.reader_scroll,
             &app.drawn.reader_max_scroll,
         );
         return;
@@ -608,7 +608,7 @@ pub(super) fn render_reader(frame: &mut Frame, inner: Rect, app: &App) {
         frame,
         inner,
         &lines,
-        app.reader_scroll,
+        app.notes.reader_scroll,
         &app.drawn.reader_max_scroll,
     );
 }

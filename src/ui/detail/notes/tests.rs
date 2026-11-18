@@ -49,7 +49,7 @@ fn the_notes_inspector_shows_the_body_or_the_error() {
     let facts = foot_text(&app);
     assert!(facts.starts_with("─ a.md · markdown"), "{facts:?}");
 
-    app.note_body.as_mut().unwrap().text = None;
+    app.notes.body.as_mut().unwrap().text = None;
     app.apply_note_read(read, Err("permission denied".to_string()));
     assert!(draw(&app).contains("could not read: permission denied"));
 }

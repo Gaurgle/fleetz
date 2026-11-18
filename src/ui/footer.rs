@@ -308,7 +308,7 @@ const SEGMENT_GAP: &str = "   ";
 /// What `p` does from the `notes` tree or reader (FZ-59): show the source,
 /// or render it again.
 fn reader_mode_hint(app: &App) -> &'static str {
-    match app.reader_raw {
+    match app.notes.reader_raw {
         true => "render",
         false => "raw",
     }
