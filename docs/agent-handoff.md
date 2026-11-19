@@ -30,17 +30,13 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 - Lead ruling for his review: F1's `include_str!` test change (#166).
   The FZ-113, O-E and `refresh_interval` rulings he accepted 11-18
   about 13:33 (log). FZ-103 to FZ-113 and FZ-116 to FZ-121 are Done and logged.
-- App-split batch filed 11-18 (architect-checked, bodies on the issues):
-  FZ-116 #173 (E2b), FZ-117 #174 (A1a), FZ-118 to FZ-123 #175 to #180
-  (A1c to A1h), FZ-124 #181 (A1i), FZ-125 #182 (R2, needs his design
-  ruling, not for the unattended run). Strictly in that order, one
-  worker at a time (each shares `app.rs` with the next).
-- FZ-122 (#179, A1g `ContribStrip`) In progress since 11-19 13:00,
-  base `82e5a6b`, branch `refactor/fz-122-app-contrib`, worktree
-  `.claude/worktrees/fz-122`; record on the issue (edit by comment id);
-  standard tiers. Then FZ-123 (#180), FZ-124 (#181), bodies
-  architect-checked, `app.rs` lines re-measured by the worker. Usage:
-  the five-hour limit hit at 15:00 on 11-18 and reset 17:10.
+- App-split batch, filed 11-18, architect-checked, strictly in order,
+  one worker at a time: FZ-122 (#179, A1g `ContribStrip`) In progress
+  since 11-19 13:00, base `82e5a6b`, branch
+  `refactor/fz-122-app-contrib`, worktree `.claude/worktrees/fz-122`,
+  record on the issue (edit by comment id), standard tiers; then
+  FZ-123 #180 (A1h), FZ-124 #181 (A1i); FZ-125 #182 (R2) needs his
+  design ruling. The five-hour limit hit 15:00 on 11-18, reset 17:10.
 - Survey for `fz-architect` after the batch: `docs/architecture.md`
   section 3's `app.rs` lines and section 5's cell counts are stale,
   section 2's intro drifted; `src/ci.rs:11` names `App::ci_budget`.
