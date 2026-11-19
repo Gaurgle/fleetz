@@ -116,12 +116,12 @@ fn handle_mouse_in(app: &mut App, area: ratatui::layout::Rect, m: MouseEvent) {
     // A strip pan owns its events for the same reason, and for the same
     // reason it is checked before the panel lookup: a drag that wanders off
     // the strip should keep panning, not silently stop.
-    if let Some(from) = app.contrib_drag {
+    if let Some(from) = app.contrib.drag {
         match m.kind {
             MouseEventKind::Drag(MouseButton::Left) => {
-                app.contrib_drag = Some(app.pan_contributions(from, m.column));
+                app.contrib.drag = Some(app.pan_contributions(from, m.column));
             }
-            _ => app.contrib_drag = None,
+            _ => app.contrib.drag = None,
         }
         return;
     }
@@ -169,13 +169,13 @@ fn handle_mouse_in(app: &mut App, area: ratatui::layout::Rect, m: MouseEvent) {
                     m.row,
                 )
             {
-                app.contrib_cursor = Some(slot);
+                app.contrib.cursor = Some(slot);
                 app.needs_redraw = true;
             }
             // Press inside the strip also arms a pan, so the same gesture
             // that picks a day can drag the year past it.
             if panel == FocusedPanel::Contributions {
-                app.contrib_drag = Some(m.column);
+                app.contrib.drag = Some(m.column);
             }
             // A click on a row of pane 2 moves its cursor there, and one on
             // the row's hash copies it as `y` does. Resolved against the map
@@ -457,8 +457,8 @@ pub(crate) fn settings_overlay(app: &App, config: &config::Config) -> app::Setti
         config.work_start,
         config.work_end,
         app.persist_pane_sizes,
-        app.contributions,
-        app.contrib_cell,
+        app.contrib.mode,
+        app.contrib.cell,
         config.intro,
         ui::badges::active_icons(),
     )
@@ -474,7 +474,7 @@ pub(crate) fn apply_live_settings(app: &mut App, so: &app::SettingsOverlay) {
     app.refresh_interval = so.refresh_interval;
     app.persist_pane_sizes = so.persist_panes;
     app.apply_contributions_setting(so.contributions);
-    app.contrib_cell = so.contrib_cell;
+    app.contrib.cell = so.contrib_cell;
     ui::badges::set_active_icons(so.icons);
     if let Some(v) = so.view {
         app.view = v;
@@ -660,7 +660,7 @@ pub(crate) async fn handle_normal_input(
             // Switching to the local source is useless without a histogram,
             // and the sweep is the only thing that fills one. Ask for one
             // rather than showing an empty year that looks like a bug.
-            if app.contributions == app::ContributionsMode::Local
+            if app.contrib.mode == app::ContributionsMode::Local
                 && app.repos.iter().all(|r| r.daily.is_none())
             {
                 app.set_status("Sweeping for local history…".to_string(), false);

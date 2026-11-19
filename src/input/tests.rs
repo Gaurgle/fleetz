@@ -86,7 +86,7 @@ async fn the_4_key_reaches_and_folds_the_strip() {
         Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
     let mut app = App::new(Vec::new(), String::new(), 120, 44);
     app.view = app::View::Detail;
-    app.contributions = app::ContributionsMode::Github;
+    app.contrib.mode = app::ContributionsMode::Github;
     app.focused_panel = FocusedPanel::Detail;
     app.contributions_folded = true;
 

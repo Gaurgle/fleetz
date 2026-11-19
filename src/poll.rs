@@ -124,7 +124,7 @@ pub(crate) fn apply_github_poll_at(
             // A payload predating the field leaves the last good
             // calendar in place rather than blanking it.
             if calendar.is_some() {
-                app.github_calendar = calendar;
+                app.contrib.calendar = calendar;
             }
             // Overwrite only the GitHub-owned fields: the local
             // git state is the sweep's business, not this poll's.

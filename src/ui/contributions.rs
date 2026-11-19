@@ -182,7 +182,7 @@ fn first_week(app: &App, visible: usize) -> usize {
 
     let shift = previous as isize - visible as isize;
     let mut first = (scroll as isize + shift).clamp(0, max as isize) as usize;
-    if let Some(slot) = app.contrib_cursor {
+    if let Some(slot) = app.contrib.cursor {
         let week = slot / 7;
         if week < first {
             first = week;
@@ -344,7 +344,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     app.drawn.contrib_visible_weeks.set(visible.max(1));
     app.drawn.contrib_scroll.set(first);
 
-    let cursor = app.contrib_cursor.map(|c| c.min(calendar.today_slot()));
+    let cursor = app.contrib.cursor.map(|c| c.min(calendar.today_slot()));
     // Where the cursor sits in the drawn window, if it is in it at all.
     let marked = cursor.and_then(|slot| {
         let (week, weekday) = (slot / 7, slot % 7);
@@ -353,7 +353,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let inner_width = area.width.saturating_sub(FRAME_COLS * 2);
 
     let pad = grid_pad(area);
-    let glyph = app.contrib_cell.glyph();
+    let glyph = app.contrib.cell.glyph();
     let mut lines = Vec::with_capacity(CONTRIB_HEIGHT as usize);
     lines.push(month_and_caret_line(&calendar, first, visible, pad, marked));
     for weekday in 0..DAY_ROWS as usize {
@@ -412,9 +412,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 /// summed from the visible repos on demand.
 fn calendar_for(app: &App, today: chrono::NaiveDate) -> Option<std::borrow::Cow<'_, Calendar>> {
     use std::borrow::Cow;
-    match app.contributions {
+    match app.contrib.mode {
         ContributionsMode::Off => None,
-        ContributionsMode::Github => app.github_calendar.as_deref().map(Cow::Borrowed),
+        ContributionsMode::Github => app.contrib.calendar.as_deref().map(Cow::Borrowed),
         ContributionsMode::Local => Some(Cow::Owned(app.local_calendar(today))),
     }
 }

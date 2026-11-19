@@ -101,7 +101,7 @@ fn a_load_that_timed_out_holds_the_row() {
 #[test]
 fn a_load_result_stores_its_calendar_on_the_app() {
     let mut app = App::new(Vec::new(), "h".to_string(), 120, 44);
-    assert!(app.github_calendar.is_none());
+    assert!(app.contrib.calendar.is_none());
     let today = chrono::Local::now().date_naive();
     let mut cal = contributions::Calendar::new(today, contributions::Source::Github);
     cal.add(today, 5);
@@ -120,7 +120,7 @@ fn a_load_result_stores_its_calendar_on_the_app() {
         })),
     );
     assert_eq!(
-        app.github_calendar.as_ref().map(|c| c.total()),
+        app.contrib.calendar.as_ref().map(|c| c.total()),
         Some(5),
         "the startup fetch must fill the strip"
     );
@@ -247,7 +247,7 @@ fn a_window_apply_does_not_blank_the_calendar() {
     let today = chrono::Local::now().date_naive();
     let mut cal = contributions::Calendar::new(today, contributions::Source::Github);
     cal.add(today, 9);
-    app.github_calendar = Some(Box::new(cal));
+    app.contrib.calendar = Some(Box::new(cal));
     apply_load_result(
         &mut app,
         &config::Config::default(),
@@ -262,7 +262,7 @@ fn a_window_apply_does_not_blank_the_calendar() {
             meta: None,
         })),
     );
-    assert_eq!(app.github_calendar.as_ref().map(|c| c.total()), Some(9));
+    assert_eq!(app.contrib.calendar.as_ref().map(|c| c.total()), Some(9));
 }
 
 #[test]

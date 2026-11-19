@@ -109,9 +109,9 @@ pub(crate) struct ContribProbe {
 
 /// Whether this sweep should pay for the per-repo commit histogram.
 fn contrib_probe(app: &App) -> Option<ContribProbe> {
-    (app.contributions == app::ContributionsMode::Local).then(|| ContribProbe {
+    (app.contrib.mode == app::ContributionsMode::Local).then(|| ContribProbe {
         start: contributions::grid_start(chrono::Local::now().date_naive()),
-        author: app.contrib_author.clone(),
+        author: app.contrib.author.clone(),
     })
 }
 
