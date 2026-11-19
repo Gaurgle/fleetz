@@ -7,11 +7,11 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Session `0dbccbeb` (`claude-fable-5-1`, at-a) retook the baton
-2026-11-19 12:56 CET on his "continue", after releasing it 11-18 18:20
-on his "let current ticket finish, but dont start any more". One
-architect survey running, no worker. `main` at `5d2e7f6` (FZ-124
-merged), CI green.
+Baton released 2026-11-19 18:00 CET by session `0dbccbeb`
+(`claude-fable-5-1`, at-a): the app-split batch and its survey are
+done, the refactor authority's scope is spent. No worker, reviewer
+or architect running. `main` at `9edeea5` (code `5d2e7f6`), CI green,
+no worktrees.
 
 ## Standing authority
 
@@ -34,9 +34,10 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 - App-split batch, filed 11-18, architect-checked, strictly in order,
   one worker at a time: all moves Done (FZ-116 to FZ-124, the last
   merged `5d2e7f6` 11-19 14:01; `app.rs` 685 production lines). The
-  post-batch `fz-architect` survey of `docs/architecture.md` is
-  running since 14:03 (sections 2, 3, 5; next seams; FZ-125's
-  questions). FZ-125 #182 (R2) needs his design ruling. His 13:15:
+  post-batch survey landed `9edeea5` (log, "Survey after the app-split
+  batch": next seams G1 `git.rs`, `ui/header.rs`, S1, A1j, an engine
+  test ticket, a doc-comment ticket; all need his word). FZ-125 #182
+  (R2) needs his ruling on Q1 (refreshed on the issue). His 13:15:
   "continue with tickets ... im sick and will stay in bed" (log).
 - Survey for `fz-architect` after the batch: `docs/architecture.md`
   section 3's `app.rs` lines and section 5's cell counts are stale,
@@ -53,8 +54,7 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## Next step
 
-Commit the architect's survey of `docs/architecture.md` when it
-reports, then report the batch to him: the refactor authority's scope
-is spent (FZ-125 needs his design ruling; the survey's next seams
-need his word to become tickets). Suggest `cargo install` (eleven
-refactors since his last build).
+Nothing is authorized. On his word: rule FZ-125 Q1 and rewrite its
+body, or file the survey's seams (G1 first) as tickets with an
+architect check, or the waiting feature tickets. Suggest `cargo
+install` (eleven refactors since his last build).

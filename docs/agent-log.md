@@ -535,6 +535,40 @@ first (from `git log --merges main`).
   you need as long as they are safe. im sick and will stay in bed."
   The batch runs unattended through FZ-124 and the architect survey;
   FZ-125 waits for his design ruling.
+- About 13:20, on the permission prompts ("youre still asking me about
+  scripts"): the lead cannot edit `.claude/settings.local.json` (the
+  classifier refuses, as on 10-01); the full file with allow rules for
+  the lead's commands was written to the session scratchpad for him to
+  copy. Still pending; the memory note `pending-permission-config`
+  stands.
+
+### Survey after the app-split batch, 2026-11-19
+
+`fz-architect`, dispatched 14:03 on `5d2e7f6`, paused by the usage
+limit about 14:10 to 17:50, reported 17:55 (149,645 tokens);
+`docs/architecture.md` committed `9edeea5`. The batch is complete
+against `docs/app-split-design.md` but R2: `app.rs` 685 against the
+800 target; `app/ci.rs` 1,004 and `app/overlays.rs` 616 over the 600
+estimate, the rest under; `engine/github_sync.rs` 851 and
+`engine/fetch.rs` 746 over theirs. A4 met for every named concern;
+render feedback still written through `&App` until R2. A1 still open:
+`git.rs` 2,444, `ui/mod.rs` 1,541, `github.rs` 1,559, `ci.rs` 1,538,
+`ui/markdown.rs` 1,245. Next seams, by the architect's priority, as
+candidates for his word: (1) G1 `git.rs` into `git/fetch.rs` (about
+717), `git/log.rs` (407), `git/changes.rs` (331), `git/worktree.rs`
+(176), four tickets, fetch first, every `git::` path kept; (2)
+`ui/mod.rs`: the header and status line into `ui/header.rs` (550 to
+600 est.); (3) S1 long functions (`render_detail_pane` 700,
+`handle_normal_input` 372, `assemble_view_held` 256, `run_event_loop`
+236, `header_lines` 222); (4) A1j after R2: the nine remaining `app`
+to `ui` sites, making O-B a layer-test rule; (5) a test-only ticket on
+`engine/` (the `push_detected` shortcut, four `FetchState` mutants);
+(6) watch `app/ci.rs` and `ui/markdown.rs`. One tiny doc-comment
+ticket: `src/ci.rs:11`, `src/app/overlays.rs:1,129,420`,
+`src/app/query.rs:1`, `src/app.rs:495-498`, `src/app/selection.rs:481`,
+`src/ui/branches.rs:147`, `src/ui/ci.rs:952`, `src/app/contrib.rs:62`.
+FZ-125's questions refreshed on #182. `docs/app-split-design.md`
+"Risks" counts (11 sites in three structs, 24 writes) are stale: his.
 
 ### 2026-11-09
 
