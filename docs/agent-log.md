@@ -535,6 +535,14 @@ first (from `git log --merges main`).
   you need as long as they are safe. im sick and will stay in bed."
   The batch runs unattended through FZ-124 and the architect survey;
   FZ-125 waits for his design ruling.
+- About 18:45 CET, on the five decisions the lead listed: "refactoring
+  can probably stop here now, if we have a more reasonable code base"
+  (the 11-09 refactor authority ends; R2 and the survey's seams wait
+  for a new word); "4, done" (`cargo install` of `5d2e7f6`); "time to
+  bump version? xx1?" (answered: the class since v0.6.2 is minor, so
+  0.7.0, prepared on his yes); "5, sounds good. lets fix that" (the
+  permission file: he copies it, the lead cannot); FZ-125 Q1 and the
+  waiting tickets to be explained better first.
 - About 13:20, on the permission prompts ("youre still asking me about
   scripts"): the lead cannot edit `.claude/settings.local.json` (the
   classifier refuses, as on 10-01); the full file with allow rules for
