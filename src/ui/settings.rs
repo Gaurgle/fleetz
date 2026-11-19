@@ -92,7 +92,7 @@ pub fn render(frame: &mut Frame, area: Rect, overlay: &SettingsOverlay) {
         // natural second home for "and which build is it".
         .title_top(
             Line::from(Span::styled(
-                format!(" fleetz {} ", crate::ui::VERSION),
+                format!(" fleetz v{} ", crate::ui::VERSION),
                 Style::default().fg(colors::SUBTEXT),
             ))
             .right_aligned(),
