@@ -1164,6 +1164,7 @@ fn the_failure_marker_survives_a_narrow_header() {
 /// panes (FZ-95) or on that line, never here.
 #[test]
 fn the_header_draws_the_name_and_version_with_github_watch_and_sweep() {
+    let v = format!("v{VERSION}");
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     for (view, expected) in [
@@ -1171,7 +1172,7 @@ fn the_header_draws_the_name_and_version_with_github_watch_and_sweep() {
             View::Detail,
             vec![
                 "fleetz",
-                VERSION,
+                v.as_str(),
                 "○",
                 "github",
                 watch_icon(false),
@@ -1182,7 +1183,7 @@ fn the_header_draws_the_name_and_version_with_github_watch_and_sweep() {
                 "03:04",
             ],
         ),
-        (View::Compact, vec!["fleetz", VERSION]),
+        (View::Compact, vec!["fleetz", v.as_str()]),
     ] {
         let mut app = crate::app::App::new(Vec::new(), "since 5 days".to_string(), 120, 40);
         full_header_app(&mut app);

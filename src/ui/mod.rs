@@ -1177,7 +1177,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     );
     // Dimmest colour: "which build am I looking at" is answerable without
     // quitting, and it is the least urgent thing on screen.
-    let version = Span::styled(format!(" {VERSION}"), Style::default().fg(colors::SUBTEXT));
+    let version = Span::styled(format!(" v{VERSION}"), Style::default().fg(colors::SUBTEXT));
     let line = Line::from(vec![name.clone(), version]);
     // Under it the compact view's status line is the divider, and carries
     // watch and the sweep. Elsewhere the header draws its own divider, as it
