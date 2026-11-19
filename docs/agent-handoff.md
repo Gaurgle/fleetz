@@ -10,7 +10,8 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 Session `0dbccbeb` (`claude-fable-5-1`, at-a) retook the baton
 2026-11-19 12:56 CET on his "continue", after releasing it 11-18 18:20
 on his "let current ticket finish, but dont start any more". One
-worker running (FZ-124). `main` at `0354b25` (FZ-123 merged), CI green.
+architect survey running, no worker. `main` at `5d2e7f6` (FZ-124
+merged), CI green.
 
 ## Standing authority
 
@@ -29,15 +30,14 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 - Lead ruling for his review: F1's `include_str!` test change (#166).
   The FZ-113, O-E and `refresh_interval` rulings he accepted 11-18
-  about 13:33 (log). FZ-103 to FZ-113 and FZ-116 to FZ-123 are Done and logged.
+  about 13:33 (log). FZ-103 to FZ-113 and FZ-116 to FZ-124 are Done and logged.
 - App-split batch, filed 11-18, architect-checked, strictly in order,
-  one worker at a time: FZ-124 (#181, A1i navigation) In progress
-  since 11-19 13:28, base `0354b25`, branch
-  `refactor/fz-124-app-navigation`, worktree `.claude/worktrees/fz-124`,
-  record on the issue (edit by comment id), standard tiers, the last
-  move; then the architect survey; FZ-125 #182 (R2) needs his design
-  ruling. His 13:15: "continue with tickets ... im sick and will stay
-  in bed" (log).
+  one worker at a time: all moves Done (FZ-116 to FZ-124, the last
+  merged `5d2e7f6` 11-19 14:01; `app.rs` 685 production lines). The
+  post-batch `fz-architect` survey of `docs/architecture.md` is
+  running since 14:03 (sections 2, 3, 5; next seams; FZ-125's
+  questions). FZ-125 #182 (R2) needs his design ruling. His 13:15:
+  "continue with tickets ... im sick and will stay in bed" (log).
 - Survey for `fz-architect` after the batch: `docs/architecture.md`
   section 3's `app.rs` lines and section 5's cell counts are stale,
   section 2's intro drifted; `src/ci.rs:11` names `App::ci_budget`.
@@ -53,8 +53,8 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## Next step
 
-Finish FZ-122 (worker running), then FZ-123 and FZ-124 in order under
-the standing authority, then the architect survey (section 2, 3 and 5
-drift, `src/ci.rs:11`); FZ-125 needs his design ruling. Report when
-the batch lands. Suggest `cargo install` (seven refactors since his
-last build).
+Commit the architect's survey of `docs/architecture.md` when it
+reports, then report the batch to him: the refactor authority's scope
+is spent (FZ-125 needs his design ruling; the survey's next seams
+need his word to become tickets). Suggest `cargo install` (eleven
+refactors since his last build).

@@ -291,6 +291,24 @@ first (from `git log --merges main`).
 
 ### 2026-11-19
 
+- **#181 (FZ-124), A1i: navigation methods into `app/panes.rs` and
+  `app/selection.rs`.** Dispatched 13:28 under the unattended run,
+  merged `5d2e7f6` at 14:01 CET, the last move of the app-split batch.
+  Base `0354b25`, commit `9abe415`: 18 pane methods with their
+  constants and 28 selection methods moved unchanged into the two
+  files (373 and 541 production lines), the fields plain on `App`
+  (D7); three `pub(super)` widenings (`inspector_is_expanded`,
+  `reset_detail_view`, `shift_scroll_target`), not the body's seven;
+  no tests moved; `app.rs` 1,570 to 685, under the limit, past the
+  design's 800 target. Lead ruling (on the issue): four doc lines that
+  described `summary` stay with it. Review 1 on `f45e73f5515d`:
+  accepted, no blockers. Branch CI 44526063901 green; combined checks
+  on `bf34299` (1758 passed); gate holds. Observed, out of scope:
+  `docs/architecture.md` section 3's `app.rs` refs stale; the doc above
+  `shows_load_error` in `app.rs` opens with four lines that describe
+  `visible_repos` (already so at base). Remembered: nothing to keep.
+  FZ-124: review accepted first; fix cycles 0; owner decisions 0; worker 8; review 3; models opus:medium/opus:medium; usage worker 117907 tokens, reviewer 44998 tokens
+
 - **#180 (FZ-123), A1h: `YankState` owns the yank and its flash in
   `app/yank.rs`.** Dispatched 13:15 under the unattended run, merged
   `0354b25` at 13:26 CET. Base `21c618f`, commit `e00114c`: the yank
