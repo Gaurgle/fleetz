@@ -3051,7 +3051,7 @@ fn plain_y_on_commits_still_copies_the_hash() {
         Some(("copied bbb2222".to_string(), false))
     );
     assert_eq!(chord(&mut app, "y"), ["bbb2222"], "yy copies it again");
-    assert!(!app.pending_yank, "yy finished the chord");
+    assert!(!app.yank.pending, "yy finished the chord");
 }
 
 #[test]
@@ -3323,7 +3323,7 @@ fn y_then_another_key_copies_nothing() {
     }));
     assert!(!called, "the clipboard was asked to copy");
     assert_eq!(yank_status(&app), None, "the status line moved");
-    assert!(!app.pending_yank, "the chord outlived the key after it");
+    assert!(!app.yank.pending, "the chord outlived the key after it");
     assert!(!app.press_yank_key(Some('p'), |_| {
         called = true;
         Ok(())
@@ -3366,18 +3366,18 @@ fn a_local_carrier_is_named_by_its_origin_not_its_folder() {
 fn yy_and_yp_start_a_flash_sweeping_their_way() {
     let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
     let (before, ms) = (std::time::Instant::now(), std::time::Duration::from_millis);
-    assert!(!app.yank_flash.is_active());
+    assert!(!app.yank.flash.is_active());
     chord(&mut app, "yy");
-    assert_eq!(app.yank_flash.source(), Some(app.flash_source()));
+    assert_eq!(app.yank.flash.source(), Some(app.flash_source()));
     let row = |app: &App| -> Vec<_> {
         (0..10)
-            .map(|c| app.yank_flash.cell_bg(before + ms(50), c, 10))
+            .map(|c| app.yank.flash.cell_bg(before + ms(50), c, 10))
             .collect()
     };
     assert_eq!(row(&app)[0], ui::colors::YANKED_BG, "`yy` from the left");
     assert_eq!(row(&app)[9], ui::colors::SELECTED_BG);
     chord(&mut app, "yp");
-    assert!(app.yank_flash.is_active(), "`yp` flashes too");
+    assert!(app.yank.flash.is_active(), "`yp` flashes too");
     assert_eq!(row(&app)[9], ui::colors::YANKED_BG, "`yp` from the right");
     assert_eq!(row(&app)[0], ui::colors::SELECTED_BG);
 }
@@ -3389,14 +3389,14 @@ fn a_failed_copy_and_nothing_to_copy_start_no_flash() {
         app::YankKind::Thing,
         |_| Err("pbcopy timed out".to_string()),
     );
-    assert!(!app.yank_flash.is_active(), "a failed copy flashed");
+    assert!(!app.yank.flash.is_active(), "a failed copy flashed");
     chord(&mut app, "yy");
-    assert!(app.yank_flash.is_active());
+    assert!(app.yank.flash.is_active());
     app.yank(
         app::YankKind::Thing,
         |_| Err("pbcopy timed out".to_string()),
     );
-    assert!(!app.yank_flash.is_active(), "a failed copy left the flash");
+    assert!(!app.yank.flash.is_active(), "a failed copy left the flash");
     chord(&mut app, "yy");
     app.repos[0].owner = None;
     assert!(chord(&mut app, "yy").is_empty());
@@ -3404,7 +3404,7 @@ fn a_failed_copy_and_nothing_to_copy_start_no_flash() {
         yank_status(&app),
         Some(("nothing to copy".to_string(), false))
     );
-    assert!(!app.yank_flash.is_active(), "`nothing to copy` flashed");
+    assert!(!app.yank.flash.is_active(), "`nothing to copy` flashed");
 }
 
 /// A screen cell, `(x, y)`.
@@ -3419,9 +3419,9 @@ fn flash_frames(
     from_right: bool,
 ) -> (Vec<Cell>, Vec<Cell>) {
     use ratatui::backend::TestBackend;
-    assert!(app.yank_flash.is_active(), "the copy started no flash");
+    assert!(app.yank.flash.is_active(), "the copy started no flash");
     let start = std::time::Instant::now();
-    app.yank_flash.show(app.flash_source(), from_right, start);
+    app.yank.flash.show(app.flash_source(), from_right, start);
     let draw = |at: u64| {
         let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term.draw(|f| ui::render_at(f, app, start + std::time::Duration::from_millis(at)))
@@ -3573,7 +3573,7 @@ fn a_live_flash_draws_at_every_terminal_size() {
     let start = std::time::Instant::now();
     for mut app in sources {
         app.inspector_folded = false;
-        app.yank_flash.show(app.flash_source(), false, start);
+        app.yank.flash.show(app.flash_source(), false, start);
         for w in 0..=40u16 {
             for h in 0..=20u16 {
                 let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -3593,7 +3593,7 @@ fn a_flash_does_not_follow_the_cursor_to_another_row() {
     let mut app = yank_on(app::HistoryView::Commits, FocusedPanel::Detail);
     app.set_detail_selected(1);
     chord(&mut app, "yy");
-    assert!(app.yank_flash.is_active());
+    assert!(app.yank.flash.is_active());
     app.set_detail_selected(2);
     let at = std::time::Instant::now() + std::time::Duration::from_millis(50);
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();

@@ -349,7 +349,7 @@ async fn the_key_handler_feeds_the_yank_chord() {
     )
     .await
     .unwrap();
-    assert!(app.pending_yank, "`y` did not reach the chord");
+    assert!(app.yank.pending, "`y` did not reach the chord");
     assert_eq!(yank_status(&app), None, "`y` alone copied something");
     handle_normal_input(
         &mut app,
@@ -362,7 +362,7 @@ async fn the_key_handler_feeds_the_yank_chord() {
     )
     .await
     .unwrap();
-    assert!(!app.pending_yank, "`j` left the chord armed");
+    assert!(!app.yank.pending, "`j` left the chord armed");
     assert_eq!(app.selected, 1, "`j` after `y` did not move the cursor");
 }
 
@@ -372,7 +372,7 @@ fn a_click_ends_the_yank_chord() {
     let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
     let terminal = yank_terminal();
     assert!(chord(&mut app, "y").is_empty());
-    assert!(app.pending_yank);
+    assert!(app.yank.pending);
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 0,
@@ -380,7 +380,7 @@ fn a_click_ends_the_yank_chord() {
         modifiers: KeyModifiers::NONE,
     };
     handle_mouse_input(&mut app, &terminal, click);
-    assert!(!app.pending_yank, "the click left the chord armed");
+    assert!(!app.yank.pending, "the click left the chord armed");
     assert!(
         chord(&mut app, "p").is_empty(),
         "`p` after the click copied"

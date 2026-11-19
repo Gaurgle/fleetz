@@ -202,12 +202,12 @@ fn a_key_press_a_click_or_a_scroll_ends_the_flash_and_motion_does_not() {
     for ev in &keeps {
         chord(&mut app, "yy");
         end_yank_flash_on(&mut app, ev);
-        assert!(app.yank_flash.is_active(), "{ev:?} ended the flash");
+        assert!(app.yank.flash.is_active(), "{ev:?} ended the flash");
     }
     for ev in &ends {
         chord(&mut app, "yy");
         end_yank_flash_on(&mut app, ev);
-        assert!(!app.yank_flash.is_active(), "{ev:?} left the flash");
+        assert!(!app.yank.flash.is_active(), "{ev:?} left the flash");
     }
 }
 
@@ -218,13 +218,13 @@ async fn the_loop_wakes_for_the_flash_frame_and_only_while_it_lasts() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = yank_on(app::HistoryView::Info, FocusedPanel::RepoList);
     let bound = std::time::Duration::from_millis(80);
-    let idle = tokio::time::timeout(bound, next_event(&mut rx, &app.yank_flash)).await;
+    let idle = tokio::time::timeout(bound, next_event(&mut rx, &app.yank.flash)).await;
     assert!(idle.is_err(), "woke with no flash and nothing queued");
     chord(&mut app, "yy");
-    let frame = tokio::time::timeout(bound, next_event(&mut rx, &app.yank_flash)).await;
+    let frame = tokio::time::timeout(bound, next_event(&mut rx, &app.yank.flash)).await;
     assert!(matches!(frame, Ok(Some(AppEvent::YankFrame))), "no frame");
     tx.send(AppEvent::Tick).unwrap();
-    let queued = next_event(&mut rx, &app.yank_flash).await;
+    let queued = next_event(&mut rx, &app.yank.flash).await;
     assert!(
         matches!(queued, Some(AppEvent::Tick)),
         "a queued event waits"
@@ -240,6 +240,6 @@ fn a_live_flash_is_never_held_behind_queued_events() {
     chord(&mut app, "yy");
     assert!(is_animating(&app), "the flash is not an animation");
     assert!(should_paint(false, 0, is_animating(&app)));
-    app.yank_flash.clear();
+    app.yank.flash.clear();
     assert!(!is_animating(&app));
 }

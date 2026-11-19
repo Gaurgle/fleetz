@@ -74,7 +74,7 @@ fn should_paint(queue_empty: bool, held: u32, animating: bool) -> bool {
 /// Whether an animation is on screen whose frames `should_paint` must not
 /// hold: the loading field, or a live copy flash (FZ-81).
 fn is_animating(app: &App) -> bool {
-    app.loading_field.is_some() || app.yank_flash.is_active()
+    app.loading_field.is_some() || app.yank.flash.is_active()
 }
 
 /// Everything the event loop reacts to. Terminal input, the periodic tick,
@@ -371,8 +371,8 @@ fn end_yank_flash_on(app: &mut App, input: &Event) {
         Event::Paste(_) => true,
         Event::Resize(..) | Event::FocusGained | Event::FocusLost => false,
     };
-    if ends && app.yank_flash.is_active() {
-        app.yank_flash.clear();
+    if ends && app.yank.flash.is_active() {
+        app.yank.flash.clear();
         app.needs_redraw = true;
     }
 }
@@ -427,7 +427,7 @@ pub(crate) async fn run_event_loop(
     // still gets drawn. See the paint at the foot of the loop.
     let mut coalesced: u32 = 0;
 
-    while let Some(ev) = next_event(&mut rx, &app.yank_flash).await {
+    while let Some(ev) = next_event(&mut rx, &app.yank.flash).await {
         if let AppEvent::Input(input) = &ev {
             end_yank_flash_on(app, input);
         }
@@ -601,7 +601,7 @@ pub(crate) async fn run_event_loop(
         if app.should_quit {
             return Ok(());
         }
-        app.needs_redraw |= app.yank_flash.tick(std::time::Instant::now());
+        app.needs_redraw |= app.yank.flash.tick(std::time::Instant::now());
         // Paint once per *burst* of events, not once per event.
         //
         // A trackpad flick delivers wheel events far faster than a full

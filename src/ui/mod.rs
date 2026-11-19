@@ -1059,7 +1059,7 @@ fn paint_yank_flash(
     app: &App,
     now: std::time::Instant,
 ) {
-    let Some(source) = app.yank_flash.source() else {
+    let Some(source) = app.yank.flash.source() else {
         return;
     };
     if app.view != View::Detail || source != app.flash_source() {
@@ -1078,7 +1078,7 @@ fn paint_yank_flash(
     let Some((y, xs)) = cells else { return };
     let width = xs.len() as u16;
     for (col, x) in xs.into_iter().enumerate() {
-        buf[(x, y)].bg = app.yank_flash.cell_bg(now, col as u16, width);
+        buf[(x, y)].bg = app.yank.flash.cell_bg(now, col as u16, width);
     }
 }
 
