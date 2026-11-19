@@ -291,6 +291,25 @@ first (from `git log --merges main`).
 
 ### 2026-11-19
 
+- **#180 (FZ-123), A1h: `YankState` owns the yank and its flash in
+  `app/yank.rs`.** Dispatched 13:15 under the unattended run, merged
+  `0354b25` at 13:26 CET. Base `21c618f`, commit `e00114c`: the yank
+  types, the flash timing constants, two fields and the ten-method
+  block to `app/yank.rs` (454 production lines), four flash tests
+  moved with their helpers; `app.rs` 1,993 to 1,570, 52 fields.
+  Light-tier worker (sonnet, low); one process slip (a stray `git
+  stash` popped at once, nothing lost, the reviewer checked every
+  rename site). `YANK_FRAME` not re-exported: the body's `event.rs`
+  claim was stale. Review 1 on `e36fd24b870d`: accepted, no blockers.
+  Branch CI 44523473258 green; combined checks on `e59d9ca` (1758
+  passed); gate holds. Observed, out of scope: `docs/architecture.md`
+  section 3's `app.rs` line refs (`:1772`, `:1831`, `:2640`) stale.
+  Remembered: for the ticket template, acceptance 3's `git diff -M
+  --stat` cannot show a partial-file move into an untracked file; the
+  token comparison is the evidence (reviewer's note; to the template
+  at the next retro, not kept here).
+  FZ-123: review accepted first; fix cycles 0; owner decisions 0; worker 6; review 3; models sonnet:low/opus:medium; usage worker 58564 tokens, reviewer 56968 tokens
+
 - **#179 (FZ-122), A1g: `ContribStrip` owns the contributions strip in
   `app/contrib.rs`.** Dispatched 13:00 on his "continue", merged
   `21c618f` at 13:12 CET. Base `82e5a6b`, commit `a00e93f`:
