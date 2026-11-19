@@ -465,6 +465,13 @@ first (from `git log --merges main`).
   on his word (FZ-122 to FZ-124 remain, FZ-125 needs his design
   ruling).
 
+### 2026-11-19
+
+- 12:56 CET, in the same session the next day: "continue". Read as
+  resuming the app-split batch (FZ-122 next) under the standing
+  refactor authority; the lead said so in one line, open to
+  correction.
+
 ### 2026-11-09
 
 Lead `19b5ad57` (`claude-fable-5-1`) on at-a from 15:15 CET. His word at

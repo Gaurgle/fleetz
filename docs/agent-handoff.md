@@ -7,10 +7,10 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Baton released 2026-11-18 18:20 CET by session `0dbccbeb`
-(`claude-fable-5-1`, at-a) after his 18:08 "let current ticket finish,
-but dont start any more". No worker or reviewer running. `main` at
-`c0ec3cf` (FZ-121 merged), CI green, no worktrees.
+Session `0dbccbeb` (`claude-fable-5-1`, at-a) retook the baton
+2026-11-19 12:56 CET on his "continue", after releasing it 11-18 18:20
+on his "let current ticket finish, but dont start any more". One
+worker running (FZ-122). `main` at `82e5a6b` (code `c0ec3cf`), CI green.
 
 ## Standing authority
 
@@ -35,10 +35,12 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
   (A1c to A1h), FZ-124 #181 (A1i), FZ-125 #182 (R2, needs his design
   ruling, not for the unattended run). Strictly in that order, one
   worker at a time (each shares `app.rs` with the next).
-- Next in the batch: FZ-122 (#179, A1g `ContribStrip`), then FZ-123
-  (#180), FZ-124 (#181); each body is architect-checked, its `app.rs`
-  lines re-measured by the worker. Records are edited by comment id.
-  Usage: the five-hour limit hit at 15:00 on 11-18 and reset 17:10.
+- FZ-122 (#179, A1g `ContribStrip`) In progress since 11-19 13:00,
+  base `82e5a6b`, branch `refactor/fz-122-app-contrib`, worktree
+  `.claude/worktrees/fz-122`; record on the issue (edit by comment id);
+  standard tiers. Then FZ-123 (#180), FZ-124 (#181), bodies
+  architect-checked, `app.rs` lines re-measured by the worker. Usage:
+  the five-hour limit hit at 15:00 on 11-18 and reset 17:10.
 - Survey for `fz-architect` after the batch: `docs/architecture.md`
   section 3's `app.rs` lines and section 5's cell counts are stale,
   section 2's intro drifted; `src/ci.rs:11` names `App::ci_budget`.
@@ -54,7 +56,8 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## Next step
 
-Stopped on his word after FZ-121. Resume FZ-122 only when he says
-so; then FZ-123, FZ-124, then the architect survey (section 2, 3 and
-5 drift, `src/ci.rs:11`), then FZ-125 needs his design ruling. Suggest
-`cargo install` (seven refactors landed since his last build).
+Finish FZ-122 (worker running), then FZ-123 and FZ-124 in order under
+the standing authority, then the architect survey (section 2, 3 and 5
+drift, `src/ci.rs:11`); FZ-125 needs his design ruling. Report when
+the batch lands. Suggest `cargo install` (seven refactors since his
+last build).
