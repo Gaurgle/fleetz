@@ -81,7 +81,7 @@ pub(crate) fn handle_mouse_input(
     // A press ends a pending yank chord (FZ-74), as a key does: a click can
     // move the cursor, and a `p` after it must not copy from the new row.
     if matches!(m.kind, MouseEventKind::Down(_)) {
-        app.pending_yank = false;
+        app.yank.pending = false;
     }
     let Ok(size) = terminal.size() else { return };
     let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
