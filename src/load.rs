@@ -280,7 +280,7 @@ pub(crate) fn apply_load_result_saving_to(
             // landed, minutes later, which read as the feature being broken.
             // A WindowApply carries None and must not blank a good calendar.
             if lr.github_calendar.is_some() {
-                app.github_calendar = lr.github_calendar;
+                app.contrib.calendar = lr.github_calendar;
             }
             app.clamp_after_reload();
             app.last_refreshed = Some(chrono::Local::now());

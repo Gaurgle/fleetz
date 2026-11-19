@@ -250,7 +250,7 @@ fn keybind_hints(app: &App, with_desc: bool) -> Vec<Span<'static>> {
     hints.push(gap.clone());
     hints.push(Span::styled(
         "[c]",
-        contrib_key_style(app.contributions, app.contributions_folded),
+        contrib_key_style(app.contrib.mode, app.contributions_folded),
     ));
     if with_desc {
         hints.push(Span::styled(" contrib", desc_style));
@@ -555,12 +555,12 @@ mod tests {
         app.contributions_folded = true;
         assert_eq!(key_color(&app, "[c]"), Some(colors::TEXT));
         app.contributions_folded = false;
-        app.contributions = ContributionsMode::Github;
+        app.contrib.mode = ContributionsMode::Github;
         assert_eq!(
             key_color(&app, "[c]"),
             Some(colors::contrib_ladder(crate::contributions::Source::Github)[4])
         );
-        app.contributions = ContributionsMode::Local;
+        app.contrib.mode = ContributionsMode::Local;
         assert_eq!(
             key_color(&app, "[c]"),
             Some(colors::contrib_ladder(crate::contributions::Source::Local)[4])
@@ -1059,7 +1059,7 @@ mod tests {
         let mut app = app_in(View::Detail);
         app.focused_panel = crate::app::FocusedPanel::Contributions;
         app.contributions_folded = false;
-        app.contributions = ContributionsMode::Github;
+        app.contrib.mode = ContributionsMode::Github;
         let c = focus_hints(&app, true)
             .into_iter()
             .find(|s| s.content == "[c]")

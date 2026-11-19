@@ -584,7 +584,7 @@ fn panel_rects_reports_the_strip_as_it_is_drawn() {
 fn the_strip_spans_the_bottom_under_the_inspector() {
     let mut app = layout_app();
     app.view = crate::app::View::Detail;
-    app.contributions = crate::app::ContributionsMode::Github;
+    app.contrib.mode = crate::app::ContributionsMode::Github;
     for width in [120u16, 200] {
         let rects = panel_rects(Rect::new(0, 0, width, 44), &app);
         let strip = rects.contributions.expect("strip present");
@@ -609,7 +609,7 @@ fn the_strip_is_laid_out_in_compact_view_too() {
     let area = Rect::new(0, 0, 120, 44);
     let mut app = layout_app();
     app.view = crate::app::View::Compact;
-    app.contributions = crate::app::ContributionsMode::Local;
+    app.contrib.mode = crate::app::ContributionsMode::Local;
     let rects = panel_rects(area, &app);
     assert!(rects.contributions.is_some());
     assert!(rects.detail.is_none());
@@ -620,7 +620,7 @@ fn the_strip_is_laid_out_in_compact_view_too() {
 #[test]
 fn a_short_terminal_drops_the_strip_rather_than_the_panes() {
     let mut app = layout_app();
-    app.contributions = crate::app::ContributionsMode::Github;
+    app.contrib.mode = crate::app::ContributionsMode::Github;
     let rects = panel_rects(Rect::new(0, 0, 120, 18), &app);
     assert!(rects.contributions.is_none());
     assert!(rects.repo_list.height > 0, "the panes survive");
@@ -1462,7 +1462,7 @@ fn grabbing_the_horizontal_divider_leaves_it_where_it_was() {
     for (w, h, mode) in drag_cases() {
         let mut app = crate::app::App::new(Vec::new(), String::new(), w, h);
         app.view = View::Detail;
-        app.contributions = mode;
+        app.contrib.mode = mode;
         let area = Rect::new(0, 0, w, h);
         let rects = panel_rects(area, &app);
         let Some(before) = rects.inspector else {
@@ -1493,7 +1493,7 @@ fn grabbing_the_vertical_divider_leaves_it_where_it_was() {
             }
             let mut app = crate::app::App::new(Vec::new(), String::new(), w, h);
             app.view = View::Detail;
-            app.contributions = mode;
+            app.contrib.mode = mode;
             app.set_repo_list_pct(pct);
             let area = Rect::new(0, 0, w, h);
             let rects = panel_rects(area, &app);
@@ -1523,7 +1523,7 @@ fn grabbing_the_capped_default_divider_moves_it_at_most_one_column() {
     for (w, h, mode) in drag_cases() {
         let mut app = crate::app::App::new(Vec::new(), String::new(), w, h);
         app.view = View::Detail;
-        app.contributions = mode;
+        app.contrib.mode = mode;
         let area = Rect::new(0, 0, w, h);
         let rects = panel_rects(area, &app);
         let before = rects.repo_list.x + rects.repo_list.width;
@@ -1547,7 +1547,7 @@ fn dragging_the_horizontal_divider_lands_on_the_grabbed_row() {
     let (w, h) = (120u16, 50u16);
     let mut app = crate::app::App::new(Vec::new(), String::new(), w, h);
     app.view = View::Detail;
-    app.contributions = crate::app::ContributionsMode::Github;
+    app.contrib.mode = crate::app::ContributionsMode::Github;
     let area = Rect::new(0, 0, w, h);
     let body = panel_rects(area, &app).body;
 
@@ -1710,7 +1710,7 @@ fn rendered(setup: impl FnOnce(&mut crate::app::App)) -> (PanelRects, ratatui::b
     let (width, height) = (120u16, 44u16);
     let mut app = crate::app::App::new(Vec::new(), String::new(), width, height);
     app.view = View::Detail;
-    app.contributions = crate::app::ContributionsMode::Github;
+    app.contrib.mode = crate::app::ContributionsMode::Github;
     setup(&mut app);
     let app = app;
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -1804,7 +1804,7 @@ fn a_folded_pane_is_one_row_and_the_detail_pane_gets_the_rest() {
     let area = Rect::new(0, 0, 120, 44);
     let mut app = layout_app();
     app.view = View::Detail;
-    app.contributions = crate::app::ContributionsMode::Github;
+    app.contrib.mode = crate::app::ContributionsMode::Github;
     let open = panel_rects(area, &app);
     app.inspector_folded = true;
     app.contributions_folded = true;

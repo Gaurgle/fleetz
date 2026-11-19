@@ -82,7 +82,7 @@ fn the_configured_size_is_drawn_in_the_grid_and_the_legend() {
     use ratatui::backend::TestBackend;
 
     let mut app = app_with_calendar(1);
-    app.contrib_cell = CellSize::Large;
+    app.contrib.cell = CellSize::Large;
     let mut t = Terminal::new(TestBackend::new(120, CONTRIB_HEIGHT)).unwrap();
     t.draw(|f| render(f, f.area(), &app)).unwrap();
     let buf = t.backend().buffer();
@@ -392,7 +392,7 @@ fn a_resize_keeps_the_marked_day_in_view() {
     app.drawn.contrib_visible_weeks.set(was);
     app.drawn.contrib_scroll.set(first);
     // Park the cursor on the oldest week currently drawn.
-    app.contrib_cursor = Some(first * 7);
+    app.contrib.cursor = Some(first * 7);
 
     let after = first_week(&app, now);
     assert!(
@@ -423,14 +423,14 @@ fn drawn(width: u16, app: &App) -> Vec<String> {
 
 fn app_with_calendar(total_per_day: u32) -> App {
     let mut app = App::new(Vec::new(), "test".to_string(), 120, 44);
-    app.contributions = ContributionsMode::Github;
+    app.contrib.mode = ContributionsMode::Github;
     let today = chrono::Local::now().date_naive();
     let mut cal = Calendar::new(today, Source::Github);
     let start = crate::contributions::grid_start(today);
     for slot in 0..crate::contributions::SLOTS {
         cal.add(start + chrono::Duration::days(slot as i64), total_per_day);
     }
-    app.github_calendar = Some(Box::new(cal));
+    app.contrib.calendar = Some(Box::new(cal));
     app
 }
 
@@ -522,8 +522,8 @@ fn month_labels_never_collide() {
 #[test]
 fn the_github_source_draws_a_frame_but_no_grid_before_the_first_poll() {
     let mut app = App::new(Vec::new(), "test".to_string(), 120, 44);
-    app.contributions = ContributionsMode::Github;
-    assert!(app.github_calendar.is_none());
+    app.contrib.mode = ContributionsMode::Github;
+    assert!(app.contrib.calendar.is_none());
     let lines = drawn(120, &app);
     assert!(lines[0].contains("[4] contributions"), "frame drawn");
     assert!(!lines[3].contains(CELL), "no cells painted: {}", lines[3]);
@@ -546,7 +546,7 @@ fn the_marked_day_is_flagged_by_a_caret_from_the_moment_the_strip_opens() {
     );
 
     let last = app.contrib_last_slot(chrono::Local::now().date_naive());
-    app.contrib_cursor = Some(last - 7 * 3 - 4);
+    app.contrib.cursor = Some(last - 7 * 3 - 4);
     let lines = drawn(120, &app);
     let header = &lines[HEADER_ROW];
     assert!(header.contains(CARET), "caret drawn: {header}");
@@ -572,7 +572,7 @@ fn an_opened_strip_marks_today_in_view_at_every_width() {
         app.drawn.contrib_scroll.set(0);
         app.apply_contributions_setting(ContributionsMode::Github);
         let last = app.contrib_last_slot(today);
-        assert_eq!(app.contrib_cursor, Some(last), "width {width}");
+        assert_eq!(app.contrib.cursor, Some(last), "width {width}");
 
         let lines = drawn(width, &app);
         let area = Rect::new(0, 0, width, CONTRIB_HEIGHT);
@@ -619,13 +619,13 @@ fn assert_unfolds_onto_today(unfold: impl Fn(&mut App), path: &str) {
         app.contributions_folded,
         "{path}: premise, folded at launch"
     );
-    assert_eq!(app.contrib_cursor, None, "{path}: premise, never opened");
+    assert_eq!(app.contrib.cursor, None, "{path}: premise, never opened");
     app.drawn.contrib_scroll.set(0);
 
     unfold(&mut app);
     assert!(!app.contributions_folded, "{path}: unfolded");
     let last = app.contrib_last_slot(chrono::Local::now().date_naive());
-    assert_eq!(app.contrib_cursor, Some(last), "{path}: on today");
+    assert_eq!(app.contrib.cursor, Some(last), "{path}: on today");
 
     let width = 120;
     let lines = drawn(width, &app);
@@ -703,14 +703,14 @@ fn a_travelled_strip_keeps_its_day_through_a_fold() {
     app.apply_contributions_setting(ContributionsMode::Github);
     let last = app.contrib_last_slot(chrono::Local::now().date_naive());
     let travelled = last - 7 * 3 - 2;
-    app.contrib_cursor = Some(travelled);
+    app.contrib.cursor = Some(travelled);
 
     app.toggle_fold(FocusedPanel::Contributions);
     assert!(app.contributions_folded);
     app.toggle_fold(FocusedPanel::Contributions);
     assert!(!app.contributions_folded);
     assert_eq!(
-        app.contrib_cursor,
+        app.contrib.cursor,
         Some(travelled),
         "tag click kept the day"
     );
@@ -720,7 +720,7 @@ fn a_travelled_strip_keeps_its_day_through_a_fold() {
     assert!(app.contributions_folded);
     app.press_panel_key(FocusedPanel::Contributions);
     assert!(!app.contributions_folded);
-    assert_eq!(app.contrib_cursor, Some(travelled), "4 key kept the day");
+    assert_eq!(app.contrib.cursor, Some(travelled), "4 key kept the day");
 }
 
 /// While travelling, the top title reads out the day under the cursor,
@@ -765,7 +765,7 @@ fn bottom_total(bottom: &str) -> (String, bool) {
 fn the_period_total_rides_the_bottom_border_beside_the_legend() {
     let app = app_with_calendar(1);
     let today = chrono::Local::now().date_naive();
-    let calendar = app.github_calendar.as_deref().unwrap();
+    let calendar = app.contrib.calendar.as_deref().unwrap();
     let total = thousands(calendar.total());
     let span = crate::contributions::span_label();
     let full = format!("{total} contributions in {span} (github)");
@@ -825,7 +825,7 @@ fn the_marked_day_is_painted_in_a_colour_no_ladder_uses() {
     let mut app = app_with_calendar(4);
     app.focused_panel = FocusedPanel::Contributions;
     app.drawn.contrib_scroll.set(0);
-    app.contrib_cursor = Some(3 * 7); // week 3, a Sunday
+    app.contrib.cursor = Some(3 * 7); // week 3, a Sunday
 
     let mut t = Terminal::new(TestBackend::new(120, CONTRIB_HEIGHT)).unwrap();
     t.draw(|f| render(f, f.area(), &app)).unwrap();
@@ -924,7 +924,7 @@ fn the_legend_follows_the_source_the_cells_use() {
     let on_github = styled(&app);
     assert!(on_github.contains(&format!("{:?}", Some(github_cells[4]))));
 
-    app.contributions = ContributionsMode::Local;
+    app.contrib.mode = ContributionsMode::Local;
     let on_local = styled(&app);
     assert!(
         !on_local.contains(&format!("{:?}", Some(github_cells[4]))),

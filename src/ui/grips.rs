@@ -242,7 +242,7 @@ mod tests {
     fn the_contribution_strip_boundary_is_not_marked() {
         let (buffer, rects) = draw(120, 44, |app| {
             app.view = View::Detail;
-            app.contributions = crate::app::ContributionsMode::Github;
+            app.contrib.mode = crate::app::ContributionsMode::Github;
         });
         let strip = rects.contributions.expect("strip open");
         for (_, y) in grip_cells(&buffer) {

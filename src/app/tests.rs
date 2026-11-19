@@ -15,7 +15,7 @@ fn commit(hash: &str) -> crate::model::Commit {
     }
 }
 
-fn make_app(n: usize) -> App {
+pub(crate) fn make_app(n: usize) -> App {
     let repos: Vec<RepoStatus> = (0..n)
         .map(|i| RepoStatus {
             daily: None,
@@ -89,7 +89,7 @@ fn the_wheel_scrolls_the_grid_both_ways() {
     assert_eq!(app.drawn.contrib_scroll.get(), max, "and back again");
 
     // Neither direction disturbs the day cursor.
-    assert_eq!(app.contrib_cursor, None);
+    assert_eq!(app.contrib.cursor, None);
 }
 
 /// Dragging pulls the grid along with the pointer, and a drag too short
@@ -989,22 +989,8 @@ fn apply_progress_ratio_and_label() {
     assert_eq!(ApplyProgress::Finishing.label(), "finishing…");
 }
 
-fn today() -> chrono::NaiveDate {
+pub(crate) fn today() -> chrono::NaiveDate {
     chrono::NaiveDate::parse_from_str("2026-08-18", "%Y-%m-%d").unwrap()
-}
-
-#[test]
-fn c_switches_the_source_while_the_strip_is_up() {
-    let mut app = make_app(1);
-    assert_eq!(
-        app.contributions,
-        ContributionsMode::Github,
-        "defaults to github"
-    );
-    app.cycle_contributions_source();
-    assert_eq!(app.contributions, ContributionsMode::Local);
-    app.cycle_contributions_source();
-    assert_eq!(app.contributions, ContributionsMode::Github);
 }
 
 #[test]
@@ -1012,7 +998,7 @@ fn c_does_nothing_while_the_strip_is_folded() {
     let mut app = make_app(1);
     app.contributions_folded = true;
     app.cycle_contributions_source();
-    assert_eq!(app.contributions, ContributionsMode::Github);
+    assert_eq!(app.contrib.mode, ContributionsMode::Github);
     assert!(app.contributions_folded, "c unfolded the strip");
 }
 
@@ -1025,10 +1011,10 @@ fn the_off_setting_folds_the_strip_and_keeps_its_source() {
     assert!(!app.contributions_folded);
     app.apply_contributions_setting(ContributionsMode::Off);
     assert!(app.contributions_folded);
-    assert_eq!(app.contributions, ContributionsMode::Local);
+    assert_eq!(app.contrib.mode, ContributionsMode::Local);
     app.apply_contributions_setting(ContributionsMode::Github);
     assert!(!app.contributions_folded, "a source setting unfolds it");
-    assert_eq!(app.contributions, ContributionsMode::Github);
+    assert_eq!(app.contrib.mode, ContributionsMode::Github);
 }
 
 #[test]
@@ -1138,29 +1124,29 @@ fn observe_day_keeps_the_cursor_on_its_date() {
     // Scrolled back from the newest edge, so the scroll has to follow.
     app.drawn.contrib_visible_weeks.set(20);
     let tuesday = d("2026-08-18");
-    app.github_calendar = Some(Box::new(Calendar::new(tuesday, Source::Github)));
-    let old_today = app.github_calendar.as_ref().unwrap().today_slot();
-    app.contrib_cursor = Some(old_today);
+    app.contrib.calendar = Some(Box::new(Calendar::new(tuesday, Source::Github)));
+    let old_today = app.contrib.calendar.as_ref().unwrap().today_slot();
+    app.contrib.cursor = Some(old_today);
     app.drawn.contrib_scroll.set(40);
     app.observe_day(tuesday + chrono::Duration::days(1));
-    assert_eq!(app.contrib_cursor, Some(old_today), "weekday: unchanged");
+    assert_eq!(app.contrib.cursor, Some(old_today), "weekday: unchanged");
     assert_eq!(
         app.drawn.contrib_scroll.get(),
         40,
         "weekday: same weeks shown"
     );
     assert_eq!(
-        app.github_calendar.as_ref().unwrap().today_slot(),
+        app.contrib.calendar.as_ref().unwrap().today_slot(),
         old_today + 1
     );
 
     let saturday = d("2026-08-22");
-    app.github_calendar = Some(Box::new(Calendar::new(saturday, Source::Github)));
-    let old_today = app.github_calendar.as_ref().unwrap().today_slot();
-    app.contrib_cursor = Some(old_today);
+    app.contrib.calendar = Some(Box::new(Calendar::new(saturday, Source::Github)));
+    let old_today = app.contrib.calendar.as_ref().unwrap().today_slot();
+    app.contrib.cursor = Some(old_today);
     app.observe_day(saturday + chrono::Duration::days(1));
     assert_eq!(
-        app.contrib_cursor,
+        app.contrib.cursor,
         Some(old_today - 7),
         "sunday: a week back"
     );
@@ -1170,21 +1156,21 @@ fn observe_day_keeps_the_cursor_on_its_date() {
         "sunday: same weeks shown"
     );
 
-    app.contrib_cursor = Some(3);
+    app.contrib.cursor = Some(3);
     app.drawn.contrib_scroll.set(0);
     app.observe_day(saturday + chrono::Duration::days(8));
-    assert_eq!(app.contrib_cursor, Some(0), "clamped at the first slot");
+    assert_eq!(app.contrib.cursor, Some(0), "clamped at the first slot");
     assert_eq!(app.drawn.contrib_scroll.get(), 0);
 }
 
 #[test]
 fn observe_day_without_a_github_calendar_changes_nothing() {
     let mut app = make_app(1);
-    app.contrib_cursor = Some(12);
+    app.contrib.cursor = Some(12);
     app.drawn.contrib_scroll.set(40);
     app.observe_day(today() + chrono::Duration::days(1));
-    assert!(app.github_calendar.is_none());
-    assert_eq!(app.contrib_cursor, Some(12));
+    assert!(app.contrib.calendar.is_none());
+    assert_eq!(app.contrib.cursor, Some(12));
     assert_eq!(app.drawn.contrib_scroll.get(), 40);
 }
 
@@ -1196,39 +1182,11 @@ fn observe_day_keeps_a_strip_pinned_to_the_newest_week() {
     use crate::contributions::{Calendar, Source, WEEKS};
     let saturday = chrono::NaiveDate::from_ymd_opt(2026, 8, 22).unwrap();
     let mut app = make_app(1);
-    app.github_calendar = Some(Box::new(Calendar::new(saturday, Source::Github)));
+    app.contrib.calendar = Some(Box::new(Calendar::new(saturday, Source::Github)));
     app.drawn.contrib_visible_weeks.set(20);
     app.drawn.contrib_scroll.set(WEEKS - 20);
     app.observe_day(saturday + chrono::Duration::days(1));
     assert_eq!(app.drawn.contrib_scroll.get(), WEEKS - 20);
-}
-
-/// The grid reads as columns of weeks and rows of weekdays, so the keys
-/// must move that way: left/right change the week, up/down change the
-/// weekday. They were wired the other way round at first, which moved the
-/// cursor at right angles to what the eye expected.
-#[test]
-fn left_right_walks_weeks_and_up_down_walks_weekdays() {
-    let mut app = make_app(1);
-    let last = app.contrib_last_slot(today());
-    app.contrib_cursor = Some(last);
-
-    app.move_contrib_cursor(-1, 0, today());
-    assert_eq!(
-        app.contrib_cursor,
-        Some(last - 7),
-        "left is one column back, same weekday"
-    );
-
-    app.move_contrib_cursor(0, -1, today());
-    assert_eq!(
-        app.contrib_cursor,
-        Some(last - 8),
-        "up is one row, same column"
-    );
-
-    app.move_contrib_cursor(1, 0, today());
-    assert_eq!(app.contrib_cursor, Some(last - 1), "right returns");
 }
 
 /// Opening the strip stands on today (#66). A strip that was never opened
@@ -1238,18 +1196,18 @@ fn left_right_walks_weeks_and_up_down_walks_weekdays() {
 #[test]
 fn an_unopened_strip_marks_today_on_the_first_move_and_a_source_change_returns_to_it() {
     let mut app = make_app(1);
-    assert_eq!(app.contrib_cursor, None, "starting marks nothing");
+    assert_eq!(app.contrib.cursor, None, "starting marks nothing");
     app.focus_panel(FocusedPanel::Contributions);
-    assert_eq!(app.contrib_cursor, None, "focusing marks nothing");
+    assert_eq!(app.contrib.cursor, None, "focusing marks nothing");
 
     // The first keypress lands on today rather than jumping from nowhere.
     app.move_contrib_cursor(-1, 0, today());
-    assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(today())));
+    assert_eq!(app.contrib.cursor, Some(app.contrib_last_slot(today())));
 
     // And it goes back to today when the source changes.
     app.cycle_contributions_source();
     let now = chrono::Local::now().date_naive();
-    assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(now)));
+    assert_eq!(app.contrib.cursor, Some(app.contrib_last_slot(now)));
 }
 
 /// Opening the strip stands on today, so the first look answers "what
@@ -1258,10 +1216,10 @@ fn an_unopened_strip_marks_today_on_the_first_move_and_a_source_change_returns_t
 #[test]
 fn opening_the_strip_stands_on_today() {
     let mut app = make_app(1);
-    app.contrib_cursor = Some(0);
+    app.contrib.cursor = Some(0);
     app.drawn.contrib_scroll.set(0);
     app.open_contributions(ContributionsMode::Github, today());
-    assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(today())));
+    assert_eq!(app.contrib.cursor, Some(app.contrib_last_slot(today())));
     assert!(
         app.drawn.contrib_scroll.get() >= crate::contributions::WEEKS,
         "still asks for the newest weeks, which holds today's column"
@@ -1278,82 +1236,11 @@ fn the_first_arrow_after_opening_moves_one_step_from_today() {
 
     app.open_contributions(ContributionsMode::Github, today());
     app.move_contrib_cursor(-1, 0, today());
-    assert_eq!(app.contrib_cursor, Some(last - 7), "one week back");
+    assert_eq!(app.contrib.cursor, Some(last - 7), "one week back");
 
     app.open_contributions(ContributionsMode::Github, today());
     app.move_contrib_cursor(0, -1, today());
-    assert_eq!(app.contrib_cursor, Some(last - 1), "one weekday up");
-}
-
-/// A source change reopens the strip, so it lands on today as well, even
-/// after the user travelled away.
-#[test]
-fn a_source_change_leaves_the_cursor_on_today() {
-    let mut app = make_app(1);
-    app.contrib_cursor = Some(0);
-    app.cycle_contributions_source();
-    assert_eq!(app.contributions, ContributionsMode::Local);
-    let today = chrono::Local::now().date_naive();
-    assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(today)));
-
-    app.contrib_cursor = Some(0);
-    app.cycle_contributions_source();
-    assert_eq!(app.contributions, ContributionsMode::Github);
-    assert_eq!(app.contrib_cursor, Some(app.contrib_last_slot(today)));
-}
-
-/// Walking up a column must not spill into the neighbouring week, and
-/// walking right must not walk into the future.
-#[test]
-fn each_axis_clamps_without_spilling_into_the_other() {
-    let mut app = make_app(1);
-    let last = app.contrib_last_slot(today());
-    let (last_week, last_weekday) = (last / 7, last % 7);
-
-    // Top of a column: further up is a no-op, not a jump to last week.
-    app.contrib_cursor = Some(last_week * 7);
-    app.move_contrib_cursor(0, -1, today());
-    assert_eq!(app.contrib_cursor, Some(last_week * 7));
-
-    // 2026-08-18 is a Tuesday, so the newest column ends there.
-    app.contrib_cursor = Some(last);
-    app.move_contrib_cursor(0, 1, today());
-    assert_eq!(
-        app.contrib_cursor,
-        Some(last),
-        "cannot walk into the future"
-    );
-
-    app.move_contrib_cursor(1, 0, today());
-    assert_eq!(app.contrib_cursor, Some(last), "no column after this one");
-
-    // Entering the short final column from a later weekday slides up to
-    // today rather than landing on a cell that does not exist.
-    app.contrib_cursor = Some((last_week - 1) * 7 + 6);
-    app.move_contrib_cursor(1, 0, today());
-    assert_eq!(app.contrib_cursor, Some(last_week * 7 + last_weekday));
-
-    // The oldest column is a hard left edge.
-    app.contrib_cursor = Some(3);
-    app.move_contrib_cursor(-1, 0, today());
-    assert_eq!(app.contrib_cursor, Some(3));
-}
-
-#[test]
-fn home_and_end_jump_to_the_ends_keeping_the_weekday() {
-    let mut app = make_app(1);
-    let last = app.contrib_last_slot(today());
-    app.contrib_cursor = Some(20 * 7 + 4); // a Thursday mid-year
-
-    app.jump_contrib_cursor(false, today());
-    assert_eq!(app.contrib_cursor, Some(4), "oldest column, same weekday");
-
-    app.jump_contrib_cursor(true, today());
-    assert_eq!(
-        app.contrib_cursor,
-        Some(last),
-        "newest column clamps to today"
-    );
+    assert_eq!(app.contrib.cursor, Some(last - 1), "one weekday up");
 }
 
 /// The grid is wider than the terminal, so moving off the visible window
@@ -1363,7 +1250,7 @@ fn moving_off_the_window_scrolls_the_grid() {
     let mut app = make_app(1);
     app.drawn.contrib_visible_weeks.set(10);
     app.drawn.contrib_scroll.set(40);
-    app.contrib_cursor = Some(40 * 7);
+    app.contrib.cursor = Some(40 * 7);
 
     app.move_contrib_cursor(-1, 0, today());
     assert_eq!(
@@ -1373,7 +1260,7 @@ fn moving_off_the_window_scrolls_the_grid() {
     );
 
     app.drawn.contrib_scroll.set(0);
-    app.contrib_cursor = Some(9 * 7);
+    app.contrib.cursor = Some(9 * 7);
     app.move_contrib_cursor(1, 0, today());
     assert_eq!(
         app.drawn.contrib_scroll.get(),
@@ -1439,16 +1326,6 @@ fn the_local_calendar_sums_only_the_visible_repos() {
         app.local_calendar(today()).total(),
         3,
         "a search narrows the heatmap the same way it narrows the list"
-    );
-}
-
-#[test]
-fn a_repo_with_no_histogram_contributes_nothing() {
-    let app = make_app(1);
-    assert_eq!(app.local_calendar(today()).total(), 0);
-    assert_eq!(
-        app.local_calendar(today()).source(),
-        crate::contributions::Source::Local
     );
 }
 
@@ -2031,7 +1908,7 @@ fn entering_the_graph_view_moves_focus_off_the_inspector() {
 fn fold_app() -> App {
     let mut app = App::new(Vec::new(), String::new(), 120, 44);
     app.view = View::Detail;
-    app.contributions = ContributionsMode::Github;
+    app.contrib.mode = ContributionsMode::Github;
     app
 }
 

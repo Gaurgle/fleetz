@@ -2713,7 +2713,7 @@ async fn cv12_a_poll_on_another_account_rebuilds_the_rows_from_its_dataset() {
     );
     assert!(app.not_in_last_poll.is_empty());
     assert_eq!(
-        app.github_calendar.as_ref().map(|c| c.total()),
+        app.contrib.calendar.as_ref().map(|c| c.total()),
         Some(11),
         "B's calendar is not shown"
     );

@@ -108,10 +108,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .as_deref()
             .unwrap_or(app::DEFAULT_CONTRIBUTIONS),
     ));
-    app.contrib_author = config.contributions_author.clone();
+    app.contrib.author = config.contributions_author.clone();
     app.github = GithubSync::from_config(&config, Box::new(ClockJitter::new()));
     app.fetch.set_max_bytes(config.fetch_cap_bytes());
-    app.contrib_cell = config
+    app.contrib.cell = config
         .contributions_cell_size
         .as_deref()
         .map(app::CellSize::from_config)

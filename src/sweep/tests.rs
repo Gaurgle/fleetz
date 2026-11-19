@@ -794,12 +794,12 @@ async fn a_recovering_poll_skips_a_row_held_after_a_timeout() {
 #[test]
 fn the_daily_probe_is_skipped_unless_the_local_source_is_showing() {
     let mut app = App::new(vec![test_repo()], "h".to_string(), 120, 44);
-    app.contributions = app::ContributionsMode::Github;
+    app.contrib.mode = app::ContributionsMode::Github;
     assert!(
         contrib_probe(&app).is_none(),
         "github source needs no local log"
     );
-    app.contributions = app::ContributionsMode::Local;
+    app.contrib.mode = app::ContributionsMode::Local;
     let probe = contrib_probe(&app).expect("local source probes");
     assert_eq!(
         probe.start,
@@ -811,8 +811,8 @@ fn the_daily_probe_is_skipped_unless_the_local_source_is_showing() {
 #[test]
 fn the_probe_carries_the_configured_author_override() {
     let mut app = App::new(vec![test_repo()], "h".to_string(), 120, 44);
-    app.contributions = app::ContributionsMode::Local;
-    app.contrib_author = Some(r"me@work.com\|me@home.com".to_string());
+    app.contrib.mode = app::ContributionsMode::Local;
+    app.contrib.author = Some(r"me@work.com\|me@home.com".to_string());
     let probe = contrib_probe(&app).unwrap();
     assert_eq!(probe.author.as_deref(), Some(r"me@work.com\|me@home.com"));
 }
