@@ -289,6 +289,29 @@ session `99996af4-81d7-4c21-8b83-a46db044f56a`), which held it from
 Grouped by the day they merged, newest first; within a day, newest merge
 first (from `git log --merges main`).
 
+### 2026-11-19
+
+- **#179 (FZ-122), A1g: `ContribStrip` owns the contributions strip in
+  `app/contrib.rs`.** Dispatched 13:00 on his "continue", merged
+  `21c618f` at 13:12 CET. Base `82e5a6b`, commit `a00e93f`:
+  `ContributionsMode`, `CellSize`, six fields, `observe_day` and the
+  strip's block to `app/contrib.rs` (329 production lines), six
+  strip-only tests moved with the code, the render cells stay in
+  `drawn`, `contributions_folded` on `App`; `app.rs` 2,288 to 1,993,
+  53 fields. Lead ruling (on the issue): acceptance 4a judged on `App`
+  receivers (the remaining hits are `LoadResult::github_calendar` and
+  `SettingsOverlay::contrib_cell`); `make_app` and `today`
+  `pub(crate)`; `open_contributions` `pub(super)`; the body's
+  `overlays.rs` and `ui/detail` counts did not exist at this base.
+  Pre-review fix: the over-limit bullet to 1,993. Review 1 on
+  `414a10df821f`: accepted, no blockers, no follow-ups. Branch CI
+  44521421849 green; combined checks on `53f16c5` (1758 passed); gate
+  holds. Observed, out of scope: `src/event.rs:223`
+  `LoadResult::github_calendar` and `src/app/overlays.rs:150`
+  `SettingsOverlay::contrib_cell` keep the old names the acceptance
+  grep looks for. Remembered: nothing to keep.
+  FZ-122: review accepted first; fix cycles 0; owner decisions 0; worker 9 + 0.3; review 2; models opus:medium/opus:medium; usage worker 121955 tokens, reviewer 62448 tokens
+
 ### 2026-11-18
 
 - **#178 (FZ-121), A1f: `DigestView` owns the digest and list stops in
@@ -471,6 +494,10 @@ first (from `git log --merges main`).
   resuming the app-split batch (FZ-122 next) under the standing
   refactor authority; the lead said so in one line, open to
   correction.
+- 13:15 CET, confirming: "continue with tickets and run the scripts
+  you need as long as they are safe. im sick and will stay in bed."
+  The batch runs unattended through FZ-124 and the architect survey;
+  FZ-125 waits for his design ruling.
 
 ### 2026-11-09
 

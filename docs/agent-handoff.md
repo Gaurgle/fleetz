@@ -10,7 +10,7 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 Session `0dbccbeb` (`claude-fable-5-1`, at-a) retook the baton
 2026-11-19 12:56 CET on his "continue", after releasing it 11-18 18:20
 on his "let current ticket finish, but dont start any more". One
-worker running (FZ-122). `main` at `82e5a6b` (code `c0ec3cf`), CI green.
+worker running (FZ-123). `main` at `21c618f` (FZ-122 merged), CI green.
 
 ## Standing authority
 
@@ -29,14 +29,14 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 - Lead ruling for his review: F1's `include_str!` test change (#166).
   The FZ-113, O-E and `refresh_interval` rulings he accepted 11-18
-  about 13:33 (log). FZ-103 to FZ-113 and FZ-116 to FZ-121 are Done and logged.
+  about 13:33 (log). FZ-103 to FZ-113 and FZ-116 to FZ-122 are Done and logged.
 - App-split batch, filed 11-18, architect-checked, strictly in order,
-  one worker at a time: FZ-122 (#179, A1g `ContribStrip`) In progress
-  since 11-19 13:00, base `82e5a6b`, branch
-  `refactor/fz-122-app-contrib`, worktree `.claude/worktrees/fz-122`,
-  record on the issue (edit by comment id), standard tiers; then
-  FZ-123 #180 (A1h), FZ-124 #181 (A1i); FZ-125 #182 (R2) needs his
-  design ruling. The five-hour limit hit 15:00 on 11-18, reset 17:10.
+  one worker at a time: FZ-123 (#180, A1h `YankState`) In progress
+  since 11-19 13:15, base `21c618f`, branch `refactor/fz-123-app-yank`,
+  worktree `.claude/worktrees/fz-123`, record on the issue (edit by
+  comment id), worker light, reviewer standard; then FZ-124 #181
+  (A1i); FZ-125 #182 (R2) needs his design ruling. His 13:15: "continue
+  with tickets ... im sick and will stay in bed" (log).
 - Survey for `fz-architect` after the batch: `docs/architecture.md`
   section 3's `app.rs` lines and section 5's cell counts are stale,
   section 2's intro drifted; `src/ci.rs:11` names `App::ci_budget`.
