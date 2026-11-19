@@ -7,11 +7,11 @@ owner's dated words and the practical notes. Also read `release-plan.md`.
 
 ## Current lead
 
-Baton released 2026-11-19 18:00 CET by session `0dbccbeb`
-(`claude-fable-5-1`, at-a): the app-split batch and its survey are
-done, the refactor authority's scope is spent. No worker, reviewer
-or architect running. `main` at `9edeea5` (code `5d2e7f6`), CI green,
-no worktrees.
+Baton released 2026-11-19 19:35 CET by session `0dbccbeb`
+(`claude-fable-5-1`, at-a) on his "we can stop for today after the
+worker and/or ticket is finished". No agent running. `main` at
+`159af0c`: the 0.7.0 bump (one commit, the last before the tag) on
+top of the version label merge `15acc3f`; the tag is his.
 
 ## Standing authority
 
@@ -29,19 +29,12 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 ## In flight
 
 - Lead ruling for his review: F1's `include_str!` test change (#166).
-  The FZ-113, O-E and `refresh_interval` rulings he accepted 11-18
-  about 13:33 (log). FZ-103 to FZ-113 and FZ-116 to FZ-124 are Done and logged.
-- App-split batch, filed 11-18, architect-checked, strictly in order,
-  one worker at a time: all moves Done (FZ-116 to FZ-124, the last
-  merged `5d2e7f6` 11-19 14:01; `app.rs` 685 production lines). The
-  post-batch survey landed `9edeea5` (log, "Survey after the app-split
-  batch": next seams G1 `git.rs`, `ui/header.rs`, S1, A1j, an engine
-  test ticket, a doc-comment ticket; all need his word). FZ-125 #182
-  (R2) needs his ruling on Q1 (refreshed on the issue). His 13:15:
-  "continue with tickets ... im sick and will stay in bed" (log).
-- Survey for `fz-architect` after the batch: `docs/architecture.md`
-  section 3's `app.rs` lines and section 5's cell counts are stale,
-  section 2's intro drifted; `src/ci.rs:11` names `App::ci_budget`.
+  FZ-103 to FZ-113 and FZ-116 to FZ-124 are Done and logged.
+- App split complete (`app.rs` 685 lines); the survey landed `9edeea5`
+  (log, "Survey after the app-split batch": next seams G1 `git.rs`,
+  `ui/header.rs`, S1, A1j, an engine test ticket, a doc-comment
+  ticket; all need his word). FZ-125 #182 (R2) in Backlog on his "lets
+  wait" (11-19); the (c) shape recommended on the issue.
 - Wait on his word: FZ-100 (#157), FZ-102 (#159), the build label,
   FZ-97 (#154); FZ-114 (#171, a feature, not on the board, filed 11-10
   on his "put the contributions restore on a ticket"); FZ-83 and FZ-95
@@ -54,7 +47,9 @@ FZ-45 look rules (10-27, log) apply; subjects end with `(#n)`.
 
 ## Next step
 
-Nothing is authorized. On his word: rule FZ-125 Q1 and rewrite its
-body, or file the survey's seams (G1 first) as tickets with an
-architect check, or the waiting feature tickets. Suggest `cargo
-install` (eleven refactors since his last build).
+Nothing is authorized. He tags `v0.7.0` on `159af0c` when he wants
+the release (`release.yml` publishes; notes from
+`scripts/release-notes.sh`). Owed to him: the waiting tickets
+explained one by one (FZ-100, FZ-102, FZ-97, FZ-114; "the build
+label" is untraceable, ask). Refactoring stopped on his word; FZ-125
+in Backlog. `cargo install` again for the label and the version.

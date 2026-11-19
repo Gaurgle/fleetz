@@ -535,6 +535,13 @@ first (from `git log --merges main`).
   you need as long as they are safe. im sick and will stay in bed."
   The batch runs unattended through FZ-124 and the architect survey;
   FZ-125 waits for his design ruling.
+- About 19:05 CET: "1 ok good, lets wait. 2. ok. 4 go to 0.7.0 then.
+  make sure it says vX.X.X in the app somewhere 5, copied". FZ-125 to
+  Backlog with the (c) recommendation on #182; the version label (the
+  header and the settings title, `v` prefix) done by `fz-small`
+  (sonnet, low, 20,575 tokens) on his word, no ticket, verified by the
+  lead; then the 0.7.0 bump. About 19:20: "we can stop for today after
+  the worker and/or ticket is finished".
 - About 18:45 CET, on the five decisions the lead listed: "refactoring
   can probably stop here now, if we have a more reasonable code base"
   (the 11-09 refactor authority ends; R2 and the survey's seams wait
